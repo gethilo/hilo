@@ -870,5 +870,164 @@ graph = ["tree-sitter", "petgraph", "duckdb", "xattr"]
 
 ---
 
-*WarpFS — Implementation Specification v1 — June 2026*  
+## 21. MCP Tool Signatures — Complete API Reference
+
+### 21.1 vfs_get_metadata
+
+```
+Request:
+{"method":"tools/call","params":{"name":"vfs_get_metadata","arguments":{"path":"src/login.go","keys":["feature","risk"]}}}
+
+Response (success):
+{"content":[{"type":"text","text":"{\"path\":\"src/login.go\",\"size\":1234,\"mtime\":\"2026-06-14T09:33:14Z\",\"backend\":\"git\",\"hash\":\"sha256:abc123...\",\"xattrs\":{\"user.vfs.feature\":\"auth-module\",\"user.vfs.risk\":\"critical-path\"}}"}]}
+
+Response (not found):
+{"content":[{"type":"text","text":"{\"error\":\"file not found\",\"path\":\"src/nonexistent.go\"}"}],"isError":true}
+```
+
+### 21.2 vfs_set_metadata
+
+```
+Request:
+{"method":"tools/call","params":{"name":"vfs_set_metadata","arguments":{"path":"src/login.go","key":"feature","value":"auth-module"}}}
+
+Response:
+{"content":[{"type":"text","text":"{\"success\":true,\"path\":\"src/login.go\",\"key\":\"user.vfs.feature\",\"previous_value\":null}"}]}
+```
+
+### 21.3 vfs_graph_related
+
+```
+Request:
+{"method":"tools/call","params":{"name":"vfs_graph_related","arguments":{"path":"src/login.go","relations":["imports"],"max_depth":3}}}
+
+Response:
+{"content":[{"type":"text","text":"{\"files\":[{\"path\":\"src/types.go\",\"relation\":\"imports\",\"depth\":1},{\"path\":\"pkg/utils.go\",\"relation\":\"imports\",\"depth\":1}],\"total\":2}"}]}
+```
+
+### 21.4 vfs_graph_impact
+
+```
+Request:
+{"method":"tools/call","params":{"name":"vfs_graph_impact","arguments":{"path":"pkg/utils.go","max_depth":5}}}
+
+Response:
+{"content":[{"type":"text","text":"{\"dependents\":[{\"path\":\"src/login.go\",\"relation\":\"imported_by\",\"depth\":1},{\"path\":\"src/handler.go\",\"relation\":\"imported_by\",\"depth\":2}],\"total\":2,\"max_depth_reached\":false}"}]}
+```
+
+### 21.5 vfs_graph_stats
+
+```
+Response:
+{"content":[{"type":"text","text":"{\"total_files\":142,\"total_edges\":891,\"most_connected\":\"pkg/utils.go\",\"orphans\":[\"scripts/migrate.sh\"],\"edge_types\":{\"imports\":520,\"imported_by\":520,\"tested_by\":73,\"tests\":73,\"documented_by\":5,\"documents\":5}}"}]}
+```
+
+### 21.6 vfs_graph_untested
+
+```
+Response:
+{"content":[{"type":"text","text":"{\"files\":[\"src/middleware.go\",\"src/config.go\"],\"total\":2}"}]}
+```
+
+### 21.7 vfs_list_directory
+
+```
+Request:
+{"method":"tools/call","params":{"name":"vfs_list_directory","arguments":{"path":"/project/models/"}}}
+
+Response:
+{"content":[{"type":"text","text":"{\"entries\":[{\"name\":\"checkpoint.pt\",\"type\":\"file\",\"backend\":\"s3\",\"size\":524288000,\"virtual\":true}]}"}]}
+```
+
+### 21.8 vfs_resolve_path
+
+```
+Response:
+{"content":[{"type":"text","text":"{\"real_path\":\"/tmp/vfs-cache/models/checkpoint.pt\",\"backend\":\"s3\",\"cached\":true,\"cache_path\":\"/tmp/vfs-cache/models/checkpoint.pt\",\"remote_url\":\"s3://my-bucket/prod/checkpoint.pt\",\"sync_status\":\"synced\"}"}]}
+```
+
+### 21.9 vfs_rule_check
+
+```
+Request:
+{"method":"tools/call","params":{"name":"vfs_rule_check","arguments":{"rule_name":"stale-files"}}}
+
+Response:
+{"content":[{"type":"text","text":"{\"rule\":\"stale-files\",\"results\":[{\"path\":\"src/login.go\",\"last_modified\":\"2026-06-14T09:33:14Z\",\"last_tested\":\"2026-06-10T14:22:00Z\"}],\"total\":1}"}]}
+```
+
+### 21.10 vfs_rule_list
+
+```
+Response:
+{"content":[{"type":"text","text":"{\"rules\":[{\"name\":\"stale-files\",\"description\":\"Files changed since last test pass\"},{\"name\":\"untested-critical\",\"description\":\"Critical path files with no tests\"},{\"name\":\"transitive-impact\",\"description\":\"Full dependency chain for a file\"}]}"}]}
+```
+
+### 21.11 vfs_graph_module
+
+```
+Response:
+{"content":[{"type":"text","text":"{\"module\":\"auth-service\",\"files\":42,\"edges_count\":156,\"test_coverage_pct\":78.3}"}]}
+```
+
+---
+
+## 22. Per-Crate Test Requirements
+
+| Crate | Test Files | Min Tests | Coverage Target | Notes |
+|---|---|---|---|---|
+| warpfs-core | tests/manifest_test.rs | 10 | 95% on manifest.rs | Every manifest field + error path |
+| warpfs-metadata | tests/xattr_test.rs, tests/inventory_test.rs | 19 | 90% | Round-trip tests for all xattr ops |
+| warpfs-graph | tests/graph_test.rs, tests/parser_test.rs, tests/impact_test.rs | 19+ | 85% | One test per language parser |
+| warpfs-cli | tests/cli.rs | 6 | 80% | Integration: each subcommand |
+| warpfs-mcp | tests/mcp_test.rs | 8 | 85% | JSON-RPC protocol correctness |
+| warpfs-backends | tests/s3_test.rs, tests/git_test.rs | 10+ | 80% | Mock S3 server + temp git repo |
+| warpfs-triggers | tests/trigger_test.rs | 8+ | 80% | Temp files + inotify + timing |
+| warpfs-fuse | tests/fuse_test.rs | 5+ | 70% | FUSE: mount + read/write + permissions |
+| warpfs-plugins | tests/plugin_test.rs | 5+ | 75% | extism host function mocking |
+| warpfs-ffi | N/A (generated) | N/A | N/A | Verify: uniffi-bindgen generate |
+
+### 22.1 Test Patterns
+
+**xattr round-trip:**
+```rust
+let tmp = TempFile::new();
+set_xattr(&tmp.path, "user.vfs.feature", "auth-module").unwrap();
+assert_eq!(get_xattr(&tmp.path, "user.vfs.feature").unwrap(), Some("auth-module".into()));
+```
+
+**Graph edge insertion + query:**
+```rust
+let db = GraphDb::in_memory();
+db.insert_edge("a.go", "b.go", "imports").unwrap();
+assert_eq!(db.edge_count(), 1);
+```
+
+**MCP message round-trip:**
+```rust
+let msg = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#;
+let resp = handle_message(msg);
+let v: Value = serde_json::from_str(&resp).unwrap();
+assert!(v["result"]["tools"].as_array().unwrap().len() >= 3);
+```
+
+**CLI integration:**
+```rust
+let tmp = TempDir::new();
+let output = run_warpfs(&["init"], tmp.path());
+assert!(output.status.success());
+assert!(tmp.path().join(".vfs/manifest.yaml").exists());
+```
+
+### 22.2 Pre-Commit Guard Expectations
+
+- Secrets: 0 findings (gitleaks)
+- Build: `cargo build` must pass
+- Tests: `cargo test` all must pass
+- Lint: `cargo clippy -- -D warnings` — no warnings (Phase 3+)
+- Format: `cargo fmt --check` — no diffs (Phase 3+)
+
+---
+
+*WarpFS — Implementation Specification v2 — June 2026*  
 *totalwindupflightsystems/warpfs*
