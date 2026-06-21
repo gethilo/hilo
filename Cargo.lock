@@ -2288,6 +2288,7 @@ dependencies = [
  "serde_yaml",
  "warpfs_core",
  "warpfs_graph",
+ "warpfs_mcp",
  "warpfs_metadata",
 ]
 
@@ -2312,6 +2313,18 @@ dependencies = [
  "thiserror",
  "tree-sitter",
  "tree-sitter-go",
+ "warpfs_metadata",
+]
+
+[[package]]
+name = "warpfs_mcp"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "warpfs_graph",
  "warpfs_metadata",
 ]
 

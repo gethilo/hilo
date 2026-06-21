@@ -129,20 +129,36 @@ fn graph_stats_no_data_prints_message() {
 // ─────────────────────── serve ───────────────────────
 
 #[test]
-fn serve_mcp_prints_stub_message() {
+fn serve_mcp_exits_cleanly_on_eof() {
+    // `serve --mcp` starts the MCP stdio server.  With no stdin piped
+    // (Command::output gives an empty/closed stdin) the server reads EOF
+    // immediately and exits 0.
     let output = Command::new(BIN)
         .args(["serve", "--mcp"])
         .output()
         .expect("failed to spawn warpfs serve --mcp");
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         output.status.success(),
-        "serve --mcp should exit 0: {}",
+        "serve --mcp should exit 0 on stdin EOF: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn serve_without_flag_errors() {
+    let output = Command::new(BIN)
+        .args(["serve"])
+        .output()
+        .expect("failed to spawn warpfs serve");
+
     assert!(
-        stdout.contains("not yet implemented"),
-        "expected a 'not yet implemented' message, got:\n{stdout}"
+        !output.status.success(),
+        "serve without --mcp should exit non-zero"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--mcp"),
+        "stderr should mention --mcp, got: {stderr}"
     );
 }

@@ -32,10 +32,10 @@
 - **Tests:** tests/cli/
 - **AC:** ✅ `warpfs init` creates .vfs/ + default manifest.yaml. `warpfs meta <path>` reads xattrs. `warpfs graph discover` runs parser → edges.jsonl → DuckDB. `warpfs graph stats` prints hotspot/orphan counts. All commands return non-zero on error. **COMPLETE 2026-06-20** — GLM 5.2 spawn, 7 files (main.rs + 4 commands + mod.rs + test), 5/5 tests pass, full workspace 44/44 tests pass, smoke-tested all 4 subcommands.
 
-## [ ] warpfs-mcp — MCP server (stdio transport, 3 tools)
+## [x] warpfs-mcp — MCP server (stdio transport, 3 tools)
 - **Priority:** P1
 - **Model:** glm-5.2
 - **Crate:** warpfs-mcp
 - **Files:** warpfs-mcp/src/lib.rs, warpfs-mcp/src/server.rs, warpfs-mcp/src/tools/
 - **Tests:** tests/mcp/
-- **AC:** `warpfs serve --mcp` starts stdio MCP server. Tools: vfs_get_metadata, vfs_graph_related, vfs_graph_stats. Each tool returns valid JSON-RPC. Server cleanly exits on stdin close. Tested with mcp-cli or equivalent.
+- **AC:** `warpfs serve --mcp` starts stdio MCP server. Tools: vfs_get_metadata, vfs_graph_related, vfs_graph_stats. Each tool returns valid JSON-RPC. Server cleanly exits on stdin close. Tested with mcp-cli or equivalent. ✅ **COMPLETE 2026-06-21**

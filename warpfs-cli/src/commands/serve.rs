@@ -1,11 +1,13 @@
-//! `warpfs serve --mcp` — MCP server stub.
-//!
-//! The real MCP server lives in the `warpfs-mcp` crate (not yet implemented).
+//! `warpfs serve --mcp` — start the MCP server.
 
 use anyhow::Result;
 
-/// Print the not-yet-implemented stub message.
-pub fn run(_mcp: bool) -> Result<()> {
-    println!("MCP server not yet implemented. Coming in warpfs-mcp crate.");
-    Ok(())
+/// Start the MCP server on stdin/stdout when `--mcp` is set.
+pub fn run(mcp: bool) -> Result<()> {
+    if mcp {
+        warpfs_mcp::server::run()?;
+        Ok(())
+    } else {
+        anyhow::bail!("No server mode selected. Use --mcp for MCP server.");
+    }
 }
