@@ -1,6 +1,6 @@
 //! Integration tests for the tree-sitter Go import parser.
 
-use warpfs_graph::parser::Parser;
+use warpfs_graph::parser::{Language, Parser};
 
 #[test]
 fn test_parse_simple_imports() {
@@ -9,7 +9,7 @@ package main
 import "fmt"
 import "os"
 "#;
-    let mut parser = Parser::new().unwrap();
+    let mut parser = Parser::for_language(Language::Go).unwrap();
     let edges = parser.parse_imports("src/main.go", source).unwrap();
     assert!(!edges.is_empty());
     // Should find at least "fmt" and "os"
@@ -24,7 +24,7 @@ fn test_parse_third_party_import() {
 package foo
 import "github.com/gin-gonic/gin"
 "#;
-    let mut parser = Parser::new().unwrap();
+    let mut parser = Parser::for_language(Language::Go).unwrap();
     let edges = parser.parse_imports("src/handler.go", source).unwrap();
     assert_eq!(edges.len(), 1);
     assert_eq!(edges[0].from, "src/handler.go");
@@ -35,7 +35,7 @@ import "github.com/gin-gonic/gin"
 #[test]
 fn test_parse_empty_file() {
     let source = "package main\n";
-    let mut parser = Parser::new().unwrap();
+    let mut parser = Parser::for_language(Language::Go).unwrap();
     let edges = parser.parse_imports("src/empty.go", source).unwrap();
     assert!(edges.is_empty());
 }
@@ -53,7 +53,7 @@ import (
     "github.com/spf13/cobra"
 )
 "#;
-    let mut parser = Parser::new().unwrap();
+    let mut parser = Parser::for_language(Language::Go).unwrap();
     let edges = parser.parse_imports("cmd/root.go", source).unwrap();
     let tos: Vec<&str> = edges.iter().map(|e| e.to.as_str()).collect();
     assert!(tos.contains(&"std:fmt"));

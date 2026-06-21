@@ -13,7 +13,7 @@ pub mod parser;
 
 pub use error::{GraphError, GraphResult};
 pub use graph::GraphDB;
-pub use parser::Parser;
+pub use parser::{Language, Parser};
 
 /// Re-export of the shared [`Edge`] type from `warpfs_metadata`.
 pub use warpfs_metadata::inventory::Edge;

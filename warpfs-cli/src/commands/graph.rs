@@ -4,53 +4,75 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use warpfs_graph::{GraphDB, Parser};
+use warpfs_graph::{GraphDB, Language, Parser};
 use warpfs_metadata::inventory::{self, Edge};
 
-/// Directory names to skip when walking for Go source files.
+/// Directory names to skip when walking for source files.
 const SKIP_DIRS: &[&str] = &[
-    "target", // Rust build output
-    "node_modules",
-    "vendor",
+    "target",       // Rust build output
+    "node_modules", // JavaScript/TypeScript
+    "vendor",       // Go / PHP
+    "__pycache__",  // Python cache
+    ".venv",        // Python virtualenv
 ];
 
-/// Walk the current directory for `*.go` files, parse their imports, and write
-/// the resulting edges to both `.vfs/graph/edges.jsonl` and the DuckDB graph
-/// database at `.vfs/graph/graph.db`.
+/// Walk the current directory for source files in all supported languages,
+/// parse their imports, and write the resulting edges to both
+/// `.vfs/graph/edges.jsonl` and `.vfs/graph/graph.db`.
 pub fn run_discover() -> Result<()> {
-    let cwd =
-        std::env::current_dir().context("failed to determine the current directory")?;
+    let cwd = std::env::current_dir().context("failed to determine the current directory")?;
 
-    // Collect every .go file under the current directory.
-    let mut go_files = Vec::new();
-    collect_go_files(&cwd, &mut go_files)
-        .context("failed to walk directory tree for Go files")?;
+    // Collect every source file under the current directory.
+    let mut source_files = Vec::new();
+    collect_source_files(&cwd, &mut source_files)
+        .context("failed to walk directory tree for source files")?;
 
-    // Parse imports from each file.
-    let mut parser =
-        Parser::new().context("failed to initialize the tree-sitter Go parser")?;
+    if source_files.is_empty() {
+        println!("No supported source files found. Supported extensions: {}",
+            Language::all_extensions().join(", "));
+        return Ok(());
+    }
+
+    // Group files by language so we can reuse one parser per language.
+    let mut by_lang: std::collections::BTreeMap<Language, Vec<PathBuf>> =
+        std::collections::BTreeMap::new();
+    for file in &source_files {
+        if let Some(ext) = file.extension().and_then(|e| e.to_str()) {
+            if let Some(lang) = Language::from_extension(ext) {
+                by_lang.entry(lang).or_default().push(file.clone());
+            }
+        }
+    }
+
     let mut all_edges: Vec<Edge> = Vec::new();
     let mut unique_sources: HashSet<String> = HashSet::new();
 
-    for file in &go_files {
-        let source = match std::fs::read_to_string(file) {
-            Ok(s) => s,
-            Err(_) => continue, // skip unreadable files
-        };
-        let rel = file
-            .strip_prefix(&cwd)
-            .unwrap_or(file)
-            .to_string_lossy()
-            .into_owned();
+    for (language, files) in &by_lang {
+        if files.is_empty() { continue; }
+        let lang_name = format!("{:?}", language);
+        let mut parser = Parser::for_language(*language)
+            .with_context(|| format!("failed to initialize tree-sitter {lang_name} parser"))?;
 
-        let edges = parser
-            .parse_imports(&rel, &source)
-            .with_context(|| format!("failed to parse {rel}"))?;
+        for file in files {
+            let source = match std::fs::read_to_string(file) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let rel = file
+                .strip_prefix(&cwd)
+                .unwrap_or(file)
+                .to_string_lossy()
+                .into_owned();
 
-        for e in &edges {
-            unique_sources.insert(e.from.clone());
+            let edges = parser
+                .parse_imports(&rel, &source)
+                .with_context(|| format!("failed to parse {rel}"))?;
+
+            for e in &edges {
+                unique_sources.insert(e.from.clone());
+            }
+            all_edges.extend(edges);
         }
-        all_edges.extend(edges);
     }
 
     // Persist edges to the JSONL inventory file.
@@ -68,19 +90,16 @@ pub fn run_discover() -> Result<()> {
 
     let n = all_edges.len();
     let m = unique_sources.len();
-    println!("Discovered {n} edges across {m} files");
+    let langs = by_lang.len();
+    println!("Discovered {n} edges across {m} files ({langs} languages)");
     Ok(())
 }
 
 /// Print summary statistics from the DuckDB graph database.
-///
-/// If no graph data exists yet, a helpful message is printed instead.
 pub fn run_stats() -> Result<()> {
-    let cwd =
-        std::env::current_dir().context("failed to determine the current directory")?;
+    let cwd = std::env::current_dir().context("failed to determine the current directory")?;
     let graph_db = cwd.join(".vfs").join("graph").join("graph.db");
 
-    // Avoid touching DuckDB when there is nothing to read.
     if !graph_db.exists() {
         println!("No graph data. Run `warpfs graph discover` first.");
         return Ok(());
@@ -106,25 +125,27 @@ pub fn run_stats() -> Result<()> {
     Ok(())
 }
 
-/// Recursively collect `*.go` file paths under `dir`, skipping hidden entries
-/// and the directories listed in [`SKIP_DIRS`].
-fn collect_go_files(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+/// Recursively collect source files for all supported languages.
+fn collect_source_files(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
 
-        // Skip hidden files/directories (e.g. .vfs, .git) and known build dirs.
         if name_str.starts_with('.') || SKIP_DIRS.contains(&name_str.as_ref()) {
             continue;
         }
 
         let ft = entry.file_type()?;
         if ft.is_dir() {
-            collect_go_files(&path, out)?;
-        } else if ft.is_file() && path.extension().map(|e| e == "go").unwrap_or(false) {
-            out.push(path);
+            collect_source_files(&path, out)?;
+        } else if ft.is_file() {
+            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                if Language::from_extension(ext).is_some() {
+                    out.push(path);
+                }
+            }
         }
     }
     Ok(())
