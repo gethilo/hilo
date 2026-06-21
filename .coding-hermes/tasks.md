@@ -8,8 +8,8 @@
 - **Tests:** warpfs-core/tests/manifest_test.rs (519L) — 10/10 pass
 - **AC:** ✅ Parse .vfs/manifest.yaml into typed Rust structs. All 13 sections (project, interfaces, repos, backends, metadata, graph, permissions, triggers, rules, plugins, discovery, sandbox, performance) parse without error. Unknown keys rejected. Default values applied for optional fields. Custom deserializers for string_or_int (permission modes) and string_or_vec (trigger on field). Rust keyword handling via serde rename (ref→git_ref, async→r#async).
 
-## [ ] warpfs-metadata — xattr read/write and inventory file I/O
-- **Priority:** P0 (blocking)
+## [x] warpfs-metadata — xattr read/write and inventory file I/O
+- **Priority:** P0 (blocking) ✅ COMPLETE 2026-06-20
 - **Model:** glm-5.2
 - **Crate:** warpfs-metadata
 - **Files:** warpfs-metadata/src/lib.rs, warpfs-metadata/src/xattr.rs, warpfs-metadata/src/inventory.rs
