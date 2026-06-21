@@ -126,11 +126,14 @@
 
 ## Models Reference
 
-| Model | Use | Provider |
-|-------|-----|----------|
-| glm-5.2 | Large new-crate features (3+ new files, complex logic) | zai-glm |
-| deepseek-v4-pro | Complex graph/algorithm work, evaluation | deepseek |
-| deepseek-v4-flash | Simple CLI wiring, thin adapters, 1-2 file changes | deepseek |
+| Model | Use | Provider | Fallback |
+|-------|-----|----------|----------|
+| glm-5.2 | Large new-crate features (3+ new files, complex logic) | zai-glm | openrouter/owl-alpha |
+| deepseek-v4-pro | Complex graph/algorithm work, evaluation | deepseek | openrouter/owl-alpha |
+| deepseek-v4-flash | Simple CLI wiring, thin adapters, 1-2 file changes | deepseek | — |
+| openrouter/owl-alpha | Fallback for any spawn — 1M ctx, 262K output, $0/M token, agentic-optimized | openrouter | — |
+
+**Fallback rule:** If `glm-5.2` rate-limits (429) or `deepseek-v4-pro` hits context limits, retry with `openrouter/owl-alpha` via `--provider openrouter`.
 
 ## Verification (Rust — every task)
 
