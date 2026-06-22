@@ -89,7 +89,7 @@
 - **AC:** Cache respects TTL from manifest; stale files re-fetched
 - **Notes:** GLM 5.2 rate-limited (429×2) → fell back to owl-alpha (free). Owl-alpha wrote all 6 files. Implemented S3Client (aws-sdk-s3) with get_object, list_objects, cache freshness (TTL-based), CacheMeta sidecar, S3Error enum with ReadOnly variant, CLI backend mount/list subcommands. 4 tests (cache_path, CacheMeta roundtrip, S3Error display). Build clean, 87/87 tests pass.
 
-## [ ] Phase 3: S3 write-through with auto-upload
+## [x] Phase 3: S3 write-through with auto-upload
 - **Priority:** medium
 - **Model:** deepseek-v4-pro
 - **Files:** warpfs-backends/src/s3.rs
@@ -99,6 +99,7 @@
 - **AC:** Upload failure returns error to agent, local cache preserved
 - **AC:** sha256 hash computed and stored in `user.vfs.hash` xattr
 - **Notes:** §13.2 in spec has the flow. This is the write path for S3.
+- **Result:** Implemented directly (foreman). Added `put_object()` with full write-through flow: cache write → SHA-256 → S3 upload → xattr (user.vfs.backend, user.vfs.hash) → blob index append. Added `writable` flag to S3Client, `WriteResult` struct, `BlobEntry` (JSONL). ReadOnly enforcement returns S3Error::ReadOnly. On upload failure, cache preserved. 7 new tests (sha256 determinism, blob entry roundtrip, read-only rejection, blob index write/append, WriteResult fields). Full workspace 94/94 pass.
 
 ## [x] Phase 3: Remote git repo backend
 - **Priority:** medium
