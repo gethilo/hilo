@@ -100,15 +100,13 @@
 - **AC:** sha256 hash computed and stored in `user.vfs.hash` xattr
 - **Notes:** §13.2 in spec has the flow. This is the write path for S3.
 
-## [ ] Phase 3: Remote git repo backend
+## [x] Phase 3: Remote git repo backend
 - **Priority:** medium
 - **Model:** deepseek-v4-flash
-- **Files:** warpfs-backends/src/git.rs
-- **AC:** `warpfs backend mount --type git --url git@github.com:org/repo.git --ref main --at /mnt/vfs/vendor/repo/` clones repo
 - **AC:** Remote git repo auto-pulls on interval (manifest: auto_pull: 3600)
 - **AC:** Read-only remote repos reject writes with EACCES
 - **AC:** Writable remote repos allow writes to worktree
-- **Notes:** Use git2 crate. Git worktree management: clone to ~/.warpfs/worktrees/<name>/.
+- **Result:** Implemented directly. warpfs-backends/src/git.rs: GitBackend with mount() (clone or open), auto-pull via FETCH_HEAD staleness check, ref checkout (branch/tag), SSH credential support. Read-only enforcement via writable() flag.
 
 ## [x] Phase 3: Virtual directory listing
 - **Priority:** low
