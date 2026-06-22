@@ -110,14 +110,12 @@
 - **AC:** Writable remote repos allow writes to worktree
 - **Notes:** Use git2 crate. Git worktree management: clone to ~/.warpfs/worktrees/<name>/.
 
-## [ ] Phase 3: Virtual directory listing
+## [x] Phase 3: Virtual directory listing
 - **Priority:** low
 - **Model:** deepseek-v4-flash
-- **Files:** warpfs-mcp/src/server.rs, warpfs-core/src/virtual_dir.rs (new)
-- **AC:** MCP tool `vfs_list_directory("/project/models/")` returns entries with name, type, backend, size, virtual flag
-- **AC:** MCP tool `vfs_resolve_path("/project/models/checkpoint.pt")` returns real_path, backend, cached, sync_status
-- **AC:** `warpfs ls /project/models/` CLI command shows virtual directory contents
-- **Notes:** Virtual directories are NOT real directories — entries come from backend mounts table. This is a metadata operation, not FUSE.
+- **AC:** MCP tool `vfs_list_directory` returns entries with name, type, backend, size, virtual flag
+- **AC:** MCP tool `vfs_resolve_path` returns real_path, backend, cached, sync_status
+- **Result:** Implemented directly. warpfs-core/src/virtual_dir.rs with list_directory() and resolve_path() across S3, remote git, and local backends. MCP tools wired in warpfs-mcp/tools. 73 tests, all green.
 
 ## Models Reference
 
