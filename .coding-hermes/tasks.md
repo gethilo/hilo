@@ -116,6 +116,19 @@
 - **AC:** MCP tool `vfs_resolve_path` returns real_path, backend, cached, sync_status
 - **Result:** Implemented directly. warpfs-core/src/virtual_dir.rs with list_directory() and resolve_path() across S3, remote git, and local backends. MCP tools wired in warpfs-mcp/tools. 73 tests, all green.
 
+## [ ] Phase 4: FUSE read-only mount — basic filesystem operations
+- **Priority:** high
+- **Model:** glm-5.2
+- **Provider:** zai-glm
+- **Files:** warpfs-fuse/src/ops.rs, warpfs-fuse/src/daemon.rs, warpfs-fuse/src/permissions.rs, warpfs-cli/src/commands/mount.rs (new), warpfs-cli/src/commands/mod.rs, warpfs-fuse/Cargo.toml
+- **AC:** `cargo build -p warpfs_fuse` compiles clean
+- **AC:** Implements fuser::Filesystem trait: lookup, getattr, readdir, read, getxattr, listxattr, open, release
+- **AC:** `warpfs-fuse/src/daemon.rs` has mount()/unmount() lifecycle with FuseConfig
+- **AC:** PermissionRule enforcement computes mode bits: 0444 for protected paths, 0644 for workspace
+- **AC:** `cargo test -p warpfs_fuse` — 6+ tests for ops (lookup existing/missing, getattr, readdir entries, read content, getxattr, permission mode bits)
+- **AC:** FUSE daemon starts, serves directory listing, accepts getxattr, unmounts cleanly
+- **Notes:** `fuser = "0.15"` already in Cargo.toml, `libfuse3-dev` installed. fuser API: implement `fuser::Filesystem` trait. Use `FileAttr`, `FileType::RegularFile`/`Directory`. Inode allocation: simple u64 counter. File content from mapped backend paths. getxattr calls warpfs_metadata::get_xattr(). For tests: mock backend with HashMap<String, Vec<u8>> file store.
+
 ## Models Reference
 
 | Model | Use | Provider | Fallback |
