@@ -62,7 +62,7 @@ struct MetaArgs {
 #[derive(Subcommand)]
 enum GraphCommand {
     /// Walk the current directory, parse Go imports, and populate the graph.
-    Discover,
+    Discover(DiscoverArgs),
     /// Print summary statistics from the discovered dependency graph.
     Stats,
     /// Query graph edges for a specific file.
@@ -73,6 +73,15 @@ enum GraphCommand {
     RuleList,
     /// Execute a named rule query against the dependency graph.
     RuleCheck(RuleCheckArgs),
+}
+
+#[derive(clap::Args)]
+struct DiscoverArgs {
+    /// Detect cross-repo imports using the workspace manifest.
+    /// When set, import paths that resolve to files in another workspace
+    /// repo are flagged as `external:repo-name:path` edges.
+    #[arg(long)]
+    workspace: bool,
 }
 
 #[derive(clap::Args)]
@@ -97,6 +106,11 @@ struct ImpactArgs {
     /// Output format: "text" (default) or "json".
     #[arg(long)]
     format: Option<String>,
+
+    /// Include external cross-repo edges in impact traversal.
+    /// When set, `external:repo-name:path` edges are also followed.
+    #[arg(long)]
+    external: bool,
 }
 
 #[derive(clap::Args)]
@@ -118,10 +132,10 @@ fn main() {
     let result = match cli.command {
         Commands::Init(_) => init::run(),
         Commands::Meta(args) => meta::run(&args.path, args.set.as_deref(), args.value.as_deref()),
-        Commands::Graph(GraphCommand::Discover) => graph::run_discover(),
+        Commands::Graph(GraphCommand::Discover(args)) => graph::run_discover(args.workspace),
         Commands::Graph(GraphCommand::Stats) => graph::run_stats(),
         Commands::Graph(GraphCommand::Related(args)) => graph::run_related(&args.path, args.relation.as_deref()),
-        Commands::Graph(GraphCommand::Impact(args)) => graph::run_impact(&args.path, args.max_depth, args.format.as_deref()),
+        Commands::Graph(GraphCommand::Impact(args)) => graph::run_impact(&args.path, args.max_depth, args.format.as_deref(), args.external),
         Commands::Graph(GraphCommand::RuleList) => graph::run_rule_list(),
         Commands::Graph(GraphCommand::RuleCheck(args)) => graph::run_rule_check(&args.name),
         Commands::Serve(args) => serve::run(args.mcp),

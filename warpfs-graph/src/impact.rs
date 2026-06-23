@@ -72,3 +72,82 @@ pub fn compute_impact(conn: &Connection, start_path: &str, max_depth: u32) -> Gr
 
     Ok(results)
 }
+
+/// Compute transitive impact with external cross-repo edge support.
+///
+/// When `include_external` is `true`, the BFS also follows `external:<repo>:<path>`
+/// edges by matching `to LIKE '%:' || path`.  This allows impact analysis
+/// to traverse across repository boundaries in a multi-repo workspace.
+pub fn compute_impact_with_external(
+    conn: &Connection,
+    start_path: &str,
+    max_depth: u32,
+    include_external: bool,
+) -> GraphResult<Vec<ImpactFile>> {
+    if max_depth == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut results: Vec<ImpactFile> = Vec::new();
+    let mut visited: HashSet<String> = HashSet::new();
+    visited.insert(start_path.to_string());
+
+    let mut queue: VecDeque<(String, u32)> = VecDeque::new();
+    queue.push_back((start_path.to_string(), 0));
+
+    let mut stmt = conn.prepare(r#"SELECT "from", rel FROM edges WHERE "to" = ?"#)?;
+    let mut ext_stmt: Option<duckdb::Statement> = None;
+
+    if include_external {
+        // Match edges where `to` ends with `:path` (the external edge format
+        // is `external:repo-name:path`).
+        ext_stmt = Some(conn.prepare(
+            r#"SELECT "from", rel FROM edges WHERE "to" LIKE '%:' || ?"#,
+        )?);
+    }
+
+    while let Some((path, depth)) = queue.pop_front() {
+        if depth >= max_depth {
+            continue;
+        }
+
+        // Exact match (local edges).
+        let rows = stmt.query_map(params![path.clone()], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            let (from, rel) = row?;
+            if visited.insert(from.clone()) {
+                results.push(ImpactFile {
+                    path: from.clone(),
+                    relation: rel,
+                    depth: depth + 1,
+                });
+                queue.push_back((from, depth + 1));
+            }
+        }
+
+        // External-edge match (cross-repo).
+        // Convert `repo/path/to/file` → `repo:path/to/file` by replacing
+        // only the first `/` with `:` to match the `external:repo:path` format.
+        if let Some(ref mut estmt) = ext_stmt {
+            let ext_path = path.replacen('/', ":", 1);
+            let rows = estmt.query_map(params![ext_path], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            for row in rows {
+                let (from, rel) = row?;
+                if visited.insert(from.clone()) {
+                    results.push(ImpactFile {
+                        path: from.clone(),
+                        relation: rel,
+                        depth: depth + 1,
+                    });
+                    queue.push_back((from, depth + 1));
+                }
+            }
+        }
+    }
+
+    Ok(results)
+}

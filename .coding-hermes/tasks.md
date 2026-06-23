@@ -196,16 +196,17 @@
 - **AC:** `cargo test -p warpfs_core` — 5+ tests (fresh clone creates worktree, ensure on existing worktree skips clone, checkout branch vs tag, list returns all worktrees, auto-pull on stale worktree triggers fetch)
 - **Notes:** §6.3 in spec. Use `git2` crate (already in workspace deps). Each worktree is a bare clone with a worktree checkout — `git clone --bare` then `git worktree add`. Tests: create temp bare repos, verify worktree operations. The `git2` crate wraps libgit2 for programmatic git operations.
 
-## [ ] Phase 6: Cross-repo graph edges — external: edge flagging
+## [x] Phase 6: Cross-repo graph edges — external: edge flagging
 - **Priority:** medium
 - **Model:** deepseek-v4-flash
-- **Files:** warpfs-graph/src/edges.rs, warpfs-graph/src/discovery.rs (or warpfs-cli/src/commands/graph.rs)
+- **Files:** warpfs-graph/src/edges.rs, warpfs-graph/src/impact.rs, warpfs-cli/src/commands/graph.rs
 - **AC:** `warpfs graph discover --workspace` detects cross-repo imports and appends `external:repo-name:path` edges
-- **AC:** Cross-repo edge format: `{from: "auth-service/src/handler.go", to: "external:shared-lib/pkg/utils.go", relation: "imports"}`
+- **AC:** Cross-repo edge format: `{from: "auth-service/src/handler.go", to: "external:shared-lib:pkg/utils.go", relation: "imports"}`
 - **AC:** `warpfs graph related auth-service/src/handler.go` shows both local and external edges, distinguished by `external:` prefix
 - **AC:** `warpfs graph impact shared-lib/pkg/utils.go --external` shows dependent files across repo boundaries
 - **AC:** `cargo test -p warpfs_graph` — 3+ tests for external edge detection, parsing, and query
 - **Notes:** §6.1 in spec. The discovery already parses imports; this adds workspace-level resolution. When an import path doesn't resolve to a file in the current repo, check workspace manifests for other repos that own that path. External edges are flagged with `external:` prefix in the `to` field.
+- **Result:** Implemented directly by foreman. warpfs-graph/src/edges.rs (+165 lines): format_external_edge, parse_external_edge, is_external, find_external_repo, build_repo_mounts functions with 8 unit + 2 doc tests. warpfs-graph/src/impact.rs: compute_impact_with_external() with LIKE '%:' pattern for cross-repo BFS. warpfs-graph/tests/edges_test.rs: 3 integration tests (edge detection in graph, cross-repo impact traversal, parse/format roundtrip). warpfs-cli: --workspace flag on discover, --external flag on impact. Full workspace 158/158 tests pass. Guard PASS.
 
 ## [ ] Phase 6: Workspace mount — unified FUSE tree from multi-repo manifest
 - **Priority:** medium

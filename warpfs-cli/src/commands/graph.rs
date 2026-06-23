@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use warpfs_graph::edges;
 use warpfs_graph::{impact, GraphDB, ImpactResult, Language, Parser};
 use warpfs_metadata::inventory::{self, Edge};
 
@@ -19,7 +20,7 @@ const SKIP_DIRS: &[&str] = &[
 /// Walk the current directory for source files in all supported languages,
 /// parse their imports, and write the resulting edges to both
 /// `.vfs/graph/edges.jsonl` and `.vfs/graph/graph.db`.
-pub fn run_discover() -> Result<()> {
+pub fn run_discover(workspace: bool) -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
 
     // Collect every source file under the current directory.
@@ -75,7 +76,39 @@ pub fn run_discover() -> Result<()> {
         }
     }
 
-    // Infer `tested_by` and `tests` edges from filename conventions.\n    let test_edges = discover_test_associations(&source_files, &cwd);\n    all_edges.extend(test_edges);\n\n    // Persist edges to the JSONL inventory file.
+    // Infer `tested_by` and `tests` edges from filename conventions.
+    let test_edges = discover_test_associations(&source_files, &cwd);
+    all_edges.extend(test_edges);
+
+    // Detect cross-repo external edges when --workspace is set.
+    if workspace {
+        if let Ok(ws) = load_workspace_manifest() {
+            let pairs: Vec<(String, String)> = ws
+                .mounts
+                .iter()
+                .map(|m| (m.source.clone(), m.at.clone()))
+                .collect();
+            let repo_mounts = edges::build_repo_mounts(&pairs);
+
+            let mut external_count = 0;
+            for edge in all_edges.iter_mut() {
+                if let Some((repo, path)) =
+                    edges::find_external_repo(&edge.to, &repo_mounts)
+                {
+                    edge.to = edges::format_external_edge(&repo, &path);
+                    external_count += 1;
+                }
+            }
+
+            if external_count > 0 {
+                println!(
+                    "Flagged {external_count} cross-repo edge(s) as external:repo:path"
+                );
+            }
+        }
+    }
+
+    // Persist edges to the JSONL inventory file.
     let edges_jsonl = cwd.join(".vfs").join("graph").join("edges.jsonl");
     inventory::append_edges_deduped(&edges_jsonl, &all_edges)
         .context("failed to write edges.jsonl")?;
@@ -148,7 +181,9 @@ pub fn run_related(path: &str, relation: Option<&str>) -> Result<()> {
 ///
 /// When `format` is `"json"`, prints the result as pretty-printed JSON.
 /// Otherwise prints each dependent file in human-readable text.
-pub fn run_impact(path: &str, max_depth: u32, format: Option<&str>) -> Result<()> {
+///
+/// When `external` is `true`, also follows `external:repo:path` cross-repo edges.
+pub fn run_impact(path: &str, max_depth: u32, format: Option<&str>, external: bool) -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
     let graph_db = cwd.join(".vfs").join("graph").join("graph.db");
 
@@ -160,15 +195,25 @@ pub fn run_impact(path: &str, max_depth: u32, format: Option<&str>) -> Result<()
     let graph = GraphDB::open(graph_db_str).context("failed to open DuckDB graph database")?;
 
     // Check whether the file exists in the graph at all.
-    if !graph
+    let in_graph = graph
         .file_in_graph(path)
-        .context("failed to query graph for file existence")?
-    {
+        .context("failed to query graph for file existence")?;
+    if !in_graph && !external {
         anyhow::bail!("not found in graph");
     }
 
-    let results = impact::compute_impact(graph.conn(), path, max_depth)
-        .context("failed to compute impact")?;
+    let results = if external {
+        warpfs_graph::impact::compute_impact_with_external(
+            graph.conn(),
+            path,
+            max_depth,
+            true,
+        )
+        .context("failed to compute impact with external edges")?
+    } else {
+        impact::compute_impact(graph.conn(), path, max_depth)
+            .context("failed to compute impact")?
+    };
 
     match format {
         Some("json") => {
@@ -221,7 +266,121 @@ pub fn run_stats() -> Result<()> {
     Ok(())
 }
 
-/// Infer `tested_by` and `tests` edges from common filename conventions across\n/// all 9 supported languages.\n///\n/// - `*_test.go` → tested_by → `*.go` (and reverse: `*.go` → tests → `*_test.go`)\n/// - `test_*.py` → tested_by → `*.py`\n/// - `*.test.ts` → tested_by → `*.ts`\n/// - `*.spec.ts` → tested_by → `*.ts`\n/// - `*_test.rs` → tested_by → `*.rs`\n/// - `*Test.java` → tested_by → `*.java`\n/// - `test_*.c` → tested_by → `*.c`\n/// - `*_test.cpp` → tested_by → `*.cpp`\n/// - `*_test.rb` → tested_by → `*.rb`\nfn discover_test_associations(source_files: &[PathBuf], cwd: &Path) -> Vec<Edge> {\n    let mut edges = Vec::new();\n    let stem_set: HashSet<String> = source_files\n        .iter()\n        .filter_map(|p| {\n            let rel = p.strip_prefix(cwd).unwrap_or(p);\n            Some(rel.to_string_lossy().into_owned())\n        })\n        .collect();\n\n    for file in source_files {\n        let rel = file.strip_prefix(cwd).unwrap_or(file);\n        let file_name = rel\n            .file_name()\n            .and_then(|n| n.to_str())\n            .unwrap_or(\"\");\n        let file_str = rel.to_string_lossy();\n\n        // Check if this is a test file → generate tested_by edge\n        if let Some(source_stem) = test_to_source(file_name) {\n            let parent = rel.parent().unwrap_or(Path::new(\"\"));\n            let source_path = parent.join(&source_stem);\n            let source_str = source_path.to_string_lossy().into_owned();\n            if stem_set.contains(&source_str) || file_name == &source_stem {\n                edges.push(Edge {\n                    from: file_str.into_owned(),\n                    to: source_str,\n                    rel: \"tested_by\".to_string(),\n                });\n            }\n        }\n\n        // Check if this is a source file that has a corresponding test file → tests edge\n        for test_stem in source_to_test_patterns(file_name) {\n            let parent = rel.parent().unwrap_or(Path::new(\"\"));\n            let test_path = parent.join(&test_stem);\n            let test_str = test_path.to_string_lossy().into_owned();\n            if stem_set.contains(&test_str) {\n                edges.push(Edge {\n                    from: file_str.clone().into_owned(),\n                    to: test_str,\n                    rel: \"tests\".to_string(),\n                });\n            }\n        }\n    }\n\n    edges\n}\n\n/// If `file_name` is a test file, return the source file stem it tests.\nfn test_to_source(name: &str) -> Option<String> {\n    if let Some(stem) = name.strip_suffix(\"_test.go\") {\n        Some(format!(\"{stem}.go\"))\n    } else if let Some(stem) = name.strip_suffix(\"_test.rs\") {\n        Some(format!(\"{stem}.rs\"))\n    } else if let Some(stem) = name.strip_suffix(\"_test.cpp\") {\n        Some(format!(\"{stem}.cpp\"))\n    } else if let Some(stem) = name.strip_suffix(\"_test.rb\") {\n        Some(format!(\"{stem}.rb\"))\n    } else if let Some(stem) = name.strip_prefix(\"test_\") {\n        if stem.ends_with(\".py\") {\n            Some(stem.to_string())\n        } else if stem.ends_with(\".c\") {\n            Some(stem.to_string())\n        } else {\n            None\n        }\n    } else if let Some(stem) = name.strip_suffix(\".test.ts\") {\n        Some(format!(\"{stem}.ts\"))\n    } else if let Some(stem) = name.strip_suffix(\".spec.ts\") {\n        Some(format!(\"{stem}.ts\"))\n    } else if let Some(stem) = name.strip_suffix(\"Test.java\") {\n        Some(format!(\"{stem}.java\"))\n    } else {\n        None\n    }\n}\n\n/// Return possible test file names for a given source file.\nfn source_to_test_patterns(name: &str) -> Vec<String> {\n    let mut patterns = Vec::new();\n    if let Some(stem) = name.strip_suffix(\".go\") {\n        patterns.push(format!(\"{stem}_test.go\"));\n    } else if let Some(stem) = name.strip_suffix(\".py\") {\n        patterns.push(format!(\"test_{stem}.py\"));\n    } else if let Some(stem) = name.strip_suffix(\".ts\") {\n        patterns.push(format!(\"{stem}.test.ts\"));\n        patterns.push(format!(\"{stem}.spec.ts\"));\n    } else if let Some(stem) = name.strip_suffix(\".rs\") {\n        patterns.push(format!(\"{stem}_test.rs\"));\n    } else if let Some(stem) = name.strip_suffix(\".java\") {\n        patterns.push(format!(\"{stem}Test.java\"));\n    } else if let Some(stem) = name.strip_suffix(\".c\") {\n        patterns.push(format!(\"test_{stem}.c\"));\n    } else if let Some(stem) = name.strip_suffix(\".cpp\") {\n        patterns.push(format!(\"{stem}_test.cpp\"));\n    } else if let Some(stem) = name.strip_suffix(\".rb\") {\n        patterns.push(format!(\"{stem}_test.rb\"));\n    }\n    patterns\n}\n\n/// Recursively collect source files for all supported languages.
+/// Infer `tested_by` and `tests` edges from common filename conventions across
+/// all 9 supported languages.
+///
+/// - `*_test.go` -> tested_by -> `*.go` (and reverse: `*.go` -> tests -> `*_test.go`)
+/// - `test_*.py` -> tested_by -> `*.py`
+/// - `*.test.ts` -> tested_by -> `*.ts`
+/// - `*.spec.ts` -> tested_by -> `*.ts`
+/// - `*_test.rs` -> tested_by -> `*.rs`
+/// - `*Test.java` -> tested_by -> `*.java`
+/// - `test_*.c` -> tested_by -> `*.c`
+/// - `*_test.cpp` -> tested_by -> `*.cpp`
+/// - `*_test.rb` -> tested_by -> `*.rb`
+fn discover_test_associations(source_files: &[PathBuf], cwd: &Path) -> Vec<Edge> {
+    let mut edges = Vec::new();
+    let stem_set: HashSet<String> = source_files
+        .iter()
+        .filter_map(|p| {
+            let rel = p.strip_prefix(cwd).unwrap_or(p);
+            Some(rel.to_string_lossy().into_owned())
+        })
+        .collect();
+
+    for file in source_files {
+        let rel = file.strip_prefix(cwd).unwrap_or(file);
+        let file_name = rel
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("");
+        let file_str = rel.to_string_lossy();
+
+        // Check if this is a test file -> generate tested_by edge
+        if let Some(source_stem) = test_to_source(file_name) {
+            let parent = rel.parent().unwrap_or(Path::new(""));
+            let source_path = parent.join(&source_stem);
+            let source_str = source_path.to_string_lossy().into_owned();
+            if stem_set.contains(&source_str) || file_name == &source_stem {
+                edges.push(Edge {
+                    from: file_str.clone().into_owned(),
+                    to: source_str,
+                    rel: "tested_by".to_string(),
+                });
+            }
+        }
+
+        // Check if this is a source file that has a corresponding test file -> tests edge
+        for test_stem in source_to_test_patterns(file_name) {
+            let parent = rel.parent().unwrap_or(Path::new(""));
+            let test_path = parent.join(&test_stem);
+            let test_str = test_path.to_string_lossy().into_owned();
+            if stem_set.contains(&test_str) {
+                edges.push(Edge {
+                    from: file_str.to_string(),
+                    to: test_str,
+                    rel: "tests".to_string(),
+                });
+            }
+        }
+    }
+
+    edges
+}
+
+/// If `file_name` is a test file, return the source file stem it tests.
+fn test_to_source(name: &str) -> Option<String> {
+    if let Some(stem) = name.strip_suffix("_test.go") {
+        Some(format!("{stem}.go"))
+    } else if let Some(stem) = name.strip_suffix("_test.rs") {
+        Some(format!("{stem}.rs"))
+    } else if let Some(stem) = name.strip_suffix("_test.cpp") {
+        Some(format!("{stem}.cpp"))
+    } else if let Some(stem) = name.strip_suffix("_test.rb") {
+        Some(format!("{stem}.rb"))
+    } else if let Some(stem) = name.strip_prefix("test_") {
+        if stem.ends_with(".py") {
+            Some(stem.to_string())
+        } else if stem.ends_with(".c") {
+            Some(stem.to_string())
+        } else {
+            None
+        }
+    } else if let Some(stem) = name.strip_suffix(".test.ts") {
+        Some(format!("{stem}.ts"))
+    } else if let Some(stem) = name.strip_suffix(".spec.ts") {
+        Some(format!("{stem}.ts"))
+    } else if let Some(stem) = name.strip_suffix("Test.java") {
+        Some(format!("{stem}.java"))
+    } else {
+        None
+    }
+}
+
+/// Return possible test file names for a given source file.
+fn source_to_test_patterns(name: &str) -> Vec<String> {
+    let mut patterns = Vec::new();
+    if let Some(stem) = name.strip_suffix(".go") {
+        patterns.push(format!("{stem}_test.go"));
+    } else if let Some(stem) = name.strip_suffix(".py") {
+        patterns.push(format!("test_{stem}.py"));
+    } else if let Some(stem) = name.strip_suffix(".ts") {
+        patterns.push(format!("{stem}.test.ts"));
+        patterns.push(format!("{stem}.spec.ts"));
+    } else if let Some(stem) = name.strip_suffix(".rs") {
+        patterns.push(format!("{stem}_test.rs"));
+    } else if let Some(stem) = name.strip_suffix(".java") {
+        patterns.push(format!("{stem}Test.java"));
+    } else if let Some(stem) = name.strip_suffix(".c") {
+        patterns.push(format!("test_{stem}.c"));
+    } else if let Some(stem) = name.strip_suffix(".cpp") {
+        patterns.push(format!("{stem}_test.cpp"));
+    } else if let Some(stem) = name.strip_suffix(".rb") {
+        patterns.push(format!("{stem}_test.rb"));
+    }
+    patterns
+}
+
 fn collect_source_files(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
@@ -264,6 +423,16 @@ fn load_manifest() -> Result<warpfs_core::manifest::Manifest> {
     anyhow::bail!(
         "No manifest found. Create a manifest.yaml or .vfs/manifest.yaml file with `warpfs init`."
     );
+}
+
+/// Load the workspace manifest from the first available path.
+fn load_workspace_manifest() -> Result<warpfs_core::workspace::WorkspaceManifest> {
+    for path in MANIFEST_PATHS {
+        if std::path::Path::new(path).exists() {
+            return Ok(warpfs_core::workspace::WorkspaceManifest::load(path)?);
+        }
+    }
+    anyhow::bail!("No workspace manifest found");
 }
 
 /// `warpfs graph rule-list` — print all rules from the manifest.
