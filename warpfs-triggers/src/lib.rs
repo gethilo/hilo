@@ -45,7 +45,7 @@ pub struct FileEvent {
     pub timestamp: u64,  // unix timestamp
 }
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum EventType {
     Write,
     Delete,

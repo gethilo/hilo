@@ -335,3 +335,201 @@ fn log_trigger_action(action: &TriggerAction, path: &Path) {
 fn _instant_marker() -> Instant {
     Instant::now()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use inotify::EventMask;
+    use std::path::Path;
+
+    // ── mask_to_event_type ────────────────────────────────────────────
+
+    #[test]
+    fn test_mask_to_close_write_is_write() {
+        assert_eq!(
+            mask_to_event_type(EventMask::CLOSE_WRITE),
+            Some(EventType::Write)
+        );
+    }
+
+    #[test]
+    fn test_mask_to_delete_is_delete() {
+        assert_eq!(
+            mask_to_event_type(EventMask::DELETE),
+            Some(EventType::Delete)
+        );
+    }
+
+    #[test]
+    fn test_mask_to_delete_self_is_delete() {
+        assert_eq!(
+            mask_to_event_type(EventMask::DELETE_SELF),
+            Some(EventType::Delete)
+        );
+    }
+
+    #[test]
+    fn test_mask_to_create_is_create() {
+        assert_eq!(
+            mask_to_event_type(EventMask::CREATE),
+            Some(EventType::Create)
+        );
+    }
+
+    #[test]
+    fn test_mask_to_modify_is_none() {
+        assert_eq!(mask_to_event_type(EventMask::MODIFY), None);
+    }
+
+    #[test]
+    fn test_mask_to_empty_is_none() {
+        assert_eq!(mask_to_event_type(EventMask::empty()), None);
+    }
+
+    // ── event_type_string ─────────────────────────────────────────────
+
+    #[test]
+    fn test_event_type_string_write() {
+        assert_eq!(event_type_string(&EventType::Write), "write");
+    }
+
+    #[test]
+    fn test_event_type_string_delete() {
+        assert_eq!(event_type_string(&EventType::Delete), "delete");
+    }
+
+    #[test]
+    fn test_event_type_string_create() {
+        assert_eq!(event_type_string(&EventType::Create), "create");
+    }
+
+    // ── matches_pattern ───────────────────────────────────────────────
+
+    #[test]
+    fn test_matches_pattern_star_matches_anything() {
+        assert!(matches_pattern(Path::new("foo.go"), "*"));
+        assert!(matches_pattern(Path::new("bar.rs"), "*"));
+        assert!(matches_pattern(Path::new("Makefile"), "*"));
+    }
+
+    #[test]
+    fn test_matches_pattern_extension_glob() {
+        assert!(matches_pattern(Path::new("main.go"), "*.go"));
+        assert!(matches_pattern(Path::new("test.go"), "*.go"));
+        assert!(!matches_pattern(Path::new("main.rs"), "*.go"));
+        assert!(!matches_pattern(Path::new("Makefile"), "*.go"));
+    }
+
+    #[test]
+    fn test_matches_pattern_exact() {
+        assert!(matches_pattern(Path::new("Makefile"), "Makefile"));
+        assert!(!matches_pattern(Path::new("makefile"), "Makefile"));
+        assert!(!matches_pattern(Path::new("Makefile.old"), "Makefile"));
+    }
+
+    #[test]
+    fn test_matches_pattern_no_match() {
+        assert!(!matches_pattern(Path::new("foo.rs"), "*.py"));
+        assert!(!matches_pattern(Path::new("bar"), "*.go"));
+    }
+
+    #[test]
+    fn test_matches_pattern_directory_component() {
+        // matches_pattern uses only the filename portion via file_name().
+        assert!(matches_pattern(
+            Path::new("src/subdir/main.go"),
+            "*.go"
+        ));
+        assert!(!matches_pattern(
+            Path::new("src/subdir/main.go"),
+            "src/subdir/main.go"
+        ));
+    }
+
+    // ── log_trigger_action ────────────────────────────────────────────
+
+    #[test]
+    fn test_log_trigger_action_setxattr() {
+        // Should not panic — writes to stderr.
+        log_trigger_action(
+            &TriggerAction::SetXattr {
+                key: "user.vfs.feature".into(),
+                value_template: "{{ .FilePath }} was updated".into(),
+            },
+            Path::new("test.go"),
+        );
+    }
+
+    #[test]
+    fn test_log_trigger_action_warn() {
+        log_trigger_action(&TriggerAction::Warn, Path::new("test.go"));
+    }
+
+    #[test]
+    fn test_log_trigger_action_error() {
+        log_trigger_action(&TriggerAction::Error, Path::new("test.go"));
+    }
+
+    // ── match-and-filter logic (unit-testable without running event loop)
+
+    #[test]
+    fn test_match_and_filter_write_event_passes() {
+        let trigger = TriggerConfig {
+            watch_pattern: "*.go".into(),
+            events: vec!["write".into()],
+            ..TriggerConfig::default()
+        };
+        let path = Path::new("main.go");
+        let event_type = EventType::Write;
+
+        // Replicate the match+filter logic from run().
+        let pattern_match = matches_pattern(path, &trigger.watch_pattern);
+        let event_match = trigger
+            .events
+            .iter()
+            .any(|e| e == event_type_string(&event_type));
+
+        assert!(pattern_match, "pattern should match *.go");
+        assert!(event_match, "write event should pass filter");
+    }
+
+    #[test]
+    fn test_match_and_filter_wrong_event_type_blocked() {
+        let trigger = TriggerConfig {
+            watch_pattern: "*.go".into(),
+            events: vec!["delete".into()],
+            ..TriggerConfig::default()
+        };
+        let path = Path::new("main.go");
+        let event_type = EventType::Write;
+
+        let pattern_match = matches_pattern(path, &trigger.watch_pattern);
+        let event_match = trigger
+            .events
+            .iter()
+            .any(|e| e == event_type_string(&event_type));
+
+        assert!(pattern_match, "pattern should match *.go");
+        assert!(!event_match, "write event should be blocked by delete-only filter");
+    }
+
+    #[test]
+    fn test_match_and_filter_wrong_pattern_blocked() {
+        let trigger = TriggerConfig {
+            watch_pattern: "*.rs".into(),
+            events: vec!["write".into()],
+            ..TriggerConfig::default()
+        };
+        let path = Path::new("main.go");
+        let event_type = EventType::Write;
+
+        let pattern_match = matches_pattern(path, &trigger.watch_pattern);
+        let event_match = trigger
+            .events
+            .iter()
+            .any(|e| e == event_type_string(&event_type));
+
+        assert!(!pattern_match, "pattern *.rs should not match main.go");
+        assert!(event_match, "write event should pass if pattern matched");
+    }
+}

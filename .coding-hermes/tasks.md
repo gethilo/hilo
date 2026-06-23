@@ -236,6 +236,16 @@
 
 **Fallback rule:** If `glm-5.2` rate-limits (429) or `deepseek-v4-pro` hits context limits, retry with `openrouter/owl-alpha` via `--provider openrouter`.
 
+## [x] Phase 6: warpfs-triggers engine unit tests — pure helper functions
+- **Priority:** low
+- **Model:** deepseek-v4-pro
+- **Files:** warpfs-triggers/src/engine.rs, warpfs-triggers/src/lib.rs, warpfs-triggers/tests/trigger_test.rs
+- **AC:** `cargo test -p warpfs_triggers` — 10+ additional tests (mask_to_event_type CLOSE_WRITE/DELETE/CREATE/MODIFY, event_type_string all variants, matches_pattern glob/exact/nomatch/directory-component, log_trigger_action SetXattr/Warn/Error, match_and_filter event-type gating, parse_and_fire_no_triggers)
+- **AC:** Unit tests use `#[cfg(test)] mod tests { use super::*; }` inline in engine.rs
+- **AC:** Existing broken matches_pattern tests removed (they create TriggerEngine but never call matches_pattern, producing zero coverage)
+- **Notes:** 484 lines source with only 61 lines of tests (mostly debounce). Pure helper functions are untested: mask_to_event_type, event_type_string, matches_pattern, log_trigger_action. Also test the match-and-filter logic (pattern match + event-type gate) without running the full event loop.
+- **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). engine.rs +197 lines: 20 inline unit tests (mask_to_event_type ×6, event_type_string ×3, matches_pattern ×5, log_trigger_action ×3, match-and-filter ×3). lib.rs: +Debug derive on EventType (needed by assert_eq!). trigger_test.rs: removed 2 broken matches_pattern tests that created TriggerEngine but never called matches_pattern. Full workspace 164+ tests pass. Guard PASS. warpfs-triggers: 26 tests (20 inline + 6 integration).
+
 ## Verification (Rust — every task)
 
 ```bash

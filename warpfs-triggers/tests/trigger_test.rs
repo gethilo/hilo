@@ -29,25 +29,6 @@ fn test_debouncer_should_fire_file() {
 }
 
 #[test]
-fn test_matches_pattern_wildcard() {
-    let cfg = TriggerConfig {
-        watch_pattern: "*".to_string(),
-        events: vec!["write".to_string()],
-        ..TriggerConfig::default()
-    };
-    let _engine = TriggerEngine::new(vec![cfg], 500);
-}
-
-#[test]
-fn test_matches_pattern_extension() {
-    let cfg = TriggerConfig {
-        watch_pattern: "*.go".to_string(),
-        ..TriggerConfig::default()
-    };
-    let _engine = TriggerEngine::new(vec![cfg], 500);
-}
-
-#[test]
 fn test_engine_creation() {
     let cfg = TriggerConfig::default();
     let _engine = TriggerEngine::new(vec![cfg], 500);
