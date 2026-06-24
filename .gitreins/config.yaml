@@ -4,13 +4,18 @@ guards:
   tests: true
   test_mode: full
   test_command: cargo test
-  static_analysis: false
+  lsp: true
+  lsp_tools: ["rust-analyzer"]
+  static_analysis: true
+  static_analysis_tools: {}
 evaluator:
   max_iterations: 25
   max_time: 5m
   max_input_tokens: 1M
   max_output_tokens: 0.5M
   tool_call_weight: 0.1
+  lsp_diagnostics: true
+  static_analysis_diagnostics: true
 defaults:
   model: deepseek-v4-pro
   check_for_updates: true
