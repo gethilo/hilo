@@ -293,7 +293,7 @@ impl Filesystem for WarpFS {
             .filter(|(_, e)| {
                 if ino == ROOT_INO {
                     // Direct children of root have single-component relative paths.
-                    e.path.parent().is_none() && e.path != Path::new("/")
+                    e.path.parent().map(|p| p.as_os_str().is_empty()).unwrap_or(false) && e.path != Path::new("/")
                 } else {
                     e.path.parent() == Some(&dir_entry.path)
                 }
