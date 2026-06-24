@@ -220,7 +220,7 @@ Phase 7: Production — scale, benchmarks, security, bubblewrap, permissions (§
 - **Notes:** This is a read-audit + patch task. Only fix critical issues — do NOT refactor working code for style.
 - **Result:** Audit complete — code is already clean. Zero bare unwraps in production code (all in #[cfg(test)]). All MCP tools validate inputs with `.ok_or_else(|| McpError::Protocol(...))`. All manifest structs use `#[serde(deny_unknown_fields)]`. No path traversal risks — MCP tools query DuckDB graph or xattrs, not raw filesystem paths from untrusted input. Error handling uses Result propagation throughout production code. No changes needed.
 
-### [ ] PH7-005: Benchmark scaffolding — criterion benchmarks for critical paths
+### [x] PH7-005: Benchmark scaffolding — criterion benchmarks for critical paths
 - **Priority:** low
 - **Model:** deepseek-v4-pro (direct write — 1 file per benchmark, mechanical)
 - **Files:** warpfs-graph/benches/graph_bench.rs (new), warpfs-fuse/benches/fuse_bench.rs (new), Cargo.toml (workspace-level benchmark profile), warpfs-graph/Cargo.toml, warpfs-fuse/Cargo.toml
@@ -231,6 +231,7 @@ Phase 7: Production — scale, benchmarks, security, bubblewrap, permissions (§
 - **AC:** No new code — benchmarks exercise existing APIs
 - **Spec ref:** §19 Phase 7 "Scale, benchmarks"
 - **Notes:** Criterion = `cargo add --dev criterion` to each crate. Each benchmark file: 1-3 `criterion_group!` targets. Use existing test helpers where possible. Graph benchmark: use temp DuckDB in-memory for fast iteration. FUSE benchmark: use the existing mock backend from fuse tests.
+- **Result:** Implemented in prior session, landed in catch-up commit (458adb8). warpfs-graph/benches/graph_bench.rs (116 lines): 6 benchmarks — insert 100/1K/10K edges, star-1K forward/reverse related, chain-500 impact BFS. warpfs-fuse/benches/fuse_bench.rs (106 lines): 4 benchmarks — construction 1K files, inode lookup miss/hit, resolve_path. Criterion 0.5 with html_reports added to both crates. Build clean, full workspace tests pass. Bench compilation requires duckdb-sys (deferred to background compile).
 
 ---
 
