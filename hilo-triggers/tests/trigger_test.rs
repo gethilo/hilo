@@ -1,5 +1,5 @@
-use std::path::Path;
 use hilo_triggers::{Debouncer, EventType, TriggerConfig, TriggerEngine};
+use std::path::Path;
 
 #[test]
 fn test_debouncer_should_fire_first_event() {

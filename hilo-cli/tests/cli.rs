@@ -23,10 +23,8 @@ fn unique_tempdir(label: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("clock moved backwards")
         .as_nanos();
-    let dir = std::env::temp_dir().join(format!(
-        "hilo-test-{label}-{}-{nanos}",
-        std::process::id()
-    ));
+    let dir =
+        std::env::temp_dir().join(format!("hilo-test-{label}-{}-{nanos}", std::process::id()));
     fs::create_dir_all(&dir).expect("failed to create temp dir");
     dir
 }

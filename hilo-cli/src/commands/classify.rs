@@ -5,10 +5,10 @@
 //! extended attributes. No LLM required.
 
 use anyhow::{Context, Result};
-use std::fs;
-use std::path::Path;
 use hilo_graph::{classify_file, Classification, Language};
 use hilo_metadata::xattr;
+use std::fs;
+use std::path::Path;
 
 /// Supported source file extensions mapped to Hilo languages.
 const SOURCE_EXTS: &[(&str, Language)] = &[

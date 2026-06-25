@@ -12,8 +12,8 @@ pub mod workspace_mount;
 
 use std::path::PathBuf;
 
-pub use ops::{InodeEntry, InodeKind, Hilo};
 pub use hilo_core::sandbox::BubblewrapConfig;
+pub use ops::{Hilo, InodeEntry, InodeKind};
 
 /// FUSE mount configuration from manifest.
 #[derive(Clone)]

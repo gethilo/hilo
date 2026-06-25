@@ -1,9 +1,9 @@
 //! Tests for the inventory module — directory creation, JSONL edge I/O,
 //! and YAML mount I/O.
 
+use hilo_metadata::inventory::{self, BackendMount, Edge};
 use std::fs;
 use tempfile::tempdir;
-use hilo_metadata::inventory::{self, BackendMount, Edge};
 
 #[test]
 fn test_create_vfs_structure_all_subdirs() {

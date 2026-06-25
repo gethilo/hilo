@@ -7,9 +7,9 @@
 //! pure CPU time (no kernel round-trips).
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use std::path::PathBuf;
 use hilo_fuse::ops::{inode_for_path, Hilo};
 use hilo_fuse::FuseConfig;
+use std::path::PathBuf;
 
 fn default_config(mount: &str, allow_other: bool) -> FuseConfig {
     FuseConfig {

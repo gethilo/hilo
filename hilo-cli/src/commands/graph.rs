@@ -5,10 +5,10 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, Result};
-use rayon::prelude::*;
 use hilo_graph::edges;
 use hilo_graph::{impact, GraphDB, ImpactResult, Language, Parser};
 use hilo_metadata::inventory::{self, Edge};
+use rayon::prelude::*;
 
 /// Directory names to skip when walking for source files.
 const SKIP_DIRS: &[&str] = &[

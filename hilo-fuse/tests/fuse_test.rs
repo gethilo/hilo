@@ -154,8 +154,8 @@ fn test_readdir_sorted_entries() {
 
 #[test]
 fn test_permission_compute_mode() {
-    use std::path::Path;
     use hilo_fuse::permissions::{compute_mode, default_protections};
+    use std::path::Path;
 
     let rules = default_protections();
 

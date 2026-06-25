@@ -8,8 +8,8 @@
 use std::fs;
 use std::path::Path;
 
-use tempfile::tempdir;
 use hilo_metadata::xattr;
+use tempfile::tempdir;
 
 /// Returns true if the filesystem backing `dir` supports xattrs.
 /// Writes a probe file and tries to set+get an xattr on it.

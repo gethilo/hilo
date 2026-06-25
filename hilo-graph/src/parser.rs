@@ -4,8 +4,8 @@
 //! Each language gets a dedicated extraction function that understands its
 //! specific import/dependency syntax.
 
-use tree_sitter::{Node, Parser as TsParser};
 use hilo_metadata::inventory::Edge;
+use tree_sitter::{Node, Parser as TsParser};
 
 use crate::error::{GraphError, GraphResult};
 
