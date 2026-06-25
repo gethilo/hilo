@@ -2265,6 +2265,146 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
+name = "hilo-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "hilo_backends",
+ "hilo_core",
+ "hilo_fuse",
+ "hilo_graph",
+ "hilo_mcp",
+ "hilo_metadata",
+ "rayon",
+ "serde",
+ "serde_yaml",
+]
+
+[[package]]
+name = "hilo_backends"
+version = "0.1.0"
+dependencies = [
+ "aws-config",
+ "aws-sdk-s3",
+ "filetime",
+ "git2",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "xattr",
+]
+
+[[package]]
+name = "hilo_core"
+version = "0.1.0"
+dependencies = [
+ "filetime",
+ "git2",
+ "serde",
+ "serde_yaml",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "hilo_fuse"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "criterion",
+ "fuser",
+ "glob",
+ "hilo_core",
+ "hilo_metadata",
+ "hilo_permissions",
+ "libc",
+ "serde",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "hilo_graph"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "duckdb",
+ "hilo_metadata",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tree-sitter",
+ "tree-sitter-c",
+ "tree-sitter-cpp",
+ "tree-sitter-go",
+ "tree-sitter-java",
+ "tree-sitter-javascript",
+ "tree-sitter-python",
+ "tree-sitter-ruby",
+ "tree-sitter-rust",
+ "tree-sitter-typescript",
+]
+
+[[package]]
+name = "hilo_mcp"
+version = "0.1.0"
+dependencies = [
+ "hilo_core",
+ "hilo_graph",
+ "hilo_metadata",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "hilo_metadata"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "thiserror 2.0.18",
+ "xattr",
+]
+
+[[package]]
+name = "hilo_permissions"
+version = "0.1.0"
+dependencies = [
+ "glob",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "hilo_plugins"
+version = "0.1.0"
+dependencies = [
+ "extism",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "hilo_triggers"
+version = "0.1.0"
+dependencies = [
+ "inotify",
+ "serde",
+ "serde_yaml",
+ "tokio",
+]
+
+[[package]]
 name = "hmac"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5035,146 +5175,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bfa7760aed19e106de2c7c0b581b509f2f25d3dacaf737cb82ac61bc6d760b0e"
 dependencies = [
  "try-lock",
-]
-
-[[package]]
-name = "warpfs-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "rayon",
- "serde",
- "serde_yaml",
- "warpfs_backends",
- "warpfs_core",
- "warpfs_fuse",
- "warpfs_graph",
- "warpfs_mcp",
- "warpfs_metadata",
-]
-
-[[package]]
-name = "warpfs_backends"
-version = "0.1.0"
-dependencies = [
- "aws-config",
- "aws-sdk-s3",
- "filetime",
- "git2",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "xattr",
-]
-
-[[package]]
-name = "warpfs_core"
-version = "0.1.0"
-dependencies = [
- "filetime",
- "git2",
- "serde",
- "serde_yaml",
- "tempfile",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "warpfs_fuse"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "criterion",
- "fuser",
- "glob",
- "libc",
- "serde",
- "tempfile",
- "tokio",
- "warpfs_core",
- "warpfs_metadata",
- "warpfs_permissions",
-]
-
-[[package]]
-name = "warpfs_graph"
-version = "0.1.0"
-dependencies = [
- "criterion",
- "duckdb",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "tree-sitter",
- "tree-sitter-c",
- "tree-sitter-cpp",
- "tree-sitter-go",
- "tree-sitter-java",
- "tree-sitter-javascript",
- "tree-sitter-python",
- "tree-sitter-ruby",
- "tree-sitter-rust",
- "tree-sitter-typescript",
- "warpfs_metadata",
-]
-
-[[package]]
-name = "warpfs_mcp"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "warpfs_core",
- "warpfs_graph",
- "warpfs_metadata",
-]
-
-[[package]]
-name = "warpfs_metadata"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "serde_yaml",
- "tempfile",
- "thiserror 2.0.18",
- "xattr",
-]
-
-[[package]]
-name = "warpfs_permissions"
-version = "0.1.0"
-dependencies = [
- "glob",
- "serde",
- "tempfile",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "warpfs_plugins"
-version = "0.1.0"
-dependencies = [
- "extism",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "warpfs_triggers"
-version = "0.1.0"
-dependencies = [
- "inotify",
- "serde",
- "serde_yaml",
- "tokio",
 ]
 
 [[package]]

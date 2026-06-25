@@ -3,10 +3,10 @@
 ## Install
 
 ```bash
-git clone https://github.com/totalwindupflightsystems/warpfs.git
-cd warpfs
+git clone https://github.com/totalwindupflightsystems/hilo.git
+cd hilo
 cargo build --release
-./target/release/warpfs-cli --help
+./target/release/hilo-cli --help
 ```
 
 ### Requirements
@@ -26,20 +26,20 @@ sudo apt install libfuse3-dev attr
 ## First Run
 
 ```bash
-# 1. Initialize WarpFS in your project
+# 1. Initialize Hilo in your project
 cd my-project
-warpfs init
+hilo init
 
 # 2. Build the dependency graph
-warpfs graph discover
+hilo graph discover
 
 # 3. Auto-classify every file
-warpfs classify
+hilo classify
 
 # 4. Explore
-warpfs graph stats
-warpfs graph impact sys:some-header.h --max-depth 3
-warpfs graph related src/main.rs --relation imports
+hilo graph stats
+hilo graph impact sys:some-header.h --max-depth 3
+hilo graph related src/main.rs --relation imports
 ```
 
 ## Using with AI Agents
@@ -47,7 +47,7 @@ warpfs graph related src/main.rs --relation imports
 ### Via MCP (Claude Desktop, Hermes, Continue)
 
 ```bash
-warpfs serve --mcp
+hilo serve --mcp
 ```
 
 Add to your MCP client configuration:
@@ -55,8 +55,8 @@ Add to your MCP client configuration:
 ```json
 {
   "mcpServers": {
-    "warpfs": {
-      "command": "/path/to/warpfs-cli",
+    "hilo": {
+      "command": "/path/to/hilo-cli",
       "args": ["serve", "--mcp"],
       "cwd": "/path/to/your/project"
     }
@@ -68,7 +68,7 @@ Add to your MCP client configuration:
 
 ```bash
 mkdir /mnt/vfs
-warpfs mount /mnt/vfs
+hilo mount /mnt/vfs
 
 # Standard tools work through the mount
 ls /mnt/vfs/

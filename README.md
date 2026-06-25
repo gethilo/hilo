@@ -1,4 +1,4 @@
-# WarpFS
+# Hilo
 
 **An agent-first virtual filesystem.** Give your AI coding agent a
 pre-built map of every codebase it touches — dependencies, entrypoints,
@@ -10,9 +10,9 @@ test coverage, blast radius — without burning context window on file reads.
 ## Install
 
 ```bash
-git clone https://github.com/totalwindupflightsystems/warpfs.git
-cd warpfs && cargo build --release
-./target/release/warpfs-cli --help
+git clone https://github.com/totalwindupflightsystems/hilo.git
+cd hilo && cargo build --release
+./target/release/hilo-cli --help
 ```
 
 Requirements: Rust 1.80+, `libfuse3-dev` (for FUSE mount), `attr` (for xattrs).
@@ -28,24 +28,24 @@ Every file read burns tokens. Context windows fill up. The agent forgets
 what it was doing halfway through. And the next time it asks the same
 question, it reads the same files again.
 
-## What WarpFS Does
+## What Hilo Does
 
-WarpFS pre-computes a dependency graph and enriches every file with
+Hilo pre-computes a dependency graph and enriches every file with
 metadata — **before** the agent asks. The agent queries the graph through
 standard tools (`getfattr`, `ls`, `cat`) or an MCP server. Zero file reads
 for structural questions.
 
 ```
-$ warpfs init              # Create .vfs/ metadata directory
-$ warpfs graph discover    # Parse AST, build graph (9 languages)
+$ hilo init              # Create .vfs/ metadata directory
+$ hilo graph discover    # Parse AST, build graph (9 languages)
   parsing 100/817 files...
   parsing 817/817 files...
   Discovered 2315 edges across 716 files (9 languages)
 
-$ warpfs graph impact 'sys:gtest/gtest.h' --max-depth 5
+$ hilo graph impact 'sys:gtest/gtest.h' --max-depth 5
   349 files impacted — 347 C++, 2 headers
 
-$ warpfs classify          # Auto-tag every file with role + stability
+$ hilo classify          # Auto-tag every file with role + stability
   1064 files: 423 library, 405 test, 39 entrypoint
 ```
 
@@ -56,7 +56,7 @@ $ warpfs classify          # Auto-tag every file with role + stability
 │  Agent (Claude / Hermes / Codex)         │
 │    │  MCP tools  │  getfattr  │  cat     │
 ├────┼─────────────┼────────────┼──────────┤
-│  WarpFS                                  │
+│  Hilo                                  │
 │  ┌──────────┐  ┌──────────┐  ┌────────┐ │
 │  │  FUSE    │  │   MCP    │  │  CLI   │ │
 │  │  mount   │  │  server  │  │  shim  │ │
@@ -93,28 +93,28 @@ $ warpfs classify          # Auto-tag every file with role + stability
 ## Quickstart
 
 ```bash
-# Initialize WarpFS in any repo
-warpfs init
+# Initialize Hilo in any repo
+hilo init
 
 # Build the dependency graph
-warpfs graph discover
+hilo graph discover
 
 # Classify every file
-warpfs classify
+hilo classify
 
 # Query through CLI
-warpfs graph stats
-warpfs graph impact <file> --max-depth 3
-warpfs graph related <file> --relation imports
+hilo graph stats
+hilo graph impact <file> --max-depth 3
+hilo graph related <file> --relation imports
 
 # Or mount as a filesystem
 mkdir /mnt/vfs
-warpfs mount /mnt/vfs
+hilo mount /mnt/vfs
 ls /mnt/vfs/
 getfattr -n user.vfs.role /mnt/vfs/src/main.rs
 
 # Or serve MCP for agents
-warpfs serve --mcp
+hilo serve --mcp
 ```
 
 ## License

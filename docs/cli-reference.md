@@ -1,30 +1,30 @@
 # CLI Reference
 
-## `warpfs init`
+## `hilo init`
 
-Initialize WarpFS in the current directory. Creates `.vfs/` with inventory
+Initialize Hilo in the current directory. Creates `.vfs/` with inventory
 files and a default manifest.
 
 ```bash
-warpfs init
+hilo init
 ```
 
-## `warpfs meta`
+## `hilo meta`
 
 Read and write extended attributes on files.
 
 ```bash
-# Read all WarpFS xattrs
-warpfs meta src/main.rs
+# Read all Hilo xattrs
+hilo meta src/main.rs
 
 # Set a specific attribute
-warpfs meta --set src/main.rs user.vfs.role entrypoint
+hilo meta --set src/main.rs user.vfs.role entrypoint
 
 # Read a specific attribute
-warpfs meta --read src/main.rs user.vfs.role
+hilo meta --read src/main.rs user.vfs.role
 ```
 
-## `warpfs graph`
+## `hilo graph`
 
 ### `discover`
 
@@ -33,10 +33,10 @@ build the dependency graph. Writes to `.vfs/graph/edges.jsonl` and
 `.vfs/graph/graph.db`.
 
 ```bash
-warpfs graph discover
+hilo graph discover
 
 # With cross-repo workspace edges
-warpfs graph discover --workspace
+hilo graph discover --workspace
 ```
 
 Supported languages: Go, Python, TypeScript, Rust, JavaScript, Java,
@@ -48,7 +48,7 @@ C, C++, Ruby. Directories skipped: `target/`, `node_modules/`, `vendor/`,
 Aggregate statistics about the dependency graph.
 
 ```bash
-warpfs graph stats
+hilo graph stats
 
 # Output:
 # Total edges: 2252
@@ -65,16 +65,16 @@ Find files related to a given path through the dependency graph.
 
 ```bash
 # Forward: what does this file import?
-warpfs graph related src/main.rs
+hilo graph related src/main.rs
 
 # Filter by relation type
-warpfs graph related src/main.rs --relation imports
+hilo graph related src/main.rs --relation imports
 
 # Reverse: what imports this file?
-warpfs graph related sys:some-header.h --direction reverse
+hilo graph related sys:some-header.h --direction reverse
 
 # Reverse with relation filter
-warpfs graph related src/login.go --direction reverse --relation tested_by
+hilo graph related src/login.go --direction reverse --relation tested_by
 ```
 
 ### `impact`
@@ -83,29 +83,29 @@ Find all files that depend on a given file, directly or transitively.
 
 ```bash
 # Direct dependents only
-warpfs graph impact sys:metacall/metacall.h --max-depth 1
+hilo graph impact sys:metacall/metacall.h --max-depth 1
 
 # Full transitive closure (up to 5 by default)
-warpfs graph impact sys:gtest/gtest.h --max-depth 5
+hilo graph impact sys:gtest/gtest.h --max-depth 5
 
 # JSON output
-warpfs graph impact sys:metacall/metacall.h --format json
+hilo graph impact sys:metacall/metacall.h --format json
 ```
 
-## `warpfs classify`
+## `hilo classify`
 
 Auto-tag every source file with `user.vfs.role` and `user.vfs.status`
 using tree-sitter AST queries. No LLM required.
 
 ```bash
 # Dry run — show what would be tagged
-warpfs classify --dry-run
+hilo classify --dry-run
 
 # Apply tags
-warpfs classify
+hilo classify
 
 # Verbose output (per-file)
-warpfs classify --verbose
+hilo classify --verbose
 ```
 
 Roles detected: `entrypoint`, `library`, `test`, `script`, `example`,
@@ -113,26 +113,26 @@ Roles detected: `entrypoint`, `library`, `test`, `script`, `example`,
 
 Statuses detected: `stable`, `beta`, `unstable`, `deprecated`, `unknown`.
 
-## `warpfs mount`
+## `hilo mount`
 
 Mount the current directory as a FUSE filesystem with xattr passthrough.
 
 ```bash
 mkdir /mnt/vfs
-warpfs mount /mnt/vfs
+hilo mount /mnt/vfs
 
 # With triggers (auto-reparse on file changes)
-warpfs mount /mnt/vfs --triggers
+hilo mount /mnt/vfs --triggers
 
 # Allow other users to access
-warpfs mount /mnt/vfs --allow-other
+hilo mount /mnt/vfs --allow-other
 ```
 
-## `warpfs serve`
+## `hilo serve`
 
 Start the MCP server for agent integration.
 
 ```bash
 # Stdio transport (for Claude Desktop, Hermes)
-warpfs serve --mcp
+hilo serve --mcp
 ```

@@ -1,9 +1,9 @@
 [workspace]
-members = ["warpfs-core", "warpfs-metadata", "warpfs-graph", "warpfs-cli", "warpfs-mcp", "warpfs-backends", "warpfs-triggers", "warpfs-fuse", "warpfs-plugins", "warpfs-permissions"]
+members = ["hilo-core", "hilo-metadata", "hilo-graph", "hilo-cli", "hilo-mcp", "hilo-backends", "hilo-triggers", "hilo-fuse", "hilo-plugins", "hilo-permissions"]
 resolver = "2"
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/totalwindupflightsystems/warpfs"
+repository = "https://github.com/gethilo/hilo"

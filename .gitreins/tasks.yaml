@@ -17,10 +17,10 @@ tasks:
 - id: xattr-fuse-roundtrip
   title: "Xattr through FUSE mount \u2014 end-to-end"
   criteria:
-  - warpfs meta --set feature --value foo stores as user.vfs.feature (single prefix)
+  - hilo meta --set feature --value foo stores as user.vfs.feature (single prefix)
   - getfattr -n user.vfs.feature <mount/file> returns 'foo'
-  - 'warpfs meta <mount/file> returns ''feature: foo'' (was broken with triple-prefix)'
-  - warpfs meta --set user.vfs.feature --value bar stores identically (idempotent)
+  - 'hilo meta <mount/file> returns ''feature: foo'' (was broken with triple-prefix)'
+  - hilo meta --set user.vfs.feature --value bar stores identically (idempotent)
   - getfattr -d <mount/file> lists user.vfs.feature exactly once
   - Untagged files return 'No such attribute' via getfattr, not empty string
   status: pending
@@ -28,7 +28,7 @@ tasks:
 - id: graph-dedup
   title: "Graph deduplication \u2014 re-discover must not double edges"
   criteria:
-  - Running warpfs graph discover twice on same project produces identical edge count
+  - Running hilo graph discover twice on same project produces identical edge count
   - append_edges_deduped filters by (from, to, rel) tuple before append
   - DuckDB loaded from edges.jsonl has no duplicate rows after re-discover
   - 'graph stats: total_edges equals unique edge count, no duplicates'
@@ -38,10 +38,10 @@ tasks:
 - id: graph-reverse-queries
   title: "Reverse graph queries \u2014 imported_by, tested_by, tests"
   criteria:
-  - warpfs graph related pkg:serde --relation imported_by returns all files importing
+  - hilo graph related pkg:serde --relation imported_by returns all files importing
     serde
-  - warpfs graph related <test_file> --relation tests returns the source file it tests
-  - warpfs graph related <source_file> --relation tested_by returns its test files
+  - hilo graph related <test_file> --relation tests returns the source file it tests
+  - hilo graph related <source_file> --relation tested_by returns its test files
   - GraphDB::related() accepts direction parameter (forward/reverse) with rel filter
   - 'Cross-language test detection: *_test.go, test_*.py, *.test.ts, *_test.rs, *Test.java
     all mapped'
@@ -98,8 +98,8 @@ tasks:
 - id: mcp-graph-consistency
   title: MCP graph tools match CLI output exactly
   criteria:
-  - vfs_graph_stats returns same total_edges as warpfs graph stats CLI
-  - vfs_graph_related(path, imports) returns same edges as warpfs graph related --relation
+  - vfs_graph_stats returns same total_edges as hilo graph stats CLI
+  - vfs_graph_related(path, imports) returns same edges as hilo graph related --relation
     imports
   - MCP server loads graph from same DuckDB file as CLI (no separate instance)
   - MCP server works after graph discover without restart
@@ -109,11 +109,11 @@ tasks:
   title: "Full pipeline \u2014 init \u2192 tag \u2192 discover \u2192 mount \u2192\
     \ query"
   criteria:
-  - warpfs init creates complete .vfs/ structure with all subdirectories
-  - warpfs meta --set works with and without user.vfs. prefix (idempotent)
-  - warpfs graph discover produces edges.jsonl with correct (from, to, rel) tuples
+  - hilo init creates complete .vfs/ structure with all subdirectories
+  - hilo meta --set works with and without user.vfs. prefix (idempotent)
+  - hilo graph discover produces edges.jsonl with correct (from, to, rel) tuples
   - FUSE mount exposes files with correct content and xattrs
-  - warpfs meta on FUSE mount returns correct values (no prefix bugs)
+  - hilo meta on FUSE mount returns correct values (no prefix bugs)
   - getfattr on FUSE mount returns correct values (no prefix bugs)
   - MCP tools query the same graph data visible through CLI and FUSE
   - Full pipeline completes without panics or hangs
@@ -122,7 +122,7 @@ tasks:
 - id: regression-test-coverage
   title: "Regression test coverage \u2014 bugs found must have tests"
   criteria:
-  - 'xattr prefix doubling: 10+ tests in warpfs_metadata covering mixed-prefix roundtrip'
+  - 'xattr prefix doubling: 10+ tests in hilo_metadata covering mixed-prefix roundtrip'
   - 'FUSE readdir root children: test validates Path(''file'').parent() = Some('''')
     case'
   - 'Graph dedup: test validates discover idempotency (same edge count on re-run)'

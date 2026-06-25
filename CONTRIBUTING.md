@@ -1,10 +1,10 @@
-# Contributing to WarpFS
+# Contributing to Hilo
 
 ## Development Setup
 
 ```bash
-git clone https://github.com/totalwindupflightsystems/warpfs.git
-cd warpfs
+git clone https://github.com/totalwindupflightsystems/hilo.git
+cd hilo
 
 # Build
 cargo build
@@ -22,17 +22,17 @@ Requirements: Rust 1.80+, `libfuse3-dev`, `attr`.
 ## Project Structure
 
 ```
-warpfs/
-├── warpfs-core/        # Manifest, workspace, sandbox, virtual dirs
-├── warpfs-metadata/    # xattr read/write, JSONL inventory
-├── warpfs-graph/       # Tree-sitter parsers, DuckDB queries, classify
-├── warpfs-mcp/         # JSON-RPC MCP server (8 tools)
-├── warpfs-cli/         # CLI (init, meta, graph, classify, mount, serve)
-├── warpfs-fuse/        # FUSE daemon, ops, permissions
-├── warpfs-backends/    # S3, Git, local storage backends
-├── warpfs-triggers/    # inotify watchers
-├── warpfs-plugins/     # Extism WASM plugin runtime
-├── warpfs-permissions/ # Mode-bit enforcement engine
+hilo/
+├── hilo-core/        # Manifest, workspace, sandbox, virtual dirs
+├── hilo-metadata/    # xattr read/write, JSONL inventory
+├── hilo-graph/       # Tree-sitter parsers, DuckDB queries, classify
+├── hilo-mcp/         # JSON-RPC MCP server (8 tools)
+├── hilo-cli/         # CLI (init, meta, graph, classify, mount, serve)
+├── hilo-fuse/        # FUSE daemon, ops, permissions
+├── hilo-backends/    # S3, Git, local storage backends
+├── hilo-triggers/    # inotify watchers
+├── hilo-plugins/     # Extism WASM plugin runtime
+├── hilo-permissions/ # Mode-bit enforcement engine
 └── specs/              # Design documents
 ```
 
@@ -44,13 +44,13 @@ feat(<crate>): <brief description>
 Co-authored-by: wojons <wojonstech@gmail.com>
 ```
 
-Crate name matches Cargo.toml `name` field: `warpfs_core`, `warpfs_graph`,
-`warpfs_metadata`, `warpfs_cli`, `warpfs_mcp`, `warpfs_backends`,
-`warpfs_triggers`, `warpfs_fuse`, `warpfs_plugins`, `warpfs_permissions`.
+Crate name matches Cargo.toml `name` field: `hilo_core`, `hilo_graph`,
+`hilo_metadata`, `hilo_cli`, `hilo_mcp`, `hilo_backends`,
+`hilo_triggers`, `hilo_fuse`, `hilo_plugins`, `hilo_permissions`.
 
 ## Pre-commit Checks
 
-WarpFS uses [GitReins](https://github.com/totalwindupflightsystems/gitreins)
+Hilo uses [GitReins](https://github.com/totalwindupflightsystems/gitreins)
 for pre-commit enforcement:
 
 - **Tier 1** (blocks commit): secrets scan, `cargo test`, LSP diagnostics,
@@ -73,9 +73,9 @@ gitreins init
 
 ## Adding a Language
 
-1. Add the `tree-sitter-<lang>` crate to `warpfs-graph/Cargo.toml`
-2. Add the variant to `Language` enum in `warpfs-graph/src/parser.rs`
+1. Add the `tree-sitter-<lang>` crate to `hilo-graph/Cargo.toml`
+2. Add the variant to `Language` enum in `hilo-graph/src/parser.rs`
 3. Add extension → language mapping in `from_extension()`
 4. Implement import extraction in `parse_imports()`
-5. Add entrypoint + test patterns to `warpfs-graph/src/classify.rs`
+5. Add entrypoint + test patterns to `hilo-graph/src/classify.rs`
 6. Add test files for verification

@@ -1,0 +1,22 @@
+[package]
+name = "hilo_backends"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/gethilo/hilo"
+description = "Hilo backend storage — Git (git2), S3 (aws-sdk), remote repos, local disk"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+git2 = "0.19"
+aws-sdk-s3 = "1"
+aws-config = "1"
+sha2 = "0.10"
+xattr = "1"
+tokio = { version = "1", features = ["full"] }
+
+[dev-dependencies]
+tempfile = "3"
+filetime = "0.2"

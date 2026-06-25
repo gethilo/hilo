@@ -1,0 +1,26 @@
+[package]
+name = "hilo_fuse"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/gethilo/hilo"
+description = "Hilo FUSE daemon — kernel-level virtual filesystem with permission enforcement"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+fuser = "0.15"
+anyhow = "1"
+tokio = { version = "1", features = ["full"] }
+glob = "0.3"
+libc = "0.2"
+hilo_metadata = { path = "../hilo-metadata" }
+hilo_core = { path = "../hilo-core" }
+hilo_permissions = { path = "../hilo-permissions" }
+
+[dev-dependencies]
+tempfile = "3"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "fuse_bench"
+harness = false

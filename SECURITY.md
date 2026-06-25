@@ -6,7 +6,7 @@
 | ------- | ------------------ |
 | 0.1.x   | ✅                 |
 
-WarpFS is in active development. Security patches are issued for the
+Hilo is in active development. Security patches are issued for the
 latest release.
 
 ## Reporting a Vulnerability
@@ -26,7 +26,7 @@ a fix within **7 days** of confirmation.
 
 ### Scope
 
-- WarpFS core daemon, CLI, and MCP server
+- Hilo core daemon, CLI, and MCP server
 - FUSE mount path traversal and permission bypass
 - MCP server input validation
 - Graph engine SQL injection

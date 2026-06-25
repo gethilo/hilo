@@ -61,7 +61,7 @@ BFS traversal from a starting node outward through `imports` edges:
 
 ## Classification
 
-Separate from graph discovery. `warpfs classify` uses tree-sitter AST
+Separate from graph discovery. `hilo classify` uses tree-sitter AST
 queries to detect:
 
 - **Entrypoints** — `fn main()`, `if __name__`, `public static void main`

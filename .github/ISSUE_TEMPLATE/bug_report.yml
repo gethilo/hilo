@@ -9,8 +9,8 @@ body:
   - type: input
     id: version
     attributes:
-      label: WarpFS version
-      description: What version are you running? (`warpfs-cli --version`)
+      label: Hilo version
+      description: What version are you running? (`hilo-cli --version`)
       placeholder: "0.1.0"
     validations:
       required: true

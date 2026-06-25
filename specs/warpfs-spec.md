@@ -1,8 +1,8 @@
-# WarpFS — Implementation Specification
+# Hilo — Implementation Specification
 
 **Status:** Spec Phase  
 **Date:** June 2026  
-**Repo:** [totalwindupflightsystems/warpfs](https://github.com/totalwindupflightsystems/warpfs)  
+**Repo:** [totalwindupflightsystems/hilo](https://github.com/totalwindupflightsystems/hilo)  
 **Language:** Pure Rust  
 **Design Reference:** [Hermes VFS Design v2](https://totalwindupflightsystems.github.io/reports/hermes-vfs-design.html)
 
@@ -10,7 +10,7 @@
 
 ## 1. Mission
 
-WarpFS is a virtual filesystem for AI coding agents. Clone repos → mount with WarpFS → point agent workspace at the mount. Files stay pristine. Metadata — relationships, graph edges, backend routing, feature tags — lives in Linux extended attributes (xattrs) and inventory files. Agents query metadata through native tools (`getfattr`, `stat`) or via an MCP server. File content is never modified.
+Hilo is a virtual filesystem for AI coding agents. Clone repos → mount with Hilo → point agent workspace at the mount. Files stay pristine. Metadata — relationships, graph edges, backend routing, feature tags — lives in Linux extended attributes (xattrs) and inventory files. Agents query metadata through native tools (`getfattr`, `stat`) or via an MCP server. File content is never modified.
 
 ---
 
@@ -41,12 +41,12 @@ WarpFS is a virtual filesystem for AI coding agents. Clone repos → mount with 
 **Pure Rust.** Single binary. Single repo.
 
 ```bash
-cargo install warpfs
-warpfs mount /mnt/vfs/workspace    # FUSE daemon
-warpfs serve --mcp                 # MCP server (same binary)
-warpfs meta login.go               # CLI shim (same binary)
-warpfs graph impact login.go       # Graph queries (same binary)
-warpfs plugin load ./scanner.wasm  # Plugin loader (same binary)
+cargo install hilo
+hilo mount /mnt/vfs/workspace    # FUSE daemon
+hilo serve --mcp                 # MCP server (same binary)
+hilo meta login.go               # CLI shim (same binary)
+hilo graph impact login.go       # Graph queries (same binary)
+hilo plugin load ./scanner.wasm  # Plugin loader (same binary)
 ```
 
 ### 3.1 Key Crates
@@ -428,7 +428,7 @@ Repos with dependencies must be mounted first so their graphs are available when
 
 ### 6.3 Git Worktree Model
 
-Each repo gets its own git worktree under `~/.warpfs/worktrees/<name>/`. The VFS manages these — clone, pull, checkout ref. The agent never touches the worktree directly.
+Each repo gets its own git worktree under `~/.hilo/worktrees/<name>/`. The VFS manages these — clone, pull, checkout ref. The agent never touches the worktree directly.
 
 ---
 
@@ -589,7 +589,7 @@ Rules defined in the manifest as SQL queries. Invoked via MCP as `vfs_rule_check
 
 ## 11. MCP Server
 
-Served by the same binary. `warpfs serve --mcp` starts the MCP server (stdio or SSE transport).
+Served by the same binary. `hilo serve --mcp` starts the MCP server (stdio or SSE transport).
 
 ### 11.1 Complete Tool Set
 
@@ -627,7 +627,7 @@ Language bindings generated from a `.udl` interface definition. Bindings are OUT
 ### 12.1 Exported Functions
 
 ```idl
-namespace warpfs {
+namespace hilo {
     Metadata vfs_get_metadata(string path);
     void vfs_set_metadata(string path, string key, string value);
     sequence<GraphEdge> vfs_graph_related(string path, sequence<string>? relations, u32 max_depth);
@@ -643,10 +643,10 @@ namespace warpfs {
 
 | Language | Output | Usage |
 |---|---|---|
-| Go | `warpfs-go/vfs/` | `import "github.com/totalwindupflightsystems/warpfs-go/vfs"` |
-| Python | `warpfs/` wheel | `import warpfs` |
-| Kotlin | `warpfs-kotlin/` | JVM/Swift interop |
-| Swift | `WarpFS/` | Native Apple platforms |
+| Go | `hilo-go/vfs/` | `import "github.com/totalwindupflightsystems/hilo-go/vfs"` |
+| Python | `hilo/` wheel | `import hilo` |
+| Kotlin | `hilo-kotlin/` | JVM/Swift interop |
+| Swift | `Hilo/` | Native Apple platforms |
 
 ---
 
@@ -687,7 +687,7 @@ Bubblewrap wraps the agent's SHELL in a mount namespace. The daemon runs on the 
 ### 14.1 Isolation Architecture
 
 ```
-Host:               warpfs-daemon (FUSE, full access)
+Host:               hilo-daemon (FUSE, full access)
                         │
                 /mnt/vfs/workspace  ← mounted by daemon
                         │
@@ -735,18 +735,18 @@ sandbox:
 ## 15. Crate Structure
 
 ```
-warpfs/                         ← single repo, pure Rust
-├── warpfs-core/                # Manifest parsing, config types, shared state
-├── warpfs-fuse/                # FUSE daemon (fuser 0.16.0), inotify wiring
-├── warpfs-metadata/            # xattr read/write, inventory file I/O
-├── warpfs-graph/               # tree-sitter AST parsing, petgraph traversal, impact
-├── warpfs-backends/            # Git (git2), S3 (rusoto/aws-sdk), remote, local
-├── warpfs-triggers/            # Trigger engine, debouncing, async execution
-├── warpfs-permissions/         # Mode bit enforcement, FUSE permission callbacks
-├── warpfs-plugins/             # extism wasm runtime, host function registry
-├── warpfs-cli/                 # CLI shim (warpfs mount|meta|graph|plugin|serve)
-├── warpfs-mcp/                 # MCP server (rmcp), tool implementations
-└── warpfs-ffi/                 # UniFFI .udl interface, generates bindings
+hilo/                         ← single repo, pure Rust
+├── hilo-core/                # Manifest parsing, config types, shared state
+├── hilo-fuse/                # FUSE daemon (fuser 0.16.0), inotify wiring
+├── hilo-metadata/            # xattr read/write, inventory file I/O
+├── hilo-graph/               # tree-sitter AST parsing, petgraph traversal, impact
+├── hilo-backends/            # Git (git2), S3 (rusoto/aws-sdk), remote, local
+├── hilo-triggers/            # Trigger engine, debouncing, async execution
+├── hilo-permissions/         # Mode bit enforcement, FUSE permission callbacks
+├── hilo-plugins/             # extism wasm runtime, host function registry
+├── hilo-cli/                 # CLI shim (hilo mount|meta|graph|plugin|serve)
+├── hilo-mcp/                 # MCP server (rmcp), tool implementations
+└── hilo-ffi/                 # UniFFI .udl interface, generates bindings
 ```
 
 ---
@@ -817,12 +817,12 @@ user.vfs.last_tested="2026-06-14T09:33:14"
 
 ### 18.1 Scope
 
-- `warpfs init` — create .vfs/ directory structure and default manifest
-- `warpfs meta <path>` — read/write xattrs on files
-- `warpfs graph discover` — tree-sitter parse project, generate edges.jsonl
-- `warpfs graph related <path>` — query graph edges for a file
-- `warpfs graph stats` — graph-wide statistics (DuckDB)
-- `warpfs serve --mcp` — MCP server with stdio transport
+- `hilo init` — create .vfs/ directory structure and default manifest
+- `hilo meta <path>` — read/write xattrs on files
+- `hilo graph discover` — tree-sitter parse project, generate edges.jsonl
+- `hilo graph related <path>` — query graph edges for a file
+- `hilo graph stats` — graph-wide statistics (DuckDB)
+- `hilo serve --mcp` — MCP server with stdio transport
 - MCP tools: `vfs_get_metadata`, `vfs_graph_related`, `vfs_graph_stats`
 - Manifest parsing (YAML → typed config)
 - DuckDB graph.db initialization from edges.jsonl
@@ -976,16 +976,16 @@ Response:
 
 | Crate | Test Files | Min Tests | Coverage Target | Notes |
 |---|---|---|---|---|
-| warpfs-core | tests/manifest_test.rs | 10 | 95% on manifest.rs | Every manifest field + error path |
-| warpfs-metadata | tests/xattr_test.rs, tests/inventory_test.rs | 19 | 90% | Round-trip tests for all xattr ops |
-| warpfs-graph | tests/graph_test.rs, tests/parser_test.rs, tests/impact_test.rs | 19+ | 85% | One test per language parser |
-| warpfs-cli | tests/cli.rs | 6 | 80% | Integration: each subcommand |
-| warpfs-mcp | tests/mcp_test.rs | 8 | 85% | JSON-RPC protocol correctness |
-| warpfs-backends | tests/s3_test.rs, tests/git_test.rs | 10+ | 80% | Mock S3 server + temp git repo |
-| warpfs-triggers | tests/trigger_test.rs | 8+ | 80% | Temp files + inotify + timing |
-| warpfs-fuse | tests/fuse_test.rs | 5+ | 70% | FUSE: mount + read/write + permissions |
-| warpfs-plugins | tests/plugin_test.rs | 5+ | 75% | extism host function mocking |
-| warpfs-ffi | N/A (generated) | N/A | N/A | Verify: uniffi-bindgen generate |
+| hilo-core | tests/manifest_test.rs | 10 | 95% on manifest.rs | Every manifest field + error path |
+| hilo-metadata | tests/xattr_test.rs, tests/inventory_test.rs | 19 | 90% | Round-trip tests for all xattr ops |
+| hilo-graph | tests/graph_test.rs, tests/parser_test.rs, tests/impact_test.rs | 19+ | 85% | One test per language parser |
+| hilo-cli | tests/cli.rs | 6 | 80% | Integration: each subcommand |
+| hilo-mcp | tests/mcp_test.rs | 8 | 85% | JSON-RPC protocol correctness |
+| hilo-backends | tests/s3_test.rs, tests/git_test.rs | 10+ | 80% | Mock S3 server + temp git repo |
+| hilo-triggers | tests/trigger_test.rs | 8+ | 80% | Temp files + inotify + timing |
+| hilo-fuse | tests/fuse_test.rs | 5+ | 70% | FUSE: mount + read/write + permissions |
+| hilo-plugins | tests/plugin_test.rs | 5+ | 75% | extism host function mocking |
+| hilo-ffi | N/A (generated) | N/A | N/A | Verify: uniffi-bindgen generate |
 
 ### 22.1 Test Patterns
 
@@ -1014,7 +1014,7 @@ assert!(v["result"]["tools"].as_array().unwrap().len() >= 3);
 **CLI integration:**
 ```rust
 let tmp = TempDir::new();
-let output = run_warpfs(&["init"], tmp.path());
+let output = run_hilo(&["init"], tmp.path());
 assert!(output.status.success());
 assert!(tmp.path().join(".vfs/manifest.yaml").exists());
 ```
@@ -1029,5 +1029,5 @@ assert!(tmp.path().join(".vfs/manifest.yaml").exists());
 
 ---
 
-*WarpFS — Implementation Specification v2 — June 2026*  
-*totalwindupflightsystems/warpfs*
+*Hilo — Implementation Specification v2 — June 2026*  
+*totalwindupflightsystems/hilo*

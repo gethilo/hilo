@@ -7,7 +7,7 @@
 │  Agent (Claude / Hermes / Codex)         │
 │    │  MCP tools  │  getfattr  │  cat     │
 ├────┼─────────────┼────────────┼──────────┤
-│  WarpFS                                  │
+│  Hilo                                  │
 │  ┌──────────┐  ┌──────────┐  ┌────────┐ │
 │  │  FUSE    │  │   MCP    │  │  CLI   │ │
 │  │  mount   │  │  server  │  │  shim  │ │
@@ -29,7 +29,7 @@
 
 ### 1. Interface Layer
 
-How agents connect to WarpFS:
+How agents connect to Hilo:
 
 | Interface | Protocol | Use Case |
 |-----------|----------|----------|
@@ -47,7 +47,7 @@ Metadata lives *outside* file content:
 - **Manifest** (`.vfs/manifest.yaml`) — master config: backends, permissions, rules, sandbox
 
 **Content is never modified.** The agent reads file bytes exactly as they
-exist on disk. WarpFS adds metadata alongside, not inside.
+exist on disk. Hilo adds metadata alongside, not inside.
 
 ### 3. Backend Storage
 

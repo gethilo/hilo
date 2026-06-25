@@ -1,6 +1,6 @@
-# WarpFS Documentation
+# Hilo Documentation
 
-WarpFS is an agent-first virtual filesystem. It pre-computes a dependency
+Hilo is an agent-first virtual filesystem. It pre-computes a dependency
 graph across your codebase and exposes it through standard filesystem
 tools and an MCP server — so AI agents can answer structural questions
 without reading files.
@@ -15,9 +15,9 @@ without reading files.
 
 ## Quick Links
 
-- [GitHub Repository](https://github.com/totalwindupflightsystems/warpfs)
+- [GitHub Repository](https://github.com/totalwindupflightsystems/hilo)
 - [Design Document](https://totalwindupflightsystems.github.io/reports/hermes-vfs-design.html)
-- [Value Test Report](https://totalwindupflightsystems.github.io/reports/warpfs-value-test.html)
+- [Value Test Report](https://totalwindupflightsystems.github.io/reports/hilo-value-test.html)
 
 ## Supported Languages
 

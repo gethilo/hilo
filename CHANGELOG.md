@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to WarpFS are documented in this file.
+All notable changes to Hilo are documented in this file.
 
 ## [0.1.0] — 2026-06-24
 
@@ -8,7 +8,7 @@ All notable changes to WarpFS are documented in this file.
 
 - **9-language AST parsing** — Go, Python, TypeScript, Rust, JavaScript,
   Java, C, C++, Ruby via tree-sitter
-- **Auto-classification** — `warpfs classify` detects entrypoints, test
+- **Auto-classification** — `hilo classify` detects entrypoints, test
   files, library roles, stability status across all 9 languages
 - **Parallel graph discovery** — rayon-powered, progress output every
   100 files

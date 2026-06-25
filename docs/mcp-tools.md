@@ -1,6 +1,6 @@
 # MCP Tools
 
-WarpFS exposes 8 tools via JSON-RPC over stdio. Agents query the
+Hilo exposes 8 tools via JSON-RPC over stdio. Agents query the
 dependency graph and metadata without reading files.
 
 ## Tool List
@@ -112,8 +112,8 @@ Add to your MCP client config:
 ```json
 {
   "mcpServers": {
-    "warpfs": {
-      "command": "warpfs-cli",
+    "hilo": {
+      "command": "hilo-cli",
       "args": ["serve", "--mcp"],
       "cwd": "/path/to/your/project"
     }
