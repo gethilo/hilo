@@ -226,12 +226,10 @@ fn graph_related(arguments: &serde_json::Value) -> McpResult<serde_json::Value> 
 
     let mut edges = Vec::new();
     for candidate in &candidates {
-        if candidate != target || edges.is_empty() {
-            if db.file_in_graph(candidate)? {
-                edges = db.related(candidate, relation, dir)?;
-                if !edges.is_empty() {
-                    break;
-                }
+        if (candidate != target || edges.is_empty()) && db.file_in_graph(candidate)? {
+            edges = db.related(candidate, relation, dir)?;
+            if !edges.is_empty() {
+                break;
             }
         }
     }

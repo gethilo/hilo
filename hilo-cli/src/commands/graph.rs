@@ -78,7 +78,7 @@ pub fn run_discover(workspace: bool) -> Result<()> {
                 .with_context(|| format!("failed to initialize {:?} parser", lang))?;
 
             let count = progress.fetch_add(1, Ordering::Relaxed) + 1;
-            if count % 100 == 0 || count == total_files {
+            if count.is_multiple_of(100) || count == total_files {
                 eprintln!("  parsing {count}/{total_files} files...");
             }
 
