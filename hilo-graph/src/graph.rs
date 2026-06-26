@@ -56,6 +56,19 @@ pub struct GraphStats {
     pub top_dependencies: Vec<(String, i64)>,
 }
 
+/// Per-module statistics returned by `vfs_graph_module`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ModuleStats {
+    /// The module prefix (e.g. "src/auth/").
+    pub module: String,
+    /// All distinct file paths within the module.
+    pub files: Vec<String>,
+    /// Total number of edges touching files in this module.
+    pub edges_count: i64,
+    /// Percentage of files that have test coverage (0.0–100.0).
+    pub test_coverage_pct: f64,
+}
+
 impl GraphDB {
     /// Open (or create) the DuckDB database at `path`.
     ///
@@ -243,6 +256,72 @@ impl GraphDB {
             files.push(r?);
         }
         Ok(files)
+    }
+
+    /// Query module-level statistics for a given directory prefix.
+    ///
+    /// Returns all distinct files (both `from` and `to`) whose path starts
+    /// with `module_name`, along with the total edge count and test-coverage
+    /// percentage (files that have at least one `tested_by` edge ÷ total files).
+    pub fn module_files(&self, module_name: &str) -> GraphResult<ModuleStats> {
+        let prefix = if module_name.ends_with('/') {
+            module_name.to_string()
+        } else {
+            format!("{module_name}/")
+        };
+
+        // Escape LIKE pattern: `%` and `_` are special in LIKE.  They are
+        // extremely unlikely in directory names but defensively escape them.
+        let like_prefix = prefix.replace('%', "\\%").replace('_', "\\_");
+
+        let files: Vec<String> = {
+            let sql = "SELECT DISTINCT path FROM (\
+                 SELECT \"from\" AS path FROM edges WHERE \"from\" LIKE ?1 ESCAPE '\\'\
+                 UNION \
+                 SELECT \"to\" AS path FROM edges WHERE \"to\" LIKE ?1 ESCAPE '\\')\
+                 ORDER BY path"
+                .to_string();
+            let mut stmt = self.conn.prepare(&sql)?;
+            let rows = stmt.query_map(params![format!("{like_prefix}%")], |row| {
+                row.get::<_, String>(0)
+            })?;
+            let mut v = Vec::new();
+            for r in rows {
+                v.push(r?);
+            }
+            v
+        };
+
+        let total_files = files.len() as i64;
+
+        let edges_count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM edges \
+             WHERE \"from\" LIKE ?1 ESCAPE '\\' OR \"to\" LIKE ?1 ESCAPE '\\'",
+            params![format!("{like_prefix}%")],
+            |row| row.get::<_, i64>(0),
+        )?;
+
+        // Files in the module that have at least one tested_by edge.
+        let tested_count: i64 = self.conn.query_row(
+            "SELECT COUNT(DISTINCT \"to\") FROM edges \
+             WHERE rel = 'tested_by' \
+             AND \"to\" LIKE ?1 ESCAPE '\\'",
+            params![format!("{like_prefix}%")],
+            |row| row.get::<_, i64>(0),
+        )?;
+
+        let test_coverage_pct = if total_files > 0 {
+            ((tested_count as f64 / total_files as f64) * 100.0 * 10.0).round() / 10.0
+        } else {
+            0.0
+        };
+
+        Ok(ModuleStats {
+            module: module_name.to_string(),
+            files,
+            edges_count,
+            test_coverage_pct,
+        })
     }
 
     /// Compute comprehensive [`GraphStats`] using DuckDB aggregate queries.

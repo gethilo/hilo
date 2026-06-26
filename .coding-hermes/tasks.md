@@ -21,14 +21,15 @@
 - **Notes:** Uses existing DuckDB graph. Follow `vfs_graph_stats` pattern.
 - **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). hilo-graph/src/graph.rs: +19 lines (untested_files() with SQL: SELECT DISTINCT "from" FROM edges WHERE rel='imports' AND "from" NOT IN (SELECT "to" FROM edges WHERE rel='tested_by')). hilo-mcp/src/tools/mod.rs: +28 lines (tool definition with no-arg inputSchema, dispatch arm, graph_untested() handler with empty-graph fallback). hilo-mcp/tests/mcp_test.rs: +62 lines (test_graph_untested_empty: empty graph → {files:[], total:0}; test_graph_untested_populated: in-memory graph with imports+tested_by → correctly identifies untested file). Full workspace 284/284 pass. Clippy clean. fmt clean.
 
-## [ ] MCP: vfs_graph_module tool — spec §11.1, §21.11
+## [x] MCP: vfs_graph_module tool — spec §11.1, §21.11
 - **Priority:** low
 - **Model:** deepseek-v4-pro (direct write)
-- **Files:** hilo-mcp/src/tools/mod.rs
+- **Files:** hilo-mcp/src/tools/mod.rs, hilo-graph/src/graph.rs, hilo-graph/src/lib.rs, hilo-mcp/tests/mcp_test.rs
 - **AC:** `vfs_graph_module(module_name)` MCP tool registered — returns `{module, files, edges_count, test_coverage_pct}`
 - **AC:** Queries DuckDB graph for all edges where from/to starts with the module path prefix
 - **AC:** `cargo test -p hilo_mcp` — 2+ tests
 - **Notes:** Follow `vfs_graph_stats` pattern. Module = directory prefix (e.g., "src/auth/").
+- **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). hilo-graph/src/graph.rs: +65 lines (ModuleStats struct, module_files() method with parameterized LIKE queries, LIKE-pattern escaping, test coverage percentage calculation). hilo-graph/src/lib.rs: +1 line (ModuleStats re-export). hilo-mcp/src/tools/mod.rs: +46 lines (tool definition with module_name required arg, dispatch arm, graph_module() handler with empty-key validation and empty-graph fallback). hilo-mcp/tests/mcp_test.rs: +86 lines (test_graph_module_empty: no-graph → returns empty result; test_graph_module_populated: in-memory graph with src/auth/ files → correct files list, edges_count=4, test_coverage_pct=33.3%). Updated test_tools_list to assert vfs_graph_module. Full workspace 283/283 pass. Clippy clean. fmt clean.
 
 ## [ ] MCP: vfs_backend_status + vfs_sync_backend — spec §11.1
 - **Priority:** low

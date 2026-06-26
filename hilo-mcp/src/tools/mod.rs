@@ -1,11 +1,12 @@
 //! Tool definitions and dispatch for the Hilo MCP server.
 //!
-//! Ten tools are exposed:
+//! Eleven tools are exposed:
 //! - `vfs_get_metadata`   — read Hilo xattrs for a file
 //! - `vfs_set_metadata`   — write Hilo xattr for a file
 //! - `vfs_graph_related`  — find related files via the dependency graph
 //! - `vfs_graph_stats`    — summary statistics about the graph
 //! - `vfs_graph_untested` — list files with imports but no test coverage
+//! - `vfs_graph_module`   — per-module file listing and coverage statistics
 //! - `vfs_graph_impact`   — transitive impact analysis for a file
 //! - `vfs_rule_list`      — list all rules defined in the manifest
 //! - `vfs_rule_check`     — execute a named rule query against the graph
@@ -109,6 +110,20 @@ pub fn list_tools() -> Vec<Tool> {
             }),
         },
         Tool {
+            name: "vfs_graph_module".into(),
+            description: "Get per-module file listing and test coverage statistics from the dependency graph.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "module_name": {
+                        "type": "string",
+                        "description": "Directory prefix to query (e.g., 'src/auth/')"
+                    }
+                },
+                "required": ["module_name"]
+            }),
+        },
+        Tool {
             name: "vfs_graph_impact".into(),
             description: "Find all files that depend on the given file, directly or transitively.".into(),
             input_schema: serde_json::json!({
@@ -182,6 +197,7 @@ pub fn call_tool(name: &str, arguments: &serde_json::Value) -> McpResult<serde_j
         "vfs_graph_related" => graph_related(arguments),
         "vfs_graph_stats" => graph_stats(arguments),
         "vfs_graph_untested" => graph_untested(arguments),
+        "vfs_graph_module" => graph_module(arguments),
         "vfs_graph_impact" => graph_impact(arguments),
         "vfs_rule_list" => rule_list(arguments),
         "vfs_rule_check" => rule_check(arguments),
@@ -366,6 +382,36 @@ fn graph_untested(_arguments: &serde_json::Value) -> McpResult<serde_json::Value
         "files": files,
         "total": files.len()
     }))
+}
+
+/// `vfs_graph_module` — per-module file listing and coverage statistics.
+///
+/// Queries the DuckDB graph for all distinct files whose path starts with
+/// `module_name` (directory prefix).  Returns the file list, total edge
+/// count touching the module, and test coverage percentage.
+///
+/// When no graph database exists, returns an empty result.
+fn graph_module(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
+    let module_name = arguments["module_name"]
+        .as_str()
+        .ok_or_else(|| McpError::Protocol("missing 'module_name' argument".into()))?;
+
+    if module_name.is_empty() {
+        return Err(McpError::Protocol("'module_name' must not be empty".into()));
+    }
+
+    if !Path::new(GRAPH_DB_PATH).exists() {
+        return Ok(serde_json::json!({
+            "module": module_name,
+            "files": [],
+            "edges_count": 0,
+            "test_coverage_pct": 0.0,
+        }));
+    }
+
+    let db = hilo_graph::GraphDB::open(GRAPH_DB_PATH)?;
+    let stats = db.module_files(module_name)?;
+    Ok(serde_json::to_value(stats)?)
 }
 
 /// `vfs_graph_impact` — transitive impact analysis for a file.

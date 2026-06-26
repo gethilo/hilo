@@ -66,6 +66,7 @@ fn test_tools_list() {
     assert!(names.contains(&"vfs_graph_related"));
     assert!(names.contains(&"vfs_graph_stats"));
     assert!(names.contains(&"vfs_graph_untested"));
+    assert!(names.contains(&"vfs_graph_module"));
 }
 
 // -------------------------------------------------------------------------
@@ -296,4 +297,93 @@ fn test_graph_untested_populated() {
     let untested = db.untested_files().unwrap();
     assert_eq!(untested.len(), 1);
     assert_eq!(untested[0], "src/main.go");
+}
+
+// -------------------------------------------------------------------------
+// vfs_graph_module — returns empty when no graph exists
+// -------------------------------------------------------------------------
+
+#[test]
+fn test_graph_module_empty() {
+    let req = r#"{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"vfs_graph_module","arguments":{"module_name":"src/auth/"}}}"#;
+    let resp = rpc(req);
+
+    assert_eq!(resp["jsonrpc"], "2.0");
+    assert_eq!(resp["id"], 11);
+
+    let text = resp["result"]["content"][0]["text"]
+        .as_str()
+        .expect("content[0].text should be a string");
+
+    let result: serde_json::Value =
+        serde_json::from_str(text).expect("tool output should be valid JSON");
+
+    assert_eq!(result["module"], "src/auth/");
+    assert_eq!(result["edges_count"], 0);
+    assert_eq!(result["test_coverage_pct"], 0.0);
+    assert_eq!(result["files"], serde_json::json!([]));
+}
+
+// -------------------------------------------------------------------------
+// vfs_graph_module — populated graph returns correct module stats
+// -------------------------------------------------------------------------
+
+#[test]
+fn test_graph_module_populated() {
+    use hilo_graph::GraphDB;
+    use hilo_metadata::inventory::Edge;
+
+    // Build an in-memory graph with files in src/auth/ and src/main/:
+    //   src/auth/login.go imports pkg/crypto.go
+    //   src/auth/session.go imports pkg/crypto.go
+    //   src/auth/login_test.go tested_by src/auth/login.go
+    //   src/main/server.go imports src/auth/login.go
+    let db = GraphDB::open(":memory:").unwrap();
+    db.insert_edges(&[
+        Edge {
+            from: "src/auth/login.go".into(),
+            to: "pkg/crypto.go".into(),
+            rel: "imports".into(),
+        },
+        Edge {
+            from: "src/auth/session.go".into(),
+            to: "pkg/crypto.go".into(),
+            rel: "imports".into(),
+        },
+        Edge {
+            from: "src/auth/login_test.go".into(),
+            to: "src/auth/login.go".into(),
+            rel: "tested_by".into(),
+        },
+        Edge {
+            from: "src/main/server.go".into(),
+            to: "src/auth/login.go".into(),
+            rel: "imports".into(),
+        },
+    ])
+    .unwrap();
+
+    let stats = db.module_files("src/auth").unwrap();
+
+    // Files in src/auth/: login.go, session.go, login_test.go (3)
+    // pkg/crypto.go is NOT in src/auth/ (excluded)
+    // src/main/server.go is NOT in src/auth/ (excluded)
+    assert_eq!(stats.module, "src/auth");
+    assert_eq!(stats.files.len(), 3);
+    assert!(stats.files.contains(&"src/auth/login.go".to_string()));
+    assert!(stats.files.contains(&"src/auth/session.go".to_string()));
+    assert!(stats.files.contains(&"src/auth/login_test.go".to_string()));
+
+    // Edges: login.go→crypto, session.go→crypto, login_test.go→login (3)
+    // Plus: server.go→login.go (login.go is "to" but server.go is NOT in src/auth/)
+    // The "to" side of the server.go→login edge includes login.go as "to" which IS in src/auth/
+    // So: 3 edges with "from" in src/auth/ + 1 edge with "to" in src/auth/ but "from" outside = 4
+    assert_eq!(stats.edges_count, 4);
+
+    // Coverage: login.go has tested_by from login_test.go (1 tested / 3 total = 33.3%)
+    assert!(
+        (stats.test_coverage_pct - 33.3).abs() < 0.1,
+        "expected ~33.3% coverage, got {}",
+        stats.test_coverage_pct
+    );
 }

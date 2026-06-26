@@ -18,7 +18,7 @@ pub mod rules;
 
 pub use classify::{classify_file, Classification};
 pub use error::{GraphError, GraphResult};
-pub use graph::{Direction, GraphDB};
+pub use graph::{Direction, GraphDB, ModuleStats};
 pub use impact::{compute_impact, compute_impact_with_external, ImpactFile, ImpactResult};
 pub use parser::{Language, Parser};
 pub use rules::{Rule, RuleCheckResult, RuleEngine, RuleError};
