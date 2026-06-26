@@ -1,5 +1,5 @@
 [workspace]
-members = ["hilo-core", "hilo-metadata", "hilo-graph", "hilo-cli", "hilo-mcp", "hilo-backends", "hilo-triggers", "hilo-fuse", "hilo-plugins", "hilo-permissions"]
+members = ["hilo-core", "hilo-metadata", "hilo-graph", "hilo-cli", "hilo-mcp", "hilo-backends", "hilo-triggers", "hilo-fuse", "hilo-plugins", "hilo-permissions", "hilo-ffi"]
 resolver = "2"
 
 [workspace.package]

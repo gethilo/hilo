@@ -1,0 +1,19 @@
+[package]
+name = "hilo_ffi"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/gethilo/hilo"
+description = "Hilo FFI — UniFFI bindings for Go, Python, Kotlin, and Swift"
+
+[lib]
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+uniffi = { version = "0.28", features = ["cli"] }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+
+[build-dependencies]
+uniffi = { version = "0.28", features = ["build"] }
+uniffi_build = "0.28"

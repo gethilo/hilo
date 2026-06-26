@@ -1,0 +1,108 @@
+[Error]
+enum HiloError {
+    "InvalidInput",
+    "NotFound",
+    "BackendUnavailable",
+    "InternalError",
+};
+
+dictionary MetadataResult {
+    string? value;
+};
+
+dictionary SetMetadataResult {
+    string? path;
+    string? key;
+    string? value;
+    string? previous_value;
+    boolean? success;
+};
+
+dictionary GraphEdge {
+    string from;
+    string to;
+    string rel;
+};
+
+dictionary GraphRelatedResult {
+    sequence<GraphEdge> edges;
+    u32 total;
+};
+
+dictionary GraphImpactEntry {
+    string path;
+    string relation;
+    u32 depth;
+};
+
+dictionary GraphImpactResult {
+    sequence<GraphImpactEntry> dependents;
+    u32 total;
+};
+
+dictionary GraphStats {
+    u32 total_files;
+    u32 total_edges;
+    u32 unique_relations;
+    f64 tested_pct;
+};
+
+dictionary BackendInfo {
+    string path;
+    string? backend;
+    string? remote_url;
+    string? cache_path;
+    string? last_synced;
+    boolean? cached;
+};
+
+dictionary RuleResultEntry {
+    string path;
+    string? severity;
+    string? detail;
+};
+
+dictionary RuleCheckResult {
+    string rule_name;
+    sequence<RuleResultEntry> matches;
+    u32 total;
+};
+
+dictionary DirectoryEntry {
+    string name;
+    string entry_type;
+    string? backend;
+    u64? size;
+    boolean? is_virtual;
+};
+
+dictionary DirectoryListing {
+    sequence<DirectoryEntry> entries;
+    u32 total;
+};
+
+namespace hilo {
+    [Throws=HiloError]
+    string? vfs_get_metadata([ByRef] string path, [ByRef] string key);
+
+    [Throws=HiloError]
+    SetMetadataResult vfs_set_metadata([ByRef] string path, [ByRef] string key, [ByRef] string value);
+
+    [Throws=HiloError]
+    GraphRelatedResult vfs_graph_related([ByRef] string path);
+
+    [Throws=HiloError]
+    GraphImpactResult vfs_graph_impact([ByRef] string path, u32 max_depth);
+
+    [Throws=HiloError]
+    GraphStats vfs_graph_stats();
+
+    [Throws=HiloError]
+    BackendInfo vfs_resolve_backend([ByRef] string path);
+
+    [Throws=HiloError]
+    RuleCheckResult vfs_rule_check([ByRef] string rule_name);
+
+    [Throws=HiloError]
+    DirectoryListing vfs_list_directory([ByRef] string path);
+};
