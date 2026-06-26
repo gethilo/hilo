@@ -1,12 +1,15 @@
 //! Tool definitions and dispatch for the Hilo MCP server.
 //!
-//! Five tools are exposed:
+//! Nine tools are exposed:
 //! - `vfs_get_metadata`   — read Hilo xattrs for a file
+//! - `vfs_set_metadata`   — write Hilo xattr for a file
 //! - `vfs_graph_related`  — find related files via the dependency graph
 //! - `vfs_graph_stats`    — summary statistics about the graph
 //! - `vfs_graph_impact`   — transitive impact analysis for a file
 //! - `vfs_rule_list`      — list all rules defined in the manifest
 //! - `vfs_rule_check`     — execute a named rule query against the graph
+//! - `vfs_list_directory` — list entries in a virtual directory
+//! - `vfs_resolve_path`   — resolve a virtual path to real storage
 
 use std::path::Path;
 
@@ -42,6 +45,28 @@ pub fn list_tools() -> Vec<Tool> {
                     }
                 },
                 "required": ["path"]
+            }),
+        },
+        Tool {
+            name: "vfs_set_metadata".into(),
+            description: "Set a Hilo extended attribute on a file.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the file"
+                    },
+                    "key": {
+                        "type": "string",
+                        "description": "Attribute name (e.g., 'feature', 'risk', 'purpose')"
+                    },
+                    "value": {
+                        "type": "string",
+                        "description": "Attribute value to set"
+                    }
+                },
+                "required": ["path", "key", "value"]
             }),
         },
         Tool {
@@ -144,6 +169,7 @@ pub fn list_tools() -> Vec<Tool> {
 pub fn call_tool(name: &str, arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
     match name {
         "vfs_get_metadata" => get_metadata(arguments),
+        "vfs_set_metadata" => set_metadata(arguments),
         "vfs_graph_related" => graph_related(arguments),
         "vfs_graph_stats" => graph_stats(arguments),
         "vfs_graph_impact" => graph_impact(arguments),
@@ -195,6 +221,44 @@ fn get_metadata(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
         }
     }
     Ok(serde_json::Value::Object(map))
+}
+
+/// `vfs_set_metadata` — set a Hilo xattr on a file.
+///
+/// Returns the previous value if the attribute was already set (useful
+/// for agents that want to restore state), or `null` if this is a new
+/// attribute.
+fn set_metadata(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
+    let path_str = arguments["path"]
+        .as_str()
+        .ok_or_else(|| McpError::Protocol("missing 'path' argument".into()))?;
+    let key = arguments["key"]
+        .as_str()
+        .ok_or_else(|| McpError::Protocol("missing 'key' argument".into()))?;
+    let value = arguments["value"]
+        .as_str()
+        .ok_or_else(|| McpError::Protocol("missing 'value' argument".into()))?;
+
+    let path = Path::new(path_str);
+
+    // Reject empty keys.
+    if key.is_empty() {
+        return Err(McpError::Protocol("'key' must not be empty".into()));
+    }
+
+    // Read the previous value before overwriting.
+    let previous = hilo_metadata::get_vfs_xattr(path, key)?;
+
+    // Set the new value.
+    hilo_metadata::set_vfs_xattr(path, key, value)?;
+
+    Ok(serde_json::json!({
+        "success": true,
+        "path": path_str,
+        "key": format!("user.vfs.{}", key.trim_start_matches("user.vfs.")),
+        "value": value,
+        "previous_value": previous,
+    }))
 }
 
 /// `vfs_graph_related` — find related files for a given path.

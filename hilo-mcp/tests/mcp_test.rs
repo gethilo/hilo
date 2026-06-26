@@ -62,6 +62,7 @@ fn test_tools_list() {
     // Verify the three expected names.
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert!(names.contains(&"vfs_get_metadata"));
+    assert!(names.contains(&"vfs_set_metadata"));
     assert!(names.contains(&"vfs_graph_related"));
     assert!(names.contains(&"vfs_graph_stats"));
 }
@@ -170,4 +171,64 @@ fn test_notification_no_response() {
         result.unwrap().is_none(),
         "notifications should return None"
     );
+}
+
+// -------------------------------------------------------------------------
+// vfs_set_metadata — set an xattr and verify previous value
+// -------------------------------------------------------------------------
+
+#[test]
+fn test_set_metadata_roundtrip() {
+    use std::fs;
+    use tempfile::TempDir;
+
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.txt");
+    fs::write(&file, "hello").unwrap();
+    let file_str = file.to_str().unwrap();
+
+    // Set a new attribute (no previous value).
+    let set_req = format!(
+        r#"{{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{{"name":"vfs_set_metadata","arguments":{{"path":"{file_str}","key":"feature","value":"auth-module"}}}}}}"#
+    );
+    let set_resp = rpc(&set_req);
+    let text = set_resp["result"]["content"][0]["text"]
+        .as_str()
+        .expect("content[0].text should be a string");
+    let result: serde_json::Value =
+        serde_json::from_str(text).expect("tool output should be valid JSON");
+    assert_eq!(result["success"], true);
+    assert!(result["previous_value"].is_null());
+
+    // Overwrite and check the previous value is returned.
+    let overwrite_req = format!(
+        r#"{{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{{"name":"vfs_set_metadata","arguments":{{"path":"{file_str}","key":"feature","value":"entrypoint"}}}}}}"#
+    );
+    let ov_resp = rpc(&overwrite_req);
+    let ov_text = ov_resp["result"]["content"][0]["text"]
+        .as_str()
+        .expect("content[0].text should be a string");
+    let ov_result: serde_json::Value =
+        serde_json::from_str(ov_text).expect("tool output should be valid JSON");
+    assert_eq!(ov_result["success"], true);
+    assert_eq!(ov_result["previous_value"], "auth-module");
+    assert_eq!(ov_result["value"], "entrypoint");
+}
+
+#[test]
+fn test_set_metadata_empty_key_rejected() {
+    use std::fs;
+    use tempfile::TempDir;
+
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.txt");
+    fs::write(&file, "hello").unwrap();
+    let file_str = file.to_str().unwrap();
+
+    let req = format!(
+        r#"{{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{{"name":"vfs_set_metadata","arguments":{{"path":"{file_str}","key":"","value":"x"}}}}}}"#
+    );
+    let resp = rpc(&req);
+    assert!(resp.get("error").is_some(), "expected error for empty key");
+    assert_eq!(resp["error"]["code"], -32603);
 }

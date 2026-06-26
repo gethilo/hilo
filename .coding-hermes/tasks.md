@@ -1,5 +1,43 @@
 # Hilo Coding Tasks
 
+## [x] MCP: vfs_set_metadata tool — spec §11.1
+- **Priority:** high
+- **Model:** deepseek-v4-pro (direct write)
+- **Files:** hilo-mcp/src/tools/mod.rs, hilo-mcp/tests/mcp_test.rs
+- **AC:** `vfs_set_metadata(path, key, value)` MCP tool registered in tools/list
+- **AC:** Sets a `user.vfs.*` xattr on a file; returns `{success, path, key, value, previous_value}`
+- **AC:** Previous value is `null` for new attributes, string for overwrites
+- **AC:** Empty key returns structured error, not panic
+- **AC:** `cargo test -p hilo_mcp` — 2 new tests (roundtrip + empty-key rejection)
+- **Result:** Implemented directly by foreman (deepseek-v4-pro). mod.rs +38 lines: tool definition with path/key/value required args, set_metadata() handler with previous-value read before overwrite, empty-key validation, dispatch arm. mcp_test.rs +63 lines: test_set_metadata_roundtrip (new attribute → overwrite with previous value returned), test_set_metadata_empty_key_rejected. Full workspace 282/282 pass. Clippy clean.
+
+## [ ] MCP: vfs_graph_untested tool — spec §11.1, §21.6
+- **Priority:** medium
+- **Model:** deepseek-v4-pro (direct write)
+- **Files:** hilo-mcp/src/tools/mod.rs
+- **AC:** `vfs_graph_untested()` MCP tool registered — returns `{files: [path], total: N}` listing files with no test coverage
+- **AC:** Queries DuckDB graph for files that have imports edges but no tested_by edges
+- **AC:** `cargo test -p hilo_mcp` — 2+ tests (empty graph returns empty, populated graph returns untested files)
+- **Notes:** Uses existing DuckDB graph. Follow `vfs_graph_stats` pattern.
+
+## [ ] MCP: vfs_graph_module tool — spec §11.1, §21.11
+- **Priority:** low
+- **Model:** deepseek-v4-pro (direct write)
+- **Files:** hilo-mcp/src/tools/mod.rs
+- **AC:** `vfs_graph_module(module_name)` MCP tool registered — returns `{module, files, edges_count, test_coverage_pct}`
+- **AC:** Queries DuckDB graph for all edges where from/to starts with the module path prefix
+- **AC:** `cargo test -p hilo_mcp` — 2+ tests
+- **Notes:** Follow `vfs_graph_stats` pattern. Module = directory prefix (e.g., "src/auth/").
+
+## [ ] MCP: vfs_backend_status + vfs_sync_backend — spec §11.1
+- **Priority:** low
+- **Model:** deepseek-v4-pro (direct write)
+- **Files:** hilo-mcp/src/tools/mod.rs
+- **AC:** `vfs_backend_status(path)` returns `{backend, cache_hit, cache_path, remote_url, last_synced}`
+- **AC:** `vfs_sync_backend(path)` returns `{synced_files, errors}`
+- **AC:** `cargo test -p hilo_mcp` — 2+ tests
+- **Notes:** Uses existing backend info() methods from hilo-backends. Follow `vfs_resolve_path` pattern.
+
 ## [x] Phase 7: manifest default-function inline tests — 30 unit tests
 - **Priority:** medium
 - **Model:** deepseek-v4-pro (direct write — model match)
