@@ -466,4 +466,16 @@ feat(<crate>): <brief description>
 Co-authored-by: wojons <wojonstech@gmail.com>
 ```
 
+## [ ] Phase 7: hilo-ffi crate — UniFFI bindings for Go/Python/Kotlin/Swift (spec §12, §15)
+- **Priority:** low
+- **Model:** deepseek-v4-pro (direct write — scaffold + .udl definition)
+- **Files:** hilo-ffi/ (new crate), hilo-ffi/src/hilo.udl, hilo-ffi/Cargo.toml, Cargo.toml (workspace members)
+- **AC:** `cargo build -p hilo_ffi` compiles clean (stub crate with `.udl` interface)
+- **AC:** `.udl` file defines the 8 exported functions from spec §12.1: vfs_get_metadata, vfs_set_metadata, vfs_graph_related, vfs_graph_impact, vfs_graph_stats, vfs_resolve_backend, vfs_rule_check, vfs_list_directory
+- **AC:** `uniffi-bindgen generate hilo-ffi/src/hilo.udl --language go` produces valid Go stubs (verify CLI exits 0)
+- **AC:** Generated targets structure documented in crate README (Go: hilo-go/vfs/, Python: hilo/ wheel, Kotlin: hilo-kotlin/, Swift: Hilo/)
+- **AC:** `cargo test --workspace` — all existing tests still pass
+- **Spec ref:** §12 (FFI — UniFFI), §15 (Crate Structure), §3.1 (Key Crates: uniffi 0.28+), §22.1 (hilo-ffi row)
+- **Notes:** Output is GENERATED code — not committed to source. The `.udl` is the source of truth. Build script runs `uniffi-bindgen` to produce language bindings. Add `uniffi = "0.28"` to Cargo.toml (workspace dep or crate dep). The crate is a library crate (`[lib]`), not a binary. Add `hilo-ffi` to workspace members. Add uniffi scaffolding to `src/lib.rs` via `uniffi::include_scaffolding!("hilo");`.
+
 Crate name matches Cargo.toml `name` field (underscores): hilo_core, hilo_graph, hilo_metadata, hilo_cli, hilo_mcp, hilo_backends, hilo_triggers
