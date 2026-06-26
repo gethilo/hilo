@@ -50,7 +50,7 @@ fn test_tools_list() {
     let tools = resp["result"]["tools"]
         .as_array()
         .expect("tools should be an array");
-    assert!(tools.len() >= 4, "expected at least 4 tools");
+    assert!(tools.len() >= 5, "expected at least 5 tools");
 
     // Each tool must have name, description, and inputSchema.
     for t in tools {
@@ -65,6 +65,7 @@ fn test_tools_list() {
     assert!(names.contains(&"vfs_set_metadata"));
     assert!(names.contains(&"vfs_graph_related"));
     assert!(names.contains(&"vfs_graph_stats"));
+    assert!(names.contains(&"vfs_graph_untested"));
 }
 
 // -------------------------------------------------------------------------
@@ -231,4 +232,68 @@ fn test_set_metadata_empty_key_rejected() {
     let resp = rpc(&req);
     assert!(resp.get("error").is_some(), "expected error for empty key");
     assert_eq!(resp["error"]["code"], -32603);
+}
+
+// -------------------------------------------------------------------------
+// vfs_graph_untested — returns empty list when no graph exists
+// -------------------------------------------------------------------------
+
+#[test]
+fn test_graph_untested_empty() {
+    // No .vfs/graph/graph.db in the test CWD, so the tool returns empty.
+    let req = r#"{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"vfs_graph_untested","arguments":{}}}"#;
+    let resp = rpc(req);
+
+    assert_eq!(resp["jsonrpc"], "2.0");
+    assert_eq!(resp["id"], 10);
+
+    let text = resp["result"]["content"][0]["text"]
+        .as_str()
+        .expect("content[0].text should be a string");
+
+    let result: serde_json::Value =
+        serde_json::from_str(text).expect("tool output should be valid JSON");
+
+    assert_eq!(result["total"], 0);
+    assert_eq!(result["files"], serde_json::json!([]));
+}
+
+// -------------------------------------------------------------------------
+// vfs_graph_untested — populated graph returns untested files
+// -------------------------------------------------------------------------
+
+#[test]
+fn test_graph_untested_populated() {
+    use hilo_graph::GraphDB;
+    use hilo_metadata::inventory::Edge;
+
+    // Build an in-memory graph with:
+    // - src/main.go imports pkg/utils.go (imports edge)
+    // - src/auth.go imports pkg/crypto.go (imports edge)
+    // - src/auth_test.go is tested_by src/auth.go (tested_by edge)
+    // Expected: src/main.go is untested (has imports edge, no tested_by edge)
+    //           src/auth.go IS tested (has tested_by edge from auth_test.go)
+    let db = GraphDB::open(":memory:").unwrap();
+    db.insert_edges(&[
+        Edge {
+            from: "src/main.go".into(),
+            to: "pkg/utils.go".into(),
+            rel: "imports".into(),
+        },
+        Edge {
+            from: "src/auth.go".into(),
+            to: "pkg/crypto.go".into(),
+            rel: "imports".into(),
+        },
+        Edge {
+            from: "src/auth_test.go".into(),
+            to: "src/auth.go".into(),
+            rel: "tested_by".into(),
+        },
+    ])
+    .unwrap();
+
+    let untested = db.untested_files().unwrap();
+    assert_eq!(untested.len(), 1);
+    assert_eq!(untested[0], "src/main.go");
 }

@@ -1,10 +1,11 @@
 //! Tool definitions and dispatch for the Hilo MCP server.
 //!
-//! Nine tools are exposed:
+//! Ten tools are exposed:
 //! - `vfs_get_metadata`   — read Hilo xattrs for a file
 //! - `vfs_set_metadata`   — write Hilo xattr for a file
 //! - `vfs_graph_related`  — find related files via the dependency graph
 //! - `vfs_graph_stats`    — summary statistics about the graph
+//! - `vfs_graph_untested` — list files with imports but no test coverage
 //! - `vfs_graph_impact`   — transitive impact analysis for a file
 //! - `vfs_rule_list`      — list all rules defined in the manifest
 //! - `vfs_rule_check`     — execute a named rule query against the graph
@@ -100,6 +101,14 @@ pub fn list_tools() -> Vec<Tool> {
             }),
         },
         Tool {
+            name: "vfs_graph_untested".into(),
+            description: "List files that have import edges but no test coverage (no tested_by edges).".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {}
+            }),
+        },
+        Tool {
             name: "vfs_graph_impact".into(),
             description: "Find all files that depend on the given file, directly or transitively.".into(),
             input_schema: serde_json::json!({
@@ -172,6 +181,7 @@ pub fn call_tool(name: &str, arguments: &serde_json::Value) -> McpResult<serde_j
         "vfs_set_metadata" => set_metadata(arguments),
         "vfs_graph_related" => graph_related(arguments),
         "vfs_graph_stats" => graph_stats(arguments),
+        "vfs_graph_untested" => graph_untested(arguments),
         "vfs_graph_impact" => graph_impact(arguments),
         "vfs_rule_list" => rule_list(arguments),
         "vfs_rule_check" => rule_check(arguments),
@@ -333,6 +343,29 @@ fn graph_stats(_arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
     let db = hilo_graph::GraphDB::open(GRAPH_DB_PATH)?;
     let stats = db.stats()?;
     Ok(serde_json::to_value(stats)?)
+}
+
+/// `vfs_graph_untested` — list files that import others but have no tests.
+///
+/// Queries the DuckDB graph for source files that have `imports` edges
+/// (they import other files) but no `tested_by` edge pointing at them
+/// (no test file claims to cover them).
+///
+/// When no graph database exists, returns an empty list.
+fn graph_untested(_arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
+    if !Path::new(GRAPH_DB_PATH).exists() {
+        return Ok(serde_json::json!({
+            "files": [],
+            "total": 0
+        }));
+    }
+
+    let db = hilo_graph::GraphDB::open(GRAPH_DB_PATH)?;
+    let files = db.untested_files()?;
+    Ok(serde_json::json!({
+        "files": files,
+        "total": files.len()
+    }))
 }
 
 /// `vfs_graph_impact` — transitive impact analysis for a file.

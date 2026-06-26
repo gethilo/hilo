@@ -226,6 +226,25 @@ impl GraphDB {
         &self.conn
     }
 
+    /// Find files that have import edges but no `tested_by` edges pointing at them.
+    ///
+    /// Returns the list of source files that import other files but are not
+    /// covered by any test (sorted alphabetically).
+    pub fn untested_files(&self) -> GraphResult<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT \"from\" FROM edges \
+             WHERE rel = 'imports' \
+             AND \"from\" NOT IN (SELECT \"to\" FROM edges WHERE rel = 'tested_by') \
+             ORDER BY \"from\"",
+        )?;
+        let rows = stmt.query_map(params![], |row| row.get::<_, String>(0))?;
+        let mut files = Vec::new();
+        for r in rows {
+            files.push(r?);
+        }
+        Ok(files)
+    }
+
     /// Compute comprehensive [`GraphStats`] using DuckDB aggregate queries.
     pub fn stats(&self) -> GraphResult<GraphStats> {
         let total_edges: i64 =

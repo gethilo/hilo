@@ -11,14 +11,15 @@
 - **AC:** `cargo test -p hilo_mcp` — 2 new tests (roundtrip + empty-key rejection)
 - **Result:** Implemented directly by foreman (deepseek-v4-pro). mod.rs +38 lines: tool definition with path/key/value required args, set_metadata() handler with previous-value read before overwrite, empty-key validation, dispatch arm. mcp_test.rs +63 lines: test_set_metadata_roundtrip (new attribute → overwrite with previous value returned), test_set_metadata_empty_key_rejected. Full workspace 282/282 pass. Clippy clean.
 
-## [ ] MCP: vfs_graph_untested tool — spec §11.1, §21.6
+## [x] MCP: vfs_graph_untested tool — spec §11.1, §21.6
 - **Priority:** medium
 - **Model:** deepseek-v4-pro (direct write)
-- **Files:** hilo-mcp/src/tools/mod.rs
+- **Files:** hilo-mcp/src/tools/mod.rs, hilo-graph/src/graph.rs, hilo-mcp/tests/mcp_test.rs
 - **AC:** `vfs_graph_untested()` MCP tool registered — returns `{files: [path], total: N}` listing files with no test coverage
 - **AC:** Queries DuckDB graph for files that have imports edges but no tested_by edges
 - **AC:** `cargo test -p hilo_mcp` — 2+ tests (empty graph returns empty, populated graph returns untested files)
 - **Notes:** Uses existing DuckDB graph. Follow `vfs_graph_stats` pattern.
+- **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). hilo-graph/src/graph.rs: +19 lines (untested_files() with SQL: SELECT DISTINCT "from" FROM edges WHERE rel='imports' AND "from" NOT IN (SELECT "to" FROM edges WHERE rel='tested_by')). hilo-mcp/src/tools/mod.rs: +28 lines (tool definition with no-arg inputSchema, dispatch arm, graph_untested() handler with empty-graph fallback). hilo-mcp/tests/mcp_test.rs: +62 lines (test_graph_untested_empty: empty graph → {files:[], total:0}; test_graph_untested_populated: in-memory graph with imports+tested_by → correctly identifies untested file). Full workspace 284/284 pass. Clippy clean. fmt clean.
 
 ## [ ] MCP: vfs_graph_module tool — spec §11.1, §21.11
 - **Priority:** low
