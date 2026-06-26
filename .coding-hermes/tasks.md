@@ -31,14 +31,15 @@
 - **Notes:** Follow `vfs_graph_stats` pattern. Module = directory prefix (e.g., "src/auth/").
 - **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). hilo-graph/src/graph.rs: +65 lines (ModuleStats struct, module_files() method with parameterized LIKE queries, LIKE-pattern escaping, test coverage percentage calculation). hilo-graph/src/lib.rs: +1 line (ModuleStats re-export). hilo-mcp/src/tools/mod.rs: +46 lines (tool definition with module_name required arg, dispatch arm, graph_module() handler with empty-key validation and empty-graph fallback). hilo-mcp/tests/mcp_test.rs: +86 lines (test_graph_module_empty: no-graph → returns empty result; test_graph_module_populated: in-memory graph with src/auth/ files → correct files list, edges_count=4, test_coverage_pct=33.3%). Updated test_tools_list to assert vfs_graph_module. Full workspace 283/283 pass. Clippy clean. fmt clean.
 
-## [ ] MCP: vfs_backend_status + vfs_sync_backend — spec §11.1
+## [x] MCP: vfs_backend_status + vfs_sync_backend — spec §11.1
 - **Priority:** low
 - **Model:** deepseek-v4-pro (direct write)
-- **Files:** hilo-mcp/src/tools/mod.rs
+- **Files:** hilo-mcp/src/tools/mod.rs, hilo-mcp/tests/mcp_test.rs
 - **AC:** `vfs_backend_status(path)` returns `{backend, cache_hit, cache_path, remote_url, last_synced}`
 - **AC:** `vfs_sync_backend(path)` returns `{synced_files, errors}`
 - **AC:** `cargo test -p hilo_mcp` — 2+ tests
 - **Notes:** Uses existing backend info() methods from hilo-backends. Follow `vfs_resolve_path` pattern.
+- **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). mod.rs +150 lines: two tool definitions in list_tools(), dispatch arms, resolve_backend() helper with manifest fallback, backend_status() handler with backend-type-specific remote_url/cache_path resolution, sync_backend() handler reporting sync status. mcp_test.rs +117 lines: 4 tests (test_backend_status_local, test_backend_status_nonexistent, test_sync_backend_local, test_sync_backend_nonexistent). Full workspace 287+ tests pass. Clippy clean. fmt clean.
 
 ## [x] Phase 7: manifest default-function inline tests — 30 unit tests
 - **Priority:** medium

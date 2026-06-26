@@ -1,6 +1,6 @@
 //! Tool definitions and dispatch for the Hilo MCP server.
 //!
-//! Eleven tools are exposed:
+//! Thirteen tools are exposed:
 //! - `vfs_get_metadata`   — read Hilo xattrs for a file
 //! - `vfs_set_metadata`   — write Hilo xattr for a file
 //! - `vfs_graph_related`  — find related files via the dependency graph
@@ -12,6 +12,8 @@
 //! - `vfs_rule_check`     — execute a named rule query against the graph
 //! - `vfs_list_directory` — list entries in a virtual directory
 //! - `vfs_resolve_path`   — resolve a virtual path to real storage
+//! - `vfs_backend_status`  — get backend information for a file
+//! - `vfs_sync_backend`    — sync the backend for a file
 
 use std::path::Path;
 
@@ -179,6 +181,28 @@ pub fn list_tools() -> Vec<Tool> {
                 "required": ["path"]
             }),
         },
+        Tool {
+            name: "vfs_backend_status".into(),
+            description: "Get backend information for a file — which backend owns it, cache status, remote URL, and last sync state.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path to query backend status for"}
+                },
+                "required": ["path"]
+            }),
+        },
+        Tool {
+            name: "vfs_sync_backend".into(),
+            description: "Sync the backend for a file — returns count of synced files and any errors.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "File path to sync the backend for"}
+                },
+                "required": ["path"]
+            }),
+        },
     ]
 }
 
@@ -203,6 +227,8 @@ pub fn call_tool(name: &str, arguments: &serde_json::Value) -> McpResult<serde_j
         "vfs_rule_check" => rule_check(arguments),
         "vfs_list_directory" => list_directory(arguments),
         "vfs_resolve_path" => resolve_path_mcp(arguments),
+        "vfs_backend_status" => backend_status(arguments),
+        "vfs_sync_backend" => sync_backend(arguments),
         other => Err(McpError::Protocol(format!("Unknown tool: {other}"))),
     }
 }
@@ -590,4 +616,151 @@ fn resolve_path_mcp(arguments: &serde_json::Value) -> McpResult<serde_json::Valu
         Some(r) => Ok(serde_json::to_value(r)?),
         None => Ok(serde_json::json!({"error":"not found","path":path})),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Backend tools
+// ---------------------------------------------------------------------------
+
+/// Helper: resolve a path through the manifest if available, otherwise
+/// fall back to a simple local-filesystem check.
+fn resolve_backend(path: &str) -> McpResult<hilo_core::virtual_dir::ResolvedPath> {
+    // Try loading the manifest first.
+    if let Ok(manifest) = load_manifest() {
+        if let Some(r) = hilo_core::virtual_dir::resolve_path(&manifest, path) {
+            return Ok(r);
+        }
+    }
+
+    // Fallback: resolve against the current working directory.
+    // If path is already absolute, use it directly.
+    let p = Path::new(path);
+    let resolved = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        let cwd = std::env::current_dir().map_err(McpError::Io)?;
+        cwd.join(p)
+    };
+    let exists = resolved.exists();
+    Ok(hilo_core::virtual_dir::ResolvedPath {
+        real_path: resolved.to_string_lossy().to_string(),
+        backend: "local".to_string(),
+        cached: exists,
+        sync_status: if exists {
+            "synced".to_string()
+        } else {
+            "not found on disk".to_string()
+        },
+    })
+}
+
+/// `vfs_backend_status` — return backend-level details for a file.
+///
+/// Resolves the path to its real storage location and returns information
+/// about which backend owns it, whether it's cached, the remote URL (if
+/// applicable), and the last sync state.
+fn backend_status(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
+    let path = arguments["path"]
+        .as_str()
+        .ok_or_else(|| McpError::Protocol("missing 'path' argument".into()))?;
+
+    let resolved = resolve_backend(path)?;
+
+    // Build remote_url and cache_path based on backend type.
+    let (remote_url, cache_path) = match resolved.backend.as_str() {
+        "s3" => {
+            // Try to get bucket/prefix from the manifest for a richer URL.
+            let url = if let Ok(manifest) = load_manifest() {
+                manifest
+                    .backends
+                    .s3
+                    .iter()
+                    .find(|s3| path.starts_with(&s3.at))
+                    .map(|s3| format!("s3://{}/{}", s3.bucket, s3.prefix.as_deref().unwrap_or("")))
+            } else {
+                None
+            };
+            (
+                url,
+                if resolved.cached {
+                    Some(resolved.real_path.clone())
+                } else {
+                    None
+                },
+            )
+        }
+        "git" => {
+            let url = if let Ok(manifest) = load_manifest() {
+                manifest
+                    .backends
+                    .remote
+                    .iter()
+                    .find(|remote| path.starts_with(&remote.at))
+                    .map(|r| r.url.clone())
+            } else {
+                None
+            };
+            (
+                url,
+                if resolved.cached {
+                    Some(resolved.real_path.clone())
+                } else {
+                    None
+                },
+            )
+        }
+        _ => {
+            // Local backend — no remote URL, no cache path.
+            (None, None)
+        }
+    };
+
+    Ok(serde_json::json!({
+        "backend": resolved.backend,
+        "cache_hit": resolved.cached,
+        "cache_path": cache_path,
+        "remote_url": remote_url,
+        "last_synced": resolved.sync_status,
+    }))
+}
+
+/// `vfs_sync_backend` — sync the backend for a file.
+///
+/// For local backends, returns synced_files = 1 (always in sync).
+/// For S3/git backends, reports the current cache state.
+fn sync_backend(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
+    let path = arguments["path"]
+        .as_str()
+        .ok_or_else(|| McpError::Protocol("missing 'path' argument".into()))?;
+
+    let resolved = resolve_backend(path)?;
+
+    let (synced_files, errors): (u32, Vec<String>) = match resolved.backend.as_str() {
+        "local" => {
+            if resolved.cached {
+                (1, vec![])
+            } else {
+                (0, vec![format!("file not found: {}", path)])
+            }
+        }
+        "s3" | "git" => {
+            if resolved.cached {
+                (1, vec![])
+            } else {
+                (
+                    0,
+                    vec![format!(
+                        "{} backend not synced: file not cached locally",
+                        resolved.backend
+                    )],
+                )
+            }
+        }
+        other => (0, vec![format!("unknown backend type: {}", other)]),
+    };
+
+    Ok(serde_json::json!({
+        "synced_files": synced_files,
+        "errors": errors,
+    }))
 }

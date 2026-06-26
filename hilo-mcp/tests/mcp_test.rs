@@ -387,3 +387,119 @@ fn test_graph_module_populated() {
         stats.test_coverage_pct
     );
 }
+
+// -------------------------------------------------------------------------
+// vfs_backend_status — returns backend info for a local file
+// -------------------------------------------------------------------------
+
+#[test]
+fn test_backend_status_local() {
+    use std::fs;
+    use tempfile::TempDir;
+
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.txt");
+    fs::write(&file, "hello").unwrap();
+    let file_str = file.to_str().unwrap();
+
+    let req = format!(
+        r#"{{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{{"name":"vfs_backend_status","arguments":{{"path":"{file_str}"}}}}}}"#
+    );
+    let resp = rpc(&req);
+
+    assert_eq!(resp["jsonrpc"], "2.0");
+    assert_eq!(resp["id"], 20);
+
+    let text = resp["result"]["content"][0]["text"]
+        .as_str()
+        .expect("content[0].text should be a string");
+    let result: serde_json::Value =
+        serde_json::from_str(text).expect("tool output should be valid JSON");
+
+    assert_eq!(result["backend"], "local");
+    assert_eq!(result["cache_hit"], true);
+    assert!(result["cache_path"].is_null());
+    assert!(result["remote_url"].is_null());
+    assert_eq!(result["last_synced"], "synced");
+}
+
+// -------------------------------------------------------------------------
+// vfs_backend_status — nonexistent file returns not-found sync status
+// -------------------------------------------------------------------------
+
+#[test]
+fn test_backend_status_nonexistent() {
+    let req = r#"{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"vfs_backend_status","arguments":{"path":"/nonexistent/hilo-file-xyz"}}}"#;
+    let resp = rpc(&req);
+
+    assert_eq!(resp["jsonrpc"], "2.0");
+    assert_eq!(resp["id"], 21);
+
+    let text = resp["result"]["content"][0]["text"]
+        .as_str()
+        .expect("content[0].text should be a string");
+    let result: serde_json::Value =
+        serde_json::from_str(text).expect("tool output should be valid JSON");
+
+    assert_eq!(result["backend"], "local");
+    assert_eq!(result["cache_hit"], false);
+    assert_eq!(result["last_synced"], "not found on disk");
+}
+
+// -------------------------------------------------------------------------
+// vfs_sync_backend — local file reports synced
+// -------------------------------------------------------------------------
+
+#[test]
+fn test_sync_backend_local() {
+    use std::fs;
+    use tempfile::TempDir;
+
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.txt");
+    fs::write(&file, "hello").unwrap();
+    let file_str = file.to_str().unwrap();
+
+    let req = format!(
+        r#"{{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{{"name":"vfs_sync_backend","arguments":{{"path":"{file_str}"}}}}}}"#
+    );
+    let resp = rpc(&req);
+
+    assert_eq!(resp["jsonrpc"], "2.0");
+    assert_eq!(resp["id"], 22);
+
+    let text = resp["result"]["content"][0]["text"]
+        .as_str()
+        .expect("content[0].text should be a string");
+    let result: serde_json::Value =
+        serde_json::from_str(text).expect("tool output should be valid JSON");
+
+    assert_eq!(result["synced_files"], 1);
+    assert_eq!(result["errors"], serde_json::json!([]));
+}
+
+// -------------------------------------------------------------------------
+// vfs_sync_backend — nonexistent file reports error
+// -------------------------------------------------------------------------
+
+#[test]
+fn test_sync_backend_nonexistent() {
+    let req = r#"{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"vfs_sync_backend","arguments":{"path":"/nonexistent/hilo-file-xyz"}}}"#;
+    let resp = rpc(&req);
+
+    assert_eq!(resp["jsonrpc"], "2.0");
+    assert_eq!(resp["id"], 23);
+
+    let text = resp["result"]["content"][0]["text"]
+        .as_str()
+        .expect("content[0].text should be a string");
+    let result: serde_json::Value =
+        serde_json::from_str(text).expect("tool output should be valid JSON");
+
+    assert_eq!(result["synced_files"], 0);
+    let errors = result["errors"]
+        .as_array()
+        .expect("errors should be an array");
+    assert!(!errors.is_empty());
+    assert!(errors[0].as_str().unwrap().contains("file not found"));
+}
