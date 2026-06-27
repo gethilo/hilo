@@ -23,8 +23,9 @@ tasks:
   - hilo meta --set user.vfs.feature --value bar stores identically (idempotent)
   - getfattr -d <mount/file> lists user.vfs.feature exactly once
   - Untagged files return 'No such attribute' via getfattr, not empty string
-  status: pending
+  status: complete
   created_at: '2026-06-24T03:00:00+00:00'
+  completed_at: '2026-06-26T20:42:36.835209+00:00'
 - id: graph-dedup
   title: "Graph deduplication \u2014 re-discover must not double edges"
   criteria:
@@ -33,8 +34,9 @@ tasks:
   - DuckDB loaded from edges.jsonl has no duplicate rows after re-discover
   - 'graph stats: total_edges equals unique edge count, no duplicates'
   - Existing unique edges preserved when new edges added (only new ones appended)
-  status: pending
+  status: complete
   created_at: '2026-06-24T03:00:00+00:00'
+  completed_at: '2026-06-26T20:42:45.272129+00:00'
 - id: graph-reverse-queries
   title: "Reverse graph queries \u2014 imported_by, tested_by, tests"
   criteria:
@@ -45,8 +47,9 @@ tasks:
   - GraphDB::related() accepts direction parameter (forward/reverse) with rel filter
   - 'Cross-language test detection: *_test.go, test_*.py, *.test.ts, *_test.rs, *Test.java
     all mapped'
-  status: pending
+  status: complete
   created_at: '2026-06-24T03:00:00+00:00'
+  completed_at: '2026-06-26T20:42:53.502273+00:00'
 - id: graph-db-path
   title: "DuckDB path consistency \u2014 graph.db vs graph.duckdb"
   criteria:
@@ -55,8 +58,9 @@ tasks:
   - MCP vfs_graph_stats opens .vfs/graph/graph.db without symlink workaround
   - No manual symlink required after fresh init + discover for MCP tools to work
   - Both graph and MCP crates reference the same constant, not hardcoded strings
-  status: pending
+  status: complete
   created_at: '2026-06-24T03:00:00+00:00'
+  completed_at: '2026-06-26T20:43:06.810394+00:00'
 - id: fuse-readdir
   title: "FUSE readdir \u2014 ls must not hang on any directory"
   criteria:
@@ -68,8 +72,9 @@ tasks:
   - FUSE daemon starts, serves requests, unmounts cleanly without zombie processes
   - "readdir offset handling works \u2014 '.' and '..' entries returned, children\
     \ follow correctly"
-  status: pending
+  status: complete
   created_at: '2026-06-24T03:00:00+00:00'
+  completed_at: '2026-06-26T20:43:15.052356+00:00'
 - id: fuse-permissions
   title: "FUSE permission enforcement \u2014 manifest-driven mode bits"
   criteria:
@@ -78,8 +83,9 @@ tasks:
   - Read attempt on read-only S3 mount returns EACCES
   - FUSE config respects allow_other flag from manifest
   - auto_unmount cleans up on daemon exit
-  status: pending
+  status: complete
   created_at: '2026-06-24T03:00:00+00:00'
+  completed_at: '2026-06-26T20:43:23.090311+00:00'
 - id: mcp-tool-registry
   title: "MCP server \u2014 8 tools registered and functional"
   criteria:
@@ -93,8 +99,9 @@ tasks:
   - vfs_list_directory returns virtual directory entries with name, type, backend,
     size
   - vfs_resolve_path returns real_path, backend, cached, sync_status
-  status: pending
+  status: complete
   created_at: '2026-06-24T03:00:00+00:00'
+  completed_at: '2026-06-26T20:43:31.131272+00:00'
 - id: mcp-graph-consistency
   title: MCP graph tools match CLI output exactly
   criteria:
@@ -103,8 +110,9 @@ tasks:
     imports
   - MCP server loads graph from same DuckDB file as CLI (no separate instance)
   - MCP server works after graph discover without restart
-  status: pending
+  status: complete
   created_at: '2026-06-24T03:00:00+00:00'
+  completed_at: '2026-06-26T20:43:41.851075+00:00'
 - id: integration-full-pipeline
   title: "Full pipeline \u2014 init \u2192 tag \u2192 discover \u2192 mount \u2192\
     \ query"
@@ -117,8 +125,9 @@ tasks:
   - getfattr on FUSE mount returns correct values (no prefix bugs)
   - MCP tools query the same graph data visible through CLI and FUSE
   - Full pipeline completes without panics or hangs
-  status: pending
+  status: complete
   created_at: '2026-06-24T03:00:00+00:00'
+  completed_at: '2026-06-26T20:43:50.092055+00:00'
 - id: regression-test-coverage
   title: "Regression test coverage \u2014 bugs found must have tests"
   criteria:
@@ -128,5 +137,6 @@ tasks:
   - 'Graph dedup: test validates discover idempotency (same edge count on re-run)'
   - 'DuckDB path: test validates MCP and CLI agree on database file location'
   - All tests are in the crate they test (not integration-only) for fast feedback
-  status: pending
+  status: complete
   created_at: '2026-06-24T03:00:00+00:00'
+  completed_at: '2026-06-26T20:43:58.331483+00:00'

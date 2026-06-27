@@ -18,6 +18,7 @@ use libc::{EACCES, ENODATA, ENOENT};
 
 use hilo_core::workspace::MountEntry;
 
+use crate::permissions::PermissionEngine;
 use crate::FuseConfig;
 
 const ROOT_INO: u64 = 1;
@@ -47,13 +48,17 @@ pub struct WorkspaceMount {
     mounts: Vec<MountEntry>,
     files: Arc<RwLock<HashMap<u64, InodeEntry>>>,
     next_inode: AtomicU64,
+    permissions: PermissionEngine,
     #[allow(dead_code)]
     config: FuseConfig,
 }
 
 impl WorkspaceMount {
     /// Create a new `WorkspaceMount` from a mount plan.
-    pub fn new(mounts: Vec<MountEntry>, config: FuseConfig) -> Self {
+    ///
+    /// `permissions` controls mode enforcement for backend-mounted paths.
+    /// Backend rules (by mount name) take priority over glob-based rules.
+    pub fn new(mounts: Vec<MountEntry>, config: FuseConfig, permissions: PermissionEngine) -> Self {
         let mut files = HashMap::new();
         files.insert(
             ROOT_INO,
@@ -69,6 +74,7 @@ impl WorkspaceMount {
             mounts,
             files: Arc::new(RwLock::new(files)),
             next_inode: AtomicU64::new(2),
+            permissions,
             config,
         }
     }
@@ -388,7 +394,35 @@ impl Filesystem for WorkspaceMount {
         }
     }
 
-    fn open(&mut self, _req: &Request, _ino: u64, _flags: i32, reply: ReplyOpen) {
+    fn open(&mut self, _req: &Request, ino: u64, _flags: i32, reply: ReplyOpen) {
+        // Enforce permission check for backend mounts
+        let files = self.files.read().unwrap();
+        if let Some(entry) = files.get(&ino) {
+            use crate::permissions::PermissionOp;
+            let access_mode = _flags & libc::O_ACCMODE;
+            if access_mode == libc::O_WRONLY {
+                if self
+                    .permissions
+                    .check(&entry.path, PermissionOp::Write)
+                    .is_err()
+                {
+                    reply.error(EACCES);
+                    return;
+                }
+            } else if access_mode == libc::O_RDWR
+                && (self
+                    .permissions
+                    .check(&entry.path, PermissionOp::Read)
+                    .is_err()
+                    || self
+                        .permissions
+                        .check(&entry.path, PermissionOp::Write)
+                        .is_err())
+            {
+                reply.error(EACCES);
+                return;
+            }
+        }
         reply.opened(0, 0);
     }
 
@@ -432,18 +466,32 @@ impl Filesystem for WorkspaceMount {
         _lock_owner: Option<u64>,
         reply: ReplyWrite,
     ) {
-        // Check writable flag
+        // Check backend permission first
         let files = self.files.read().unwrap();
-        let writable = match files.get(&ino) {
-            Some(entry) => entry
-                .mount_idx
-                .map(|idx| self.mounts[idx].writable)
-                .unwrap_or(true),
+        let entry = match files.get(&ino) {
+            Some(e) => e.clone(),
             None => {
                 reply.error(ENOENT);
                 return;
             }
         };
+
+        // 1. Permission engine check (backend rules take priority)
+        use crate::permissions::PermissionOp;
+        if self
+            .permissions
+            .check(&entry.path, PermissionOp::Write)
+            .is_err()
+        {
+            reply.error(EACCES);
+            return;
+        }
+
+        // 2. Writable flag check
+        let writable = entry
+            .mount_idx
+            .map(|idx| self.mounts[idx].writable)
+            .unwrap_or(true);
         if !writable {
             reply.error(EACCES);
             return;

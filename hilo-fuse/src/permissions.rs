@@ -4,7 +4,8 @@
 //! This module re-exports the public API for backward compatibility.
 
 pub use hilo_permissions::{
-    PermissionEngine, PermissionError, PermissionOp, PermissionResult, PermissionRule,
+    BackendPermissionRule, PermissionEngine, PermissionError, PermissionOp, PermissionResult,
+    PermissionRule,
 };
 
 use std::path::Path;

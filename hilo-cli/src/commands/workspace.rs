@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use hilo_core::workspace::WorkspaceManifest;
+use hilo_fuse::permissions::PermissionEngine;
 use hilo_fuse::{daemon, workspace_mount, workspace_mount::WorkspaceMount, FuseConfig};
 
 /// Mount all repos and backends declared in the manifest.
@@ -49,7 +50,8 @@ pub fn run_workspace_mount(manifest_path: &str, mount_point: &str) -> Result<()>
         sandbox: None,
     };
 
-    let fs = WorkspaceMount::new(plan, config.clone());
+    let permissions = PermissionEngine::from_rules(hilo_fuse::permissions::default_protections());
+    let fs = WorkspaceMount::new(plan, config.clone(), permissions);
 
     println!("Hilo workspace mounted at {}", mount_point);
     workspace_mount::mount(fs, &config).context("workspace FUSE mount failed")?;

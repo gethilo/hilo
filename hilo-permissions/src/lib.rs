@@ -38,6 +38,20 @@ pub struct PermissionRule {
     pub allow_delete: bool,
 }
 
+/// A backend-level permission rule — enforces a mode on an entire mount tree.
+///
+/// Backend rules apply to any path whose first component matches `name`
+/// (e.g., a rule with `name = "shared-lib"` matches `"shared-lib/src/main.rs"`).
+/// Backend rules take priority over glob-based `PermissionRule` entries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackendPermissionRule {
+    /// The mount name this rule applies to (first path component).
+    pub name: String,
+    /// Octal mode enforced for all paths under this backend mount
+    /// (e.g., `0o444` for read-only dependency repos).
+    pub mode: u32,
+}
+
 /// The result of applying a permission rule to a specific path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PermissionResult {
@@ -95,11 +109,13 @@ pub enum PermissionError {
 
 /// Evaluates permission rules for file-system paths.
 ///
-/// Rules are evaluated in order — the first rule whose glob pattern matches the
-/// path wins. If no rule matches, the `default_mode` (typically `0o644`) applies.
+/// Rules are evaluated in order — backend rules are checked first (by path
+/// component prefix-match), then glob-based rules. The first match wins.
+/// If no rule matches, the `default_mode` (typically `0o644`) applies.
 #[derive(Debug, Clone)]
 pub struct PermissionEngine {
     rules: Vec<PermissionRule>,
+    backend_rules: Vec<BackendPermissionRule>,
     default_mode: u32,
 }
 
@@ -111,6 +127,7 @@ impl PermissionEngine {
     pub fn from_rules(rules: Vec<PermissionRule>) -> Self {
         Self {
             rules,
+            backend_rules: Vec::new(),
             default_mode: 0o644,
         }
     }
@@ -119,6 +136,20 @@ impl PermissionEngine {
     pub fn new(rules: Vec<PermissionRule>, default_mode: u32) -> Self {
         Self {
             rules,
+            backend_rules: Vec::new(),
+            default_mode,
+        }
+    }
+
+    /// Create an engine with glob rules, backend rules, and an explicit default mode.
+    pub fn new_with_backends(
+        rules: Vec<PermissionRule>,
+        backend_rules: Vec<BackendPermissionRule>,
+        default_mode: u32,
+    ) -> Self {
+        Self {
+            rules,
+            backend_rules,
             default_mode,
         }
     }
@@ -150,11 +181,21 @@ impl PermissionEngine {
 
     /// Compute the permission mode for `path` given the engine's rules.
     ///
-    /// Iterates rules in order; the first rule whose glob pattern matches `path`
-    /// wins. If no rule matches, the `default_mode` is returned.
+    /// Backend rules are checked first (by first-path-component prefix match);
+    /// then glob-based rules are iterated in order. The first match wins.
+    /// If no rule matches, the `default_mode` is returned.
     pub fn compute_mode(&self, path: &Path) -> u32 {
         let path_str = path_to_str(path);
 
+        // 1. Check backend rules first — they take priority over glob rules.
+        let first_component = path_str.split('/').next().unwrap_or(&path_str);
+        for backend in &self.backend_rules {
+            if backend.name == first_component {
+                return backend.mode;
+            }
+        }
+
+        // 2. Fall through to glob-based rules.
         for rule in &self.rules {
             for pattern in &rule.paths {
                 if glob_matches(pattern, &path_str) {
@@ -163,6 +204,7 @@ impl PermissionEngine {
             }
         }
 
+        // 3. Default.
         self.default_mode
     }
 }
@@ -565,5 +607,82 @@ mod tests {
         assert!(msg.contains(".vfs/secret.yaml"));
         assert!(msg.contains("Write"));
         assert!(msg.contains("444"));
+    }
+
+    // --- backend permission rules ---
+
+    #[test]
+    fn backend_rule_matches_path() {
+        let backend_rules = vec![BackendPermissionRule {
+            name: "shared-lib".into(),
+            mode: 0o444,
+        }];
+        let engine = PermissionEngine::new_with_backends(vec![], backend_rules, 0o644);
+
+        // Path under backend mount gets the backend mode
+        assert_eq!(engine.compute_mode(p("shared-lib/src/main.rs")), 0o444);
+        assert!(engine
+            .check("shared-lib/src/main.rs", PermissionOp::Read)
+            .is_ok());
+        assert!(engine
+            .check("shared-lib/src/main.rs", PermissionOp::Write)
+            .is_err());
+    }
+
+    #[test]
+    fn backend_rule_overrides_glob_rule() {
+        let glob_rules = vec![PermissionRule {
+            paths: vec!["src/**".into()],
+            mode: 0o644,
+            allow_delete: true,
+        }];
+        let backend_rules = vec![BackendPermissionRule {
+            name: "shared-lib".into(),
+            mode: 0o444,
+        }];
+        let engine = PermissionEngine::new_with_backends(glob_rules, backend_rules, 0o644);
+
+        // Backend rule takes priority over glob rule for backend paths
+        assert_eq!(engine.compute_mode(p("shared-lib/src/main.rs")), 0o444);
+        // Glob rule still applies for non-backend paths
+        assert_eq!(engine.compute_mode(p("src/main.rs")), 0o644);
+    }
+
+    #[test]
+    fn path_not_under_any_backend_falls_through_to_glob() {
+        let glob_rules = vec![PermissionRule {
+            paths: vec!["src/**".into()],
+            mode: 0o644,
+            allow_delete: true,
+        }];
+        let backend_rules = vec![BackendPermissionRule {
+            name: "shared-lib".into(),
+            mode: 0o444,
+        }];
+        let engine = PermissionEngine::new_with_backends(glob_rules, backend_rules, 0o755);
+
+        // Path not under any backend → glob rules apply
+        assert_eq!(engine.compute_mode(p("src/main.rs")), 0o644);
+        // Path not matching any rule → default
+        assert_eq!(engine.compute_mode(p("random/file.txt")), 0o755);
+    }
+
+    #[test]
+    fn multiple_backend_rules() {
+        let backend_rules = vec![
+            BackendPermissionRule {
+                name: "shared-lib".into(),
+                mode: 0o444,
+            },
+            BackendPermissionRule {
+                name: "docs".into(),
+                mode: 0o444,
+            },
+        ];
+        let engine = PermissionEngine::new_with_backends(vec![], backend_rules, 0o644);
+
+        assert_eq!(engine.compute_mode(p("shared-lib/pkg/utils.go")), 0o444);
+        assert_eq!(engine.compute_mode(p("docs/api/spec.md")), 0o444);
+        assert_eq!(engine.compute_mode(p("src/main.rs")), 0o644);
     }
 }
