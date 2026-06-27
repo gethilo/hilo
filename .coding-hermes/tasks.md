@@ -512,7 +512,7 @@ Co-authored-by: wojons <wojonstech@gmail.com>
 ## [x] Spec: Multi-language graph discover — walk all supported languages
 **Status:** complete — 9 languages, 716 files, 2,315 edges proven on metacall/core.
 
-## [ ] Phase 7: Feature inference — set user.vfs.feature xattrs from directory structure
+## [x] Phase 7: Feature inference — set user.vfs.feature xattrs from directory structure
 - **Priority:** low
 - **Model:** deepseek-v4-pro (direct write — types exist, needs wiring)
 - **Files:** hilo-graph/src/classify.rs, hilo-cli/src/commands/classify.rs
@@ -522,5 +522,6 @@ Co-authored-by: wojons <wojonstech@gmail.com>
 - **AC:** `hilo classify --features` flag enables feature inference during classification
 - **AC:** `cargo test -p hilo_graph` — 3+ tests (directory inference, override file, inference disabled)
 - **Notes:** §4.1 discovery block. `FeatureInference` struct already exists in manifest.rs with `enabled`, `strategy`, `override_file` fields. The parsing works; only the classification wiring is missing. Follow `classify_file()` pattern — add feature inference as Step 4 (after entrypoint/test/library detection, before returning). Use `xattr::set_xattr` from hilo-metadata crate.
+- **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). hilo-graph/src/classify.rs: +98 lines — `feature: Option<String>` field added to `Classification` struct, `infer_feature()` public function with directory strategy + override map (exact match and directory-prefix), `infer_feature_from_directory()` helper handling `src/` paths and top-level components, 10 new tests (directory subdir, deep path, no src dir, top-level file, hidden dir, disabled strategy, exact override, directory-prefix override, empty override, Windows separators). hilo-graph/src/lib.rs: +1 line — `infer_feature` re-export. hilo-cli/src/commands/classify.rs: +101 lines — `--features` flag support with manifest loading, override file parsing from `.vfs/features/tags.yaml`, feature inference wired into classification pipeline, `user.vfs.feature` xattr writing, "By feature" summary table. hilo-cli/src/main.rs: +3 lines — `ClassifyArgs.features` field and dispatch wiring. Full workspace 330+ tests pass. fmt clean. Clippy clean.
 
 Crate name matches Cargo.toml `name` field (underscores): hilo_core, hilo_graph, hilo_metadata, hilo_cli, hilo_mcp, hilo_backends, hilo_triggers

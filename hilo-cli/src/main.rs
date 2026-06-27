@@ -167,6 +167,9 @@ struct ClassifyArgs {
     /// Verbose output — show every file classification.
     #[arg(short, long)]
     verbose: bool,
+    /// Enable feature inference — set user.vfs.feature xattrs from directory structure.
+    #[arg(long)]
+    features: bool,
 }
 
 fn main() {
@@ -204,7 +207,9 @@ fn main() {
         Commands::Workspace(WorkspaceCommand::Unmount(args)) => {
             workspace::run_workspace_unmount(&args.mount_point)
         }
-        Commands::Classify(args) => classify::run_classify(args.dry_run, args.verbose),
+        Commands::Classify(args) => {
+            classify::run_classify(args.dry_run, args.verbose, args.features)
+        }
     };
 
     if let Err(e) = result {

@@ -16,7 +16,7 @@ pub mod impact;
 pub mod parser;
 pub mod rules;
 
-pub use classify::{classify_file, Classification};
+pub use classify::{classify_file, infer_feature, Classification};
 pub use error::{GraphError, GraphResult};
 pub use graph::{Direction, GraphDB, ModuleStats};
 pub use impact::{compute_impact, compute_impact_with_external, ImpactFile, ImpactResult};

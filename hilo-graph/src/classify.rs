@@ -17,6 +17,8 @@ pub struct Classification {
     pub status: String,
     /// Human-readable reason for the classification.
     pub reason: String,
+    /// Inferred feature name (e.g., "auth-module") — set via `infer_feature()`.
+    pub feature: Option<String>,
 }
 
 /// Generated file header markers from spec §4 discovery.generated_detection.
@@ -62,6 +64,7 @@ pub fn classify_file(
             role: "generated".into(),
             status: "generated".into(),
             reason: "matches generated file pattern (header or path marker)".into(),
+            feature: None,
         });
     }
 
@@ -71,6 +74,7 @@ pub fn classify_file(
             role: "test".into(),
             status: classify_test_status(file_path),
             reason: format!("filename matches test pattern for {:?}", language),
+            feature: None,
         });
     }
 
@@ -80,6 +84,7 @@ pub fn classify_file(
             role: "entrypoint".into(),
             status: "stable".into(),
             reason: format!("filename convention: {:?}", language),
+            feature: None,
         });
     }
 
@@ -102,6 +107,7 @@ pub fn classify_file(
             role: "entrypoint".into(),
             status: "stable".into(),
             reason: format!("contains entrypoint pattern for {:?}", language),
+            feature: None,
         });
     }
 
@@ -111,6 +117,7 @@ pub fn classify_file(
             role: "library".into(),
             status: classify_library_status(file_path),
             reason: format!("has public API surface for {:?}", language),
+            feature: None,
         });
     }
 
@@ -354,6 +361,7 @@ fn classify_by_path(path: &str) -> GraphResult<Classification> {
             role: "example".into(),
             status: "stable".into(),
             reason: "in examples directory".into(),
+            feature: None,
         });
     }
 
@@ -370,6 +378,7 @@ fn classify_by_path(path: &str) -> GraphResult<Classification> {
             role: "config".into(),
             status: "stable".into(),
             reason: "configuration file".into(),
+            feature: None,
         });
     }
 
@@ -378,6 +387,7 @@ fn classify_by_path(path: &str) -> GraphResult<Classification> {
             role: "script".into(),
             status: "beta".into(),
             reason: "in scripts directory".into(),
+            feature: None,
         });
     }
 
@@ -385,6 +395,7 @@ fn classify_by_path(path: &str) -> GraphResult<Classification> {
         role: "unknown".into(),
         status: "unknown".into(),
         reason: "no classification pattern matched".into(),
+        feature: None,
     })
 }
 
@@ -394,6 +405,101 @@ fn classify_library_status(path: &str) -> String {
         "stable".into()
     } else {
         "beta".into()
+    }
+}
+
+// ── Feature inference ────────────────────────────────────────────────
+
+/// Infer a feature name from a file's directory structure.
+///
+/// ## Strategy: `directory`
+///
+/// Extracts the first subdirectory under `src/` or the top-level directory
+/// component and derives a feature name with the `-module` or `-feature` suffix.
+///
+/// Examples:
+/// - `src/auth/login.go` → `Some("auth-module")`
+/// - `src/payments/handler.go` → `Some("payments-module")`
+/// - `lib/utils.go` (no `src/`) → `Some("utils-module")`
+///
+/// ## Overrides
+///
+/// `overrides` is a map of path → feature name. Keys ending with `/` are
+/// directory-prefix matches. Overrides take priority over directory inference.
+/// An override value of `""` means "no feature" (returns `None`).
+///
+/// Returns `None` when:
+/// - The strategy is invalid or unknown
+/// - No directory component can be meaningfully extracted (top-level file)
+/// - An override explicitly maps to `""`
+pub fn infer_feature(
+    path: &str,
+    strategy: &str,
+    overrides: Option<&std::collections::HashMap<String, String>>,
+) -> Option<String> {
+    // 1. Check overrides: exact match first, then directory-prefix match
+    if let Some(ov) = overrides {
+        // Exact match
+        if let Some(feature) = ov.get(path) {
+            return if feature.is_empty() {
+                None
+            } else {
+                Some(feature.clone())
+            };
+        }
+        // Directory-prefix match (keys ending with '/')
+        for (prefix, feature) in ov {
+            if prefix.ends_with('/') && path.starts_with(prefix.as_str()) {
+                return if feature.is_empty() {
+                    None
+                } else {
+                    Some(feature.clone())
+                };
+            }
+        }
+    }
+
+    // 2. Directory-based inference
+    if strategy == "directory" {
+        return infer_feature_from_directory(path);
+    }
+
+    None
+}
+
+/// Extract feature name from directory structure under `src/`.
+fn infer_feature_from_directory(path: &str) -> Option<String> {
+    // Normalize separators
+    let normalized = path.replace('\\', "/");
+
+    // Try extraction from `src/<subdir>/...`
+    // Handle both "/src/auth/..." and "src/auth/..."
+    for prefix in &["/src/", "src/"] {
+        if let Some(after_src) = normalized.split(prefix).nth(1) {
+            let component = after_src.split('/').next().unwrap_or("");
+            if !component.is_empty() {
+                return Some(format!("{}-module", component));
+            }
+        }
+    }
+
+    // Try first meaningful directory component
+    let components: Vec<&str> = normalized.split('/').filter(|c| !c.is_empty()).collect();
+    match components.len() {
+        0 | 1 => {
+            // Top-level file — no meaningful directory structure
+            None
+        }
+        _ => {
+            // Use the first directory component
+            let dir = components[0];
+            // Skip hidden directories and "src" (it's handled above if there's a subdirectory)
+            if dir.starts_with('.') || dir == "src" {
+                None
+            } else {
+                Some(format!("{}-module", dir))
+            }
+        }
     }
 }
 
@@ -568,5 +674,85 @@ mod tests {
         // A file that matches BOTH test and generated patterns should be classified as generated
         let result = classify_file(Language::Go, "api/user_test.gen.go", "").unwrap();
         assert_eq!(result.role, "generated");
+    }
+
+    // ── Feature inference tests ──────────────────────────────────────
+
+    #[test]
+    fn test_feature_inference_directory_src_subdir() {
+        // src/auth/login.go → auth-module
+        let feature = infer_feature("src/auth/login.go", "directory", None);
+        assert_eq!(feature.as_deref(), Some("auth-module"));
+    }
+
+    #[test]
+    fn test_feature_inference_directory_src_deep() {
+        // src/payments/internal/handler.go → payments-module
+        let feature = infer_feature("src/payments/internal/handler.go", "directory", None);
+        assert_eq!(feature.as_deref(), Some("payments-module"));
+    }
+
+    #[test]
+    fn test_feature_inference_no_src_dir() {
+        // lib/utils.go (no src/) → first component
+        let feature = infer_feature("lib/utils.go", "directory", None);
+        assert_eq!(feature.as_deref(), Some("lib-module"));
+    }
+
+    #[test]
+    fn test_feature_inference_top_level_file() {
+        // README.md at root → no feature
+        let feature = infer_feature("README.md", "directory", None);
+        assert_eq!(feature, None);
+    }
+
+    #[test]
+    fn test_feature_inference_hidden_dir() {
+        // .github/workflows/ci.yaml → skip hidden dirs
+        let feature = infer_feature(".github/workflows/ci.yaml", "directory", None);
+        assert_eq!(feature, None);
+    }
+
+    #[test]
+    fn test_feature_inference_disabled() {
+        // Unknown/invalid strategy → no feature
+        let feature = infer_feature("src/auth/login.go", "none", None);
+        assert_eq!(feature, None);
+    }
+
+    #[test]
+    fn test_feature_inference_override_exact() {
+        let mut overrides = std::collections::HashMap::new();
+        overrides.insert("src/auth/login.go".to_string(), "auth-service".to_string());
+        let feature = infer_feature("src/auth/login.go", "directory", Some(&overrides));
+        assert_eq!(feature.as_deref(), Some("auth-service"));
+    }
+
+    #[test]
+    fn test_feature_inference_override_directory_prefix() {
+        let mut overrides = std::collections::HashMap::new();
+        overrides.insert("src/auth/".to_string(), "authentication".to_string());
+        // File under src/auth/ → matches directory prefix
+        let feature = infer_feature("src/auth/login.go", "directory", Some(&overrides));
+        assert_eq!(feature.as_deref(), Some("authentication"));
+
+        // File NOT under src/auth/ → falls through to directory inference
+        let feature = infer_feature("src/payments/handler.rs", "directory", Some(&overrides));
+        assert_eq!(feature.as_deref(), Some("payments-module"));
+    }
+
+    #[test]
+    fn test_feature_inference_override_empty() {
+        let mut overrides = std::collections::HashMap::new();
+        overrides.insert("src/vendor/".to_string(), "".to_string());
+        // Empty override → no feature
+        let feature = infer_feature("src/vendor/lib.go", "directory", Some(&overrides));
+        assert_eq!(feature, None);
+    }
+
+    #[test]
+    fn test_feature_inference_windows_separators() {
+        let feature = infer_feature("src\\auth\\login.go", "directory", None);
+        assert_eq!(feature.as_deref(), Some("auth-module"));
     }
 }
