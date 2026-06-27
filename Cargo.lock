@@ -2388,6 +2388,7 @@ dependencies = [
  "hilo_graph",
  "hilo_mcp",
  "hilo_metadata",
+ "hilo_plugins",
  "hilo_triggers",
  "rayon",
  "serde",

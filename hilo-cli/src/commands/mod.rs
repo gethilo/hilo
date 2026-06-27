@@ -6,5 +6,6 @@ pub mod graph;
 pub mod init;
 pub mod meta;
 pub mod mount;
+pub mod plugin;
 pub mod serve;
 pub mod workspace;

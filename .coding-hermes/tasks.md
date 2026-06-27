@@ -536,3 +536,13 @@ Crate name matches Cargo.toml `name` field (underscores): hilo_core, hilo_graph,
 - **AC:** `cargo build -p hilo-cli` compiles clean; `cargo test --workspace` all pass; clippy clean; fmt clean
 - **AC:** 6 new unit tests for trigger loading: default_triggers coverage, manifest parsing, timeout and debounce parsing
 - **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). hilo-cli/Cargo.toml: +2 lines (hilo_triggers + tokio deps). hilo-cli/src/commands/mount.rs: rewritten — run_mount() spawns background OS thread with tokio runtime + TriggerEngine when --triggers set; load_triggers() tries manifest first, falls back to default_triggers() (9 language-specific parse-and-diff triggers); parse_manifest_triggers() handles YAML triggers block. 6 unit tests. Full workspace 332+ tests pass. Clippy clean. fmt clean.
+
+## [x] `hilo plugin` CLI — load and list wasm plugins (spec §3, §8)
+- **Priority:** medium
+- **Model:** deepseek-v4-pro (direct write — model match)
+- **Files:** hilo-cli/src/commands/plugin.rs (new), hilo-cli/src/commands/mod.rs, hilo-cli/src/main.rs, hilo-cli/Cargo.toml
+- **AC:** `hilo plugin load ./scanner.wasm` loads a .wasm plugin via PluginRuntime::load_plugin()
+- **AC:** `hilo plugin list` discovers .wasm files in .vfs/plugins/ via PluginRegistry::discover()
+- **AC:** `cargo build -p hilo-cli` compiles clean; `cargo test --workspace` all pass; clippy clean; fmt clean
+- **Notes:** Spec §3 says `hilo plugin load ./scanner.wasm`. hilo-plugins crate has PluginRuntime + PluginRegistry already. Only CLI wiring missing.
+- **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). plugin.rs: 81 lines — PluginCommand enum (Load/List), LoadArgs, run_plugin_load() with .wasm extension check + PluginRuntime::load_plugin(), run_plugin_list() with PluginRegistry::discover(".vfs/plugins/"). mod.rs: +1 line (pub mod plugin). main.rs: +7 lines (Plugin variant + import + match arms). Cargo.toml: +1 line (hilo_plugins dep). Full workspace 332+ tests pass. Clippy clean. fmt clean.
