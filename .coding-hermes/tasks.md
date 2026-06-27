@@ -525,3 +525,14 @@ Co-authored-by: wojons <wojonstech@gmail.com>
 - **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). hilo-graph/src/classify.rs: +98 lines — `feature: Option<String>` field added to `Classification` struct, `infer_feature()` public function with directory strategy + override map (exact match and directory-prefix), `infer_feature_from_directory()` helper handling `src/` paths and top-level components, 10 new tests (directory subdir, deep path, no src dir, top-level file, hidden dir, disabled strategy, exact override, directory-prefix override, empty override, Windows separators). hilo-graph/src/lib.rs: +1 line — `infer_feature` re-export. hilo-cli/src/commands/classify.rs: +101 lines — `--features` flag support with manifest loading, override file parsing from `.vfs/features/tags.yaml`, feature inference wired into classification pipeline, `user.vfs.feature` xattr writing, "By feature" summary table. hilo-cli/src/main.rs: +3 lines — `ClassifyArgs.features` field and dispatch wiring. Full workspace 330+ tests pass. fmt clean. Clippy clean.
 
 Crate name matches Cargo.toml `name` field (underscores): hilo_core, hilo_graph, hilo_metadata, hilo_cli, hilo_mcp, hilo_backends, hilo_triggers
+
+## [x] PH7-007: Wire TriggerEngine to `hilo mount --triggers` — spec §7
+- **Priority:** high
+- **Model:** deepseek-v4-pro (direct write)
+- **Files:** hilo-cli/src/commands/mount.rs, hilo-cli/Cargo.toml
+- **AC:** `hilo mount /mnt/vfs/test --triggers` starts a TriggerEngine in a background tokio runtime — watching the mount point for file events via inotify
+- **AC:** Triggers loaded from manifest (§4 triggers block) when `.vfs/manifest.yaml` exists; falls back to sensible defaults (parse-and-diff on all 9 supported languages)
+- **AC:** Trigger engine prints startup info to stderr: loaded trigger count, watch directory
+- **AC:** `cargo build -p hilo-cli` compiles clean; `cargo test --workspace` all pass; clippy clean; fmt clean
+- **AC:** 6 new unit tests for trigger loading: default_triggers coverage, manifest parsing, timeout and debounce parsing
+- **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). hilo-cli/Cargo.toml: +2 lines (hilo_triggers + tokio deps). hilo-cli/src/commands/mount.rs: rewritten — run_mount() spawns background OS thread with tokio runtime + TriggerEngine when --triggers set; load_triggers() tries manifest first, falls back to default_triggers() (9 language-specific parse-and-diff triggers); parse_manifest_triggers() handles YAML triggers block. 6 unit tests. Full workspace 332+ tests pass. Clippy clean. fmt clean.

@@ -20,6 +20,8 @@ hilo_graph = { path = "../hilo-graph" }
 hilo_mcp = { path = "../hilo-mcp" }
 hilo_backends = { path = "../hilo-backends" }
 hilo_fuse = { path = "../hilo-fuse" }
+hilo_triggers = { path = "../hilo-triggers" }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "time"] }
 glob = "0.3"
 
 [dev-dependencies]

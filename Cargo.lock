@@ -2388,10 +2388,12 @@ dependencies = [
  "hilo_graph",
  "hilo_mcp",
  "hilo_metadata",
+ "hilo_triggers",
  "rayon",
  "serde",
  "serde_yaml",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]
