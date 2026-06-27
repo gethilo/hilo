@@ -512,4 +512,15 @@ Co-authored-by: wojons <wojonstech@gmail.com>
 ## [x] Spec: Multi-language graph discover — walk all supported languages
 **Status:** complete — 9 languages, 716 files, 2,315 edges proven on metacall/core.
 
+## [ ] Phase 7: Feature inference — set user.vfs.feature xattrs from directory structure
+- **Priority:** low
+- **Model:** deepseek-v4-pro (direct write — types exist, needs wiring)
+- **Files:** hilo-graph/src/classify.rs, hilo-cli/src/commands/classify.rs
+- **AC:** `FeatureInference` from manifest is wired into `classify_file()` — when enabled with `strategy: directory`, files under `src/auth/` get `user.vfs.feature=auth-module`
+- **AC:** `override_file` (.vfs/features/tags.yaml) is read and applied — overrides take priority over directory-based inference
+- **AC:** Feature is written as xattr (`user.vfs.feature`) on classified files and returned in `Classification` result
+- **AC:** `hilo classify --features` flag enables feature inference during classification
+- **AC:** `cargo test -p hilo_graph` — 3+ tests (directory inference, override file, inference disabled)
+- **Notes:** §4.1 discovery block. `FeatureInference` struct already exists in manifest.rs with `enabled`, `strategy`, `override_file` fields. The parsing works; only the classification wiring is missing. Follow `classify_file()` pattern — add feature inference as Step 4 (after entrypoint/test/library detection, before returning). Use `xattr::set_xattr` from hilo-metadata crate.
+
 Crate name matches Cargo.toml `name` field (underscores): hilo_core, hilo_graph, hilo_metadata, hilo_cli, hilo_mcp, hilo_backends, hilo_triggers
