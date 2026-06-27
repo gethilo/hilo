@@ -20,6 +20,10 @@ hilo_graph = { path = "../hilo-graph" }
 hilo_mcp = { path = "../hilo-mcp" }
 hilo_backends = { path = "../hilo-backends" }
 hilo_fuse = { path = "../hilo-fuse" }
+glob = "0.3"
+
+[dev-dependencies]
+tempfile = "3"
 
 [[bin]]
 name = "hilo"

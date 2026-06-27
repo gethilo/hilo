@@ -103,6 +103,21 @@ pub fn run_discover(workspace: bool) -> Result<()> {
     let test_edges = discover_test_associations(&source_files, &cwd);
     all_edges.extend(test_edges);
 
+    // Process graph extensions from manifest — manually declared edge patterns
+    // like docs/**/*.md → src/**/*.go with relation "documented_by".
+    if let Ok(manifest) = load_manifest() {
+        let extension_edges =
+            generate_extension_edges(&manifest.graph.extensions, &source_files, &cwd);
+        if !extension_edges.is_empty() {
+            println!(
+                "Generated {} edge(s) from {} manifest extension(s)",
+                extension_edges.len(),
+                manifest.graph.extensions.len()
+            );
+        }
+        all_edges.extend(extension_edges);
+    }
+
     // Detect cross-repo external edges when --workspace is set.
     if workspace {
         if let Ok(ws) = load_workspace_manifest() {
@@ -433,6 +448,99 @@ fn collect_source_files(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<(
     Ok(())
 }
 
+/// Generate edges from graph extensions declared in the manifest.
+///
+/// Each extension has a pattern like `"docs/**/*.md → src/**/*.go"` and a
+/// relation like `"documented_by"`.  The left-hand glob matches source files;
+/// the right-hand glob matches target files.  Every matching (from, to) pair
+/// produces an edge with the declared relation.
+fn generate_extension_edges(
+    extensions: &[hilo_core::manifest::GraphExtension],
+    source_files: &[PathBuf],
+    cwd: &Path,
+) -> Vec<Edge> {
+    let mut edges = Vec::new();
+
+    for ext in extensions {
+        // Parse the pattern "from_glob → to_glob".
+        let parts: Vec<&str> = ext.pattern.splitn(2, "→").map(str::trim).collect();
+        if parts.len() != 2 || parts[0].is_empty() || parts[1].is_empty() {
+            eprintln!(
+                "[warn] graph extension '{}' has malformed pattern '{}' — skipping",
+                ext.name, ext.pattern
+            );
+            continue;
+        }
+        let from_glob = parts[0];
+        let to_glob = parts[1];
+
+        // Match source files against the from-glob.
+        let matched_from: Vec<PathBuf> = source_files
+            .iter()
+            .filter(|f| {
+                let rel = f.strip_prefix(cwd).unwrap_or(f);
+                glob_matches(from_glob, &rel.to_string_lossy())
+            })
+            .cloned()
+            .collect();
+
+        // Match source files against the to-glob.
+        let matched_to: Vec<PathBuf> = source_files
+            .iter()
+            .filter(|f| {
+                let rel = f.strip_prefix(cwd).unwrap_or(f);
+                glob_matches(to_glob, &rel.to_string_lossy())
+            })
+            .cloned()
+            .collect();
+
+        // Generate a cross-product of edges.
+        for from_file in &matched_from {
+            for to_file in &matched_to {
+                let from_rel = from_file
+                    .strip_prefix(cwd)
+                    .unwrap_or(from_file)
+                    .to_string_lossy()
+                    .into_owned();
+                let to_rel = to_file
+                    .strip_prefix(cwd)
+                    .unwrap_or(to_file)
+                    .to_string_lossy()
+                    .into_owned();
+
+                // Skip self-edges.
+                if from_rel == to_rel {
+                    continue;
+                }
+
+                edges.push(Edge {
+                    from: from_rel,
+                    to: to_rel,
+                    rel: ext.relation.clone(),
+                });
+            }
+        }
+    }
+
+    edges
+}
+
+/// Check whether a path matches a glob pattern.  Falls back to simple
+/// substring/suffix matching when glob::Pattern::new fails on complex patterns.
+fn glob_matches(pattern: &str, path: &str) -> bool {
+    match glob::Pattern::new(pattern) {
+        Ok(p) => p.matches(path),
+        Err(_) => {
+            // Fallback: simple ** suffix matching
+            if let Some(suffix) = pattern.strip_prefix("**/") {
+                path.ends_with(suffix) || path.contains(suffix)
+            } else {
+                path.contains(pattern)
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Rule engine — manifest-driven SQL queries against the graph
 // ---------------------------------------------------------------------------
@@ -527,5 +635,137 @@ pub fn run_rule_check(name: &str) -> Result<()> {
             // Return structured error — never panic.
             anyhow::bail!("Rule '{}' failed: {}", err.rule, err.error);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn glob_matches_exact() {
+        assert!(glob_matches("src/main.rs", "src/main.rs"));
+        assert!(!glob_matches("src/main.rs", "src/lib.rs"));
+    }
+
+    #[test]
+    fn glob_matches_wildcard() {
+        assert!(glob_matches("src/**/*.rs", "src/auth/login.rs"));
+        assert!(glob_matches("src/**/*.rs", "src/main.rs"));
+        assert!(!glob_matches("src/**/*.rs", "tests/test_auth.rs"));
+    }
+
+    #[test]
+    fn glob_matches_suffix() {
+        assert!(glob_matches("*.md", "README.md"));
+        assert!(glob_matches("*.md", "docs/guide.md"));
+        assert!(!glob_matches("*.md", "src/main.rs"));
+    }
+
+    #[test]
+    fn generate_extensions_empty() {
+        let dir = TempDir::new().unwrap();
+        let extensions: Vec<hilo_core::manifest::GraphExtension> = vec![];
+        let source_files: Vec<PathBuf> = vec![];
+        let edges = generate_extension_edges(&extensions, &source_files, dir.path());
+        assert!(edges.is_empty());
+    }
+
+    #[test]
+    fn generate_extensions_single_pattern() {
+        let dir = TempDir::new().unwrap();
+        // Create some dummy files
+        let docs_dir = dir.path().join("docs");
+        fs::create_dir_all(&docs_dir).unwrap();
+        fs::write(docs_dir.join("guide.md"), "# Guide").unwrap();
+        let src_dir = dir.path().join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::write(src_dir.join("main.rs"), "fn main() {}").unwrap();
+
+        let extensions = vec![hilo_core::manifest::GraphExtension {
+            name: "docs".to_string(),
+            pattern: "docs/**/*.md → src/**/*.rs".to_string(),
+            relation: "documented_by".to_string(),
+        }];
+
+        let source_files = vec![docs_dir.join("guide.md"), src_dir.join("main.rs")];
+
+        let edges = generate_extension_edges(&extensions, &source_files, dir.path());
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].from, "docs/guide.md");
+        assert_eq!(edges[0].to, "src/main.rs");
+        assert_eq!(edges[0].rel, "documented_by");
+    }
+
+    #[test]
+    fn generate_extensions_no_match() {
+        let dir = TempDir::new().unwrap();
+        let src_dir = dir.path().join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::write(src_dir.join("main.rs"), "fn main() {}").unwrap();
+
+        let extensions = vec![hilo_core::manifest::GraphExtension {
+            name: "docs".to_string(),
+            pattern: "docs/**/*.md → src/**/*.rs".to_string(),
+            relation: "documented_by".to_string(),
+        }];
+
+        // No docs/ files exist — from-glob matches nothing
+        let source_files = vec![src_dir.join("main.rs")];
+        let edges = generate_extension_edges(&extensions, &source_files, dir.path());
+        assert!(edges.is_empty());
+    }
+
+    #[test]
+    fn generate_extensions_self_edge_skipped() {
+        let dir = TempDir::new().unwrap();
+        let src_dir = dir.path().join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::write(src_dir.join("lib.rs"), "pub fn x() {}").unwrap();
+
+        // Pattern matches same file against itself — should skip
+        let extensions = vec![hilo_core::manifest::GraphExtension {
+            name: "self-ref".to_string(),
+            pattern: "src/lib.rs → src/lib.rs".to_string(),
+            relation: "tests".to_string(),
+        }];
+
+        let source_files = vec![src_dir.join("lib.rs")];
+        let edges = generate_extension_edges(&extensions, &source_files, dir.path());
+        assert!(edges.is_empty(), "self-edges should be skipped");
+    }
+
+    #[test]
+    fn generate_extensions_multi_pattern() {
+        let dir = TempDir::new().unwrap();
+        let docs_dir = dir.path().join("docs");
+        fs::create_dir_all(&docs_dir).unwrap();
+        fs::write(docs_dir.join("api.md"), "# API").unwrap();
+        fs::write(docs_dir.join("guide.md"), "# Guide").unwrap();
+        let src_dir = dir.path().join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::write(src_dir.join("main.rs"), "fn main() {}").unwrap();
+        fs::write(src_dir.join("lib.rs"), "pub fn x() {}").unwrap();
+
+        let extensions = vec![hilo_core::manifest::GraphExtension {
+            name: "docs".to_string(),
+            pattern: "docs/**/*.md → src/**/*.rs".to_string(),
+            relation: "documented_by".to_string(),
+        }];
+
+        let source_files = vec![
+            docs_dir.join("api.md"),
+            docs_dir.join("guide.md"),
+            src_dir.join("main.rs"),
+            src_dir.join("lib.rs"),
+        ];
+
+        let edges = generate_extension_edges(&extensions, &source_files, dir.path());
+        // 2 docs × 2 src = 4 edges
+        assert_eq!(edges.len(), 4);
+        // All should have the documented_by relation
+        assert!(edges.iter().all(|e| e.rel == "documented_by"));
     }
 }

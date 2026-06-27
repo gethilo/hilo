@@ -488,4 +488,28 @@ Co-authored-by: wojons <wojonstech@gmail.com>
 - **AC:** `cargo test --workspace` — all existing tests still pass ✅
 - **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). Created hilo-ffi/ crate: Cargo.toml (uniffi 0.28, thiserror, serde), build.rs (uniffi_build::generate_scaffolding), src/hilo.udl (8 functions + HiloError enum + 11 dictionary types), src/lib.rs (stub impls + scaffolding include + clippy allow for generated code), README.md (bindings generation docs + target structure). Key discoveries: (1) UDL dictionaries/errors must be defined OUTSIDE namespace block in uniffi 0.28, (2) Do NOT derive uniffi::Record or uniffi::Error on types defined in UDL — scaffolding auto-generates those impls, (3) Generated scaffolding has clippy::empty_line_after_doc_comments — suppressed with #![allow]. Added to workspace members. Full workspace 287+ tests pass. Clippy clean (hilo_ffi crate). fmt clean..
 
+## [x] Phase 7: Graph extensions wiring — manual edge declarations from manifest
+- **Priority:** medium
+- **Model:** deepseek-v4-pro (direct write — types exist, needs wiring)
+- **Files:** hilo-cli/src/commands/graph.rs, hilo-cli/Cargo.toml
+- **AC:** `hilo graph discover` reads `manifest.graph.extensions[]` and generates edges for each declared extension (e.g., `{name: docs, pattern: "docs/**/*.md → src/**/*.go", relation: "documented_by"}`)
+- **AC:** Glob pattern matching: for each extension, match `from` glob against source files, `to` glob against target files, insert edge with specified relation
+- **AC:** Extension edges are appended alongside discovered edges (dedup applies as usual)
+- **AC:** `cargo test -p hilo-cli` — 8 new tests (empty, single, multi, no-match, self-edge skipped, 3 glob_matches variants)
+- **Notes:** `GraphExtension` (name, pattern, relation) is already defined and parsed in `hilo-core/src/manifest.rs`. The `graph.extensions` field is populated from manifest YAML. Only wiring into discover is missing. Parse `pattern` as `"from_glob → to_glob"`. Use existing glob crate for matching. Extension edges get the declared relation type.
+- **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). hilo-cli/Cargo.toml: +3 lines (glob 0.3 dep, dev-deps tempfile 3). hilo-cli/src/commands/graph.rs: +109 lines (generate_extension_edges() and glob_matches() functions, wiring in run_discover() after test associations, 8 inline tests). Full workspace 303 tests pass. Clippy clean. fmt clean.
+
+## [ ] Phase 7: Permissions backends enforcement — mode override per backend mount
+- **Priority:** low
+- **Model:** deepseek-v4-pro (direct write — types exist, needs wiring)
+- **Files:** hilo-permissions/src/lib.rs, hilo-fuse/src/workspace_mount.rs, hilo-fuse/src/ops.rs
+- **AC:** `PermissionEngine` respects `permissions.backends[]` from manifest — backend mounts like `shared-lib` can have their entire tree set to a specific mode (e.g., 0444)
+- **AC:** `PermissionEngine::check(path, op)` when path is under a backend mount with a backend-level mode rule, that backend rule takes priority over glob-based rules
+- **AC:** Mounted dependency repos marked `mode: 0444` reject writes with EACCES — kernel-level enforcement
+- **AC:** `cargo test -p hilo_permissions` — 3+ tests (backend rule matches path, backend rule overrides glob rule, path not under any backend falls through to glob rules)
+- **Notes:** `BackendPermission` (name, mode) is already defined and parsed in `hilo-core/src/manifest.rs`. The `permissions.backends` field is populated from manifest YAML. Need to: (1) add `backend_rules: Vec<BackendPermission>` to PermissionEngine, (2) export `BackendPermission` from hilo-core, (3) in check(), prefix-match path against backend name before glob rules, (4) wire backend permissions from manifest into workspace_mount construction.
+
+## [x] Spec: Multi-language graph discover — walk all supported languages
+**Status:** complete — 9 languages, 716 files, 2,315 edges proven on metacall/core.
+
 Crate name matches Cargo.toml `name` field (underscores): hilo_core, hilo_graph, hilo_metadata, hilo_cli, hilo_mcp, hilo_backends, hilo_triggers
