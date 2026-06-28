@@ -634,3 +634,77 @@ Crate name matches Cargo.toml `name` field (underscores): hilo_core, hilo_graph,
 - **AC:** `cargo test -p hilo_mcp` — 3+ tests: roundtrip with xattrs+stats, keys filter, nonexistent file error unchanged
 - **AC:** `cargo test --workspace` all pass, `cargo build --workspace` clean, clippy clean, fmt clean
 - **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). hilo-mcp/src/tools/mod.rs: +97/-15 lines — get_metadata() now returns spec-compliant `{path, size, mtime, backend, hash, xattrs}` structure; `size`/`mtime` from `std::fs::metadata`, `backend`/`hash` extracted from xattrs; optional `keys` filter supported; added `format_iso8601()` and `days_to_ymd()` helpers (Hinnant civil-from-days algorithm, zero-copy). hilo-mcp/tests/mcp_test.rs: +135 lines — 3 new tests: test_get_metadata_roundtrip (file stats + xattrs), test_get_metadata_keys_filter (filter by short name), test_get_metadata_with_backend_and_hash (backend="s3" + hash extraction). hilo-mcp: 21/21 pass. Full workspace: all test suites pass, clippy 0 warnings, fmt clean.
+
+## [ ] JIT/lazy query architecture — remove batch-first gate
+
+- **Priority:** high
+- **Model:** glm-5.2 (multi-crate refactor, 4+ files)
+- **Provider:** zai-glm
+- **Fallback:** openrouter/owl-alpha, deepseek-v4-pro
+- **Files:** hilo-cli/src/commands/graph.rs, hilo-graph/src/graph.rs, hilo-graph/src/parser.rs, hilo-mcp/src/tools/mod.rs
+
+- **AC:** `hilo graph related src/main.rs` works on a fresh `hilo init` — no `graph discover` required
+- **AC:** First query on any file: parse it on-the-fly, cache edges in DuckDB, return results
+- **AC:** Second query on same file: instant — hits DuckDB cache, no re-parse
+- **AC:** `hilo graph discover` still exists as `hilo graph warm` (optional pre-computation)
+- **AC:** `hilo graph impact src/auth.rs` parses only needed files, not entire codebase
+- **AC:** `hilo graph stats` reflects whatever's in cache — returns 0 on fresh init (not an error)
+- **AC:** MCP tools work identically — `vfs_graph_related` triggers lazy parse on miss
+- **AC:** `hilo init` creates `.vfs/` structure only — no graph pre-computation
+- **AC:** `cargo test --workspace` — all existing tests pass; 5+ new tests for lazy parse (first-query parses, second-query cached, missing file error, stats-on-empty-cache, impact builds incrementally)
+- **AC:** `cargo build --workspace` clean, clippy clean, fmt clean
+
+### Design
+
+**Core change:** Remove the gate. Today queries require `graph discover` first. Tomorrow they auto-initialize.
+
+```rust
+// TODAY (batch-first)
+let db = GraphDB::open(".vfs/graph/graph.db")?;
+if db.edge_count() == 0 {
+    return Err("run 'hilo graph discover' first");
+}
+let edges = db.related("src/main.rs", None)?;
+
+// TOMORROW (JIT/lazy)
+let db = GraphDB::open(".vfs/graph/graph.db")?;
+let edges = db.related_or_parse("src/main.rs", None)?;
+// db.related_or_parse():
+//   1. Check DuckDB cache for file
+//   2. Cache hit → return edges from DB
+//   3. Cache miss → detect language, tree-sitter parse, insert edges, return
+```
+
+**New methods on GraphDB:**
+- `related_or_parse(from, rel, dir)` — query with lazy fallback
+- `impact_or_parse(from, max_depth)` — BFS with per-file lazy parse
+- `ensure_parsed(path)` — parse single file, cache, return edges
+- `edge_count()` — already exists
+- `file_in_graph(path)` — already exists, used by lazy gate
+
+**graph discover → graph warm:**
+- Rename `Discover` subcommand to `Warm` (keep `Discover` as hidden alias)
+- `hilo graph warm` = parse everything (full cache population)
+- `hilo graph warm --language rust` = only Rust files
+
+**init behavior:**
+- `hilo init` creates `.vfs/` directory structure + empty DuckDB
+- No parsing. No pre-computation. Initialize and exit.
+
+**Agent experience:**
+```
+$ cd /any/project
+$ hilo init                        # 0.1s — creates .vfs/
+$ hilo graph related src/main.rs   # 0.5s — parses main.rs, caches
+$ hilo graph related src/lib.rs    # 0.4s — parses lib.rs, caches
+$ hilo graph related src/main.rs   # 0.01s — cache hit, instant
+$ hilo graph impact src/lib.rs     # 2.1s — BFS, parses as needed
+```
+
+### Pitfalls
+
+- **Tree-sitter parse is not incremental.** Each file parses fully on first access. On repos >5K files, first queries have latency.
+- **Parser per-file cost is ~50-200ms.** Cache hit is <1ms. The first few queries are slow, then everything is fast.
+- **Warm command is for eager users.** `hilo graph warm` pre-computes everything — same as old `discover`. Useful for CI.
+- **Cache invalidation.** File changes don't auto-invalidate. `hilo graph warm` or manual `rm .vfs/graph/graph.db` to reset.
+- **Thread safety.** DuckDB connection is single-threaded. Use mutex or connection pool if concurrent queries are needed (future phase).
