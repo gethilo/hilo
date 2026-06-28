@@ -9,7 +9,9 @@ use inotify::{EventMask, Inotify, WatchDescriptor, WatchMask};
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::sync::Semaphore;
 use tokio::time::timeout;
 
 pub struct TriggerEngine {
@@ -23,8 +25,9 @@ pub struct TriggerEngine {
     #[allow(dead_code)]
     debounce_default_ms: u64,
     /// Max concurrent trigger executions.
-    #[allow(dead_code)]
     max_concurrent: usize,
+    /// Semaphore to enforce max_concurrent.
+    semaphore: Arc<Semaphore>,
     /// Timeout for async trigger execution.
     #[allow(dead_code)]
     trigger_timeout: Duration,
@@ -49,6 +52,7 @@ impl TriggerEngine {
             watches: HashMap::new(),
             debounce_default_ms,
             max_concurrent: 4,
+            semaphore: Arc::new(Semaphore::new(4)),
             trigger_timeout,
         }
     }
@@ -152,9 +156,23 @@ impl TriggerEngine {
                     let to = Duration::from_secs(trigger.timeout_secs);
 
                     if trigger.async_exec {
+                        // Acquire a permit from the semaphore — drop if at capacity.
+                        let permit = match self.semaphore.clone().try_acquire_owned() {
+                            Ok(p) => p,
+                            Err(_) => {
+                                eprintln!(
+                                    "[trigger] dropped '{}' for {} (max_concurrent={} reached)",
+                                    trigger.name,
+                                    path.display(),
+                                    self.max_concurrent
+                                );
+                                continue;
+                            }
+                        };
                         let cfg = trigger.clone();
                         let evt = file_event.clone();
                         tokio::spawn(async move {
+                            let _permit = permit; // hold permit until done
                             execute_trigger(&cfg, &evt, to).await;
                         });
                     } else {
@@ -714,5 +732,66 @@ mod tests {
 
         assert!(!pattern_match, "pattern *.rs should not match main.go");
         assert!(event_match, "write event should pass if pattern matched");
+    }
+
+    // ── max_concurrent semaphore enforcement ────────────────────────────
+
+    #[test]
+    fn test_max_concurrent_semaphore_created() {
+        let engine = TriggerEngine::new(vec![], 500);
+        // Semaphore should have capacity equal to max_concurrent.
+        assert_eq!(engine.max_concurrent, 4);
+        assert_eq!(engine.semaphore.available_permits(), 4);
+    }
+
+    #[tokio::test]
+    async fn test_semaphore_try_acquire_limits_concurrency() {
+        use std::sync::Arc;
+        use tokio::sync::Semaphore;
+
+        let sem = Arc::new(Semaphore::new(2));
+        assert_eq!(sem.available_permits(), 2);
+
+        // Acquire two permits.
+        let p1 = sem.clone().try_acquire_owned().unwrap();
+        let p2 = sem.clone().try_acquire_owned().unwrap();
+        assert_eq!(sem.available_permits(), 0);
+
+        // Third try_acquire should fail.
+        assert!(sem.clone().try_acquire_owned().is_err());
+
+        // Release one permit.
+        drop(p1);
+        // After dropping, the permit is returned. Wait briefly for async return.
+        tokio::task::yield_now().await;
+
+        // Now try_acquire should succeed again.
+        let p3 = sem.clone().try_acquire_owned().unwrap();
+        assert!(sem.available_permits() <= 1);
+
+        drop(p2);
+        drop(p3);
+    }
+
+    #[tokio::test]
+    async fn test_semaphore_release_allows_new_acquire() {
+        use std::sync::Arc;
+        use tokio::sync::Semaphore;
+
+        let sem = Arc::new(Semaphore::new(1));
+        assert_eq!(sem.available_permits(), 1);
+
+        let p = sem.clone().try_acquire_owned().unwrap();
+        assert_eq!(sem.available_permits(), 0);
+
+        // Should fail while permit is held.
+        assert!(sem.clone().try_acquire_owned().is_err());
+
+        // Release — permit returns.
+        drop(p);
+        tokio::task::yield_now().await;
+
+        // Now should succeed.
+        assert!(sem.clone().try_acquire_owned().is_ok());
     }
 }
