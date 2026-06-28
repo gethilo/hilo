@@ -586,6 +586,21 @@ Crate name matches Cargo.toml `name` field (underscores): hilo_core, hilo_graph,
 - **AC:** 6 new unit tests for trigger loading: default_triggers coverage, manifest parsing, timeout and debounce parsing
 - **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). hilo-cli/Cargo.toml: +2 lines (hilo_triggers + tokio deps). hilo-cli/src/commands/mount.rs: rewritten — run_mount() spawns background OS thread with tokio runtime + TriggerEngine when --triggers set; load_triggers() tries manifest first, falls back to default_triggers() (9 language-specific parse-and-diff triggers); parse_manifest_triggers() handles YAML triggers block. 6 unit tests. Full workspace 332+ tests pass. Clippy clean. fmt clean.
 
+## [ ] Spec gap: Implement `upload-to-backend` built-in trigger — spec §7.2, §13.2
+- **Priority:** medium
+- **Model:** glm-5.2 (multi-crate feature: hilo-triggers → hilo-backends → hilo-metadata)
+- **Provider:** zai-glm
+- **Files:** hilo-triggers/src/engine.rs, hilo-triggers/Cargo.toml, hilo-backends/src/s3.rs, hilo-mcp/src/tools/mod.rs (optional)
+- **AC:** `upload-to-backend` built-in trigger in engine.rs actually uploads the changed file to S3 (not just log stub)
+- **AC:** File content read from path, SHA-256 hash computed, S3 put_object called
+- **AC:** Xattrs set on success: `user.vfs.backend` = "s3", `user.vfs.hash` = sha256 hex, `user.vfs.cache_status` = "synced"
+- **AC:** Blob index (.vfs/blobs/index.jsonl) updated with {path, hash, backend, uploaded_at}
+- **AC:** Upload failure returns error to trigger log, local cache preserved
+- **AC:** Trigger respects timeout from manifest (kills hung upload)
+- **AC:** `cargo test -p hilo_triggers` — 4+ new tests (upload-to-backend success path, upload-to-backend error path, timeout, missing backend config)
+- **AC:** `cargo test --workspace` all pass, `cargo build --workspace` clean, clippy clean, fmt clean
+- **Notes:** Currently engine.rs line 440 treats upload-to-backend as stub (eprintln). parse-and-diff is handled synchronously in run() at line ~180; upload-to-backend should get similar treatment. Needs hilo-backends dep added to hilo-triggers/Cargo.toml. S3 backend client already exists (hilo-backends/src/s3.rs: S3Client::put_object). TriggerEngine needs `s3_client` field OR pass via run() method. Tests should mock S3 (httptest) or use temp files — no real AWS creds needed.
+
 ## [x] `hilo plugin` CLI — load and list wasm plugins (spec §3, §8)
 - **Priority:** medium
 - **Model:** deepseek-v4-pro (direct write — model match)

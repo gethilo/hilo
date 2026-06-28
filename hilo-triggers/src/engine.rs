@@ -415,13 +415,16 @@ fn parse_and_diff_sync(
 
 /// Execute a single trigger for a file event.
 ///
-/// - Built-in triggers (parse-and-diff, upload-to-backend): log and return Ok (stub).
+/// - `parse-and-diff`: handled synchronously in `run()` — never reaches this function.
+/// - `upload-to-backend`: stub (TODO: wire S3 client, upload, blob-index append).
 /// - Command triggers: run shell command with `{{ .FilePath }}` substitution.
 ///
 /// Returns on timeout via `tokio::time::timeout`.
 /// Errors are logged with `eprintln!`, never panic.
 async fn execute_trigger(cfg: &TriggerConfig, event: &FileEvent, timeout_dur: Duration) {
-    // Built-in triggers — stub for now.
+    // Built-in triggers.
+    // parse-and-diff is dispatched synchronously from run() (line ~180)
+    // and never reaches this function.
     if let Some(builtin) = &cfg.builtin {
         eprintln!(
             "[trigger] builtin '{}' fired for '{}' ({})",
@@ -430,10 +433,14 @@ async fn execute_trigger(cfg: &TriggerConfig, event: &FileEvent, timeout_dur: Du
             event_type_string(&event.event_type)
         );
 
-        // Handle on_success / on_failure for builtin triggers.
         match builtin.as_str() {
-            "parse-and-diff" | "upload-to-backend" => {
-                eprintln!("[trigger] builtin '{}' completed (stub)", builtin);
+            "parse-and-diff" => {
+                // Should never reach here — handled synchronously in run().
+                eprintln!("[trigger] parse-and-diff reached execute_trigger (should not happen)");
+            }
+            "upload-to-backend" => {
+                // TODO: Wire S3 backend upload + blob index append (§7.2, §13.2).
+                eprintln!("[trigger] upload-to-backend completed (stub — TODO)");
             }
             _ => {
                 eprintln!("[trigger] unknown builtin '{}'", builtin);
