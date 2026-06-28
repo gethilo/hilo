@@ -62,12 +62,33 @@ fn test_graph_stats() {
             to: "std:fmt".into(),
             rel: "imports".into(),
         },
+        Edge {
+            from: "a_test.go".into(),
+            to: "a.go".into(),
+            rel: "tested_by".into(),
+        },
     ];
     db.insert_edges(&edges).unwrap();
     let stats = db.stats().unwrap();
-    assert_eq!(stats.total_edges, 3);
-    assert_eq!(stats.unique_files, 3); // a.go, b.go, c.go
-    assert_eq!(stats.unique_dependencies, 2); // fmt, os
+    assert_eq!(stats.total_edges, 4);
+    assert_eq!(stats.total_files, 4); // a.go, b.go, c.go, a_test.go
+    assert_eq!(stats.unique_files, 4);
+    assert_eq!(stats.unique_dependencies, 3); // fmt, os, a.go
+    assert_eq!(stats.most_connected.as_deref(), Some("std:fmt"));
+
+    // Edge types breakdown.
+    assert_eq!(stats.edge_types.get("imports").copied(), Some(3));
+    assert_eq!(stats.edge_types.get("tested_by").copied(), Some(1));
+
+    // Orphans: files that appear as \"from\" but never as \"to\".
+    // b.go → std:os (b.go never appears as \"to\")
+    // c.go → std:fmt (c.go never appears as \"to\")
+    // a_test.go → a.go (a_test.go never appears as \"to\")
+    assert!(stats.orphans.contains(&"b.go".to_string()));
+    assert!(stats.orphans.contains(&"c.go".to_string()));
+    assert!(stats.orphans.contains(&"a_test.go".to_string()));
+    // a.go appears as both \"from\" (a.go → std:fmt) and \"to\" (a_test.go → a.go) — not an orphan.
+    assert!(!stats.orphans.contains(&"a.go".to_string()));
 }
 
 #[test]

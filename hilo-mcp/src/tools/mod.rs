@@ -460,9 +460,10 @@ fn graph_stats(_arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
     if !Path::new(GRAPH_DB_PATH).exists() {
         return Ok(serde_json::json!({
             "total_edges": 0,
-            "unique_files": 0,
-            "unique_dependencies": 0,
-            "top_dependencies": []
+            "total_files": 0,
+            "most_connected": null,
+            "orphans": [],
+            "edge_types": {}
         }));
     }
 

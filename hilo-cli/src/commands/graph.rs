@@ -304,8 +304,20 @@ pub fn run_stats() -> Result<()> {
     }
 
     println!("Total edges: {}", stats.total_edges);
-    println!("Unique source files: {}", stats.unique_files);
-    println!("Unique dependencies: {}", stats.unique_dependencies);
+    println!("Total files: {}", stats.total_files);
+    if let Some(ref mc) = stats.most_connected {
+        println!("Most connected: {mc}");
+    }
+    println!("Edge types:");
+    for (rel, count) in &stats.edge_types {
+        println!("  {rel}: {count}");
+    }
+    if !stats.orphans.is_empty() {
+        println!("Orphans (no incoming edges):");
+        for orphan in &stats.orphans {
+            println!("  {orphan}");
+        }
+    }
     println!("Top dependencies:");
     for (dep, count) in &stats.top_dependencies {
         println!("  {dep}: {count}");

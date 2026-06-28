@@ -1,5 +1,18 @@
 # Hilo Coding Tasks
 
+## [x] Spec gap: vfs_graph_stats edge_types + most_connected + orphans — spec §21.5
+- **Priority:** medium
+- **Model:** deepseek-v4-pro (direct write — model match, 3-file fix)
+- **Files:** hilo-graph/src/graph.rs, hilo-mcp/src/tools/mod.rs, hilo-cli/src/commands/graph.rs
+- **AC:** ✅ `vfs_graph_stats` returns `edge_types` (HashMap<String,i64> breakdown by relation) matching spec §21.5
+- **AC:** ✅ `vfs_graph_stats` returns `most_connected` (Option<String>) — single most-referenced file
+- **AC:** ✅ `vfs_graph_stats` returns `orphans` (Vec<String>) — isolated files with no incoming edges
+- **AC:** ✅ `vfs_graph_stats` returns `total_files` (alias for unique_files) for spec compliance
+- **AC:** ✅ `cargo test -p hilo_graph` updated test verifies edge_types, most_connected, orphans
+- **AC:** ✅ `cargo test -p hilo_mcp` updated empty-graph test verifies new fields
+- **AC:** ✅ `cargo build --workspace` clean, `cargo test --workspace` all pass, clippy clean, fmt clean
+- **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). hilo-graph/src/graph.rs: +50/-4 lines — GraphStats gains `total_files`, `most_connected: Option<String>`, `orphans: Vec<String>`, `edge_types: HashMap<String,i64>` fields. stats() method adds 3 new SQL queries: rel GROUP BY for edge_types, NOT IN subquery for orphans, and most_connected extract from top_dependencies. Serde #[skip] on legacy fields (unique_files, unique_dependencies, top_dependencies) to keep backward compat. hilo-mcp/src/tools/mod.rs: empty-graph fallback updated with new fields. hilo-cli/src/commands/graph.rs: run_stats() display updated with edge_types table, most_connected, orphans section. hilo-graph/tests/graph_test.rs: test_graph_stats expanded from 3→4 edges (adds tested_by), verifies edge_types breakdown, most_connected, orphans detection. hilo-mcp/tests/mcp_test.rs: empty stats assertions updated. Full workspace: all 32 test suites pass (0 failures). Clippy: 0 warnings. fmt: clean.
+
 ## [x] Spec gap: Wire on_success set_xattr trigger action — spec §7.3
 - **Priority:** medium
 - **Model:** deepseek-v4-pro (direct write — 1-function fix)

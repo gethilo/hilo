@@ -47,12 +47,23 @@ pub struct GraphDB {
 pub struct GraphStats {
     /// Total number of rows in `edges`.
     pub total_edges: i64,
+    /// Total number of distinct source files in the graph.
+    pub total_files: i64,
     /// Count of distinct `from` values (source files).
+    #[serde(skip)]
     pub unique_files: i64,
     /// Count of distinct `to` values (unique dependencies).
+    #[serde(skip)]
     pub unique_dependencies: i64,
+    /// The single most-referenced file in the graph, if any.
+    pub most_connected: Option<String>,
+    /// Files that appear as `from` but have no edges pointing at them.
+    pub orphans: Vec<String>,
+    /// Edge count broken down by relation type.
+    pub edge_types: std::collections::HashMap<String, i64>,
     /// The top 10 most-referenced dependencies as `(to, count)` pairs,
     /// ordered by reference count descending.
+    #[serde(skip)]
     pub top_dependencies: Vec<(String, i64)>,
 }
 
@@ -342,6 +353,7 @@ impl GraphDB {
             |row| row.get::<_, i64>(0),
         )?;
 
+        // Top dependencies by reference count.
         let mut stmt = self.conn.prepare(
             "SELECT \"to\", COUNT(*) AS cnt \
              FROM edges \
@@ -356,11 +368,43 @@ impl GraphDB {
         for r in rows {
             top.push(r?);
         }
+        let most_connected = top.first().map(|(name, _)| name.clone());
+
+        // Edge types: count per relation.
+        let mut edge_types = std::collections::HashMap::new();
+        let mut rel_stmt = self
+            .conn
+            .prepare("SELECT rel, COUNT(*) AS cnt FROM edges GROUP BY rel ORDER BY cnt DESC")?;
+        let rel_rows = rel_stmt.query_map(params![], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        for r in rel_rows {
+            let (rel, cnt) = r?;
+            edge_types.insert(rel, cnt);
+        }
+
+        // Orphans: files that appear as \"from\" but never appear as \"to\"
+        // in any edge — truly isolated source files with no incoming references.
+        let mut orphan_stmt = self.conn.prepare(
+            "SELECT DISTINCT e.\"from\" \
+             FROM edges e \
+             WHERE e.\"from\" NOT IN (SELECT DISTINCT \"to\" FROM edges) \
+             ORDER BY e.\"from\"",
+        )?;
+        let orphan_rows = orphan_stmt.query_map(params![], |row| row.get::<_, String>(0))?;
+        let mut orphans = Vec::new();
+        for r in orphan_rows {
+            orphans.push(r?);
+        }
 
         Ok(GraphStats {
             total_edges,
+            total_files: unique_files,
             unique_files,
             unique_dependencies,
+            most_connected,
+            orphans,
+            edge_types,
             top_dependencies: top,
         })
     }

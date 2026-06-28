@@ -245,9 +245,10 @@ fn test_graph_stats_empty() {
         serde_json::from_str(text).expect("tool output should be valid JSON");
 
     assert_eq!(stats["total_edges"], 0);
-    assert_eq!(stats["unique_files"], 0);
-    assert_eq!(stats["unique_dependencies"], 0);
-    assert_eq!(stats["top_dependencies"], serde_json::json!([]));
+    assert_eq!(stats["total_files"], 0);
+    assert!(stats["most_connected"].is_null());
+    assert_eq!(stats["orphans"], serde_json::json!([]));
+    assert_eq!(stats["edge_types"], serde_json::json!({}));
 }
 
 // -------------------------------------------------------------------------
