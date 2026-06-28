@@ -610,3 +610,14 @@ Crate name matches Cargo.toml `name` field (underscores): hilo_core, hilo_graph,
 - **AC:** `cargo build -p hilo-cli` compiles clean; `cargo test --workspace` all pass; clippy clean; fmt clean
 - **Notes:** Spec §3 says `hilo plugin load ./scanner.wasm`. hilo-plugins crate has PluginRuntime + PluginRegistry already. Only CLI wiring missing.
 - **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). plugin.rs: 81 lines — PluginCommand enum (Load/List), LoadArgs, run_plugin_load() with .wasm extension check + PluginRuntime::load_plugin(), run_plugin_list() with PluginRegistry::discover(".vfs/plugins/"). mod.rs: +1 line (pub mod plugin). main.rs: +7 lines (Plugin variant + import + match arms). Cargo.toml: +1 line (hilo_plugins dep). Full workspace 332+ tests pass. Clippy clean. fmt clean.
+
+## [x] Spec gap: vfs_get_metadata missing file stats — spec §21.1
+- **Priority:** high
+- **Model:** deepseek-v4-pro (direct write — model match, single-method fix)
+- **Files:** hilo-mcp/src/tools/mod.rs, hilo-mcp/tests/mcp_test.rs
+- **AC:** `vfs_get_metadata(path)` returns `{path, size, mtime, backend, hash, xattrs: {user.vfs.*: ...}}` matching spec §21.1 structure
+- **AC:** `vfs_get_metadata(path, keys=["feature"])` filters xattrs to only requested keys (optional parameter)
+- **AC:** `size` and `mtime` come from `std::fs::metadata(path)`, `backend` from `user.vfs.backend` xattr (or "local" default), `hash` from `user.vfs.hash` xattr (or null)
+- **AC:** `cargo test -p hilo_mcp` — 3+ tests: roundtrip with xattrs+stats, keys filter, nonexistent file error unchanged
+- **AC:** `cargo test --workspace` all pass, `cargo build --workspace` clean, clippy clean, fmt clean
+- **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). hilo-mcp/src/tools/mod.rs: +97/-15 lines — get_metadata() now returns spec-compliant `{path, size, mtime, backend, hash, xattrs}` structure; `size`/`mtime` from `std::fs::metadata`, `backend`/`hash` extracted from xattrs; optional `keys` filter supported; added `format_iso8601()` and `days_to_ymd()` helpers (Hinnant civil-from-days algorithm, zero-copy). hilo-mcp/tests/mcp_test.rs: +135 lines — 3 new tests: test_get_metadata_roundtrip (file stats + xattrs), test_get_metadata_keys_filter (filter by short name), test_get_metadata_with_backend_and_hash (backend="s3" + hash extraction). hilo-mcp: 21/21 pass. Full workspace: all test suites pass, clippy 0 warnings, fmt clean.

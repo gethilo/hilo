@@ -246,33 +246,117 @@ const MANIFEST_PATH: &str = "manifest.yaml";
 /// Fallback manifest path used when the primary path doesn't exist.
 const MANIFEST_FALLBACK_PATH: &str = ".vfs/manifest.yaml";
 
-/// `vfs_get_metadata` — read all `user.vfs.*` xattrs for a file.
+/// `vfs_get_metadata` — read file stats + Hilo xattrs.
 ///
-/// `list_vfs_xattrs` returns full names (e.g. `"user.vfs.relations"`) while
-/// `get_vfs_xattr` expects the short name (without the `user.vfs.` prefix)
-/// because it prepends the prefix internally.
+/// Returns `{path, size, mtime, backend, hash, xattrs: {…}}` per spec §21.1.
+/// Optional `keys` array filters xattrs to only the requested short names
+/// (e.g. `["feature", "risk"]`).
+///
+/// `size` and `mtime` come from `std::fs::metadata`.  `backend` is read from
+/// the `user.vfs.backend` xattr (default `"local"`).  `hash` is read from
+/// `user.vfs.hash` (default `null`).
 fn get_metadata(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
+    use std::time::UNIX_EPOCH;
+
     let path_str = arguments["path"]
         .as_str()
         .ok_or_else(|| McpError::Protocol("missing 'path' argument".into()))?;
     let path = Path::new(path_str);
 
+    // ── file stats from the OS ──────────────────────────────────────────
+    let meta = std::fs::metadata(path)
+        .map_err(|e| McpError::Protocol(format!("cannot stat '{path_str}': {e}")))?;
+    let size = meta.len();
+    let mtime: Option<String> = meta.modified().ok().and_then(|st| {
+        let secs = st.duration_since(UNIX_EPOCH).ok()?.as_secs();
+        Some(format_iso8601(secs))
+    });
+
+    // ── optional keys filter ────────────────────────────────────────────
+    let keys_filter: Option<Vec<String>> =
+        arguments.get("keys").and_then(|v| v.as_array()).map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        });
+
+    // ── collect xattrs ──────────────────────────────────────────────────
     let full_names = hilo_metadata::list_vfs_xattrs(path)?;
 
-    let mut map = serde_json::Map::new();
+    let mut xattrs = serde_json::Map::new();
+    let mut backend: String = "local".into();
+    let mut hash: Option<String> = None;
+
     for full_name in full_names {
-        // Strip the `user.vfs.` prefix so get_vfs_xattr doesn't double it.
         let short_name = full_name.strip_prefix("user.vfs.").unwrap_or(&full_name);
+
+        // Honour the optional keys filter (match on short name).
+        if let Some(ref keys) = keys_filter {
+            if !keys.iter().any(|k| k == short_name) {
+                continue;
+            }
+        }
+
         match hilo_metadata::get_vfs_xattr(path, short_name)? {
             Some(val) => {
-                map.insert(full_name, serde_json::Value::String(val));
+                // Capture backend / hash for the top-level fields.
+                if short_name == "backend" {
+                    backend = val.clone();
+                }
+                if short_name == "hash" {
+                    hash = Some(val.clone());
+                }
+                xattrs.insert(full_name, serde_json::Value::String(val));
             }
             None => {
-                map.insert(full_name, serde_json::Value::Null);
+                xattrs.insert(full_name, serde_json::Value::Null);
             }
         }
     }
-    Ok(serde_json::Value::Object(map))
+
+    Ok(serde_json::json!({
+        "path": path_str,
+        "size": size,
+        "mtime": mtime,
+        "backend": backend,
+        "hash": hash,
+        "xattrs": xattrs,
+    }))
+}
+
+/// Format a Unix timestamp (seconds since epoch) as ISO 8601.
+///
+/// Uses Hinnant's civil-from-days algorithm so no external date library is
+/// required.  Output: `"2026-06-28T14:30:00Z"`.
+fn format_iso8601(secs: u64) -> String {
+    let days = (secs / 86400) as i64;
+    let (year, month, day) = days_to_ymd(days);
+    let remaining = secs % 86400;
+    let hours = remaining / 3600;
+    let minutes = (remaining % 3600) / 60;
+    let secs_rem = remaining % 60;
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year, month, day, hours, minutes, secs_rem
+    )
+}
+
+/// Convert days since Unix epoch to (year, month, day).
+///
+/// Algorithm: civil_from_days (Howard Hinnant).  Works for the full
+/// `chrono` date range — no 2038 problem.
+fn days_to_ymd(days: i64) -> (i64, u32, u32) {
+    let z = days + 719468;
+    let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
+    let doe = (z - era * 146097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m as u32, d as u32)
 }
 
 /// `vfs_set_metadata` — set a Hilo xattr on a file.

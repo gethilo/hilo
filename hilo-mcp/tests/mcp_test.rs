@@ -88,6 +88,141 @@ fn test_get_metadata_nonexistent() {
 }
 
 // -------------------------------------------------------------------------
+// vfs_get_metadata — roundtrip with file stats and xattrs
+// -------------------------------------------------------------------------
+
+#[test]
+fn test_get_metadata_roundtrip() {
+    use std::fs;
+    use tempfile::TempDir;
+
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.txt");
+    fs::write(&file, "hello world").unwrap();
+    let file_str = file.to_str().unwrap();
+
+    // Set a couple of xattrs via MCP.
+    for (k, v) in [("feature", "auth-module"), ("risk", "critical-path")] {
+        let set_req = format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"vfs_set_metadata","arguments":{{"path":"{file_str}","key":"{k}","value":"{v}"}}}}}}"#
+        );
+        let resp = rpc(&set_req);
+        let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+        let r: serde_json::Value = serde_json::from_str(text).unwrap();
+        assert_eq!(r["success"], true);
+    }
+
+    // Now call vfs_get_metadata.
+    let get_req = format!(
+        r#"{{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{{"name":"vfs_get_metadata","arguments":{{"path":"{file_str}"}}}}}}"#
+    );
+    let get_resp = rpc(&get_req);
+    let text = get_resp["result"]["content"][0]["text"]
+        .as_str()
+        .expect("content[0].text should be a string");
+    let result: serde_json::Value =
+        serde_json::from_str(text).expect("tool output should be valid JSON");
+
+    // Top-level fields per spec §21.1.
+    assert_eq!(result["path"], file_str);
+    assert_eq!(result["size"], 11); // "hello world"
+    assert!(result["mtime"].is_string()); // ISO 8601 timestamp
+    assert_eq!(result["backend"], "local"); // no user.vfs.backend set
+    assert!(result["hash"].is_null()); // no user.vfs.hash set
+
+    // Xattrs nested under "xattrs".
+    let xattrs = &result["xattrs"];
+    assert_eq!(xattrs["user.vfs.feature"], "auth-module");
+    assert_eq!(xattrs["user.vfs.risk"], "critical-path");
+}
+
+// -------------------------------------------------------------------------
+// vfs_get_metadata — keys filter
+// -------------------------------------------------------------------------
+
+#[test]
+fn test_get_metadata_keys_filter() {
+    use std::fs;
+    use tempfile::TempDir;
+
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.txt");
+    fs::write(&file, "hello").unwrap();
+    let file_str = file.to_str().unwrap();
+
+    // Set two xattrs.
+    for (k, v) in [("feature", "auth"), ("risk", "low")] {
+        let req = format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"vfs_set_metadata","arguments":{{"path":"{file_str}","key":"{k}","value":"{v}"}}}}}}"#
+        );
+        rpc(&req);
+    }
+
+    // Call with keys filter — only request "feature".
+    let get_req = format!(
+        r#"{{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{{"name":"vfs_get_metadata","arguments":{{"path":"{file_str}","keys":["feature"]}}}}}}"#
+    );
+    let get_resp = rpc(&get_req);
+    let text = get_resp["result"]["content"][0]["text"]
+        .as_str()
+        .expect("content[0].text should be a string");
+    let result: serde_json::Value =
+        serde_json::from_str(text).expect("tool output should be valid JSON");
+
+    let xattrs = &result["xattrs"];
+    // Only the requested key should be present.
+    assert_eq!(xattrs["user.vfs.feature"], "auth");
+    assert!(
+        xattrs.get("user.vfs.risk").is_none(),
+        "risk should not be in response when keys filter excludes it"
+    );
+
+    // Top-level fields still present.
+    assert_eq!(result["path"], file_str);
+    assert_eq!(result["size"], 5);
+    assert_eq!(result["backend"], "local");
+}
+
+// -------------------------------------------------------------------------
+// vfs_get_metadata — file with backend + hash xattrs
+// -------------------------------------------------------------------------
+
+#[test]
+fn test_get_metadata_with_backend_and_hash() {
+    use std::fs;
+    use tempfile::TempDir;
+
+    let dir = TempDir::new().unwrap();
+    let file = dir.path().join("test.txt");
+    fs::write(&file, "data").unwrap();
+    let file_str = file.to_str().unwrap();
+
+    // Set backend and hash xattrs.
+    for (k, v) in [("backend", "s3"), ("hash", "sha256:abc123")] {
+        let req = format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"vfs_set_metadata","arguments":{{"path":"{file_str}","key":"{k}","value":"{v}"}}}}}}"#
+        );
+        rpc(&req);
+    }
+
+    let get_req = format!(
+        r#"{{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{{"name":"vfs_get_metadata","arguments":{{"path":"{file_str}"}}}}}}"#
+    );
+    let get_resp = rpc(&get_req);
+    let text = get_resp["result"]["content"][0]["text"]
+        .as_str()
+        .expect("content[0].text should be a string");
+    let result: serde_json::Value =
+        serde_json::from_str(text).expect("tool output should be valid JSON");
+
+    assert_eq!(result["backend"], "s3");
+    assert_eq!(result["hash"], "sha256:abc123");
+    // Xattrs still contain them too.
+    assert_eq!(result["xattrs"]["user.vfs.backend"], "s3");
+    assert_eq!(result["xattrs"]["user.vfs.hash"], "sha256:abc123");
+}
+
+// -------------------------------------------------------------------------
 // vfs_graph_stats — empty graph (no .vfs/graph/graph.db in test CWD)
 // -------------------------------------------------------------------------
 
