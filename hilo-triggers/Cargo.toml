@@ -15,6 +15,8 @@ xattr = "1"
 hilo_graph = { path = "../hilo-graph" }
 hilo_metadata = { path = "../hilo-metadata" }
 duckdb = { version = "1.1", features = ["bundled"] }
+hilo_backends = { path = "../hilo-backends" }
+sha2 = "0.10"
 
 [dev-dependencies]
 tempfile = "3"

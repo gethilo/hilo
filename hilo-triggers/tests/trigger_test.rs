@@ -31,7 +31,7 @@ fn test_debouncer_should_fire_file() {
 #[test]
 fn test_engine_creation() {
     let cfg = TriggerConfig::default();
-    let _engine = TriggerEngine::new(vec![cfg], 500, None, None);
+    let _engine = TriggerEngine::new(vec![cfg], 500, None, None, None, None);
 }
 
 #[test]
@@ -39,4 +39,21 @@ fn test_parse_duration_ms() {
     assert_eq!(hilo_triggers::parse_duration_ms("500ms"), 500);
     assert_eq!(hilo_triggers::parse_duration_ms("2s"), 2000);
     assert_eq!(hilo_triggers::parse_duration_ms("30s"), 30000);
+}
+
+#[test]
+fn test_engine_creation_with_upload_builtin() {
+    // Constructor accepts the new s3_client/s3_bucket params without panic.
+    let cfg = TriggerConfig {
+        builtin: Some("upload-to-backend".into()),
+        ..TriggerConfig::default()
+    };
+    let _engine = TriggerEngine::new(vec![cfg], 500, None, None, None, None);
+}
+
+#[test]
+fn test_engine_creation_with_s3_bucket_configured() {
+    // s3_bucket can be set even without a client — constructor stores it.
+    let cfg = TriggerConfig::default();
+    let _engine = TriggerEngine::new(vec![cfg], 500, None, None, None, Some("my-bucket".into()));
 }

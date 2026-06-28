@@ -107,7 +107,7 @@ async fn run_trigger_engine(watch_dir: &Path, mount_desc: &str) {
     };
 
     let trigger_count = triggers.len();
-    let mut engine = TriggerEngine::new(triggers, 500, db_conn, project_root);
+    let mut engine = TriggerEngine::new(triggers, 500, db_conn, project_root, None, None);
 
     if let Err(e) = engine.watch_dir(&watch_dir) {
         eprintln!(

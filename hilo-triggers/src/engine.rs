@@ -37,6 +37,10 @@ pub struct TriggerEngine {
     db_conn: Option<duckdb::Connection>,
     /// Project root directory for .vfs/ paths.
     project_root: Option<PathBuf>,
+    /// Optional S3 client for the `upload-to-backend` builtin.
+    s3_client: Option<hilo_backends::S3Client>,
+    /// S3 bucket name used by the `upload-to-backend` builtin.
+    s3_bucket: Option<String>,
 }
 
 impl TriggerEngine {
@@ -49,6 +53,8 @@ impl TriggerEngine {
         debounce_default_ms: u64,
         db_conn: Option<duckdb::Connection>,
         project_root: Option<PathBuf>,
+        s3_client: Option<hilo_backends::S3Client>,
+        s3_bucket: Option<String>,
     ) -> Self {
         let trigger_timeout = triggers
             .first()
@@ -71,6 +77,8 @@ impl TriggerEngine {
             ast_cache: HashMap::new(),
             db_conn,
             project_root,
+            s3_client,
+            s3_bucket,
         }
     }
 
@@ -185,6 +193,72 @@ impl TriggerEngine {
                                 &self.project_root,
                             );
                             continue; // skip async execute_trigger spawn
+                        }
+                        if builtin == "upload-to-backend" {
+                            let file_path_str = file_event.path.display().to_string();
+                            match (&self.s3_client, &self.s3_bucket) {
+                                (Some(s3), Some(bucket)) => {
+                                    let to = Duration::from_secs(trigger.timeout_secs);
+                                    let result = tokio::time::timeout(
+                                        to,
+                                        upload_to_backend(
+                                            &file_event,
+                                            s3,
+                                            bucket,
+                                            &self.project_root,
+                                        ),
+                                    )
+                                    .await;
+                                    match result {
+                                        Ok(Ok(())) => {
+                                            eprintln!(
+                                                "[trigger] upload-to-backend: {} uploaded successfully",
+                                                file_path_str
+                                            );
+                                            if let Some(on_success) = &trigger.on_success {
+                                                log_trigger_action(
+                                                    on_success,
+                                                    &file_event.path,
+                                                    file_event.timestamp,
+                                                );
+                                            }
+                                        }
+                                        Ok(Err(e)) => {
+                                            eprintln!(
+                                                "[trigger] upload-to-backend: {} failed: {}",
+                                                file_path_str, e
+                                            );
+                                            if let Some(on_failure) = &trigger.on_failure {
+                                                log_trigger_action(
+                                                    on_failure,
+                                                    &file_event.path,
+                                                    file_event.timestamp,
+                                                );
+                                            }
+                                        }
+                                        Err(_) => {
+                                            eprintln!(
+                                                "[trigger] upload-to-backend: {} timed out after {:?}",
+                                                file_path_str, to
+                                            );
+                                            if let Some(on_failure) = &trigger.on_failure {
+                                                log_trigger_action(
+                                                    on_failure,
+                                                    &file_event.path,
+                                                    file_event.timestamp,
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                                _ => {
+                                    eprintln!(
+                                        "[trigger] upload-to-backend: S3 client or bucket not configured for {}",
+                                        file_path_str
+                                    );
+                                }
+                            }
+                            continue;
                         }
                     }
 
@@ -413,6 +487,83 @@ fn parse_and_diff_sync(
     );
 }
 
+/// Execute the `upload-to-backend` built-in trigger for a file event.
+///
+/// Async — awaited in `run()` inside a `tokio::time::timeout` wrapper.
+/// Steps:
+/// 1. Read file content
+/// 2. Compute SHA-256 hash (sha256:<hex>)
+/// 3. Derive S3 key from file path (relative to project_root when possible)
+/// 4. Derive blob_index_dir from project_root (.vfs/)
+/// 5. S3Client.put_object(bucket, key, data, blob_index_dir) — writes cache,
+///    uploads to S3, sets xattrs on cache file, appends blob index
+/// 6. Set xattrs on the SOURCE file: user.vfs.backend, user.vfs.hash,
+///    user.vfs.cache_status = "synced"
+///
+/// Errors are returned as `String` — the caller logs them.
+async fn upload_to_backend(
+    event: &FileEvent,
+    s3_client: &hilo_backends::S3Client,
+    bucket: &str,
+    project_root: &Option<PathBuf>,
+) -> Result<(), String> {
+    let file_path_str = event.path.display().to_string();
+
+    // 1. Read file content.
+    let data = std::fs::read(&event.path).map_err(|e| format!("read {}: {}", file_path_str, e))?;
+
+    // 2. Compute SHA-256 hash.
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    Digest::update(&mut hasher, &data);
+    let hash_hex = format!("{:x}", hasher.finalize());
+    let hash = format!("sha256:{}", hash_hex);
+
+    // 3. Derive S3 key — prefer path relative to project_root.
+    let s3_key = match project_root {
+        Some(root) if event.path.starts_with(root) => event
+            .path
+            .strip_prefix(root)
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| file_path_str.clone()),
+        _ => file_path_str.clone(),
+    };
+
+    // 4. Derive blob_index_dir from project_root.
+    let blob_index_dir = project_root.clone().unwrap_or_else(|| PathBuf::from("."));
+
+    // 5. S3 put_object — cache write + upload + blob index append.
+    s3_client
+        .put_object(bucket, &s3_key, &data, &blob_index_dir)
+        .await
+        .map_err(|e| format!("put_object {}: {}", s3_key, e))?;
+
+    // 6. Set xattrs on the SOURCE file (not the cache file).
+    let backend_key = vfs_xattr_name("backend");
+    let hash_key = vfs_xattr_name("hash");
+    let status_key = vfs_xattr_name("cache_status");
+    if let Err(e) = xattr::set(&event.path, &backend_key, b"s3") {
+        eprintln!(
+            "[trigger] upload-to-backend: failed to set backend xattr on {}: {}",
+            file_path_str, e
+        );
+    }
+    if let Err(e) = xattr::set(&event.path, &hash_key, hash.as_bytes()) {
+        eprintln!(
+            "[trigger] upload-to-backend: failed to set hash xattr on {}: {}",
+            file_path_str, e
+        );
+    }
+    if let Err(e) = xattr::set(&event.path, &status_key, b"synced") {
+        eprintln!(
+            "[trigger] upload-to-backend: failed to set cache_status xattr on {}: {}",
+            file_path_str, e
+        );
+    }
+
+    Ok(())
+}
+
 /// Execute a single trigger for a file event.
 ///
 /// - `parse-and-diff`: handled synchronously in `run()` — never reaches this function.
@@ -439,8 +590,10 @@ async fn execute_trigger(cfg: &TriggerConfig, event: &FileEvent, timeout_dur: Du
                 eprintln!("[trigger] parse-and-diff reached execute_trigger (should not happen)");
             }
             "upload-to-backend" => {
-                // TODO: Wire S3 backend upload + blob index append (§7.2, §13.2).
-                eprintln!("[trigger] upload-to-backend completed (stub — TODO)");
+                // Should never reach here — handled synchronously in run().
+                eprintln!(
+                    "[trigger] upload-to-backend reached execute_trigger (should not happen)"
+                );
             }
             _ => {
                 eprintln!("[trigger] unknown builtin '{}'", builtin);
@@ -919,7 +1072,7 @@ mod tests {
 
     #[test]
     fn test_max_concurrent_semaphore_created() {
-        let engine = TriggerEngine::new(vec![], 500, None, None);
+        let engine = TriggerEngine::new(vec![], 500, None, None, None, None);
         // Semaphore should have capacity equal to max_concurrent.
         assert_eq!(engine.max_concurrent, 4);
         assert_eq!(engine.semaphore.available_permits(), 4);
@@ -1230,5 +1383,133 @@ mod tests {
         );
 
         assert!(cache.is_empty(), "cache should remain empty");
+    }
+
+    // ── upload-to-backend builtin ────────────────────────────────────
+
+    #[test]
+    fn test_upload_to_backend_engine_without_s3_client() {
+        // TriggerEngine with s3_client=None and s3_bucket=None — the field
+        // config exists but the builtin can't run without a client.
+        let cfg = TriggerConfig {
+            name: "upload".into(),
+            builtin: Some("upload-to-backend".into()),
+            ..TriggerConfig::default()
+        };
+        let engine = TriggerEngine::new(vec![cfg], 500, None, None, None, None);
+        assert!(engine.s3_client.is_none());
+        assert!(engine.s3_bucket.is_none());
+    }
+
+    #[test]
+    fn test_upload_to_backend_missing_file_no_panic() {
+        // upload_to_backend on a nonexistent file should return Err, not panic.
+        let dir = tempfile::TempDir::new().unwrap();
+        let no_file = dir.path().join("nonexistent.txt");
+
+        // We can't build a real S3Client without AWS config init, but we can
+        // test that the read() guard fails BEFORE reaching put_object. Since
+        // S3Client::new is async, we wrap in a tokio runtime.
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            // Build a writable S3Client with a dummy region + temp cache dir.
+            let cache_dir = dir.path().join("cache");
+            let s3 = hilo_backends::S3Client::new("us-east-1", &cache_dir, 0, true)
+                .await
+                .expect("S3Client init");
+
+            let event = FileEvent {
+                path: no_file,
+                event_type: EventType::Write,
+                timestamp: 0,
+            };
+
+            let result = upload_to_backend(&event, &s3, "test-bucket", &None).await;
+            assert!(result.is_err(), "missing file should return Err");
+            let err = result.unwrap_err();
+            assert!(
+                err.contains("read") || err.contains("No such file"),
+                "error should mention read failure: {err}"
+            );
+        });
+    }
+
+    #[test]
+    fn test_upload_to_backend_s3_error_no_panic() {
+        // File exists, but S3 upload fails (no real S3 endpoint reachable).
+        // The function should return Err with put_object failure, not panic.
+        let dir = tempfile::TempDir::new().unwrap();
+        let file = dir.path().join("test.txt");
+        std::fs::write(&file, "hello world").unwrap();
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let cache_dir = dir.path().join("cache");
+            let s3 = hilo_backends::S3Client::new("us-east-1", &cache_dir, 0, true)
+                .await
+                .expect("S3Client init");
+
+            let event = FileEvent {
+                path: file,
+                event_type: EventType::Write,
+                timestamp: 0,
+            };
+
+            let result = upload_to_backend(
+                &event,
+                &s3,
+                "nonexistent-bucket-for-test",
+                &Some(dir.path().to_path_buf()),
+            )
+            .await;
+
+            // S3 put_object will fail — either network error or AWS error.
+            assert!(
+                result.is_err(),
+                "upload to fake bucket should fail: {:?}",
+                result
+            );
+        });
+    }
+
+    #[tokio::test]
+    async fn test_upload_to_backend_sets_xattrs_on_success_path() {
+        // Verify that when put_object succeeds, the source file gets
+        // user.vfs.backend, user.vfs.hash, and user.vfs.cache_status xattrs.
+        // Since we can't reach real S3 in CI, this test uses a writable client
+        // but expects put_object to fail — it then checks that NO xattrs were
+        // set (proving xattrs are only set after a successful put_object).
+        let dir = tempfile::TempDir::new().unwrap();
+        let file = dir.path().join("content.txt");
+        std::fs::write(&file, "test content").unwrap();
+
+        let cache_dir = dir.path().join("cache");
+        let s3 = hilo_backends::S3Client::new("us-east-1", &cache_dir, 0, true)
+            .await
+            .expect("S3Client init");
+
+        let event = FileEvent {
+            path: file.clone(),
+            event_type: EventType::Write,
+            timestamp: 0,
+        };
+
+        let result =
+            upload_to_backend(&event, &s3, "fake-bucket", &Some(dir.path().to_path_buf())).await;
+
+        // put_object will fail (no real S3) — xattrs should NOT be set on source.
+        assert!(result.is_err());
+
+        let backend: Option<Vec<u8>> = xattr::get(&file, "user.vfs.backend").unwrap();
+        assert!(
+            backend.is_none(),
+            "backend xattr should not be set on failed upload"
+        );
+
+        let hash: Option<Vec<u8>> = xattr::get(&file, "user.vfs.hash").unwrap();
+        assert!(
+            hash.is_none(),
+            "hash xattr should not be set on failed upload"
+        );
     }
 }

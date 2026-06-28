@@ -2526,11 +2526,13 @@ name = "hilo_triggers"
 version = "0.1.0"
 dependencies = [
  "duckdb",
+ "hilo_backends",
  "hilo_graph",
  "hilo_metadata",
  "inotify",
  "serde",
  "serde_yaml",
+ "sha2 0.10.9",
  "tempfile",
  "tokio",
  "xattr",
