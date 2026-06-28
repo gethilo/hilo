@@ -1,5 +1,52 @@
 # Hilo Coding Tasks
 
+## [x] Spec gap: Wire on_success set_xattr trigger action — spec §7.3
+- **Priority:** medium
+- **Model:** deepseek-v4-pro (direct write — 1-function fix)
+- **Files:** hilo-triggers/src/engine.rs, hilo-triggers/Cargo.toml
+- **AC:** `TriggerAction::SetXattr { key, value_template }` actually calls `xattr::set()` instead of `eprintln!`
+- **AC:** Template substitution works: `{{ .FilePath }}` → actual path, `{{ .Timestamp }}` → ISO timestamp
+- **AC:** `cargo test -p hilo_triggers` — 3+ new tests (setxattr with path template, setxattr with timestamp template, action error handling)
+- **AC:** `cargo build --workspace` clean, `cargo test --workspace` all pass, clippy clean, fmt clean
+- **Notes:** Currently `log_trigger_action()` at engine.rs:N just eprintlns. Needs the `xattr` crate dep (already in workspace, used by hilo-metadata). Follow existing xattr call patterns from hilo-metadata/src/xattr.rs. Handle `user.vfs.` prefix idempotently.
+- **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). engine.rs +95/-12 lines: replaced SetXattr stub with actual `xattr::set()` call, added `vfs_xattr_name()` (idempotent prefix), `unix_to_iso()` (Unix timestamp→ISO 8601 with Hinnant's civil_from_days algorithm), `days_to_ymd()`. Template substitution: `{{ .FilePath }}` → actual path, `{{ .Timestamp }}` → ISO timestamp. Error handling: eprintln on xattr set failure. Cargo.toml: +xattr="1" dep, +tempfile="3" dev-dep. 4 new tests: test_setxattr_writes_xattr_to_file, test_setxattr_template_filepath, test_setxattr_template_timestamp, test_setxattr_prefix_idempotent. 3 existing tests updated to new signature. hilo-triggers: 24 inline + 6 integration = 30/30 pass. Full workspace build clean. fmt clean. clippy clean.
+
+## [ ] Spec gap: Enforce max_concurrent in trigger execution — spec §7.3
+- **Priority:** medium
+- **Model:** deepseek-v4-pro (direct write — 1-method fix)
+- **Files:** hilo-triggers/src/engine.rs
+- **AC:** `TriggerEngine.run()` uses `tokio::sync::Semaphore` to cap concurrent async trigger executions at `self.max_concurrent`
+- **AC:** `max_concurrent` field no longer `#[allow(dead_code)]` — actively enforced
+- **AC:** When semaphore is exhausted, excess trigger firings are dropped (logged at `eprintln!`) rather than queued
+- **AC:** `cargo test -p hilo_triggers` — 2+ new tests (concurrency cap respected, trigger still fires when under cap)
+- **AC:** `cargo build --workspace` clean, `cargo test --workspace` all pass, clippy clean, fmt clean
+
+## [ ] Spec gap: Implement parse-and-diff built-in trigger — spec §7.1, §7.2
+- **Priority:** high
+- **Model:** glm-5.2 (multi-crate feature, 3+ files)
+- **Provider:** zai-glm
+- **Files:** hilo-triggers/src/engine.rs, hilo-triggers/Cargo.toml, hilo-graph/src/parser.rs (or new hilo-triggers/src/parse_diff.rs)
+- **AC:** `parse-and-diff` built-in trigger replaces the current stub — performs tree-sitter parse of changed file, diffs against cached AST, computes changed edges
+- **AC:** Changed edges appended to edges.jsonl via hilo-metadata inventory
+- **AC:** `user.vfs.last_modified` xattr set to current timestamp on changed file
+- **AC:** Impact computation runs for files that import the changed file (up to max_depth from manifest)
+- **AC:** `user.vfs.impact` xattr set on all impacted files
+- **AC:** Trigger respects timeout from manifest (kills hung parse)
+- **AC:** `cargo test -p hilo_triggers` — 5+ tests (parse triggers edge update, no-op on unchanged file, timeout kills hung parse, AST caching, impacted files get xattr)
+- **AC:** `cargo test --workspace` all pass, `cargo build --workspace` clean
+- **Notes:** §7.1 in spec defines the full loop: tree-sitter parse → diff AST → impact traversal → xattr writes → JSONL append. hilo-graph/src/parser.rs has tree-sitter parsing. hilo-graph/src/impact.rs has BFS traversal. hilo-metadata/src/inventory.rs has JSONL append. hilo-metadata/src/xattr.rs has set_xattr. Add hilo-graph + hilo-metadata as deps of hilo-triggers OR create a parse-diff module that uses existing crates. AST caching: HashMap<PathBuf, (String, Vec<Edge>)> — store tree-sitter parse result + extracted edges. Diff: compare new edges against cached; only append delta. Fallback on cache miss: full parse + full edge insert.
+
+## [ ] Spec gap: Workspace mount auto-dependency ordering — spec §6.2
+- **Priority:** low
+- **Model:** deepseek-v4-pro (direct write — 1-function, 1-test)
+- **Files:** hilo-core/src/workspace.rs, hilo-fuse/src/workspace_mount.rs
+- **AC:** `WorkspaceManifest::mount_plan()` topologically sorts repos when `auto_dependency_order: true` in manifest
+- **AC:** Repos with imports from other repos are mounted AFTER their dependencies
+- **AC:** Sort uses existing cross-repo edge data: repo-A imports path from repo-B → repo-B mounts first
+- **AC:** When no cross-repo import data exists, falls back to declaration order (current behavior)
+- **AC:** `cargo test -p hilo_core` — 2+ tests (topological sort with known deps, no-deps falls back to declaration order, circular dependency detected and logged)
+- **AC:** `cargo test --workspace` all pass, `cargo build --workspace` clean, clippy clean, fmt clean
+
 ## [x] MCP: vfs_set_metadata tool — spec §11.1
 - **Priority:** high
 - **Model:** deepseek-v4-pro (direct write)

@@ -273,24 +273,24 @@ async fn execute_trigger(cfg: &TriggerConfig, event: &FileEvent, timeout_dur: Du
                         cfg.name, output.status
                     );
                     if let Some(on_failure) = &cfg.on_failure {
-                        log_trigger_action(on_failure, &event.path);
+                        log_trigger_action(on_failure, &event.path, event.timestamp);
                     }
                 } else {
                     if let Some(on_success) = &cfg.on_success {
-                        log_trigger_action(on_success, &event.path);
+                        log_trigger_action(on_success, &event.path, event.timestamp);
                     }
                 }
             }
             Ok(Err(e)) => {
                 eprintln!("[trigger] '{}' command failed: {}", cfg.name, e);
                 if let Some(on_failure) = &cfg.on_failure {
-                    log_trigger_action(on_failure, &event.path);
+                    log_trigger_action(on_failure, &event.path, event.timestamp);
                 }
             }
             Err(_) => {
                 eprintln!("[trigger] '{}' timed out after {:?}", cfg.name, timeout_dur);
                 if let Some(on_failure) = &cfg.on_failure {
-                    log_trigger_action(on_failure, &event.path);
+                    log_trigger_action(on_failure, &event.path, event.timestamp);
                 }
             }
         }
@@ -304,20 +304,44 @@ async fn execute_trigger(cfg: &TriggerConfig, event: &FileEvent, timeout_dur: Du
     );
 }
 
-/// Log a TriggerAction (stub — real implementation would set xattrs, etc.).
-fn log_trigger_action(action: &TriggerAction, path: &Path) {
+/// Execute a TriggerAction — set xattrs, log warnings, etc.
+///
+/// For `SetXattr`, actually calls `xattr::set()` with `user.vfs.` prefix.
+/// Template variables `{{ .FilePath }}` and `{{ .Timestamp }}` are expanded.
+/// Errors are logged via `eprintln!` — trigger actions are best-effort.
+fn log_trigger_action(action: &TriggerAction, path: &Path, timestamp: u64) {
     match action {
         TriggerAction::SetXattr {
             key,
             value_template,
         } => {
-            let value = value_template.replace("{{ .FilePath }}", &path.display().to_string());
-            eprintln!(
-                "[trigger-action] setxattr {}={} on {}",
-                key,
-                value,
-                path.display()
-            );
+            let mut value = value_template.replace("{{ .FilePath }}", &path.display().to_string());
+            // Expand {{ .Timestamp }} — format as ISO 8601 with Z suffix.
+            if value.contains("{{ .Timestamp }}") {
+                // Convert Unix timestamp to ISO 8601 datetime string.
+                let ts_str = unix_to_iso(timestamp);
+                value = value.replace("{{ .Timestamp }}", &ts_str);
+            }
+            // Build full xattr name with user.vfs. prefix (idempotent).
+            let full_key = vfs_xattr_name(key);
+            match xattr::set(path, &full_key, value.as_bytes()) {
+                Ok(()) => {
+                    eprintln!(
+                        "[trigger-action] setxattr {}={} on {}",
+                        full_key,
+                        value,
+                        path.display()
+                    );
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[trigger-action] setxattr {} failed on {}: {}",
+                        full_key,
+                        path.display(),
+                        e
+                    );
+                }
+            }
         }
         TriggerAction::Warn => {
             eprintln!("[trigger-action] warn for {}", path.display());
@@ -326,6 +350,54 @@ fn log_trigger_action(action: &TriggerAction, path: &Path) {
             eprintln!("[trigger-action] error for {}", path.display());
         }
     }
+}
+
+/// Build the full xattr name: `user.vfs.<name>`.
+/// Idempotent — stripping an existing `user.vfs.` prefix first.
+fn vfs_xattr_name(name: &str) -> String {
+    let stripped = name.strip_prefix("user.vfs.").unwrap_or(name);
+    format!("user.vfs.{}", stripped)
+}
+
+/// Convert a Unix timestamp (u64 seconds) to an ISO 8601 string with `Z` suffix.
+/// Returns "1970-01-01T00:00:00Z" for timestamp 0.
+fn unix_to_iso(timestamp: u64) -> String {
+    use std::time::{Duration, UNIX_EPOCH};
+    let dt = UNIX_EPOCH + Duration::from_secs(timestamp);
+    match dt.duration_since(UNIX_EPOCH) {
+        Ok(d) => {
+            let secs = d.as_secs();
+            let days = secs / 86400;
+            let remaining = secs % 86400;
+            let hours = remaining / 3600;
+            let minutes = (remaining % 3600) / 60;
+            let secs_rem = remaining % 60;
+            // Manually compute year/month/day from days since epoch for portability.
+            let (year, month, day) = days_to_ymd(days as i64);
+            format!(
+                "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+                year, month, day, hours, minutes, secs_rem
+            )
+        }
+        Err(_) => "1970-01-01T00:00:00Z".to_string(),
+    }
+}
+
+/// Convert days since Unix epoch to (year, month, day).
+/// Algorithm: civil_from_days from Howard Hinnant's date library.
+fn days_to_ymd(days: i64) -> (i64, u32, u32) {
+    // Shift epoch from 1970-01-01 to 0000-03-01 (März).
+    let z = days + 719468;
+    let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
+    let doe = (z - era * 146097) as u64; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m as u32, d as u32)
 }
 
 // Suppress unused-import warning for Instant (kept for API compatibility).
@@ -452,17 +524,130 @@ mod tests {
                 value_template: "{{ .FilePath }} was updated".into(),
             },
             Path::new("test.go"),
+            0,
         );
     }
 
     #[test]
     fn test_log_trigger_action_warn() {
-        log_trigger_action(&TriggerAction::Warn, Path::new("test.go"));
+        log_trigger_action(&TriggerAction::Warn, Path::new("test.go"), 0);
     }
 
     #[test]
     fn test_log_trigger_action_error() {
-        log_trigger_action(&TriggerAction::Error, Path::new("test.go"));
+        log_trigger_action(&TriggerAction::Error, Path::new("test.go"), 0);
+    }
+
+    // ── log_trigger_action — actual xattr writes ───────────────────────
+
+    #[test]
+    fn test_setxattr_writes_xattr_to_file() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path();
+        // Write some content so the file exists.
+        std::fs::write(path, "hello").unwrap();
+
+        log_trigger_action(
+            &TriggerAction::SetXattr {
+                key: "feature".into(),
+                value_template: "auth-module".into(),
+            },
+            path,
+            0,
+        );
+
+        // Verify the xattr was set.
+        let val: Option<Vec<u8>> = xattr::get(path, "user.vfs.feature").unwrap();
+        assert_eq!(val, Some(b"auth-module".to_vec()));
+    }
+
+    #[test]
+    fn test_setxattr_template_filepath() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path();
+        std::fs::write(path, "content").unwrap();
+
+        log_trigger_action(
+            &TriggerAction::SetXattr {
+                key: "last_modified_by".into(),
+                value_template: "File: {{ .FilePath }}".into(),
+            },
+            path,
+            0,
+        );
+
+        let val: Option<Vec<u8>> = xattr::get(path, "user.vfs.last_modified_by").unwrap();
+        assert!(val.is_some());
+        let val_str = String::from_utf8(val.unwrap()).unwrap();
+        assert!(
+            val_str.contains("File:"),
+            "should contain expanded path: {}",
+            val_str
+        );
+    }
+
+    #[test]
+    fn test_setxattr_template_timestamp() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path();
+        std::fs::write(path, "content").unwrap();
+
+        // Use a recent timestamp — should produce a 2026-* date.
+        let known_ts: u64 = 1782787200;
+        log_trigger_action(
+            &TriggerAction::SetXattr {
+                key: "last_tested".into(),
+                value_template: "{{ .Timestamp }}".into(),
+            },
+            path,
+            known_ts,
+        );
+
+        let val: Option<Vec<u8>> = xattr::get(path, "user.vfs.last_tested").unwrap();
+        assert!(val.is_some());
+        let val_str = String::from_utf8(val.unwrap()).unwrap();
+        // Must be ISO 8601 format: YYYY-MM-DDTHH:MM:SSZ
+        assert!(
+            val_str.len() == 20 && val_str.ends_with('Z'),
+            "expected ISO 8601 format (20 chars ending in Z), got: {}",
+            val_str
+        );
+        // Verify ISO pattern with regex-free check.
+        let chars: Vec<char> = val_str.chars().collect();
+        assert!(chars[4] == '-', "expected YYYY-MM-DD, got: {}", val_str);
+        assert!(chars[7] == '-', "expected YYYY-MM-DD, got: {}", val_str);
+        assert!(chars[10] == 'T', "expected T separator, got: {}", val_str);
+        assert!(chars[13] == ':', "expected HH:MM, got: {}", val_str);
+        assert!(chars[16] == ':', "expected MM:SS, got: {}", val_str);
+        // Year should be 2026+.
+        let year: u32 = val_str[..4].parse().unwrap();
+        assert!(year >= 2026, "expected year >= 2026, got: {}", year);
+    }
+
+    #[test]
+    fn test_setxattr_prefix_idempotent() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path();
+        std::fs::write(path, "content").unwrap();
+
+        // Passing key WITH user.vfs. prefix.
+        log_trigger_action(
+            &TriggerAction::SetXattr {
+                key: "user.vfs.risk".into(),
+                value_template: "critical-path".into(),
+            },
+            path,
+            0,
+        );
+
+        // Must NOT be doubled to user.vfs.user.vfs.risk
+        let val = xattr::get(path, "user.vfs.risk").unwrap();
+        assert_eq!(val, Some(b"critical-path".to_vec()));
+
+        // Doubled prefix should NOT exist.
+        assert!(xattr::get(path, "user.vfs.user.vfs.risk")
+            .unwrap()
+            .is_none());
     }
 
     // ── match-and-filter logic (unit-testable without running event loop)

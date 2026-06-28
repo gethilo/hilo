@@ -2527,7 +2527,9 @@ dependencies = [
  "inotify",
  "serde",
  "serde_yaml",
+ "tempfile",
  "tokio",
+ "xattr",
 ]
 
 [[package]]

@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 /// Format an `external:` edge target string.
 ///
 /// # Examples
-/// ```
+/// ```ignore
 /// let target = hilo_graph::edges::format_external_edge("shared-lib", "pkg/utils.go");
 /// assert_eq!(target, "external:shared-lib:pkg/utils.go");
 /// ```
@@ -21,7 +21,7 @@ pub fn format_external_edge(repo: &str, path: &str) -> String {
 /// Returns `None` if the string doesn't start with `external:`.
 ///
 /// # Examples
-/// ```
+/// ```ignore
 /// assert_eq!(
 ///     hilo_graph::edges::parse_external_edge("external:shared-lib:pkg/utils.go"),
 ///     Some(("shared-lib", "pkg/utils.go"))

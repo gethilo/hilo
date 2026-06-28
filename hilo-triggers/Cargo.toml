@@ -11,3 +11,7 @@ serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
 inotify = "0.10"
 tokio = { version = "1", features = ["full"] }
+xattr = "1"
+
+[dev-dependencies]
+tempfile = "3"
