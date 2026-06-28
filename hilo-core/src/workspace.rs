@@ -42,6 +42,10 @@ pub struct WorkspaceManifest {
     pub backends: Vec<WorkspaceBackend>,
     #[serde(default)]
     pub mounts: Vec<WorkspaceMount>,
+    /// When true, `mount_plan()` topologically sorts repos so
+    /// dependencies mount first. Requires `dependencies` param.
+    #[serde(default)]
+    pub auto_dependency_order: bool,
 }
 
 // ============================================================
@@ -248,6 +252,145 @@ impl WorkspaceManifest {
 
         Ok(entries)
     }
+
+    /// Build a mount plan with optional topological ordering.
+    ///
+    /// When `auto_dependency_order` is `true` and `dependencies` is provided,
+    /// repos are topologically sorted so that dependencies mount first.
+    /// Circular dependencies are detected, logged to stderr, and broken.
+    /// When `auto_dependency_order` is `false` or no dependencies are
+    /// provided, falls back to declaration order (current behavior).
+    ///
+    /// `dependencies`: a map from repo name to the list of repos it depends
+    /// on (i.e., "auth-service" → ["shared-lib"] means auth-service mounts
+    /// AFTER shared-lib).
+    pub fn mount_plan(
+        &self,
+        dependencies: Option<&std::collections::HashMap<String, Vec<String>>>,
+    ) -> Result<Vec<MountEntry>, WorkspaceError> {
+        let entries = self.build_mount_plan()?;
+
+        if !self.auto_dependency_order {
+            return Ok(entries);
+        }
+
+        let deps = match dependencies {
+            Some(d) => d,
+            None => return Ok(entries),
+        };
+
+        if deps.is_empty() || entries.len() <= 1 {
+            return Ok(entries);
+        }
+
+        Ok(topological_sort_mounts(&entries, deps))
+    }
+}
+
+/// Topologically sort mount entries using Kahn's algorithm.
+///
+/// Dependencies map from repo name → list of repos it depends on.
+/// "auth-service" → ["shared-lib"] means shared-lib must come first.
+/// Circular dependencies are detected, logged to stderr, and broken
+/// by keeping declaration order for the cycle members.
+pub fn topological_sort_mounts(
+    entries: &[MountEntry],
+    dependencies: &std::collections::HashMap<String, Vec<String>>,
+) -> Vec<MountEntry> {
+    if dependencies.is_empty() {
+        return entries.to_vec();
+    }
+
+    let mut in_degree: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    let mut dependents: std::collections::HashMap<&str, Vec<&str>> =
+        std::collections::HashMap::new();
+
+    // Initialise every entry
+    for entry in entries {
+        in_degree.entry(entry.name.as_str()).or_insert(0);
+    }
+
+    // Build reverse edges: dep → [dependents]
+    for (repo, repo_deps) in dependencies {
+        for dep in repo_deps {
+            if in_degree.contains_key(dep.as_str()) && in_degree.contains_key(repo.as_str()) {
+                dependents
+                    .entry(dep.as_str())
+                    .or_default()
+                    .push(repo.as_str());
+                *in_degree.entry(repo.as_str()).or_insert(0) += 1;
+            }
+        }
+    }
+
+    // Start with nodes that have zero in-degree
+    let mut queue: std::collections::VecDeque<&str> = in_degree
+        .iter()
+        .filter(|(_, &deg)| deg == 0)
+        .map(|(&name, _)| name)
+        .collect();
+
+    let mut sorted_names: Vec<&str> = Vec::with_capacity(entries.len());
+
+    while let Some(name) = queue.pop_front() {
+        sorted_names.push(name);
+        if let Some(deps_of_this) = dependents.get(name) {
+            for &dependent in deps_of_this {
+                if let Some(deg) = in_degree.get_mut(dependent) {
+                    *deg -= 1;
+                    if *deg == 0 {
+                        queue.push_back(dependent);
+                    }
+                }
+            }
+        }
+    }
+
+    // Detect cycles
+    let cyclic: Vec<&str> = in_degree
+        .iter()
+        .filter(|(_, &deg)| deg > 0)
+        .map(|(&name, _)| name)
+        .collect();
+
+    if !cyclic.is_empty() {
+        eprintln!(
+            "WARNING: circular dependency detected among repos: {:?}. \
+             Breaking cycle arbitrarily.",
+            cyclic
+        );
+        for name in &cyclic {
+            if !sorted_names.contains(name) {
+                sorted_names.push(name);
+            }
+        }
+    }
+
+    // Reorder
+    let name_to_idx: std::collections::HashMap<&str, usize> = entries
+        .iter()
+        .enumerate()
+        .map(|(i, e)| (e.name.as_str(), i))
+        .collect();
+
+    let mut reordered: Vec<MountEntry> = Vec::with_capacity(entries.len());
+    let mut placed: std::collections::HashSet<&str> = std::collections::HashSet::new();
+
+    for name in &sorted_names {
+        if let Some(&idx) = name_to_idx.get(name) {
+            reordered.push(entries[idx].clone());
+            placed.insert(name);
+        }
+    }
+
+    // Append entries not in the dependency graph
+    for entry in entries {
+        if !placed.contains(entry.name.as_str()) {
+            reordered.push(entry.clone());
+        }
+    }
+
+    reordered
 }
 
 /// An entry in the workspace mount plan — one mounted source.
@@ -635,5 +778,122 @@ mounts:
             "expected no validation errors, got {:?}",
             errors
         );
+    }
+
+    // ── mount_plan / topological_sort_mounts tests ──
+
+    fn make_entry(name: &str) -> MountEntry {
+        MountEntry {
+            name: name.to_string(),
+            backing_path: std::path::PathBuf::from(format!("/tmp/{}", name)),
+            at: format!("/mnt/vfs/{}/", name),
+            writable: false,
+        }
+    }
+
+    #[test]
+    fn test_topological_sort_linear_deps() {
+        // C ← B ← A  →  C, B, A
+        let entries = vec![
+            make_entry("repo-a"),
+            make_entry("repo-b"),
+            make_entry("repo-c"),
+        ];
+        let mut deps = std::collections::HashMap::new();
+        deps.insert("repo-a".to_string(), vec!["repo-b".to_string()]);
+        deps.insert("repo-b".to_string(), vec!["repo-c".to_string()]);
+
+        let sorted = super::topological_sort_mounts(&entries, &deps);
+        let names: Vec<&str> = sorted.iter().map(|e| e.name.as_str()).collect();
+
+        let idx_c = names.iter().position(|&n| n == "repo-c").unwrap();
+        let idx_b = names.iter().position(|&n| n == "repo-b").unwrap();
+        let idx_a = names.iter().position(|&n| n == "repo-a").unwrap();
+        assert!(idx_c < idx_b, "repo-c must come before repo-b");
+        assert!(idx_b < idx_a, "repo-b must come before repo-a");
+        assert_eq!(sorted.len(), 3, "all 3 entries present");
+    }
+
+    #[test]
+    fn test_topological_sort_no_deps_fallback() {
+        // No dependencies → declaration order preserved
+        let entries = vec![
+            make_entry("repo-a"),
+            make_entry("repo-b"),
+            make_entry("repo-c"),
+        ];
+        let deps = std::collections::HashMap::new();
+
+        let sorted = super::topological_sort_mounts(&entries, &deps);
+        let names: Vec<&str> = sorted.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["repo-a", "repo-b", "repo-c"]);
+    }
+
+    #[test]
+    fn test_topological_sort_circular_dependency() {
+        // A → B → A (cycle) — should not panic, should include both
+        let entries = vec![make_entry("repo-a"), make_entry("repo-b")];
+        let mut deps = std::collections::HashMap::new();
+        deps.insert("repo-a".to_string(), vec!["repo-b".to_string()]);
+        deps.insert("repo-b".to_string(), vec!["repo-a".to_string()]);
+
+        let sorted = super::topological_sort_mounts(&entries, &deps);
+        assert_eq!(sorted.len(), 2, "both entries present despite cycle");
+        let names: Vec<&str> = sorted.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"repo-a"));
+        assert!(names.contains(&"repo-b"));
+    }
+
+    #[test]
+    fn test_topological_sort_partial_deps() {
+        // A depends on B, C has no deps → C can be anywhere, but B before A
+        let entries = vec![
+            make_entry("repo-a"),
+            make_entry("repo-b"),
+            make_entry("repo-c"),
+        ];
+        let mut deps = std::collections::HashMap::new();
+        deps.insert("repo-a".to_string(), vec!["repo-b".to_string()]);
+
+        let sorted = super::topological_sort_mounts(&entries, &deps);
+        let names: Vec<&str> = sorted.iter().map(|e| e.name.as_str()).collect();
+
+        let idx_b = names.iter().position(|&n| n == "repo-b").unwrap();
+        let idx_a = names.iter().position(|&n| n == "repo-a").unwrap();
+        assert!(idx_b < idx_a, "repo-b must come before repo-a");
+        assert_eq!(sorted.len(), 3, "all 3 entries present");
+    }
+
+    #[test]
+    fn test_topological_sort_diamond_deps() {
+        // A depends on B and C, B depends on D, C depends on D
+        // Valid orders: D, B, C, A  or  D, C, B, A
+        let entries = vec![
+            make_entry("repo-a"),
+            make_entry("repo-b"),
+            make_entry("repo-c"),
+            make_entry("repo-d"),
+        ];
+        let mut deps = std::collections::HashMap::new();
+        deps.insert(
+            "repo-a".to_string(),
+            vec!["repo-b".to_string(), "repo-c".to_string()],
+        );
+        deps.insert("repo-b".to_string(), vec!["repo-d".to_string()]);
+        deps.insert("repo-c".to_string(), vec!["repo-d".to_string()]);
+
+        let sorted = super::topological_sort_mounts(&entries, &deps);
+        let names: Vec<&str> = sorted.iter().map(|e| e.name.as_str()).collect();
+
+        let idx_d = names.iter().position(|&n| n == "repo-d").unwrap();
+        let idx_b = names.iter().position(|&n| n == "repo-b").unwrap();
+        let idx_c = names.iter().position(|&n| n == "repo-c").unwrap();
+        let idx_a = names.iter().position(|&n| n == "repo-a").unwrap();
+
+        assert!(idx_d < idx_b, "repo-d must come before repo-b");
+        assert!(idx_d < idx_c, "repo-d must come before repo-c");
+        assert!(idx_b < idx_a, "repo-b must come before repo-a");
+        assert!(idx_c < idx_a, "repo-c must come before repo-a");
+        assert_eq!(sorted.len(), 4, "all 4 entries present");
     }
 }

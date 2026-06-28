@@ -37,7 +37,7 @@
 - **AC:** ✅ `cargo test --workspace` all pass (33 test suites, 0 failures), `cargo build --workspace` clean, clippy clean, fmt clean, Tier 1 guard PASS
 - **Result:** GLM 5.2 spawn (~10m). 7 files changed (+473/-4): engine.rs (+434): parse_and_diff_sync() with tree-sitter parse, AST cache diffing, edges.jsonl append, xattr writes (last_modified, impact), impact computation via DuckDB; ast_cache + db_conn + project_root fields on TriggerEngine. lib.rs: +max_depth + graph_db_path fields on TriggerConfig. Cargo.toml: +hilo_graph, hilo_metadata, duckdb deps. mount.rs: +27 lines for db_conn + project_root wiring in run_trigger_engine(), TriggerConfig construction updated. 6 new tests: test_parse_diff_updates_edges, test_parse_diff_unchanged_file_noop, test_parse_diff_changed_content_delta_edges, test_parse_diff_unsupported_extension_noop, test_parse_diff_with_impact, test_parse_diff_missing_file_no_panic. Full workspace: 33 test suites, 0 failures.
 
-## [ ] Spec gap: Workspace mount auto-dependency ordering — spec §6.2
+## [x] Spec gap: Workspace mount auto-dependency ordering — spec §6.2
 - **Priority:** low
 - **Model:** deepseek-v4-pro (direct write — 1-function, 1-test)
 - **Files:** hilo-core/src/workspace.rs, hilo-fuse/src/workspace_mount.rs
@@ -47,6 +47,7 @@
 - **AC:** When no cross-repo import data exists, falls back to declaration order (current behavior)
 - **AC:** `cargo test -p hilo_core` — 2+ tests (topological sort with known deps, no-deps falls back to declaration order, circular dependency detected and logged)
 - **AC:** `cargo test --workspace` all pass, `cargo build --workspace` clean, clippy clean, fmt clean
+- **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). workspace.rs +207 lines: `auto_dependency_order` field on WorkspaceManifest (default false), `mount_plan()` method with topological sort delegation, `topological_sort_mounts()` free function using Kahn's algorithm (BFS with in-degree counting, cycle detection with eprintln warning, empty-deps fast path). 73/73 hilo_core tests pass. 5 new tests: topological sort linear deps (A→B→C), no-deps declaration order fallback, circular dependency detection, partial deps, diamond deps. Full workspace 332+ tests pass. fmt clean. clippy clean.
 
 ## [x] MCP: vfs_set_metadata tool — spec §11.1
 - **Priority:** high
