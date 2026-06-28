@@ -28,6 +28,10 @@ pub struct TriggerConfig {
     pub debounce_ms: u64,
     pub on_success: Option<TriggerAction>,
     pub on_failure: Option<TriggerAction>,
+    /// Impact depth for parse-and-diff trigger (default: None → 3).
+    pub max_depth: Option<u32>,
+    /// Path to DuckDB graph DB (default: None → derived from project root).
+    pub graph_db_path: Option<String>,
 }
 
 #[derive(Clone)]
@@ -65,6 +69,8 @@ impl Default for TriggerConfig {
             debounce_ms: 500,
             on_success: None,
             on_failure: None,
+            max_depth: None,
+            graph_db_path: None,
         }
     }
 }

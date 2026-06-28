@@ -31,7 +31,7 @@ fn test_debouncer_should_fire_file() {
 #[test]
 fn test_engine_creation() {
     let cfg = TriggerConfig::default();
-    let _engine = TriggerEngine::new(vec![cfg], 500);
+    let _engine = TriggerEngine::new(vec![cfg], 500, None, None);
 }
 
 #[test]

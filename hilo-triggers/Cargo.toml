@@ -12,6 +12,9 @@ serde_yaml = "0.9"
 inotify = "0.10"
 tokio = { version = "1", features = ["full"] }
 xattr = "1"
+hilo_graph = { path = "../hilo-graph" }
+hilo_metadata = { path = "../hilo-metadata" }
+duckdb = { version = "1.1", features = ["bundled"] }
 
 [dev-dependencies]
 tempfile = "3"

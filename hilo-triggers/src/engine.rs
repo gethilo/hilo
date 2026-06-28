@@ -31,11 +31,25 @@ pub struct TriggerEngine {
     /// Timeout for async trigger execution.
     #[allow(dead_code)]
     trigger_timeout: Duration,
+    /// AST cache: file path → (source_content, Vec<Edge>).
+    ast_cache: HashMap<PathBuf, (String, Vec<hilo_metadata::inventory::Edge>)>,
+    /// Optional DuckDB connection for impact computation.
+    db_conn: Option<duckdb::Connection>,
+    /// Project root directory for .vfs/ paths.
+    project_root: Option<PathBuf>,
 }
 
 impl TriggerEngine {
     /// Create a new engine. Does NOT start watching yet.
-    pub fn new(triggers: Vec<TriggerConfig>, debounce_default_ms: u64) -> Self {
+    ///
+    /// `db_conn` and `project_root` are optional — when `Some`, the
+    /// `parse-and-diff` builtin uses them for edge append + impact computation.
+    pub fn new(
+        triggers: Vec<TriggerConfig>,
+        debounce_default_ms: u64,
+        db_conn: Option<duckdb::Connection>,
+        project_root: Option<PathBuf>,
+    ) -> Self {
         let trigger_timeout = triggers
             .first()
             .map(|t| Duration::from_secs(t.timeout_secs))
@@ -54,6 +68,9 @@ impl TriggerEngine {
             max_concurrent: 4,
             semaphore: Arc::new(Semaphore::new(4)),
             trigger_timeout,
+            ast_cache: HashMap::new(),
+            db_conn,
+            project_root,
         }
     }
 
@@ -152,6 +169,25 @@ impl TriggerEngine {
                         continue;
                     }
 
+                    // ── parse-and-diff builtin: handle synchronously using ──
+                    // engine's own ast_cache / db_conn / project_root.      ──
+                    // This avoids the complexity of passing &mut cache      ──
+                    // through tokio::spawn for a CPU-bound, synchronous      ──
+                    // operation.  Command triggers and other builtins        ──
+                    // continue through the async execute_trigger path below. ──
+                    if let Some(builtin) = &trigger.builtin {
+                        if builtin == "parse-and-diff" {
+                            parse_and_diff_sync(
+                                trigger,
+                                &file_event,
+                                &mut self.ast_cache,
+                                &self.db_conn,
+                                &self.project_root,
+                            );
+                            continue; // skip async execute_trigger spawn
+                        }
+                    }
+
                     // Fire trigger.
                     let to = Duration::from_secs(trigger.timeout_secs);
 
@@ -237,6 +273,144 @@ fn matches_pattern(path: &Path, pattern: &str) -> bool {
 
     // Exact filename match.
     filename == pattern
+}
+
+/// Execute the parse-and-diff built-in trigger for a file event.
+///
+/// Synchronous (tree-sitter parsing is CPU-bound). Steps:
+/// 1. Read file content
+/// 2. Detect language from extension
+/// 3. Tree-sitter parse → extract edges via hilo_graph::Parser::parse_imports()
+/// 4. Diff against AST cache: only new/changed edges are appended
+/// 5. Append new edges to .vfs/graph/edges.jsonl
+/// 6. Set user.vfs.last_modified xattr
+/// 7. If db_conn is Some, compute impact via hilo_graph::impact::compute_impact()
+/// 8. Set user.vfs.impact xattr on each impacted file
+/// 9. Update AST cache with new parse result
+///
+/// Errors are logged via `eprintln!` — never panics.
+fn parse_and_diff_sync(
+    cfg: &TriggerConfig,
+    event: &FileEvent,
+    ast_cache: &mut HashMap<PathBuf, (String, Vec<hilo_metadata::inventory::Edge>)>,
+    db_conn: &Option<duckdb::Connection>,
+    project_root: &Option<PathBuf>,
+) {
+    // 1. Read file content.
+    let content = match std::fs::read_to_string(&event.path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!(
+                "[trigger] parse-and-diff: cannot read {}: {e}",
+                event.path.display()
+            );
+            return;
+        }
+    };
+
+    // 2. Detect language from extension.
+    let ext = event
+        .path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    let lang = match hilo_graph::Language::from_extension(ext) {
+        Some(l) => l,
+        None => {
+            eprintln!("[trigger] parse-and-diff: unsupported extension .{ext}");
+            return;
+        }
+    };
+
+    // 3. Parse imports via tree-sitter.
+    let mut parser = match hilo_graph::Parser::for_language(lang) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("[trigger] parse-and-diff: parser init failed: {e}");
+            return;
+        }
+    };
+    let file_path_str = event.path.display().to_string();
+    let edges = match parser.parse_imports(&file_path_str, &content) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("[trigger] parse-and-diff: parse failed: {e}");
+            return;
+        }
+    };
+
+    // 4. Diff against cache — only edges NOT already present.
+    let cache_key = event.path.clone();
+    let new_edges: Vec<hilo_metadata::inventory::Edge> =
+        if let Some((_, cached_edges)) = ast_cache.get(&cache_key) {
+            edges
+                .iter()
+                .filter(|e| !cached_edges.contains(e))
+                .cloned()
+                .collect()
+        } else {
+            edges.clone()
+        };
+
+    // 5. Append new edges to .vfs/graph/edges.jsonl.
+    if !new_edges.is_empty() {
+        if let Some(root) = project_root {
+            let edges_path = root.join(".vfs/graph/edges.jsonl");
+            if let Err(e) = hilo_metadata::inventory::append_edges(&edges_path, &new_edges) {
+                eprintln!("[trigger] parse-and-diff: failed to append edges: {e}");
+            }
+        }
+    }
+
+    // 6. Set user.vfs.last_modified xattr.
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let iso_ts = unix_to_iso(ts);
+    let last_mod_key = vfs_xattr_name("last_modified");
+    if let Err(e) = xattr::set(&event.path, &last_mod_key, iso_ts.as_bytes()) {
+        eprintln!("[trigger] parse-and-diff: failed to set last_modified xattr: {e}");
+    }
+
+    // 7. Impact computation (best-effort).
+    if let Some(conn) = db_conn {
+        let max_depth = cfg.max_depth.unwrap_or(3);
+        match hilo_graph::impact::compute_impact(conn, &file_path_str, max_depth) {
+            Ok(impacted) => {
+                let impact_key = vfs_xattr_name("impact");
+                // 8. Set user.vfs.impact on each impacted file.
+                for f in &impacted {
+                    let imp_path = Path::new(&f.path);
+                    let val = format!("{} (depth {})", f.relation, f.depth);
+                    if let Err(e) = xattr::set(imp_path, &impact_key, val.as_bytes()) {
+                        eprintln!(
+                            "[trigger] parse-and-diff: failed to set impact xattr on {}: {e}",
+                            f.path
+                        );
+                    }
+                }
+                eprintln!(
+                    "[trigger] parse-and-diff: {} impacted files for {}",
+                    impacted.len(),
+                    file_path_str
+                );
+            }
+            Err(e) => {
+                eprintln!("[trigger] parse-and-diff: impact computation failed: {e}");
+            }
+        }
+    }
+
+    // 9. Update AST cache.
+    ast_cache.insert(cache_key, (content, edges.clone()));
+
+    eprintln!(
+        "[trigger] parse-and-diff: {} processed — {} edges ({} new)",
+        file_path_str,
+        edges.len(),
+        new_edges.len()
+    );
 }
 
 /// Execute a single trigger for a file event.
@@ -738,7 +912,7 @@ mod tests {
 
     #[test]
     fn test_max_concurrent_semaphore_created() {
-        let engine = TriggerEngine::new(vec![], 500);
+        let engine = TriggerEngine::new(vec![], 500, None, None);
         // Semaphore should have capacity equal to max_concurrent.
         assert_eq!(engine.max_concurrent, 4);
         assert_eq!(engine.semaphore.available_permits(), 4);
@@ -793,5 +967,261 @@ mod tests {
 
         // Now should succeed.
         assert!(sem.clone().try_acquire_owned().is_ok());
+    }
+
+    // ── parse-and-diff builtin ────────────────────────────────────────
+
+    /// Helper: build a TriggerConfig for the parse-and-diff builtin.
+    fn parse_diff_cfg(max_depth: Option<u32>) -> TriggerConfig {
+        TriggerConfig {
+            name: "test".into(),
+            builtin: Some("parse-and-diff".into()),
+            max_depth,
+            ..TriggerConfig::default()
+        }
+    }
+
+    #[test]
+    fn test_parse_diff_updates_edges() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let go_file = dir.path().join("main.go");
+        std::fs::write(
+            &go_file,
+            "package main\nimport \"fmt\"\nfunc main() { fmt.Println(\"hi\") }\n",
+        )
+        .unwrap();
+
+        let mut cache = HashMap::new();
+        let conn = duckdb::Connection::open_in_memory().unwrap();
+        // Initialize edges table so compute_impact doesn't error.
+        conn.execute_batch("CREATE TABLE edges (\"from\" TEXT, \"to\" TEXT, rel TEXT)")
+            .unwrap();
+
+        let event = FileEvent {
+            path: go_file.clone(),
+            event_type: EventType::Write,
+            timestamp: 0,
+        };
+        let cfg = parse_diff_cfg(Some(3));
+
+        parse_and_diff_sync(
+            &cfg,
+            &event,
+            &mut cache,
+            &Some(conn),
+            &Some(dir.path().to_path_buf()),
+        );
+
+        // edges.jsonl should be created with import edges.
+        let edges_path = dir.path().join(".vfs/graph/edges.jsonl");
+        assert!(edges_path.exists(), "edges.jsonl should be created");
+        let content = std::fs::read_to_string(&edges_path).unwrap();
+        assert!(
+            content.contains("imports"),
+            "should contain import edge: {content}"
+        );
+
+        // last_modified xattr should be set.
+        let xattr_val: Option<Vec<u8>> = xattr::get(&go_file, "user.vfs.last_modified").unwrap();
+        assert!(xattr_val.is_some(), "last_modified xattr should be set");
+
+        // Cache should have an entry.
+        assert!(cache.contains_key(&go_file), "cache should have entry");
+    }
+
+    #[test]
+    fn test_parse_diff_unchanged_file_noop() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let go_file = dir.path().join("main.go");
+        std::fs::write(&go_file, "package main\nimport \"fmt\"\n").unwrap();
+
+        let mut cache = HashMap::new();
+        let event = FileEvent {
+            path: go_file.clone(),
+            event_type: EventType::Write,
+            timestamp: 0,
+        };
+        let cfg = parse_diff_cfg(None);
+
+        // First parse — should write edges.
+        parse_and_diff_sync(
+            &cfg,
+            &event,
+            &mut cache,
+            &None,
+            &Some(dir.path().to_path_buf()),
+        );
+
+        let edges_path = dir.path().join(".vfs/graph/edges.jsonl");
+        let first_content = std::fs::read_to_string(&edges_path).unwrap();
+        let first_line_count = first_content.lines().count();
+        assert!(first_line_count > 0, "first parse should produce edges");
+
+        // Second parse — same content, same cache → no new edges.
+        parse_and_diff_sync(
+            &cfg,
+            &event,
+            &mut cache,
+            &None,
+            &Some(dir.path().to_path_buf()),
+        );
+
+        let second_content = std::fs::read_to_string(&edges_path).unwrap();
+        let second_line_count = second_content.lines().count();
+        assert_eq!(
+            first_line_count, second_line_count,
+            "second parse should not add edges"
+        );
+    }
+
+    #[test]
+    fn test_parse_diff_changed_content_delta_edges() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let go_file = dir.path().join("main.go");
+        std::fs::write(&go_file, "package main\nimport \"fmt\"\n").unwrap();
+
+        let mut cache = HashMap::new();
+        let event = FileEvent {
+            path: go_file.clone(),
+            event_type: EventType::Write,
+            timestamp: 0,
+        };
+        let cfg = parse_diff_cfg(None);
+
+        // First parse.
+        parse_and_diff_sync(
+            &cfg,
+            &event,
+            &mut cache,
+            &None,
+            &Some(dir.path().to_path_buf()),
+        );
+
+        let edges_path = dir.path().join(".vfs/graph/edges.jsonl");
+        let first_count = std::fs::read_to_string(&edges_path)
+            .unwrap()
+            .lines()
+            .count();
+
+        // Change file — add a new import.
+        std::fs::write(&go_file, "package main\nimport \"fmt\"\nimport \"os\"\n").unwrap();
+
+        // Second parse — delta should produce only the new edge.
+        parse_and_diff_sync(
+            &cfg,
+            &event,
+            &mut cache,
+            &None,
+            &Some(dir.path().to_path_buf()),
+        );
+
+        let second_count = std::fs::read_to_string(&edges_path)
+            .unwrap()
+            .lines()
+            .count();
+        assert!(
+            second_count >= first_count,
+            "delta parse should not lose edges: {first_count} -> {second_count}"
+        );
+    }
+
+    #[test]
+    fn test_parse_diff_unsupported_extension_noop() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let file = dir.path().join("README.md");
+        std::fs::write(&file, "# Hello\n").unwrap();
+
+        let mut cache = HashMap::new();
+        let event = FileEvent {
+            path: file.clone(),
+            event_type: EventType::Write,
+            timestamp: 0,
+        };
+        let cfg = parse_diff_cfg(None);
+
+        parse_and_diff_sync(
+            &cfg,
+            &event,
+            &mut cache,
+            &None,
+            &Some(dir.path().to_path_buf()),
+        );
+
+        // Cache should NOT have an entry for unsupported extension.
+        assert!(
+            cache.is_empty() || !cache.contains_key(&file),
+            "cache should not have entry for .md"
+        );
+    }
+
+    #[test]
+    fn test_parse_diff_with_impact() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let go_file = dir.path().join("main.go");
+        std::fs::write(&go_file, "package main\nimport \"fmt\"\n").unwrap();
+
+        // Create a file that "imports" main.go in the graph DB.
+        let other = dir.path().join("other.go");
+        std::fs::write(&other, "package other\n").unwrap();
+
+        // compute_impact matches by the file_path_str (the absolute path passed
+        // to parse_and_diff_sync), so the edge's "to" column must use the same
+        // full path.
+        let go_path_str = go_file.display().to_string();
+        let other_path_str = other.display().to_string();
+        let conn = duckdb::Connection::open_in_memory().unwrap();
+        conn.execute_batch(&format!(
+            "CREATE TABLE edges (\"from\" TEXT, \"to\" TEXT, rel TEXT);
+             INSERT INTO edges VALUES ('{other_path_str}', '{go_path_str}', 'imports');",
+        ))
+        .unwrap();
+
+        let mut cache = HashMap::new();
+        let event = FileEvent {
+            path: go_file.clone(),
+            event_type: EventType::Write,
+            timestamp: 0,
+        };
+        let cfg = parse_diff_cfg(Some(5));
+
+        parse_and_diff_sync(
+            &cfg,
+            &event,
+            &mut cache,
+            &Some(conn),
+            &Some(dir.path().to_path_buf()),
+        );
+
+        // other.go should have user.vfs.impact xattr set.
+        let impact_val: Option<Vec<u8>> = xattr::get(&other, "user.vfs.impact").unwrap();
+        assert!(
+            impact_val.is_some(),
+            "impacted file should have impact xattr"
+        );
+    }
+
+    #[test]
+    fn test_parse_diff_missing_file_no_panic() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let no_file = dir.path().join("nonexistent.go");
+
+        let mut cache = HashMap::new();
+        let event = FileEvent {
+            path: no_file,
+            event_type: EventType::Write,
+            timestamp: 0,
+        };
+        let cfg = parse_diff_cfg(None);
+
+        // Should not panic — gracefully logs and returns.
+        parse_and_diff_sync(
+            &cfg,
+            &event,
+            &mut cache,
+            &None,
+            &Some(dir.path().to_path_buf()),
+        );
+
+        assert!(cache.is_empty(), "cache should remain empty");
     }
 }

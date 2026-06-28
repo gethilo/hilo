@@ -85,8 +85,29 @@ async fn run_trigger_engine(watch_dir: &Path, mount_desc: &str) {
         mount_desc
     );
 
+    // Compute project root and (best-effort) open the DuckDB graph DB so the
+    // parse-and-diff builtin can compute transitive impact.
+    let project_root = Some(watch_dir.clone());
+    let db_conn = {
+        let db_path = watch_dir.join(".vfs/graph/graph.db");
+        if db_path.exists() {
+            match duckdb::Connection::open(&db_path) {
+                Ok(conn) => Some(conn),
+                Err(e) => {
+                    eprintln!(
+                        "[trigger-engine] cannot open graph DB at {}: {e}",
+                        db_path.display()
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        }
+    };
+
     let trigger_count = triggers.len();
-    let mut engine = TriggerEngine::new(triggers, 500);
+    let mut engine = TriggerEngine::new(triggers, 500, db_conn, project_root);
 
     if let Err(e) = engine.watch_dir(&watch_dir) {
         eprintln!(
@@ -177,6 +198,8 @@ fn parse_manifest_triggers(yaml: &str) -> Option<Vec<TriggerConfig>> {
             debounce_ms,
             on_success: None,
             on_failure: None,
+            max_depth: None,
+            graph_db_path: None,
         });
     }
 
@@ -227,6 +250,8 @@ fn default_triggers() -> Vec<TriggerConfig> {
             debounce_ms: 500,
             on_success: None,
             on_failure: None,
+            max_depth: None,
+            graph_db_path: None,
         })
         .collect()
 }

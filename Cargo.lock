@@ -2381,6 +2381,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "duckdb",
  "glob",
  "hilo_backends",
  "hilo_core",
@@ -2524,6 +2525,9 @@ dependencies = [
 name = "hilo_triggers"
 version = "0.1.0"
 dependencies = [
+ "duckdb",
+ "hilo_graph",
+ "hilo_metadata",
  "inotify",
  "serde",
  "serde_yaml",
