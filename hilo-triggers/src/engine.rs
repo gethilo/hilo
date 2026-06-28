@@ -567,7 +567,7 @@ async fn upload_to_backend(
 /// Execute a single trigger for a file event.
 ///
 /// - `parse-and-diff`: handled synchronously in `run()` — never reaches this function.
-/// - `upload-to-backend`: stub (TODO: wire S3 client, upload, blob-index append).
+/// - `upload-to-backend`: uploads the changed file to S3, updates blob index, sets xattrs.
 /// - Command triggers: run shell command with `{{ .FilePath }}` substitution.
 ///
 /// Returns on timeout via `tokio::time::timeout`.
