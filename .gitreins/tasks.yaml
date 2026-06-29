@@ -140,3 +140,18 @@ tasks:
   status: complete
   created_at: '2026-06-24T03:00:00+00:00'
   completed_at: '2026-06-26T20:43:58.331483+00:00'
+- id: jit-lazy-queries
+  title: "JIT/lazy query architecture \u2014 remove batch-first gate"
+  criteria:
+  - "hilo graph related src/main.rs works on fresh hilo init \u2014 no discover required"
+  - 'First query on any file: parse on-the-fly, cache in DuckDB, return results'
+  - 'Second query on same file: instant cache hit, no re-parse'
+  - hilo graph discover still exists as hilo graph warm (Discover as hidden alias)
+  - hilo graph impact parses only needed files, not entire codebase
+  - "hilo graph stats reflects cache \u2014 returns 0 on fresh init (not an error)"
+  - MCP vfs_graph_related triggers lazy parse on miss
+  - "cargo test --workspace \u2014 all existing + 5+ new lazy parse tests pass"
+  - cargo build --workspace clean, clippy clean, fmt clean
+  status: complete
+  created_at: '2026-06-28T23:35:08.859237+00:00'
+  completed_at: '2026-06-28T23:49:51.545258+00:00'

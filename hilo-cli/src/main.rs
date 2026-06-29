@@ -70,11 +70,16 @@ struct MetaArgs {
 
 #[derive(Subcommand)]
 enum GraphCommand {
-    /// Walk the current directory, parse Go imports, and populate the graph.
-    Discover(DiscoverArgs),
-    /// Print summary statistics from the discovered dependency graph.
+    /// Pre-compute the dependency graph by parsing all source files.
+    ///
+    /// Optional batch warmup for CI or power users. Queries (`related`,
+    /// `impact`) are JIT — they auto-parse files on first access and do
+    /// NOT require `warm` first.
+    #[clap(alias = "discover")]
+    Warm(WarmArgs),
+    /// Print summary statistics from the dependency graph.
     Stats,
-    /// Query graph edges for a specific file.
+    /// Query graph edges for a specific file (auto-parses on first access).
     Related(RelatedArgs),
     /// Find all files that transitively depend on a given file (impact analysis).
     Impact(ImpactArgs),
@@ -85,12 +90,17 @@ enum GraphCommand {
 }
 
 #[derive(clap::Args)]
-struct DiscoverArgs {
+struct WarmArgs {
     /// Detect cross-repo imports using the workspace manifest.
     /// When set, import paths that resolve to files in another workspace
     /// repo are flagged as `external:repo-name:path` edges.
     #[arg(long)]
     workspace: bool,
+
+    /// Only parse files of a specific language (e.g. "rust", "python", "go").
+    /// When omitted, all supported languages are scanned.
+    #[arg(long)]
+    language: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -182,7 +192,7 @@ fn main() {
     let result = match cli.command {
         Commands::Init(_) => init::run(),
         Commands::Meta(args) => meta::run(&args.path, args.set.as_deref(), args.value.as_deref()),
-        Commands::Graph(GraphCommand::Discover(args)) => graph::run_discover(args.workspace),
+        Commands::Graph(GraphCommand::Warm(args)) => graph::run_warm(args.workspace, args.language),
         Commands::Graph(GraphCommand::Stats) => graph::run_stats(),
         Commands::Graph(GraphCommand::Related(args)) => graph::run_related(
             &args.path,

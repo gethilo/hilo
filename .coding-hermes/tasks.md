@@ -635,11 +635,12 @@ Crate name matches Cargo.toml `name` field (underscores): hilo_core, hilo_graph,
 - **AC:** `cargo test --workspace` all pass, `cargo build --workspace` clean, clippy clean, fmt clean
 - **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). hilo-mcp/src/tools/mod.rs: +97/-15 lines — get_metadata() now returns spec-compliant `{path, size, mtime, backend, hash, xattrs}` structure; `size`/`mtime` from `std::fs::metadata`, `backend`/`hash` extracted from xattrs; optional `keys` filter supported; added `format_iso8601()` and `days_to_ymd()` helpers (Hinnant civil-from-days algorithm, zero-copy). hilo-mcp/tests/mcp_test.rs: +135 lines — 3 new tests: test_get_metadata_roundtrip (file stats + xattrs), test_get_metadata_keys_filter (filter by short name), test_get_metadata_with_backend_and_hash (backend="s3" + hash extraction). hilo-mcp: 21/21 pass. Full workspace: all test suites pass, clippy 0 warnings, fmt clean.
 
-## [ ] JIT/lazy query architecture — remove batch-first gate
+## [x] JIT/lazy query architecture — remove batch-first gate
 
 - **Priority:** high
 - **Model:** glm-5.2 (multi-crate refactor, 4+ files)
 - **Provider:** zai-glm
+- **Result:** GLM 5.2 spawn (~14m). 6 files, +302/-66. ensure_parsed(), related_or_parse(), impact_or_parse() on GraphDB; run_related/run_impact lazy-adapted; discover→warm rename; --language filter; MCP lazy parse. All 31+ suites pass. Build/clippy/fmt clean. Guard PASS.
 - **Fallback:** openrouter/owl-alpha, deepseek-v4-pro
 - **Files:** hilo-cli/src/commands/graph.rs, hilo-graph/src/graph.rs, hilo-graph/src/parser.rs, hilo-mcp/src/tools/mod.rs
 

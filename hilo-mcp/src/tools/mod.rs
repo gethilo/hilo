@@ -401,6 +401,9 @@ fn set_metadata(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
 ///
 /// Supports both forward (outgoing) and reverse (incoming) queries, with
 /// optional relation-type filtering (e.g. "imported_by", "tested_by").
+///
+/// JIT: on first access the file is parsed on-the-fly and cached — no
+/// `hilo graph warm` pre-requisite needed.
 fn graph_related(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
     let target = arguments["path"]
         .as_str()
@@ -409,14 +412,14 @@ fn graph_related(arguments: &serde_json::Value) -> McpResult<serde_json::Value> 
     let relation = arguments["relation"].as_str();
     let direction = arguments["direction"].as_str().unwrap_or("forward");
 
-    if !Path::new(GRAPH_DB_PATH).exists() {
-        return Ok(serde_json::Value::Array(vec![]));
-    }
+    // Ensure the .vfs/graph directory exists (create on first use).
+    let db_parent = Path::new(GRAPH_DB_PATH).parent().unwrap_or(Path::new("."));
+    std::fs::create_dir_all(db_parent).ok();
 
     let db = hilo_graph::GraphDB::open(GRAPH_DB_PATH)?;
     let dir = hilo_graph::Direction::parse(direction);
 
-    // Try exact path first, then common prefixes
+    // Try exact path first, then common prefixes.
     let candidates = [
         target.to_string(),
         target.trim_start_matches("/home/").to_string(),
@@ -434,8 +437,10 @@ fn graph_related(arguments: &serde_json::Value) -> McpResult<serde_json::Value> 
         }
     }
 
-    // If still no edges found, try as a dependency query (package-level)
+    // Cache miss on all candidates — try lazy parse on the original target,
+    // then re-query from the freshly populated cache.
     if edges.is_empty() {
+        db.ensure_parsed(target)?;
         edges = db.related(target, relation, dir)?;
     }
 
@@ -529,6 +534,9 @@ fn graph_module(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
 ///
 /// Uses BFS over the dependency graph to find all files that depend on
 /// the given path, up to `max_depth` hops (default 5).
+///
+/// JIT: on first access the start file is parsed on-the-fly and cached —
+/// no `hilo graph warm` pre-requisite needed.
 fn graph_impact(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
     let path_str = arguments["path"]
         .as_str()
@@ -540,12 +548,15 @@ fn graph_impact(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
         .try_into()
         .unwrap_or(5);
 
-    if !Path::new(GRAPH_DB_PATH).exists() {
-        return Ok(serde_json::json!({"dependents": [], "total": 0, "max_depth_reached": false}));
-    }
+    // Ensure the .vfs/graph directory exists (create on first use).
+    let db_parent = Path::new(GRAPH_DB_PATH).parent().unwrap_or(Path::new("."));
+    std::fs::create_dir_all(db_parent).ok();
 
     let db = hilo_graph::GraphDB::open(GRAPH_DB_PATH)?;
-    let results = hilo_graph::impact::compute_impact(db.conn(), path_str, max_depth)?;
+
+    // JIT: parse start file on cache miss, then BFS over cache.
+    let results = db.impact_or_parse(path_str, max_depth)?;
+
     Ok(serde_json::json!({
         "dependents": results,
         "total": results.len(),

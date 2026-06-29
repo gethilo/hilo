@@ -120,8 +120,8 @@ fn graph_stats_no_data_prints_message() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        stdout.contains("No graph data"),
-        "expected a 'No graph data' message, got:\n{stdout}"
+        stdout.contains("Graph cache is empty"),
+        "expected a 'Graph cache is empty' message, got:\n{stdout}"
     );
 
     let _ = fs::remove_dir_all(&dir);

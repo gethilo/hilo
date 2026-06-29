@@ -1,4 +1,7 @@
-//! `hilo graph discover`, `hilo graph stats`, and `hilo graph impact`.
+//! `hilo graph warm`, `hilo graph stats`, `hilo graph related`, and `hilo graph impact`.
+//!
+//! Queries (`related`, `impact`, `stats`) are JIT — they auto-parse files on
+//! first access. `warm` is an optional batch pre-parse for CI / power users.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -6,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, Result};
 use hilo_graph::edges;
-use hilo_graph::{impact, GraphDB, ImpactResult, Language, Parser};
+use hilo_graph::{GraphDB, ImpactResult, Language, Parser};
 use hilo_metadata::inventory::{self, Edge};
 use rayon::prelude::*;
 
@@ -21,14 +24,39 @@ const SKIP_DIRS: &[&str] = &[
 
 /// Walk the current directory for source files in all supported languages,
 /// parse their imports, and write the resulting edges to both
-/// `.vfs/graph/edges.jsonl` and `.vfs/graph/graph.db`.
-pub fn run_discover(workspace: bool) -> Result<()> {
+/// Pre-compute the full graph — parse ALL source files (optional warmup).
+///
+/// This is the same batch-parse that was previously called
+/// `hilo graph discover`.  It remains useful for CI pipelines or users who
+/// want every file cached before running queries.  Day-to-day, queries are
+/// JIT (lazy) and do **not** require `warm` first.
+///
+/// When `language` is `Some`, only files of that language are parsed
+/// (e.g. `--language rust`).  Otherwise all supported languages are scanned.
+pub fn run_warm(workspace: bool, language: Option<String>) -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
 
     // Collect every source file under the current directory.
     let mut source_files = Vec::new();
     collect_source_files(&cwd, &mut source_files)
         .context("failed to walk directory tree for source files")?;
+
+    // Optional language filter (e.g. --language rust).
+    if let Some(ref lang_str) = language {
+        let ext = match lang_str.as_str() {
+            "go" => "go",
+            "python" | "py" => "py",
+            "typescript" | "ts" => "ts",
+            "rust" | "rs" => "rs",
+            "javascript" | "js" => "js",
+            "java" => "java",
+            "c" => "c",
+            "cpp" | "c++" | "cxx" => "cpp",
+            "ruby" | "rb" => "rb",
+            other => anyhow::bail!("unknown language: {other}"),
+        };
+        source_files.retain(|f| f.extension().and_then(|e| e.to_str()) == Some(ext));
+    }
 
     if source_files.is_empty() {
         println!(
@@ -170,56 +198,44 @@ pub fn run_discover(workspace: bool) -> Result<()> {
 /// - `--direction reverse`: incoming edges (WHERE "to" = ?), e.g.
 ///   `imported_by`, `tested_by`.
 ///
-/// Exits with code 1 and a "not found in graph" message when the path does not
-/// appear in the `edges` table at all (neither as `from` nor `to`).
+/// JIT: on first access the file is parsed on-the-fly and cached in DuckDB —
+/// no `hilo graph warm` pre-requisite needed.
 pub fn run_related(path: &str, relation: Option<&str>, direction: Option<&str>) -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
     let graph_db = cwd.join(".vfs").join("graph").join("graph.db");
 
-    if !graph_db.exists() {
-        anyhow::bail!("No graph data. Run `hilo graph discover` first.");
+    // Ensure the .vfs/graph directory exists (create on first use).
+    if let Some(parent) = graph_db.parent() {
+        std::fs::create_dir_all(parent).ok();
     }
 
     let graph_db_str = graph_db.to_str().unwrap_or(".vfs/graph/graph.db");
     let graph = GraphDB::open(graph_db_str).context("failed to open DuckDB graph database")?;
 
-    // Check whether the file exists in the graph at all.
-    if !graph
-        .file_in_graph(path)
-        .context("failed to query graph for file existence")?
-    {
-        anyhow::bail!("not found in graph");
-    }
-
     let dir = direction
         .map(hilo_graph::Direction::parse)
         .unwrap_or(hilo_graph::Direction::Forward);
 
+    // JIT: parse on cache miss, query on cache hit.
     let edges = graph
-        .related(path, relation, dir)
+        .related_or_parse(path, relation, dir)
         .context("failed to query related edges")?;
 
-    if edges.is_empty() {
-        if let Some(rel) = &relation {
-            println!(
-                "No {} edges found for '{}' with relation filter '{}'.",
-                dir, path, rel
-            );
-            return Ok(());
-        }
-    }
-
-    // Print edges in a readable format.
     if edges.is_empty() {
         let label = match dir {
             hilo_graph::Direction::Forward => "outgoing",
             hilo_graph::Direction::Reverse => "incoming",
         };
-        println!("No {} edges for '{}'.", label, path);
-    } else {
-        for edge in &edges {
-            println!("{}  →  {}  ({})", edge.from, edge.to, edge.rel);
+        if let Some(rel) = relation {
+            println!("No {rel} ({label}) edges found for '{path}'.");
+        } else {
+            println!("No {label} edges for '{path}'.");
         }
+        return Ok(());
+    }
+
+    for edge in &edges {
+        println!("{}  →  {}  ({})", edge.from, edge.to, edge.rel);
     }
 
     Ok(())
@@ -232,30 +248,31 @@ pub fn run_related(path: &str, relation: Option<&str>, direction: Option<&str>) 
 /// Otherwise prints each dependent file in human-readable text.
 ///
 /// When `external` is `true`, also follows `external:repo:path` cross-repo edges.
+///
+/// JIT: on first access the start file is parsed on-the-fly and cached —
+/// no `hilo graph warm` pre-requisite needed.
 pub fn run_impact(path: &str, max_depth: u32, format: Option<&str>, external: bool) -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
     let graph_db = cwd.join(".vfs").join("graph").join("graph.db");
 
-    if !graph_db.exists() {
-        anyhow::bail!("No graph data. Run `hilo graph discover` first.");
+    // Ensure the .vfs/graph directory exists.
+    if let Some(parent) = graph_db.parent() {
+        std::fs::create_dir_all(parent).ok();
     }
 
     let graph_db_str = graph_db.to_str().unwrap_or(".vfs/graph/graph.db");
     let graph = GraphDB::open(graph_db_str).context("failed to open DuckDB graph database")?;
 
-    // Check whether the file exists in the graph at all.
-    let in_graph = graph
-        .file_in_graph(path)
-        .context("failed to query graph for file existence")?;
-    if !in_graph && !external {
-        anyhow::bail!("not found in graph");
-    }
-
     let results = if external {
+        // For external: parse start file first, then use cross-repo BFS.
+        graph.ensure_parsed(path)?;
         hilo_graph::impact::compute_impact_with_external(graph.conn(), path, max_depth, true)
             .context("failed to compute impact with external edges")?
     } else {
-        impact::compute_impact(graph.conn(), path, max_depth).context("failed to compute impact")?
+        // JIT: parse start file on cache miss, then BFS over cache.
+        graph
+            .impact_or_parse(path, max_depth)
+            .context("failed to compute impact")?
     };
 
     match format {
@@ -263,11 +280,11 @@ pub fn run_impact(path: &str, max_depth: u32, format: Option<&str>, external: bo
             let result = ImpactResult { files: results };
             let json = hilo_graph::serde_json::to_string_pretty(&result)
                 .context("failed to serialize impact results as JSON")?;
-            println!("{}", json);
+            println!("{json}");
         }
         _ => {
             if results.is_empty() {
-                println!("No dependents found for '{}'.", path);
+                println!("No dependents found for '{path}'.");
             } else {
                 for file in &results {
                     println!(
@@ -282,13 +299,17 @@ pub fn run_impact(path: &str, max_depth: u32, format: Option<&str>, external: bo
     Ok(())
 }
 
-/// Print summary statistics from the discovered dependency graph.
+/// Print summary statistics from the dependency graph.
+///
+/// An empty cache is a valid state (not an error) — the graph starts
+/// empty after `hilo init` and is populated lazily as files are queried
+/// or eagerly via `hilo graph warm`.
 pub fn run_stats() -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
     let graph_db = cwd.join(".vfs").join("graph").join("graph.db");
 
     if !graph_db.exists() {
-        println!("No graph data. Run `hilo graph discover` first.");
+        println!("Graph cache is empty. Query a file or run `hilo graph warm` to populate.");
         return Ok(());
     }
 
@@ -299,7 +320,7 @@ pub fn run_stats() -> Result<()> {
         .context("failed to compute graph statistics")?;
 
     if stats.total_edges == 0 {
-        println!("No graph data. Run `hilo graph discover` first.");
+        println!("Graph cache is empty. No edges parsed yet.");
         return Ok(());
     }
 

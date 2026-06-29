@@ -3,10 +3,14 @@
 //! Creates and manages the `.vfs/graph/graph.db` database for graph edge
 //! storage and querying.
 
+use std::path::Path;
+
 use duckdb::{params, Connection};
 use hilo_metadata::inventory::Edge;
 
-use crate::error::GraphResult;
+use crate::error::{GraphError, GraphResult};
+use crate::impact::{self, ImpactFile};
+use crate::parser::{Language, Parser};
 
 /// Direction for edge queries: forward (`"from" = ?`) or reverse (`"to" = ?`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -407,5 +411,181 @@ impl GraphDB {
             edge_types,
             top_dependencies: top,
         })
+    }
+
+    // -----------------------------------------------------------------
+    // JIT / lazy-parse methods
+    // -----------------------------------------------------------------
+
+    /// JIT-parse a single file and cache its edges in DuckDB.
+    ///
+    /// If the file already has outgoing edges in the graph (as `"from"`),
+    /// returns the cached edges immediately without re-parsing. Otherwise
+    /// detects the language from the file extension, reads the file from
+    /// disk, parses its imports with tree-sitter, and inserts the resulting
+    /// edges into the cache.
+    ///
+    /// Returns empty vec for unsupported extensions or unreadable files.
+    pub fn ensure_parsed(&self, file_path: &str) -> GraphResult<Vec<Edge>> {
+        // 1. Cache check: return existing outgoing edges if any.
+        let existing = self.related(file_path, None, Direction::Forward)?;
+        if !existing.is_empty() {
+            return Ok(existing);
+        }
+
+        // 2. Detect language from extension.
+        let path = Path::new(file_path);
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        let lang = match Language::from_extension(ext) {
+            Some(l) => l,
+            None => return Ok(Vec::new()),
+        };
+
+        // 3. Read the file from disk.
+        let source = match std::fs::read_to_string(file_path) {
+            Ok(s) => s,
+            Err(_) => return Ok(Vec::new()),
+        };
+
+        // 4. Parse imports with tree-sitter.
+        let mut parser = Parser::for_language(lang)
+            .map_err(|e| GraphError::Other(format!("failed to create parser for {ext}: {e}")))?;
+        let edges = parser
+            .parse_imports(file_path, &source)
+            .map_err(|e| GraphError::Other(format!("parse error in {file_path}: {e}")))?;
+
+        // 5. Insert into DuckDB cache (INSERT OR IGNORE → idempotent).
+        if !edges.is_empty() {
+            self.insert_edges(&edges)?;
+        }
+
+        Ok(edges)
+    }
+
+    /// Query edges for a file, falling back to on-the-fly parsing if the
+    /// file is not yet in the graph cache.
+    pub fn related_or_parse(
+        &self,
+        path: &str,
+        rel_filter: Option<&str>,
+        direction: Direction,
+    ) -> GraphResult<Vec<Edge>> {
+        // Cache hit → query directly.
+        if self.file_in_graph(path)? {
+            return self.related(path, rel_filter, direction);
+        }
+        // Cache miss → parse on-the-fly, then query.
+        self.ensure_parsed(path)?;
+        self.related(path, rel_filter, direction)
+    }
+
+    /// Compute transitive impact with lazy parsing of the start file.
+    ///
+    /// Parses the start file on-the-fly if not cached, then runs BFS over
+    /// whatever edges are in the DuckDB cache. When `max_depth` is 0,
+    /// returns empty immediately.
+    pub fn impact_or_parse(
+        &self,
+        start_path: &str,
+        max_depth: u32,
+    ) -> GraphResult<Vec<ImpactFile>> {
+        // Parse the start file first (no-op if already cached).
+        self.ensure_parsed(start_path)?;
+        // Delegate to existing BFS over the DuckDB edges cache.
+        impact::compute_impact(&self.conn, start_path, max_depth)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_go_file(dir: &Path, name: &str, content: &str) -> String {
+        let path = dir.join(name);
+        std::fs::write(&path, content).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn ensure_parsed_go_file_returns_edges() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_go_file(
+            dir.path(),
+            "main.go",
+            "package main\n\nimport (\n\t\"fmt\"\n\t\"os\"\n)\n",
+        );
+        let db = GraphDB::open(":memory:").unwrap();
+        let edges = db.ensure_parsed(&path).unwrap();
+        assert!(
+            !edges.is_empty(),
+            "Go file with imports should produce edges"
+        );
+    }
+
+    #[test]
+    fn ensure_parsed_caches_and_returns_same_edges() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_go_file(dir.path(), "main.go", "package main\n\nimport \"fmt\"\n");
+        let db = GraphDB::open(":memory:").unwrap();
+
+        let edges1 = db.ensure_parsed(&path).unwrap();
+        let count1 = edges1.len();
+
+        let edges2 = db.ensure_parsed(&path).unwrap();
+        assert_eq!(edges2.len(), count1);
+
+        let total = db.count_edges().unwrap();
+        assert_eq!(
+            total as usize, count1,
+            "edge count must not double on second call"
+        );
+    }
+
+    #[test]
+    fn ensure_parsed_unsupported_extension_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_go_file(dir.path(), "readme.md", "# Hello");
+        let db = GraphDB::open(":memory:").unwrap();
+        let edges = db.ensure_parsed(&path).unwrap();
+        assert!(edges.is_empty());
+    }
+
+    #[test]
+    fn ensure_parsed_missing_file_returns_empty() {
+        let db = GraphDB::open(":memory:").unwrap();
+        let edges = db.ensure_parsed("/nonexistent/path/file.go").unwrap();
+        assert!(edges.is_empty());
+    }
+
+    #[test]
+    fn related_or_parse_falls_back_to_parse() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_go_file(dir.path(), "main.go", "package main\n\nimport \"fmt\"\n");
+        let db = GraphDB::open(":memory:").unwrap();
+        let edges = db
+            .related_or_parse(&path, None, Direction::Forward)
+            .unwrap();
+        assert!(!edges.is_empty(), "should return edges after lazy parse");
+    }
+
+    #[test]
+    fn impact_or_parse_parses_start_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_go_file(dir.path(), "main.go", "package main\n\nimport \"fmt\"\n");
+        let db = GraphDB::open(":memory:").unwrap();
+        let _ = db.impact_or_parse(&path, 3).unwrap();
+        assert!(
+            db.file_in_graph(&path).unwrap(),
+            "file should be in graph after impact_or_parse"
+        );
+    }
+
+    #[test]
+    fn impact_or_parse_max_depth_zero_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_go_file(dir.path(), "main.go", "package main\n\nimport \"fmt\"\n");
+        let db = GraphDB::open(":memory:").unwrap();
+        let results = db.impact_or_parse(&path, 0).unwrap();
+        assert!(results.is_empty());
     }
 }
