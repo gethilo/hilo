@@ -190,43 +190,52 @@ mod tests {
     use std::process::Command;
     use tempfile::TempDir;
 
+    /// Run a git command, asserting success with a descriptive message on failure.
+    /// Uses `-c` flags to set user identity so tests are hermetic and work
+    /// in CI environments without a pre-configured git identity.
+    fn git_cmd(args: &[&str]) {
+        let prefix = &[
+            "-c",
+            "user.name=Hilo Test",
+            "-c",
+            "user.email=test@hilo.test",
+            "-c",
+            "init.defaultBranch=main",
+            "-c",
+            "commit.gpgSign=false",
+        ];
+        let all_args: Vec<&str> = prefix.iter().chain(args.iter()).copied().collect();
+        let output = Command::new("git").args(&all_args).output().unwrap();
+        assert!(
+            output.status.success(),
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
     /// Create a bare Git repo in a temp directory with an initial commit.
+    /// Uses explicit identity config so it works in CI without a
+    /// pre-configured git user.
     fn init_bare_repo() -> (TempDir, String) {
         let dir = tempfile::tempdir().unwrap();
         let repo_path = dir.path().join("test-repo.git");
         std::fs::create_dir_all(&repo_path).unwrap();
 
-        let output = Command::new("git")
-            .args(["init", "--bare", "-b", "main"])
-            .arg(&repo_path)
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "git init failed: {:?}", output);
+        // Init bare repo with main as default branch.
+        git_cmd(&["init", "--bare", "-b", "main", repo_path.to_str().unwrap()]);
 
         let work = dir.path().join("work");
         let url = format!("file://{}", repo_path.display());
-        let output = Command::new("git")
-            .args(["clone", &url, work.to_str().unwrap()])
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "git clone failed: {:?}", output);
 
+        // Clone the empty bare repo (warning expected, not an error).
+        git_cmd(&["clone", &url, work.to_str().unwrap()]);
+
+        // Create initial commit and push to main.
         std::fs::write(work.join("README.md"), "# test\n").unwrap();
-        let output = Command::new("git")
-            .args(["-C", work.to_str().unwrap(), "add", "README.md"])
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-        let output = Command::new("git")
-            .args(["-C", work.to_str().unwrap(), "commit", "-m", "initial"])
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-        let output = Command::new("git")
-            .args(["-C", work.to_str().unwrap(), "push", "origin", "main"])
-            .output()
-            .unwrap();
-        assert!(output.status.success());
+        git_cmd(&["-C", work.to_str().unwrap(), "add", "README.md"]);
+        git_cmd(&["-C", work.to_str().unwrap(), "commit", "-m", "initial"]);
+        git_cmd(&["-C", work.to_str().unwrap(), "push", "origin", "main"]);
 
         (dir, url)
     }

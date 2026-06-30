@@ -25,6 +25,15 @@
 - **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). engine.rs +95/-12 lines: replaced SetXattr stub with actual `xattr::set()` call, added `vfs_xattr_name()` (idempotent prefix), `unix_to_iso()` (Unix timestamp→ISO 8601 with Hinnant's civil_from_days algorithm), `days_to_ymd()`. Template substitution: `{{ .FilePath }}` → actual path, `{{ .Timestamp }}` → ISO timestamp. Error handling: eprintln on xattr set failure. Cargo.toml: +xattr="1" dep, +tempfile="3" dev-dep. 4 new tests: test_setxattr_writes_xattr_to_file, test_setxattr_template_filepath, test_setxattr_template_timestamp, test_setxattr_prefix_idempotent. 3 existing tests updated to new signature. hilo-triggers: 24 inline + 6 integration = 30/30 pass. Full workspace build clean. fmt clean. clippy clean.
 
 ## [x] Spec gap: Enforce max_concurrent in trigger execution — spec §7.3
+
+## [x] Fix CI: CI — git backend tests failing on master
+- **Priority:** high
+- **Branch:** master
+- **CI URL:** https://github.com/gethilo/hilo/actions/runs/28346320493
+- **Error:** 6 `git::tests::test_git_backend_*` tests fail with `assertion failed: output.status.success()` in hilo-backends/src/git.rs:224. Tests need a real git repo to clone — may be CI environment issue or broken git command.
+- **Result:** Root cause: `init_bare_repo()` test helper used bare `Command::new("git")` without setting user identity or GPG signing config. `git commit` fails in CI (GitHub Actions runners have no global git identity configured by default), causing `output.status.success()` to be `false` — cascading all 6 `test_git_backend_*` tests. Fix: extracted `git_cmd()` helper that prepends `-c user.name=Hilo Test -c user.email=test@hilo.test -c init.defaultBranch=main -c commit.gpgSign=false` to every git invocation. This makes tests hermetic — they work regardless of the CI environment's git configuration. All 12 hilo_backends tests pass locally. cargo check --workspace clean, fmt clean, clippy clean.
+
+## [x] Spec gap: Enforce max_concurrent in trigger execution — spec §7.3
 - **Priority:** medium
 - **Model:** deepseek-v4-pro (direct write — 1-method fix)
 - **Files:** hilo-triggers/src/engine.rs
@@ -709,3 +718,9 @@ $ hilo graph impact src/lib.rs     # 2.1s — BFS, parses as needed
 - **Warm command is for eager users.** `hilo graph warm` pre-computes everything — same as old `discover`. Useful for CI.
 - **Cache invalidation.** File changes don't auto-invalidate. `hilo graph warm` or manual `rm .vfs/graph/graph.db` to reset.
 - **Thread safety.** DuckDB connection is single-threaded. Use mutex or connection pool if concurrent queries are needed (future phase).
+
+## [ ] Fix CI: hilo — Test step fails with exit code 101
+- **Priority:** high
+- **Branch:** master
+- **CI Run:** https://github.com/gethilo/hilo/actions/runs/28346320493
+- **Error:** Rust test suite failing. Build + Clippy pass but Test exits 101. Run `cargo test` locally to identify and fix.
