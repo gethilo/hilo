@@ -197,6 +197,32 @@ mod tests {
     use std::process::Command;
     use tempfile::TempDir;
 
+    /// Run a git command with CI-safe identity injection.
+    /// GitHub Actions runners do not configure a global git identity by
+    /// default, causing `git commit` to fail with "Author identity unknown".
+    /// This helper prepends `-c user.name=... -c user.email=... -c
+    /// commit.gpgSign=false` so tests are hermetic.
+    fn git_cmd(args: &[&str]) {
+        let prefix = &[
+            "-c",
+            "user.name=Hilo Test",
+            "-c",
+            "user.email=test@hilo.test",
+            "-c",
+            "init.defaultBranch=main",
+            "-c",
+            "commit.gpgSign=false",
+        ];
+        let all_args: Vec<&str> = prefix.iter().chain(args.iter()).copied().collect();
+        let output = Command::new("git").args(&all_args).output().unwrap();
+        assert!(
+            output.status.success(),
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
     /// Create a bare Git repo in a temp directory with an initial commit on
     /// `main`. Returns the temp dir (kept alive for the test) and the
     /// `file://` URL to the bare repo.
@@ -205,37 +231,17 @@ mod tests {
         let repo_path = dir.path().join("test-repo.git");
         std::fs::create_dir_all(&repo_path).unwrap();
 
-        let output = Command::new("git")
-            .args(["init", "--bare", "-b", "main"])
-            .arg(&repo_path)
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "git init failed: {:?}", output);
+        git_cmd(&["init", "--bare", "-b", "main", repo_path.to_str().unwrap()]);
 
         let work = dir.path().join("work");
         let url = format!("file://{}", repo_path.display());
-        let output = Command::new("git")
-            .args(["clone", &url, work.to_str().unwrap()])
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "git clone failed: {:?}", output);
+
+        git_cmd(&["clone", &url, work.to_str().unwrap()]);
 
         std::fs::write(work.join("README.md"), "# test\n").unwrap();
-        let output = Command::new("git")
-            .args(["-C", work.to_str().unwrap(), "add", "README.md"])
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-        let output = Command::new("git")
-            .args(["-C", work.to_str().unwrap(), "commit", "-m", "initial"])
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-        let output = Command::new("git")
-            .args(["-C", work.to_str().unwrap(), "push", "origin", "main"])
-            .output()
-            .unwrap();
-        assert!(output.status.success());
+        git_cmd(&["-C", work.to_str().unwrap(), "add", "README.md"]);
+        git_cmd(&["-C", work.to_str().unwrap(), "commit", "-m", "initial"]);
+        git_cmd(&["-C", work.to_str().unwrap(), "push", "origin", "main"]);
 
         (dir, url)
     }
@@ -360,41 +366,22 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let repo_path = dir.path().join("tag-repo.git");
         std::fs::create_dir_all(&repo_path).unwrap();
-        Command::new("git")
-            .args(["init", "--bare", "-b", "main"])
-            .arg(&repo_path)
-            .output()
-            .unwrap();
+        git_cmd(&["init", "--bare", "-b", "main", repo_path.to_str().unwrap()]);
         let work = dir.path().join("work");
         let url = format!("file://{}", repo_path.display());
-        Command::new("git")
-            .args(["clone", &url, work.to_str().unwrap()])
-            .output()
-            .unwrap();
+        git_cmd(&["clone", &url, work.to_str().unwrap()]);
         std::fs::write(work.join("file.txt"), "v1\n").unwrap();
-        Command::new("git")
-            .args(["-C", work.to_str().unwrap(), "add", "file.txt"])
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["-C", work.to_str().unwrap(), "commit", "-m", "v1 commit"])
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["-C", work.to_str().unwrap(), "tag", "v1.0"])
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args([
-                "-C",
-                work.to_str().unwrap(),
-                "push",
-                "origin",
-                "main",
-                "--tags",
-            ])
-            .output()
-            .unwrap();
+        git_cmd(&["-C", work.to_str().unwrap(), "add", "file.txt"]);
+        git_cmd(&["-C", work.to_str().unwrap(), "commit", "-m", "v1 commit"]);
+        git_cmd(&["-C", work.to_str().unwrap(), "tag", "v1.0"]);
+        git_cmd(&[
+            "-C",
+            work.to_str().unwrap(),
+            "push",
+            "origin",
+            "main",
+            "--tags",
+        ]);
 
         let tmp = tempfile::tempdir().unwrap();
         let mgr = WorktreeManager::with_base_dir(tmp.path().to_path_buf()).unwrap();

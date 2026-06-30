@@ -719,8 +719,9 @@ $ hilo graph impact src/lib.rs     # 2.1s — BFS, parses as needed
 - **Cache invalidation.** File changes don't auto-invalidate. `hilo graph warm` or manual `rm .vfs/graph/graph.db` to reset.
 - **Thread safety.** DuckDB connection is single-threaded. Use mutex or connection pool if concurrent queries are needed (future phase).
 
-## [ ] Fix CI: hilo — Test step fails with exit code 101
+## [x] Fix CI: hilo — Test step fails with exit code 101
 - **Priority:** high
 - **Branch:** master
 - **CI Run:** https://github.com/gethilo/hilo/actions/runs/28346320493
-- **Error:** Rust test suite failing. Build + Clippy pass but Test exits 101. Run `cargo test` locally to identify and fix.
+- **Error:** Rust test suite failing. Build + Clippy pass but Test exits 101.
+- **Result:** Root cause: same class as the prior hilo-backends fix (e1afd50), but in hilo-core/src/worktree.rs. 8 `worktree::tests::test_*` tests failed in CI with `assertion failed: output.status.success()` at worktree.rs:233. The `init_bare_repo()` and `test_ensure_checkout_tag()` helpers used bare `Command::new("git")` without setting user identity. `git commit` fails in CI (GitHub Actions runners have no global git identity by default). Fix: extracted `git_cmd()` helper that prepends `-c user.name=Hilo Test -c user.email=test@hilo.test -c init.defaultBranch=main -c commit.gpgSign=false` — identical pattern to the hilo-backends fix. Replaced all 11 bare `Command::new("git")` calls in the test module with `git_cmd()`. All 10 worktree tests pass locally. Full workspace: all suites pass, clippy 0 warnings, fmt clean.
