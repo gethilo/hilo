@@ -1,5 +1,10 @@
 # Hilo Coding Tasks
 
+## [ ] Fix CI: CI — 8 worktree tests failing (shallow checkout issue)
+- **Priority:** high
+- **CI Run:** https://github.com/gethilo/hilo/actions/runs/28452596119
+- **Error:** 8 worktree tests panic at hilo-core/src/worktree.rs with `assertion failed: output.status.success()`. GitHub Actions shallow checkout doesn't support `git worktree add`. Fix: add `fetch-depth: 0` to actions/checkout@v4, or mark worktree tests as `#[ignore]` in CI.
+
 ## [x] Spec gap: vfs_graph_stats edge_types + most_connected + orphans — spec §21.5
 - **Priority:** medium
 - **Model:** deepseek-v4-pro (direct write — model match, 3-file fix)
@@ -725,3 +730,96 @@ $ hilo graph impact src/lib.rs     # 2.1s — BFS, parses as needed
 - **CI Run:** https://github.com/gethilo/hilo/actions/runs/28346320493
 - **Error:** Rust test suite failing. Build + Clippy pass but Test exits 101.
 - **Result:** Root cause: same class as the prior hilo-backends fix (e1afd50), but in hilo-core/src/worktree.rs. 8 `worktree::tests::test_*` tests failed in CI with `assertion failed: output.status.success()` at worktree.rs:233. The `init_bare_repo()` and `test_ensure_checkout_tag()` helpers used bare `Command::new("git")` without setting user identity. `git commit` fails in CI (GitHub Actions runners have no global git identity by default). Fix: extracted `git_cmd()` helper that prepends `-c user.name=Hilo Test -c user.email=test@hilo.test -c init.defaultBranch=main -c commit.gpgSign=false` — identical pattern to the hilo-backends fix. Replaced all 11 bare `Command::new("git")` calls in the test module with `git_cmd()`. All 10 worktree tests pass locally. Full workspace: all suites pass, clippy 0 warnings, fmt clean.
+
+## [ ] Git hook integration — auto-update Hilo on commit/pull, dirty-file protocol
+
+- **Priority:** high
+- **Model:** glm-5.2 (multi-file feature)
+- **Provider:** zai-glm
+- **Fallback:** openrouter/owl-alpha, deepseek-v4-pro
+- **Files:** hilo-cli/src/commands/init.rs, hilo-cli/src/commands/hooks.rs (new), hilo-cli/src/commands/mod.rs, hilo-cli/src/main.rs, hilo-core/src/lib.rs
+
+### Behavior
+
+**On `hilo init`:**
+Installs two git hooks into `.git/hooks/`:
+- `post-commit` — runs after every commit
+- `post-merge` — runs after every pull/fetch+merge
+
+If hooks already exist, appends Hilo block with clear `### HILO` markers. Does not overwrite existing hook content.
+
+**post-commit hook:**
+```bash
+#!/bin/sh
+### HILO — auto-update metadata on commit
+if command -v hilo >/dev/null 2>&1; then
+    hilo graph warm --changed 2>/dev/null || true
+else
+    # Hilo not installed — mark dirty
+    echo "Hilo: not installed — marking metadata as dirty"
+    echo "stale" > .vfs/.dirty
+fi
+### /HILO
+```
+
+**post-merge hook:**
+```bash
+#!/bin/sh
+### HILO — sync metadata on pull
+if [ -f .vfs/.dirty ]; then
+    if command -v hilo >/dev/null 2>&1; then
+        echo "Hilo: dirty marker found — updating metadata"
+        hilo graph warm 2>/dev/null || true
+        rm -f .vfs/.dirty
+        echo "Hilo: metadata updated, dirty marker removed"
+    else
+        echo "Hilo: not installed — leaving dirty marker"
+    fi
+fi
+### /HILO
+```
+
+**The `.vfs/.dirty` file:**
+- Created by post-commit when Hilo not installed
+- Contains: `stale` + timestamp + last commit hash
+- Committed to the repo (lives in `.vfs/`, travels with clone)
+- Read by post-merge on the pulling machine
+- Deleted after successful `hilo graph warm`
+
+**Workflow:**
+
+```
+Machine A (has Hilo):
+  $ git commit → hilo graph warm --changed ✓
+  $ git push
+
+Machine B (no Hilo):
+  $ git pull
+  → post-merge hook fires
+  → no .vfs/.dirty file (A ran warm before push)
+  → nothing to do ✓
+
+Machine A (no Hilo):
+  $ git commit → post-commit: hilo not found → writes .vfs/.dirty
+  $ git push
+
+Machine B (has Hilo):
+  $ git pull
+  → post-merge hook fires
+  → .vfs/.dirty exists
+  → hilo is installed → hilo graph warm → deletes .vfs/.dirty ✓
+```
+
+### AC
+
+- **AC:** `hilo init` installs `post-commit` and `post-merge` hooks in `.git/hooks/`
+- **AC:** `hilo init` appends Hilo block to existing hooks; does not overwrite
+- **AC:** `hilo init` warns (does not fail) if `.git/` directory missing (not a git repo)
+- **AC:** post-commit: Hilo installed → `hilo graph warm --changed` runs, updates edges
+- **AC:** post-commit: Hilo NOT installed → writes `.vfs/.dirty` with timestamp+commit
+- **AC:** post-merge: `.vfs/.dirty` exists + Hilo installed → `hilo graph warm` → deletes dirty
+- **AC:** post-merge: `.vfs/.dirty` exists + Hilo NOT installed → leaves dirty, prints message
+- **AC:** post-merge: no `.vfs/.dirty` → no-op, exits clean
+- **AC:** `hilo graph warm --changed` parses only files changed since last warm (mtime-based)
+- **AC:** `cargo test --workspace` all pass; 3+ new tests (hook install, existing-hook append, dirty-file roundtrip)
+- **AC:** `cargo build --workspace` clean, clippy clean, fmt clean
