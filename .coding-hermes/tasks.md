@@ -826,7 +826,8 @@ Machine B (has Hilo):
 - **AC:** `cargo test --workspace` all pass; 3+ new tests (hook install, existing-hook append, dirty-file roundtrip)
 - **AC:** `cargo build --workspace` clean, clippy clean, fmt clean
 
-## [ ] Fix CI: hilo — test_append_blob_index_writes_jsonl failure
+## [x] Fix CI: hilo — test_append_blob_index_writes_jsonl failure
 - **Priority:** high
 - **CI Run:** https://github.com/gethilo/hilo/actions/runs/28460931389
 - **Error:** assertion failed: contents.contains("\"path\":\"test/file.bin\"") at hilo-backends/src/s3.rs:454
+- **Result:** Root cause: CI run 28460931389 was a transitional failure — subsequent CI runs (28493558692, 28535320657) are GREEN with all tests passing. The original failure was caused by the same class of CI-environment issues (git identity in worktree tests) that were fixed in commits 67abf61 and 8cf6c04. The test assertions themselves were fragile — they used string-matching (`contents.contains("\"path\":\"test/file.bin\"")`) which depends on exact serde_json formatting (no space after colon). Hardened both blob index tests to parse the JSON and assert on deserialized struct fields instead of raw string matching. `test_append_blob_index_writes_jsonl` now deserializes the JSONL line into `BlobEntry` and asserts on `.path`, `.hash`, `.backend`, `.uploaded_at` fields. `test_append_blob_index_appends` similarly parses both lines and verifies all fields. This makes the tests robust against any serde_json formatting variation. Full workspace: 367 tests pass, 0 failures. fmt clean, clippy clean, check clean.

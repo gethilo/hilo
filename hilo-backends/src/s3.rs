@@ -451,10 +451,16 @@ mod tests {
         assert!(index_path.exists(), "index.jsonl should exist");
 
         let contents = tokio::fs::read_to_string(&index_path).await.unwrap();
-        assert!(contents.contains("\"path\":\"test/file.bin\""));
-        assert!(contents.contains("\"hash\":\"sha256:deadbeef\""));
-        assert!(contents.contains("\"backend\":\"s3\""));
-        assert!(contents.contains("\"uploaded_at\""));
+        // Parse the JSONL line and verify fields — robust against serde_json formatting variations
+        let parsed: BlobEntry =
+            serde_json::from_str(contents.trim()).expect("index.jsonl should be valid JSON");
+        assert_eq!(parsed.path, "test/file.bin");
+        assert_eq!(parsed.hash, "sha256:deadbeef");
+        assert_eq!(parsed.backend, "s3");
+        assert!(
+            parsed.uploaded_at > 0,
+            "uploaded_at should be a valid timestamp"
+        );
     }
 
     // Test: append_blob_index appends (doesn't overwrite)
@@ -479,8 +485,15 @@ mod tests {
         let contents = tokio::fs::read_to_string(&index_path).await.unwrap();
         let lines: Vec<&str> = contents.lines().collect();
         assert_eq!(lines.len(), 2, "should have 2 lines");
-        assert!(lines[0].contains("file1.txt"));
-        assert!(lines[1].contains("file2.txt"));
+        // Parse each line as JSON for robust verification
+        let entry1: BlobEntry =
+            serde_json::from_str(lines[0]).expect("line 1 should be valid JSON");
+        let entry2: BlobEntry =
+            serde_json::from_str(lines[1]).expect("line 2 should be valid JSON");
+        assert_eq!(entry1.path, "file1.txt");
+        assert_eq!(entry1.hash, "sha256:aaa");
+        assert_eq!(entry2.path, "file2.txt");
+        assert_eq!(entry2.hash, "sha256:bbb");
     }
 
     // Test: WriteResult fields are accessible
