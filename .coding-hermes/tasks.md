@@ -1,9 +1,10 @@
 # Hilo Coding Tasks
 
-## [ ] Fix CI: CI — 8 worktree tests failing (shallow checkout issue)
+## [x] Fix CI: CI — 8 worktree tests failing (shallow checkout issue)
 - **Priority:** high
 - **CI Run:** https://github.com/gethilo/hilo/actions/runs/28452596119
 - **Error:** 8 worktree tests panic at hilo-core/src/worktree.rs with `assertion failed: output.status.success()`. GitHub Actions shallow checkout doesn't support `git worktree add`. Fix: add `fetch-depth: 0` to actions/checkout@v4, or mark worktree tests as `#[ignore]` in CI.
+- **Result:** Fixed CI workflow (.github/workflows/ci.yml): (1) Added `fetch-depth: 0` to actions/checkout@v4 — full history clone prevents shallow-checkout edge cases that break git2 operations in worktree tests. (2) Added `pkg-config libssl-dev` to system dependencies — the git2 crate depends on openssl-sys which needs these to build reliably on CI runners. All 10 worktree tests pass locally. cargo check, cargo test (all suites pass, 0 failures), cargo fmt, cargo clippy all clean.
 
 ## [x] Spec gap: vfs_graph_stats edge_types + most_connected + orphans — spec §21.5
 - **Priority:** medium
