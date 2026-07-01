@@ -732,13 +732,14 @@ $ hilo graph impact src/lib.rs     # 2.1s — BFS, parses as needed
 - **Error:** Rust test suite failing. Build + Clippy pass but Test exits 101.
 - **Result:** Root cause: same class as the prior hilo-backends fix (e1afd50), but in hilo-core/src/worktree.rs. 8 `worktree::tests::test_*` tests failed in CI with `assertion failed: output.status.success()` at worktree.rs:233. The `init_bare_repo()` and `test_ensure_checkout_tag()` helpers used bare `Command::new("git")` without setting user identity. `git commit` fails in CI (GitHub Actions runners have no global git identity by default). Fix: extracted `git_cmd()` helper that prepends `-c user.name=Hilo Test -c user.email=test@hilo.test -c init.defaultBranch=main -c commit.gpgSign=false` — identical pattern to the hilo-backends fix. Replaced all 11 bare `Command::new("git")` calls in the test module with `git_cmd()`. All 10 worktree tests pass locally. Full workspace: all suites pass, clippy 0 warnings, fmt clean.
 
-## [ ] Git hook integration — auto-update Hilo on commit/pull, dirty-file protocol
+## [x] Git hook integration — auto-update Hilo on commit/pull, dirty-file protocol
 
 - **Priority:** high
-- **Model:** glm-5.2 (multi-file feature)
+- **Model:** glm-5.2 (multi-file feature) — direct write (foreman IS the coding model)
 - **Provider:** zai-glm
 - **Fallback:** openrouter/owl-alpha, deepseek-v4-pro
-- **Files:** hilo-cli/src/commands/init.rs, hilo-cli/src/commands/hooks.rs (new), hilo-cli/src/commands/mod.rs, hilo-cli/src/main.rs, hilo-core/src/lib.rs
+- **Files:** hilo-cli/src/commands/init.rs, hilo-cli/src/commands/hooks.rs (new), hilo-cli/src/commands/mod.rs, hilo-cli/src/main.rs, hilo-cli/src/commands/graph.rs
+- **Result:** Implemented directly by foreman (GLM 5.2, model match). hooks.rs (new, ~300 lines): install_hooks() installs post-commit and post-merge git hooks into .git/hooks/; install_hook() handles three cases (fresh create, append to existing, replace stale Hilo block); has_hilo_block() and replace_hilo_block() helpers for idempotent block management. POST_COMMIT_HOOK runs `hilo graph warm --changed` when Hilo available, writes .vfs/.dirty marker when not. POST_MERGE_HOOK checks for .vfs/.dirty, runs full `hilo graph warm` and deletes marker when Hilo available. init.rs: +3 lines calling hooks::install_hooks() at end of run(). graph.rs: +50 lines — `--changed` flag with mtime-based filtering against `.vfs/graph/.last_warm` marker, read_last_warm_mtime() and write_last_warm_marker() helpers. main.rs: +4 lines (WarmArgs.changed field + dispatch wiring). mod.rs: +1 line (pub mod hooks). 11 inline tests: post-commit creation, post-merge creation, append to existing hook, idempotent block replacement, missing .git dir warning, block detection, block replacement preserving surrounding content, dirty-logic in post-commit, dirty-deletion in post-merge, executable permission check, newline-before-append. Full workspace: 367 tests pass, 0 failures. Clippy clean. fmt clean.
 
 ### Behavior
 
@@ -824,3 +825,8 @@ Machine B (has Hilo):
 - **AC:** `hilo graph warm --changed` parses only files changed since last warm (mtime-based)
 - **AC:** `cargo test --workspace` all pass; 3+ new tests (hook install, existing-hook append, dirty-file roundtrip)
 - **AC:** `cargo build --workspace` clean, clippy clean, fmt clean
+
+## [ ] Fix CI: hilo — test_append_blob_index_writes_jsonl failure
+- **Priority:** high
+- **CI Run:** https://github.com/gethilo/hilo/actions/runs/28460931389
+- **Error:** assertion failed: contents.contains("\"path\":\"test/file.bin\"") at hilo-backends/src/s3.rs:454

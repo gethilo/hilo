@@ -33,13 +33,37 @@ const SKIP_DIRS: &[&str] = &[
 ///
 /// When `language` is `Some`, only files of that language are parsed
 /// (e.g. `--language rust`).  Otherwise all supported languages are scanned.
-pub fn run_warm(workspace: bool, language: Option<String>) -> Result<()> {
+pub fn run_warm(workspace: bool, language: Option<String>, changed: bool) -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
 
     // Collect every source file under the current directory.
     let mut source_files = Vec::new();
     collect_source_files(&cwd, &mut source_files)
         .context("failed to walk directory tree for source files")?;
+
+    // When --changed is set, filter to files modified since the last warm.
+    // The timestamp is stored in `.vfs/graph/.last_warm`.
+    if changed {
+        let warm_marker = cwd.join(".vfs").join("graph").join(".last_warm");
+        if let Some(cutoff) = read_last_warm_mtime(&warm_marker) {
+            let before = source_files.len();
+            source_files.retain(|f| {
+                std::fs::metadata(f)
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .map(|mtime| mtime > cutoff)
+                    .unwrap_or(true) // keep files we can't stat
+            });
+            eprintln!(
+                "  --changed: {}/{} files modified since last warm",
+                source_files.len(),
+                before
+            );
+        } else {
+            // No marker — parse everything (first warm).
+            eprintln!("  --changed: no previous warm marker, parsing all files");
+        }
+    }
 
     // Optional language filter (e.g. --language rust).
     if let Some(ref lang_str) = language {
@@ -187,6 +211,30 @@ pub fn run_warm(workspace: bool, language: Option<String>) -> Result<()> {
     let m = unique_sources.len();
     let langs = langs_seen.len();
     println!("Discovered {n} edges across {m} files ({langs} languages)");
+
+    // Update the last-warm marker so --changed knows the cutoff.
+    let warm_marker = cwd.join(".vfs").join("graph").join(".last_warm");
+    if let Err(e) = write_last_warm_marker(&warm_marker) {
+        eprintln!("warning: failed to write warm marker: {e}");
+    }
+
+    Ok(())
+}
+
+/// Read the modification time of the `.last_warm` marker file.
+/// Returns `None` if the file doesn't exist (first warm run).
+fn read_last_warm_mtime(path: &Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path).ok().and_then(|m| m.modified().ok())
+}
+
+/// Write the `.last_warm` marker file (touch — just needs to exist with
+/// current mtime).
+fn write_last_warm_marker(path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    std::fs::write(path, "").with_context(|| format!("failed to write {}", path.display()))?;
     Ok(())
 }
 

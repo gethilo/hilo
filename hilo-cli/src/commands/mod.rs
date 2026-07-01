@@ -3,6 +3,7 @@
 pub mod backend;
 pub mod classify;
 pub mod graph;
+pub mod hooks;
 pub mod init;
 pub mod meta;
 pub mod mount;

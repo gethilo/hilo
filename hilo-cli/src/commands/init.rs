@@ -4,6 +4,8 @@ use anyhow::{Context, Result};
 use hilo_core::manifest::{Manifest, Project};
 use hilo_metadata::inventory;
 
+use crate::commands::hooks;
+
 /// Create the `.vfs/` structure and a minimal `manifest.yaml` in the current
 /// directory.
 ///
@@ -55,5 +57,9 @@ pub fn run() -> Result<()> {
         .with_context(|| format!("failed to write {}", manifest_path.display()))?;
 
     println!("Initialized Hilo in {}", cwd.display());
+
+    // Install git hooks for auto-metadata-update on commit and pull.
+    hooks::install_hooks(&cwd).context("failed to install git hooks")?;
+
     Ok(())
 }

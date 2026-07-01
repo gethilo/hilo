@@ -101,6 +101,11 @@ struct WarmArgs {
     /// When omitted, all supported languages are scanned.
     #[arg(long)]
     language: Option<String>,
+
+    /// Only parse files changed since the last `graph warm` (mtime-based).
+    /// Used by the post-commit hook for incremental updates.
+    #[arg(long)]
+    changed: bool,
 }
 
 #[derive(clap::Args)]
@@ -192,7 +197,9 @@ fn main() {
     let result = match cli.command {
         Commands::Init(_) => init::run(),
         Commands::Meta(args) => meta::run(&args.path, args.set.as_deref(), args.value.as_deref()),
-        Commands::Graph(GraphCommand::Warm(args)) => graph::run_warm(args.workspace, args.language),
+        Commands::Graph(GraphCommand::Warm(args)) => {
+            graph::run_warm(args.workspace, args.language, args.changed)
+        }
         Commands::Graph(GraphCommand::Stats) => graph::run_stats(),
         Commands::Graph(GraphCommand::Related(args)) => graph::run_related(
             &args.path,
