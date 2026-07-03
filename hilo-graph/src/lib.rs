@@ -16,6 +16,7 @@ pub mod impact;
 pub mod parser;
 pub mod provenance;
 pub mod rules;
+pub mod signal;
 
 pub use classify::{classify_file, infer_feature, Classification};
 pub use error::{GraphError, GraphResult};
@@ -24,6 +25,10 @@ pub use impact::{compute_impact, compute_impact_with_external, ImpactFile, Impac
 pub use parser::{Language, Parser};
 pub use provenance::Provenance;
 pub use rules::{Rule, RuleCheckResult, RuleEngine, RuleError};
+pub use signal::{
+    understand, understand_with_source, Resolution, SignalFile, SignalOpts, SignalResult,
+    SymbolSignature, Tier,
+};
 
 /// Re-export of the shared [`Edge`] type from `hilo_metadata`.
 pub use hilo_metadata::inventory::Edge;

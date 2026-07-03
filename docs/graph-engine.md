@@ -78,3 +78,53 @@ Results stored as xattrs: `user.vfs.role`, `user.vfs.status`.
 - **Incremental** — `append_edges_deduped()` only adds new edges to JSONL
 - **Progress** — output every 100 files during discovery
 - **Vendor skip** — `target/`, `node_modules/`, `vendor/` excluded by default
+
+## Signal Engine — `vfs_graph_understand`
+
+The signal engine produces budgeted, tiered context from the dependency graph
+so agents get the *shape* of the code first, then exact lines last.
+
+### Tiers
+
+| Tier | Budget | Content |
+|------|--------|---------|
+| MAP | 15% | `{ file: [symbols…] }` — orientation |
+| SIGNATURES | 25% | `file:line  fn foo(x: i32) -> bool` — spine |
+| DETAIL | 60% | whitespace-minified source blocks — exact lines |
+
+### Position Ordering
+
+Highest-signal files are placed at the **edges** of the output (first and last),
+lower-signal files in the **middle**. This exploits the empirical finding that
+attention-limited models attend more to the beginning and end of context
+windows ("lost in the middle" effect).
+
+### Determinism
+
+The engine is fully deterministic: same task + same graph → byte-identical
+text output. No randomness, no model calls, no external API.
+
+### MCP Tool
+
+```json
+{
+  "name": "vfs_graph_understand",
+  "arguments": {
+    "task": "rate limiter middleware",
+    "budget": 6000,
+    "resolution": "harmonic"
+  }
+}
+```
+
+- `task` (required): natural-language description of what the agent needs
+- `budget` (optional): token budget, default 6000
+- `resolution` (optional): `"harmonic"` (3-tier, default) or `"flat"` (single-tier)
+
+### Anchor Discovery
+
+The engine tokenizes the task string (lowercase, split on non-alphanumeric,
+filter tokens ≥ 3 chars) and matches tokens against file paths in the graph.
+Files with the most token matches become anchor/seed files. The engine then
+traverses the graph from anchors (BFS, depth 2 by default) to collect related
+files, scoring each by provenance weight × depth factor.

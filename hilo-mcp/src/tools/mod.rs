@@ -1,19 +1,20 @@
 //! Tool definitions and dispatch for the Hilo MCP server.
 //!
-//! Thirteen tools are exposed:
-//! - `vfs_get_metadata`   — read Hilo xattrs for a file
-//! - `vfs_set_metadata`   — write Hilo xattr for a file
-//! - `vfs_graph_related`  — find related files via the dependency graph
-//! - `vfs_graph_stats`    — summary statistics about the graph
-//! - `vfs_graph_untested` — list files with imports but no test coverage
-//! - `vfs_graph_module`   — per-module file listing and coverage statistics
-//! - `vfs_graph_impact`   — transitive impact analysis for a file
-//! - `vfs_rule_list`      — list all rules defined in the manifest
-//! - `vfs_rule_check`     — execute a named rule query against the graph
-//! - `vfs_list_directory` — list entries in a virtual directory
-//! - `vfs_resolve_path`   — resolve a virtual path to real storage
-//! - `vfs_backend_status`  — get backend information for a file
-//! - `vfs_sync_backend`    — sync the backend for a file
+//! Fourteen tools are exposed:
+//! - `vfs_get_metadata`     — read Hilo xattrs for a file
+//! - `vfs_set_metadata`     — write Hilo xattr for a file
+//! - `vfs_graph_related`    — find related files via the dependency graph
+//! - `vfs_graph_stats`      — summary statistics about the graph
+//! - `vfs_graph_untested`   — list files with imports but no test coverage
+//! - `vfs_graph_module`     — per-module file listing and coverage statistics
+//! - `vfs_graph_impact`     — transitive impact analysis for a file
+//! - `vfs_graph_understand` — harmonic multi-resolution context (signal engine)
+//! - `vfs_rule_list`        — list all rules defined in the manifest
+//! - `vfs_rule_check`       — execute a named rule query against the graph
+//! - `vfs_list_directory`   — list entries in a virtual directory
+//! - `vfs_resolve_path`     — resolve a virtual path to real storage
+//! - `vfs_backend_status`   — get backend information for a file
+//! - `vfs_sync_backend`     — sync the backend for a file
 
 use std::path::Path;
 
@@ -138,6 +139,19 @@ pub fn list_tools() -> Vec<Tool> {
             }),
         },
         Tool {
+            name: "vfs_graph_understand".into(),
+            description: "Get harmonic multi-resolution context for a task — MAP (file→symbols), SIGNATURES (one-line per symbol), DETAIL (whitespace-minified source). Position-ordered, budget-controlled, deterministic.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "task": {"type": "string", "description": "Natural-language task description (e.g. 'rate limiter middleware')"},
+                    "budget": {"type": "integer", "description": "Token budget (default: 6000)"},
+                    "resolution": {"type": "string", "description": "Output mode: 'harmonic' (3-tier, default) or 'flat' (single-tier)"}
+                },
+                "required": ["task"]
+            }),
+        },
+        Tool {
             name: "vfs_rule_list".into(),
             description: "List all rules defined in the Hilo manifest (stale-files, untested-critical, transitive-impact, etc.).".into(),
             input_schema: serde_json::json!({
@@ -223,6 +237,7 @@ pub fn call_tool(name: &str, arguments: &serde_json::Value) -> McpResult<serde_j
         "vfs_graph_untested" => graph_untested(arguments),
         "vfs_graph_module" => graph_module(arguments),
         "vfs_graph_impact" => graph_impact(arguments),
+        "vfs_graph_understand" => graph_understand(arguments),
         "vfs_rule_list" => rule_list(arguments),
         "vfs_rule_check" => rule_check(arguments),
         "vfs_list_directory" => list_directory(arguments),
@@ -563,6 +578,56 @@ fn graph_impact(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
         "dependents": results,
         "total": results.len(),
         "max_depth_reached": false
+    }))
+}
+
+/// `vfs_graph_understand` — harmonic multi-resolution context for a task.
+///
+/// Produces budgeted, tiered output (MAP → SIGNATURES → DETAIL) from the
+/// dependency graph. The agent gets the shape of the code first, exact lines
+/// last — position-ordered to beat "lost in the middle" attention loss.
+///
+/// If the graph database doesn't exist, returns an empty result with a
+/// helpful message.
+fn graph_understand(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
+    let task = arguments["task"]
+        .as_str()
+        .ok_or_else(|| McpError::Protocol("missing 'task' argument".into()))?;
+
+    let token_budget = arguments["budget"].as_u64().unwrap_or(6000) as usize;
+    let resolution_str = arguments["resolution"].as_str().unwrap_or("harmonic");
+    let resolution = match resolution_str.to_lowercase().as_str() {
+        "flat" => hilo_graph::Resolution::Flat,
+        _ => hilo_graph::Resolution::Harmonic,
+    };
+
+    // Ensure the .vfs/graph directory exists (create on first use).
+    let db_parent = Path::new(GRAPH_DB_PATH).parent().unwrap_or(Path::new("."));
+    std::fs::create_dir_all(db_parent).ok();
+
+    if !Path::new(GRAPH_DB_PATH).exists() {
+        return Ok(serde_json::json!({
+            "text": format!("No graph database found at {GRAPH_DB_PATH}. Run `hilo graph warm` first."),
+            "files": [],
+            "tokens_estimate": 0,
+            "anchors": []
+        }));
+    }
+
+    let db = hilo_graph::GraphDB::open(GRAPH_DB_PATH)?;
+    let opts = hilo_graph::SignalOpts {
+        token_budget,
+        resolution,
+        ..Default::default()
+    };
+
+    let result = hilo_graph::understand(&db, task, &opts)?;
+
+    Ok(serde_json::json!({
+        "text": result.text,
+        "files": result.files,
+        "tokens_estimate": result.tokens_estimate,
+        "anchors": result.anchors
     }))
 }
 

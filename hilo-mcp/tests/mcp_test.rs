@@ -67,6 +67,8 @@ fn test_tools_list() {
     assert!(names.contains(&"vfs_graph_stats"));
     assert!(names.contains(&"vfs_graph_untested"));
     assert!(names.contains(&"vfs_graph_module"));
+    assert!(names.contains(&"vfs_graph_impact"));
+    assert!(names.contains(&"vfs_graph_understand"));
 }
 
 // -------------------------------------------------------------------------
