@@ -50,6 +50,8 @@ fn test_append_edge_single() {
         from: "src/handler.go".to_string(),
         to: "src/types.go".to_string(),
         rel: "imports".to_string(),
+        provenance: "ast_exact".to_string(),
+        confidence: 1.0,
     };
 
     inventory::append_edge(&edges_path, &edge).expect("append edge");
@@ -73,16 +75,22 @@ fn test_append_edges_bulk() {
             from: "a.go".into(),
             to: "b.go".into(),
             rel: "imports".into(),
+            provenance: "ast_exact".into(),
+            confidence: 1.0,
         },
         Edge {
             from: "b.go".into(),
             to: "c.go".into(),
             rel: "calls".into(),
+            provenance: "ast_exact".into(),
+            confidence: 1.0,
         },
         Edge {
             from: "c.go".into(),
             to: "d.go".into(),
             rel: "uses".into(),
+            provenance: "ast_exact".into(),
+            confidence: 1.0,
         },
     ];
 
@@ -111,6 +119,8 @@ fn test_append_edges_creates_parent_dir() {
         from: "x".into(),
         to: "y".into(),
         rel: "r".into(),
+        provenance: "ast_exact".into(),
+        confidence: 1.0,
     };
 
     inventory::append_edge(&edges_path, &edge).expect("append with parent creation");
@@ -128,6 +138,8 @@ fn test_append_edges_appends_not_overwrites() {
             from: "first".into(),
             to: "second".into(),
             rel: "r".into(),
+            provenance: "ast_exact".into(),
+            confidence: 1.0,
         },
     )
     .expect("first append");
@@ -138,6 +150,8 @@ fn test_append_edges_appends_not_overwrites() {
             from: "third".into(),
             to: "fourth".into(),
             rel: "r".into(),
+            provenance: "ast_exact".into(),
+            confidence: 1.0,
         },
     )
     .expect("second append");
@@ -236,6 +250,8 @@ fn test_edge_to_jsonl_format() {
         from: "a".into(),
         to: "b".into(),
         rel: "imports".into(),
+        provenance: "ast_exact".into(),
+        confidence: 1.0,
     };
 
     let jsonl = inventory::edge_to_jsonl(&edge).expect("serialize edge");
@@ -258,17 +274,23 @@ fn test_append_multiple_edges_then_verify_order() {
             from: "1".into(),
             to: "2".into(),
             rel: "a".into(),
+            provenance: "ast_exact".into(),
+            confidence: 1.0,
         },
         Edge {
             from: "2".into(),
             to: "3".into(),
             rel: "b".into(),
+            provenance: "ast_exact".into(),
+            confidence: 1.0,
         },
     ];
     let batch2 = vec![Edge {
         from: "3".into(),
         to: "4".into(),
         rel: "c".into(),
+        provenance: "ast_exact".into(),
+        confidence: 1.0,
     }];
 
     inventory::append_edges(&edges_path, &batch1).expect("batch 1");
@@ -286,4 +308,27 @@ fn test_append_multiple_edges_then_verify_order() {
     assert_eq!(p0.from, "1");
     assert_eq!(p1.from, "2");
     assert_eq!(p2.from, "3");
+}
+
+#[test]
+fn test_old_jsonl_without_provenance_deserializes_with_defaults() {
+    // Old edges.jsonl files (pre-v0.2) don't have provenance/confidence fields.
+    // serde(default) should fill them with "ast_exact" and 1.0.
+    let old_json = r#"{"from":"a.go","to":"b.go","rel":"imports"}"#;
+    let edge: Edge = serde_json::from_str(old_json).expect("old format should parse");
+    assert_eq!(edge.from, "a.go");
+    assert_eq!(edge.to, "b.go");
+    assert_eq!(edge.rel, "imports");
+    assert_eq!(edge.provenance, "ast_exact");
+    assert_eq!(edge.confidence, 1.0);
+}
+
+#[test]
+fn test_edge_with_provenance_roundtrips_through_jsonl() {
+    let edge = Edge::with_provenance("x.go", "y.go", "imports", "heuristic", 0.8);
+    let jsonl = inventory::edge_to_jsonl(&edge).expect("serialize");
+    let parsed: Edge = serde_json::from_str(jsonl.trim()).expect("parse");
+    assert_eq!(parsed, edge);
+    assert_eq!(parsed.provenance, "heuristic");
+    assert!((parsed.confidence - 0.8).abs() < f64::EPSILON);
 }

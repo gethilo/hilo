@@ -6,11 +6,7 @@ use hilo_metadata::inventory::Edge;
 
 /// Helper: build an `Edge` from string slices.
 fn edge(from: &str, to: &str, rel: &str) -> Edge {
-    Edge {
-        from: from.to_string(),
-        to: to.to_string(),
-        rel: rel.to_string(),
-    }
+    Edge::new(from, to, rel)
 }
 
 #[test]
@@ -119,11 +115,15 @@ fn test_impact_json_format() -> Result<(), Box<dyn std::error::Error>> {
                 path: "b.rs".to_string(),
                 relation: "imports".to_string(),
                 depth: 1,
+                provenance: None,
+                confidence: None,
             },
             ImpactFile {
                 path: "a.rs".to_string(),
                 relation: "imports".to_string(),
                 depth: 2,
+                provenance: None,
+                confidence: None,
             },
         ],
     };

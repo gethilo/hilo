@@ -99,26 +99,82 @@ impl GraphDB {
         Ok(GraphDB { conn })
     }
 
-    /// Create the `edges` table and an index on `("from", rel)`.
+    /// Create the `edges` table and indexes.
     ///
-    /// `"from"` and `"to"` are quoted because they are SQL keywords.
+    /// `\"from\"` and `\"to\"` are quoted because they are SQL keywords.
+    ///
+    /// The schema includes `provenance` (TEXT, default `'ast_exact'`) and
+    /// `confidence` (REAL, default `1.0`) columns. If the table already
+    /// exists with the old 3-column schema (no `provenance`), it is
+    /// auto-migrated by adding the missing columns with `ALTER TABLE`.
     fn init_schema(conn: &Connection) -> GraphResult<()> {
         conn.execute(
             "CREATE TABLE IF NOT EXISTS edges (\
                 \"from\" TEXT NOT NULL,\
                 \"to\" TEXT NOT NULL,\
-                rel TEXT NOT NULL\
+                rel TEXT NOT NULL,\
+                provenance TEXT NOT NULL DEFAULT 'ast_exact',\
+                confidence REAL NOT NULL DEFAULT 1.0\
              )",
             params![],
         )?;
+
+        // Auto-migrate: if the table was created with the old 3-column
+        // schema (pre-v0.2), add the missing columns. DuckDB's
+        // `pragma_table_info` lets us check without parsing CREATE TABLE.
+        Self::migrate_schema(conn)?;
+
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_edges_from_rel ON edges(\"from\", rel)",
             params![],
         )?;
         conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_edges_unique ON edges(\"from\", \"to\", rel)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_edges_unique ON edges(\"from\", \"to\", rel, provenance)",
             params![],
         )?;
+        Ok(())
+    }
+
+    /// Check for and apply schema migrations for the `edges` table.
+    ///
+    /// Currently handles one migration:
+    /// - v0.1 (3-column) → v0.2 (5-column): add `provenance` and `confidence`.
+    ///
+    /// Uses `pragma_table_info('edges')` to check column existence. If
+    /// `provenance` is missing, both columns are added with ALTER TABLE.
+    fn migrate_schema(conn: &Connection) -> GraphResult<()> {
+        // Check if 'provenance' column exists.
+        let has_provenance: bool = {
+            let mut stmt = conn.prepare(
+                "SELECT count(*) FROM pragma_table_info('edges') WHERE name = 'provenance'",
+            )?;
+            let count: i64 = stmt.query_row(params![], |row| row.get(0))?;
+            count > 0
+        };
+
+        if !has_provenance {
+            // Old 3-column schema → add provenance + confidence.
+            // DuckDB doesn't support ADD COLUMN with NOT NULL constraints,
+            // so we add nullable columns with defaults and then backfill.
+            conn.execute(
+                "ALTER TABLE edges ADD COLUMN provenance TEXT DEFAULT 'ast_exact'",
+                params![],
+            )?;
+            conn.execute(
+                "ALTER TABLE edges ADD COLUMN confidence REAL DEFAULT 1.0",
+                params![],
+            )?;
+            // Backfill any NULLs (shouldn't be any due to DEFAULT, but be safe).
+            conn.execute(
+                "UPDATE edges SET provenance = 'ast_exact' WHERE provenance IS NULL",
+                params![],
+            )?;
+            conn.execute(
+                "UPDATE edges SET confidence = 1.0 WHERE confidence IS NULL",
+                params![],
+            )?;
+        }
+
         Ok(())
     }
 
@@ -126,8 +182,8 @@ impl GraphDB {
     pub fn insert_edges(&self, edges: &[Edge]) -> GraphResult<()> {
         for edge in edges {
             self.conn.execute(
-                "INSERT OR IGNORE INTO edges (\"from\", \"to\", rel) VALUES (?, ?, ?)",
-                params![edge.from, edge.to, edge.rel],
+                "INSERT OR IGNORE INTO edges (\"from\", \"to\", rel, provenance, confidence) VALUES (?, ?, ?, ?, ?)",
+                params![edge.from, edge.to, edge.rel, edge.provenance, edge.confidence],
             )?;
         }
         Ok(())
@@ -210,25 +266,35 @@ impl GraphDB {
             Direction::Reverse => "\"to\"",
         };
 
-        let (sql, params_vec): (&str, Vec<Box<dyn duckdb::ToSql>>) = if let Some(rel) = rel_filter {
+        let (sql, params_vec): (String, Vec<Box<dyn duckdb::ToSql>>) = if let Some(rel) = rel_filter
+        {
             (
-                &*format!("SELECT \"from\", \"to\", rel FROM edges WHERE {column} = ? AND rel = ?"),
-                vec![Box::new(path.to_string()), Box::new(rel.to_string())],
+                format!(
+                    "SELECT \"from\", \"to\", rel, provenance, confidence FROM edges WHERE {column} = ? AND rel = ?"
+                ),
+                vec![
+                    Box::new(path.to_string()),
+                    Box::new(rel.to_string()),
+                ],
             )
         } else {
             (
-                &*format!("SELECT \"from\", \"to\", rel FROM edges WHERE {column} = ?"),
+                format!(
+                    "SELECT \"from\", \"to\", rel, provenance, confidence FROM edges WHERE {column} = ?"
+                ),
                 vec![Box::new(path.to_string())],
             )
         };
         let param_refs: Vec<&dyn duckdb::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
 
-        let mut stmt = self.conn.prepare(sql)?;
+        let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(param_refs.as_slice(), |row| {
             Ok(Edge {
                 from: row.get::<_, String>(0)?,
                 to: row.get::<_, String>(1)?,
                 rel: row.get::<_, String>(2)?,
+                provenance: row.get::<_, String>(3)?,
+                confidence: row.get::<_, f64>(4)?,
             })
         })?;
 

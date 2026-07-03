@@ -51,6 +51,8 @@ pub struct GraphEdge {
     pub from: String,
     pub to: String,
     pub rel: String,
+    pub provenance: Option<String>,
+    pub confidence: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -64,6 +66,8 @@ pub struct GraphImpactEntry {
     pub path: String,
     pub relation: String,
     pub depth: u32,
+    pub provenance: Option<String>,
+    pub confidence: Option<f64>,
 }
 
 #[derive(Debug, Clone)]

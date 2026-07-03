@@ -416,16 +416,22 @@ fn test_graph_untested_populated() {
             from: "src/main.go".into(),
             to: "pkg/utils.go".into(),
             rel: "imports".into(),
+            provenance: "ast_exact".into(),
+            confidence: 1.0,
         },
         Edge {
             from: "src/auth.go".into(),
             to: "pkg/crypto.go".into(),
             rel: "imports".into(),
+            provenance: "ast_exact".into(),
+            confidence: 1.0,
         },
         Edge {
             from: "src/auth_test.go".into(),
             to: "src/auth.go".into(),
             rel: "tested_by".into(),
+            provenance: "heuristic".into(),
+            confidence: 0.8,
         },
     ])
     .unwrap();
@@ -480,21 +486,29 @@ fn test_graph_module_populated() {
             from: "src/auth/login.go".into(),
             to: "pkg/crypto.go".into(),
             rel: "imports".into(),
+            provenance: "ast_exact".into(),
+            confidence: 1.0,
         },
         Edge {
             from: "src/auth/session.go".into(),
             to: "pkg/crypto.go".into(),
             rel: "imports".into(),
+            provenance: "ast_exact".into(),
+            confidence: 1.0,
         },
         Edge {
             from: "src/auth/login_test.go".into(),
             to: "src/auth/login.go".into(),
             rel: "tested_by".into(),
+            provenance: "heuristic".into(),
+            confidence: 0.8,
         },
         Edge {
             from: "src/main/server.go".into(),
             to: "src/auth/login.go".into(),
             rel: "imports".into(),
+            provenance: "ast_exact".into(),
+            confidence: 1.0,
         },
     ])
     .unwrap();

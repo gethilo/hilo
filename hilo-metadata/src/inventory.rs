@@ -16,11 +16,70 @@ use crate::MetadataError;
 /// A directed graph edge between two files or nodes.
 ///
 /// Serialized as a single JSONL line in `edges.jsonl`.
+///
+/// ## Backward compatibility
+///
+/// The `provenance` and `confidence` fields default to `AstExact` / `1.0`
+/// when missing from JSON (old `edges.jsonl` files without provenance). This
+/// is handled via `#[serde(default)]` on both fields.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct Edge {
     pub from: String,
     pub to: String,
     pub rel: String,
+    /// How this edge was discovered (AST, heuristic, lexical, etc.).
+    ///
+    /// Defaults to `ast_exact` when missing (backward compat with old JSONL).
+    #[serde(default = "default_provenance")]
+    pub provenance: String,
+    /// Confidence weight (0.0 – 1.0) reflecting the reliability of this edge.
+    ///
+    /// Defaults to `1.0` when missing (backward compat with old JSONL).
+    #[serde(default = "default_confidence")]
+    pub confidence: f64,
+}
+
+/// Default provenance string for old edges without the field.
+fn default_provenance() -> String {
+    "ast_exact".to_string()
+}
+
+/// Default confidence for old edges without the field.
+fn default_confidence() -> f64 {
+    1.0
+}
+
+impl Edge {
+    /// Create a new edge with `ast_exact` provenance and `1.0` confidence.
+    ///
+    /// This is the standard constructor for edges extracted directly from
+    /// the AST (the most common case).
+    pub fn new(from: impl Into<String>, to: impl Into<String>, rel: impl Into<String>) -> Self {
+        Edge {
+            from: from.into(),
+            to: to.into(),
+            rel: rel.into(),
+            provenance: "ast_exact".to_string(),
+            confidence: 1.0,
+        }
+    }
+
+    /// Create a new edge with a specific provenance and confidence.
+    pub fn with_provenance(
+        from: impl Into<String>,
+        to: impl Into<String>,
+        rel: impl Into<String>,
+        provenance: impl Into<String>,
+        confidence: f64,
+    ) -> Self {
+        Edge {
+            from: from.into(),
+            to: to.into(),
+            rel: rel.into(),
+            provenance: provenance.into(),
+            confidence,
+        }
+    }
 }
 
 /// A virtual mount entry mapping a backend to a path in the VFS.
@@ -115,7 +174,12 @@ pub fn append_edges_deduped(edges_jsonl: &Path, edges: &[Edge]) -> Result<usize,
                 continue;
             }
             if let Ok(edge) = serde_json::from_str::<Edge>(line) {
-                seen.insert((edge.from.clone(), edge.to.clone(), edge.rel.clone()));
+                seen.insert((
+                    edge.from.clone(),
+                    edge.to.clone(),
+                    edge.rel.clone(),
+                    edge.provenance.clone(),
+                ));
             }
         }
     }
@@ -123,7 +187,14 @@ pub fn append_edges_deduped(edges_jsonl: &Path, edges: &[Edge]) -> Result<usize,
     // Filter to genuinely new edges.
     let new_edges: Vec<&Edge> = edges
         .iter()
-        .filter(|e| !seen.contains(&(e.from.clone(), e.to.clone(), e.rel.clone())))
+        .filter(|e| {
+            !seen.contains(&(
+                e.from.clone(),
+                e.to.clone(),
+                e.rel.clone(),
+                e.provenance.clone(),
+            ))
+        })
         .collect();
 
     if new_edges.is_empty() {

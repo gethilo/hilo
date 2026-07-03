@@ -22,6 +22,8 @@ dictionary GraphEdge {
     string from;
     string to;
     string rel;
+    string? provenance;
+    f64? confidence;
 };
 
 dictionary GraphRelatedResult {
@@ -33,6 +35,8 @@ dictionary GraphImpactEntry {
     string path;
     string relation;
     u32 depth;
+    string? provenance;
+    f64? confidence;
 };
 
 dictionary GraphImpactResult {

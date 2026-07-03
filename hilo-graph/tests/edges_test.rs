@@ -10,6 +10,8 @@ fn edge(from: &str, to: &str, rel: &str) -> Edge {
         from: from.to_string(),
         to: to.to_string(),
         rel: rel.to_string(),
+        provenance: "ast_exact".to_string(),
+        confidence: 1.0,
     }
 }
 

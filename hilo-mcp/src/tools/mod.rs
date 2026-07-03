@@ -451,6 +451,8 @@ fn graph_related(arguments: &serde_json::Value) -> McpResult<serde_json::Value> 
                 "from": e.from,
                 "to": e.to,
                 "relation": e.rel,
+                "provenance": e.provenance,
+                "confidence": e.confidence,
             })
         })
         .collect();

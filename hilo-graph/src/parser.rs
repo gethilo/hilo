@@ -112,6 +112,8 @@ impl Parser {
                 from: file_path.to_string(),
                 to: path,
                 rel: "imports".to_string(),
+                provenance: "ast_exact".to_string(),
+                confidence: 1.0,
             })
             .collect();
         Ok(edges)

@@ -135,22 +135,22 @@ mod tests {
     fn setup_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute(
-            "CREATE TABLE edges (\"from\" TEXT, \"to\" TEXT, rel TEXT)",
+            "CREATE TABLE edges (\"from\" TEXT, \"to\" TEXT, rel TEXT, provenance TEXT NOT NULL DEFAULT 'ast_exact', confidence REAL NOT NULL DEFAULT 1.0)",
             params![],
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO edges VALUES ('a.go', 'b.go', 'imports')",
+            "INSERT INTO edges VALUES ('a.go', 'b.go', 'imports', 'ast_exact', 1.0)",
             params![],
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO edges VALUES ('b.go', 'c.go', 'imports')",
+            "INSERT INTO edges VALUES ('b.go', 'c.go', 'imports', 'ast_exact', 1.0)",
             params![],
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO edges VALUES ('x.go', 'y.go', 'calls')",
+            "INSERT INTO edges VALUES ('x.go', 'y.go', 'calls', 'heuristic', 0.8)",
             params![],
         )
         .unwrap();

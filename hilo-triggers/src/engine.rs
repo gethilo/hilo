@@ -1201,7 +1201,7 @@ mod tests {
         let mut cache = HashMap::new();
         let conn = duckdb::Connection::open_in_memory().unwrap();
         // Initialize edges table so compute_impact doesn't error.
-        conn.execute_batch("CREATE TABLE edges (\"from\" TEXT, \"to\" TEXT, rel TEXT)")
+        conn.execute_batch("CREATE TABLE edges (\"from\" TEXT, \"to\" TEXT, rel TEXT, provenance TEXT NOT NULL DEFAULT 'ast_exact', confidence REAL NOT NULL DEFAULT 1.0)")
             .unwrap();
 
         let event = FileEvent {
@@ -1378,8 +1378,8 @@ mod tests {
         let other_path_str = other.display().to_string();
         let conn = duckdb::Connection::open_in_memory().unwrap();
         conn.execute_batch(&format!(
-            "CREATE TABLE edges (\"from\" TEXT, \"to\" TEXT, rel TEXT);
-             INSERT INTO edges VALUES ('{other_path_str}', '{go_path_str}', 'imports');",
+            "CREATE TABLE edges (\"from\" TEXT, \"to\" TEXT, rel TEXT, provenance TEXT NOT NULL DEFAULT 'ast_exact', confidence REAL NOT NULL DEFAULT 1.0);
+             INSERT INTO edges VALUES ('{other_path_str}', '{go_path_str}', 'imports', 'ast_exact', 1.0);",
         ))
         .unwrap();
 

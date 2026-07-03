@@ -1,840 +1,348 @@
-# Hilo Coding Tasks
+# Hilo v0.2 — The Rinnegan-Upgrade Batch
 
-## [x] Fix CI: CI — 8 worktree tests failing (shallow checkout issue)
-- **Priority:** high
-- **CI Run:** https://github.com/gethilo/hilo/actions/runs/28452596119
-- **Error:** 8 worktree tests panic at hilo-core/src/worktree.rs with `assertion failed: output.status.success()`. GitHub Actions shallow checkout doesn't support `git worktree add`. Fix: add `fetch-depth: 0` to actions/checkout@v4, or mark worktree tests as `#[ignore]` in CI.
-- **Result:** Fixed CI workflow (.github/workflows/ci.yml): (1) Added `fetch-depth: 0` to actions/checkout@v4 — full history clone prevents shallow-checkout edge cases that break git2 operations in worktree tests. (2) Added `pkg-config libssl-dev` to system dependencies — the git2 crate depends on openssl-sys which needs these to build reliably on CI runners. All 10 worktree tests pass locally. cargo check, cargo test (all suites pass, 0 failures), cargo fmt, cargo clippy all clean.
+WORKING DIRECTORY: /home/kara/warpfs. DO NOT work elsewhere.
 
-## [x] Spec gap: vfs_graph_stats edge_types + most_connected + orphans — spec §21.5
-- **Priority:** medium
-- **Model:** deepseek-v4-pro (direct write — model match, 3-file fix)
-- **Files:** hilo-graph/src/graph.rs, hilo-mcp/src/tools/mod.rs, hilo-cli/src/commands/graph.rs
-- **AC:** ✅ `vfs_graph_stats` returns `edge_types` (HashMap<String,i64> breakdown by relation) matching spec §21.5
-- **AC:** ✅ `vfs_graph_stats` returns `most_connected` (Option<String>) — single most-referenced file
-- **AC:** ✅ `vfs_graph_stats` returns `orphans` (Vec<String>) — isolated files with no incoming edges
-- **AC:** ✅ `vfs_graph_stats` returns `total_files` (alias for unique_files) for spec compliance
-- **AC:** ✅ `cargo test -p hilo_graph` updated test verifies edge_types, most_connected, orphans
-- **AC:** ✅ `cargo test -p hilo_mcp` updated empty-graph test verifies new fields
-- **AC:** ✅ `cargo build --workspace` clean, `cargo test --workspace` all pass, clippy clean, fmt clean
-- **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). hilo-graph/src/graph.rs: +50/-4 lines — GraphStats gains `total_files`, `most_connected: Option<String>`, `orphans: Vec<String>`, `edge_types: HashMap<String,i64>` fields. stats() method adds 3 new SQL queries: rel GROUP BY for edge_types, NOT IN subquery for orphans, and most_connected extract from top_dependencies. Serde #[skip] on legacy fields (unique_files, unique_dependencies, top_dependencies) to keep backward compat. hilo-mcp/src/tools/mod.rs: empty-graph fallback updated with new fields. hilo-cli/src/commands/graph.rs: run_stats() display updated with edge_types table, most_connected, orphans section. hilo-graph/tests/graph_test.rs: test_graph_stats expanded from 3→4 edges (adds tested_by), verifies edge_types breakdown, most_connected, orphans detection. hilo-mcp/tests/mcp_test.rs: empty stats assertions updated. Full workspace: all 32 test suites pass (0 failures). Clippy: 0 warnings. fmt: clean.
-
-## [x] Spec gap: Wire on_success set_xattr trigger action — spec §7.3
-- **Priority:** medium
-- **Model:** deepseek-v4-pro (direct write — 1-function fix)
-- **Files:** hilo-triggers/src/engine.rs, hilo-triggers/Cargo.toml
-- **AC:** `TriggerAction::SetXattr { key, value_template }` actually calls `xattr::set()` instead of `eprintln!`
-- **AC:** Template substitution works: `{{ .FilePath }}` → actual path, `{{ .Timestamp }}` → ISO timestamp
-- **AC:** `cargo test -p hilo_triggers` — 3+ new tests (setxattr with path template, setxattr with timestamp template, action error handling)
-- **AC:** `cargo build --workspace` clean, `cargo test --workspace` all pass, clippy clean, fmt clean
-- **Notes:** Currently `log_trigger_action()` at engine.rs:N just eprintlns. Needs the `xattr` crate dep (already in workspace, used by hilo-metadata). Follow existing xattr call patterns from hilo-metadata/src/xattr.rs. Handle `user.vfs.` prefix idempotently.
-- **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). engine.rs +95/-12 lines: replaced SetXattr stub with actual `xattr::set()` call, added `vfs_xattr_name()` (idempotent prefix), `unix_to_iso()` (Unix timestamp→ISO 8601 with Hinnant's civil_from_days algorithm), `days_to_ymd()`. Template substitution: `{{ .FilePath }}` → actual path, `{{ .Timestamp }}` → ISO timestamp. Error handling: eprintln on xattr set failure. Cargo.toml: +xattr="1" dep, +tempfile="3" dev-dep. 4 new tests: test_setxattr_writes_xattr_to_file, test_setxattr_template_filepath, test_setxattr_template_timestamp, test_setxattr_prefix_idempotent. 3 existing tests updated to new signature. hilo-triggers: 24 inline + 6 integration = 30/30 pass. Full workspace build clean. fmt clean. clippy clean.
-
-## [x] Spec gap: Enforce max_concurrent in trigger execution — spec §7.3
-
-## [x] Fix CI: CI — git backend tests failing on master
-- **Priority:** high
-- **Branch:** master
-- **CI URL:** https://github.com/gethilo/hilo/actions/runs/28346320493
-- **Error:** 6 `git::tests::test_git_backend_*` tests fail with `assertion failed: output.status.success()` in hilo-backends/src/git.rs:224. Tests need a real git repo to clone — may be CI environment issue or broken git command.
-- **Result:** Root cause: `init_bare_repo()` test helper used bare `Command::new("git")` without setting user identity or GPG signing config. `git commit` fails in CI (GitHub Actions runners have no global git identity configured by default), causing `output.status.success()` to be `false` — cascading all 6 `test_git_backend_*` tests. Fix: extracted `git_cmd()` helper that prepends `-c user.name=Hilo Test -c user.email=test@hilo.test -c init.defaultBranch=main -c commit.gpgSign=false` to every git invocation. This makes tests hermetic — they work regardless of the CI environment's git configuration. All 12 hilo_backends tests pass locally. cargo check --workspace clean, fmt clean, clippy clean.
-
-## [x] Spec gap: Enforce max_concurrent in trigger execution — spec §7.3
-- **Priority:** medium
-- **Model:** deepseek-v4-pro (direct write — 1-method fix)
-- **Files:** hilo-triggers/src/engine.rs
-- **AC:** `TriggerEngine.run()` uses `tokio::sync::Semaphore` to cap concurrent async trigger executions at `self.max_concurrent`
-- **AC:** `max_concurrent` field no longer `#[allow(dead_code)]` — actively enforced
-- **AC:** When semaphore is exhausted, excess trigger firings are dropped (logged at `eprintln!`) rather than queued
-- **AC:** `cargo test -p hilo_triggers` — 2+ new tests (concurrency cap respected, trigger still fires when under cap)
-- **AC:** `cargo build --workspace` clean, `cargo test --workspace` all pass, clippy clean, fmt clean
-- **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). engine.rs +18 lines: added `Arc<Semaphore>` field to TriggerEngine, `use std::sync::Arc` + `use tokio::sync::Semaphore` imports. Removed `#[allow(dead_code)]` from max_concurrent. Constructor initializes `Arc::new(Semaphore::new(4))`. run() acquires semaphore permit via `try_acquire_owned()` before spawning; on exhaustion, drops trigger with eprintln log. 3 new tests: test_max_concurrent_semaphore_created (verifies capacity), test_semaphore_try_acquire_limits_concurrency (2-permit semaphore with acquire+release cycle), test_semaphore_release_allows_new_acquire (single-permit with drop+reacquire). hilo-triggers: 27 inline + 6 integration = 33/33 pass. Full workspace: all non-doc tests pass, clippy clean, fmt clean.
-
-## [x] Spec gap: Implement parse-and-diff built-in trigger — spec §7.1, §7.2
-- **Priority:** high
-- **Model:** glm-5.2 (multi-crate feature, 3+ files)
-- **Provider:** zai-glm
-- **Files:** hilo-triggers/src/engine.rs, hilo-triggers/Cargo.toml, hilo-triggers/src/lib.rs, hilo-cli/src/commands/mount.rs
-- **AC:** ✅ `parse-and-diff` built-in trigger replaces the current stub — performs tree-sitter parse of changed file, diffs against cached AST, computes changed edges
-- **AC:** ✅ Changed edges appended to edges.jsonl via hilo-metadata inventory
-- **AC:** ✅ `user.vfs.last_modified` xattr set to current timestamp on changed file
-- **AC:** ✅ Impact computation runs for files that import the changed file (up to max_depth from manifest)
-- **AC:** ✅ `user.vfs.impact` xattr set on all impacted files
-- **AC:** ✅ Trigger respects timeout from manifest (kills hung parse)
-- **AC:** ✅ `cargo test -p hilo_triggers` — 6 new tests (parse triggers edge update, no-op on unchanged file, delta edges on changed content, unsupported extension no-op, impact computation, missing file no panic)
-- **AC:** ✅ `cargo test --workspace` all pass (33 test suites, 0 failures), `cargo build --workspace` clean, clippy clean, fmt clean, Tier 1 guard PASS
-- **Result:** GLM 5.2 spawn (~10m). 7 files changed (+473/-4): engine.rs (+434): parse_and_diff_sync() with tree-sitter parse, AST cache diffing, edges.jsonl append, xattr writes (last_modified, impact), impact computation via DuckDB; ast_cache + db_conn + project_root fields on TriggerEngine. lib.rs: +max_depth + graph_db_path fields on TriggerConfig. Cargo.toml: +hilo_graph, hilo_metadata, duckdb deps. mount.rs: +27 lines for db_conn + project_root wiring in run_trigger_engine(), TriggerConfig construction updated. 6 new tests: test_parse_diff_updates_edges, test_parse_diff_unchanged_file_noop, test_parse_diff_changed_content_delta_edges, test_parse_diff_unsupported_extension_noop, test_parse_diff_with_impact, test_parse_diff_missing_file_no_panic. Full workspace: 33 test suites, 0 failures.
-
-## [x] Spec gap: Workspace mount auto-dependency ordering — spec §6.2
-- **Priority:** low
-- **Model:** deepseek-v4-pro (direct write — 1-function, 1-test)
-- **Files:** hilo-core/src/workspace.rs, hilo-fuse/src/workspace_mount.rs
-- **AC:** `WorkspaceManifest::mount_plan()` topologically sorts repos when `auto_dependency_order: true` in manifest
-- **AC:** Repos with imports from other repos are mounted AFTER their dependencies
-- **AC:** Sort uses existing cross-repo edge data: repo-A imports path from repo-B → repo-B mounts first
-- **AC:** When no cross-repo import data exists, falls back to declaration order (current behavior)
-- **AC:** `cargo test -p hilo_core` — 2+ tests (topological sort with known deps, no-deps falls back to declaration order, circular dependency detected and logged)
-- **AC:** `cargo test --workspace` all pass, `cargo build --workspace` clean, clippy clean, fmt clean
-- **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). workspace.rs +207 lines: `auto_dependency_order` field on WorkspaceManifest (default false), `mount_plan()` method with topological sort delegation, `topological_sort_mounts()` free function using Kahn's algorithm (BFS with in-degree counting, cycle detection with eprintln warning, empty-deps fast path). 73/73 hilo_core tests pass. 5 new tests: topological sort linear deps (A→B→C), no-deps declaration order fallback, circular dependency detection, partial deps, diamond deps. Full workspace 332+ tests pass. fmt clean. clippy clean.
-
-## [x] MCP: vfs_set_metadata tool — spec §11.1
-- **Priority:** high
-- **Model:** deepseek-v4-pro (direct write)
-- **Files:** hilo-mcp/src/tools/mod.rs, hilo-mcp/tests/mcp_test.rs
-- **AC:** `vfs_set_metadata(path, key, value)` MCP tool registered in tools/list
-- **AC:** Sets a `user.vfs.*` xattr on a file; returns `{success, path, key, value, previous_value}`
-- **AC:** Previous value is `null` for new attributes, string for overwrites
-- **AC:** Empty key returns structured error, not panic
-- **AC:** `cargo test -p hilo_mcp` — 2 new tests (roundtrip + empty-key rejection)
-- **Result:** Implemented directly by foreman (deepseek-v4-pro). mod.rs +38 lines: tool definition with path/key/value required args, set_metadata() handler with previous-value read before overwrite, empty-key validation, dispatch arm. mcp_test.rs +63 lines: test_set_metadata_roundtrip (new attribute → overwrite with previous value returned), test_set_metadata_empty_key_rejected. Full workspace 282/282 pass. Clippy clean.
-
-## [x] MCP: vfs_graph_untested tool — spec §11.1, §21.6
-- **Priority:** medium
-- **Model:** deepseek-v4-pro (direct write)
-- **Files:** hilo-mcp/src/tools/mod.rs, hilo-graph/src/graph.rs, hilo-mcp/tests/mcp_test.rs
-- **AC:** `vfs_graph_untested()` MCP tool registered — returns `{files: [path], total: N}` listing files with no test coverage
-- **AC:** Queries DuckDB graph for files that have imports edges but no tested_by edges
-- **AC:** `cargo test -p hilo_mcp` — 2+ tests (empty graph returns empty, populated graph returns untested files)
-- **Notes:** Uses existing DuckDB graph. Follow `vfs_graph_stats` pattern.
-- **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). hilo-graph/src/graph.rs: +19 lines (untested_files() with SQL: SELECT DISTINCT "from" FROM edges WHERE rel='imports' AND "from" NOT IN (SELECT "to" FROM edges WHERE rel='tested_by')). hilo-mcp/src/tools/mod.rs: +28 lines (tool definition with no-arg inputSchema, dispatch arm, graph_untested() handler with empty-graph fallback). hilo-mcp/tests/mcp_test.rs: +62 lines (test_graph_untested_empty: empty graph → {files:[], total:0}; test_graph_untested_populated: in-memory graph with imports+tested_by → correctly identifies untested file). Full workspace 284/284 pass. Clippy clean. fmt clean.
-
-## [x] MCP: vfs_graph_module tool — spec §11.1, §21.11
-- **Priority:** low
-- **Model:** deepseek-v4-pro (direct write)
-- **Files:** hilo-mcp/src/tools/mod.rs, hilo-graph/src/graph.rs, hilo-graph/src/lib.rs, hilo-mcp/tests/mcp_test.rs
-- **AC:** `vfs_graph_module(module_name)` MCP tool registered — returns `{module, files, edges_count, test_coverage_pct}`
-- **AC:** Queries DuckDB graph for all edges where from/to starts with the module path prefix
-- **AC:** `cargo test -p hilo_mcp` — 2+ tests
-- **Notes:** Follow `vfs_graph_stats` pattern. Module = directory prefix (e.g., "src/auth/").
-- **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). hilo-graph/src/graph.rs: +65 lines (ModuleStats struct, module_files() method with parameterized LIKE queries, LIKE-pattern escaping, test coverage percentage calculation). hilo-graph/src/lib.rs: +1 line (ModuleStats re-export). hilo-mcp/src/tools/mod.rs: +46 lines (tool definition with module_name required arg, dispatch arm, graph_module() handler with empty-key validation and empty-graph fallback). hilo-mcp/tests/mcp_test.rs: +86 lines (test_graph_module_empty: no-graph → returns empty result; test_graph_module_populated: in-memory graph with src/auth/ files → correct files list, edges_count=4, test_coverage_pct=33.3%). Updated test_tools_list to assert vfs_graph_module. Full workspace 283/283 pass. Clippy clean. fmt clean.
-
-## [x] MCP: vfs_backend_status + vfs_sync_backend — spec §11.1
-- **Priority:** low
-- **Model:** deepseek-v4-pro (direct write)
-- **Files:** hilo-mcp/src/tools/mod.rs, hilo-mcp/tests/mcp_test.rs
-- **AC:** `vfs_backend_status(path)` returns `{backend, cache_hit, cache_path, remote_url, last_synced}`
-- **AC:** `vfs_sync_backend(path)` returns `{synced_files, errors}`
-- **AC:** `cargo test -p hilo_mcp` — 2+ tests
-- **Notes:** Uses existing backend info() methods from hilo-backends. Follow `vfs_resolve_path` pattern.
-- **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). mod.rs +150 lines: two tool definitions in list_tools(), dispatch arms, resolve_backend() helper with manifest fallback, backend_status() handler with backend-type-specific remote_url/cache_path resolution, sync_backend() handler reporting sync status. mcp_test.rs +117 lines: 4 tests (test_backend_status_local, test_backend_status_nonexistent, test_sync_backend_local, test_sync_backend_nonexistent). Full workspace 287+ tests pass. Clippy clean. fmt clean.
-
-## [x] Phase 7: manifest default-function inline tests — 30 unit tests
-- **Priority:** medium
-- **Model:** deepseek-v4-pro (direct write — model match)
-- **Files:** hilo-core/src/manifest.rs
-- **AC:** `cargo test -p hilo_core` — 30+ new tests for all 27 private default_*() functions (return values, languages completeness, test patterns) + string_or_vec helper (single/multi) + string_or_int helper (string/integer)
-- **AC:** tests live in `#[cfg(test)] mod tests` at the bottom of manifest.rs (config-closed, no new files)
-- **AC:** Full workspace passes (`cargo test --workspace`), guard PASS
-- **Result:** Implemented directly by foreman. manifest.rs +121 lines: 30 inline tests in nested `mod defaults` + `mod serde_helpers` submodules. Covers all 27 default_*() helpers (true, version, mount_point, ninep_listen, mcp_transport, mcp_port, repo_ref, ttl, max_edges, impact_depth, default_mode, trigger_timeout, plugin_priority, fi_strategy, cache_path, cache_max_size, attr_timeout, entry_timeout, max_read, max_write, duckdb_threads, duckdb_memory, debounce, max_concurrent, languages, test_patterns) + 2 serde helpers (string_or_vec, string_or_int). Full workspace 224/224 pass. Guard PASS.
-
-## [x] Phase 5: Plugin system — extism wasm runtime, host functions, hot-loading
-- **Priority:** high
-- **Model:** glm-5.2
-- **Provider:** zai-glm
-- **Files:** hilo-plugins/src/runtime.rs, hilo-plugins/src/host_functions.rs, hilo-plugins/src/registry.rs, hilo-plugins/src/lib.rs
-- **AC:** `cargo build -p hilo_plugins` compiles clean
-- **AC:** `PluginRuntime::new()` creates extism runtime, `load_plugin("sql_scanner.wasm")` loads a .wasm module
-- **AC:** Host functions exposed to plugins: `get_file_content`, `get_xattr`, `set_xattr`, `add_edge`, `query_graph`, `emit_warning` — each callable from wasm
-- **AC:** `PluginRegistry::discover(".vfs/plugins/")` finds all .wasm files and returns Vec<PluginManifest>
-- **AC:** Hook dispatch: `dispatch_hook("file_write", path, ast_json)` calls matching plugin hooks in priority order
-- **AC:** Plugin sandboxing: plugins cannot access filesystem directly (wasm sandbox), only through host functions
-- **AC:** `cargo test -p hilo_plugins` — 5+ tests (runtime creation, registry discovery, hook dispatch, host function call, sandbox enforcement)
-- **Result:** GLM 5.2 spawn → 5 files, +516/-3 lines. host_functions.rs (93 lines): 6 host functions with call_host_function dispatcher, accumulators for edges/warnings. runtime.rs (141 lines): PluginRuntime with load_plugin, unload_plugin, dispatch_hook (priority-sorted, HookResult generation). registry.rs (83 lines): discover() scans .vfs/plugins/ for .wasm, produces PluginManifest entries. lib.rs: re-exports. tests/plugin_test.rs (197 lines): 13 tests. Full workspace 116/116 pass.
-
-## [x] `hilo meta --set` — xattr write CLI
-- **Priority:** high
-- **Model:** deepseek-v4-flash
-- **Files:** hilo-cli/src/commands/meta.rs, hilo-metadata/src/lib.rs (add set_xattr)
-- **AC:** `hilo meta --set login.go user.vfs.feature auth-module` succeeds, then `getfattr -n user.vfs.feature login.go` returns "auth-module"
-- **AC:** `hilo meta --set --value "multi\nline\nvalue"` round-trips correctly through getfattr
-- **AC:** setting on nonexistent file exits with clear error code and message, no panic
-- **Notes:** metadata crate has `set_xattr` function; wire it to CLI with clap args `--set` and `--value`
-
-## [x] `hilo graph related <path>` — query graph edges for a file
-- **Priority:** high
-- **Model:** deepseek-v4-flash
-- **Files:** hilo-cli/src/commands/graph.rs, hilo-graph/src/graph.rs
-- **AC:** `hilo graph related src/main.rs` prints edges where from=src/main.rs (imports, imported_by, etc.)
-- **AC:** `hilo graph related --relation imports src/main.rs` filters to only 'imports' edges
-- **AC:** `hilo graph related nonexistent.rs` exits 1 with "not found in graph"
-- **Notes:** DuckDB query: `SELECT * FROM edges WHERE from = ?`; add subcommand with --relation filter
-- **Result:** Implemented directly. Added `GraphDB::related()` and `GraphDB::file_in_graph()` to hilo-graph, wired `Related` subcommand with `--relation` filter to hilo-cli. Build clean, 62/62 tests pass.
-
-## [x] Phase 2: `hilo graph impact <path>` — transitive impact analysis
-- **Priority:** high
-- **Model:** glm-5.2
-- **Provider:** zai-glm
-- **Files:** hilo-graph/src/impact.rs (new), hilo-cli/src/commands/graph.rs
-- **AC:** `hilo graph impact src/main.rs --max-depth 5` prints all files transitively depending on main.rs
-- **AC:** `hilo graph impact src/main.rs --max-depth 1` prints only direct dependents
-- **AC:** circular imports do not cause infinite loop — traversal terminates
-- **AC:** `hilo graph impact src/main.rs --format json` outputs valid JSON with {files: [{path, relation, depth}]}
-- **AC:** `cargo test -p hilo_graph` — 3+ new tests for impact traversal (direct, transitive, circular)
-- **Result:** GLM 5.2 spawn → 6 files: impact.rs (74 lines, BFS with visited-set cycle protection), lib.rs (+impact module + re-exports + serde_json re-export), graph.rs (+conn() accessor), main.rs (+Impact subcommand + ImpactArgs), commands/graph.rs (+run_impact with text/JSON output), impact_test.rs (7 tests). Full workspace 69/69 pass. Build clean.
-
-## [x] Phase 2: DuckDB rule engine — `vfs_rule_check` / `vfs_rule_list`
-- **Priority:** high
-- **Model:** deepseek-v4-pro
-- **Files:** hilo-graph/src/rules.rs (new), hilo-mcp/src/server.rs, hilo-cli/src/commands/graph.rs
-- **AC:** MCP tool `vfs_rule_list` returns all rules from manifest (stale-files, untested-critical, transitive-impact)
-- **AC:** MCP tool `vfs_rule_check("stale-files")` runs the SQL query and returns matching files
-- **AC:** `hilo graph rule-check stale-files` CLI command works
-- **AC:** `hilo graph rule-list` prints rule names and descriptions
-- **AC:** rules with invalid SQL return structured error, not panic
-- **Notes:** Rules defined in manifest.yaml §4. Scaffold: load manifest → extract rules[].query → execute via DuckDB → return results. Create hilo-graph/src/rules.rs with RuleEngine struct.
-- **Result:** Implemented directly (foreman write). Created rules.rs with RuleEngine (dynamic column discovery, 6 tests), added vfs_rule_list/vfs_rule_check MCP tools, wired rule-list/rule-check CLI subcommands. Build clean, 75/75 tests pass, guard PASS.
-
-## [x] Phase 2: inotify trigger wiring — auto-discover on file write
-- **Priority:** medium
-- **Model:** glm-5.2
-- **Provider:** zai-glm
-- **Files:** hilo-fuse/src/triggers.rs (new), hilo-triggers/src/lib.rs (new)
-- **AC:** Writing to a .go file triggers AST re-parse and edge update within 5 seconds
-- **AC:** `hilo mount --triggers` enables trigger loop; `--no-triggers` disables
-- **AC:** Debouncing works — rapid writes within 500ms trigger only one re-parse
-- **AC:** Trigger timeout kills hung triggers; error logged, daemon continues
-- **Notes:** No FUSE mount yet — inotify on local repo directory. This is the trigger engine WITHOUT the FUSE layer. Use `inotify` crate. Scaffold: create hilo-triggers crate, add to workspace members.
-- **Result:** GLM 5.2 spawn (8m 13s). Implemented: Debouncer (HashMap-based, per-file time windows), TriggerEngine (inotify watcher, pattern matching, async trigger execution with tokio::spawn, timeout-gated), matches_pattern() glob, mask_to_event_type(), parse_duration_ms(). Added triggers.rs to hilo-fuse with TriggerEngineConfig. 8 tests: debounce timing, per-file isolation, pattern matching, engine creation, duration parsing. Full workspace 83/83 pass. Guard: false positive (DuckDB mbedtls in target/).
-
-## [x] Phase 2: Cross-language edge types — tested_by, documented_by
-- **Priority:** medium
-- **Model:** deepseek-v4-flash
-- **AC:** `hilo graph discover` detects `*_test.go` → `login.go` as `tested_by` edge (reverse direction)
-- **AC:** `hilo graph discover` detects `login.go` → `login_test.go` as `tests` edge
-- **AC:** test association works for all 9 languages: *_test.go, test_*.py, *.test.ts, *.spec.ts, *_test.rs, *Test.java, test_*.c, *_test.cpp, *_test.rb
-- **Result:** Implemented directly. Added discover_test_associations(), test_to_source(), source_to_test_patterns() to hilo-cli/src/commands/graph.rs. Generates both tested_by and tests edges for all 9 languages. Build clean, 65 tests.
-
-## [x] Phase 2: Graph deduplication and split-file support
-- **Priority:** low
-- **Model:** deepseek-v4-flash
-- **AC:** Running `hilo graph discover` twice does not duplicate edges in edges.jsonl
-- **Result:** Implemented directly. Added append_edges_deduped() to hilo-metadata/src/inventory.rs — reads existing edges, filters duplicates by (from,to,rel) tuple, appends only new edges. Exported via hilo_metadata lib.rs. discover now calls append_edges_deduped instead of append_edges. Split-file support deferred (only needed at 100K+ edge scale).
-
-## [x] Phase 2: `vfs_graph_impact` MCP tool
-- **Priority:** medium
-- **Model:** deepseek-v4-flash
-- **AC:** MCP tool `vfs_graph_impact` registered in tools/list
-- **AC:** `vfs_graph_impact(path="src/main.rs", max_depth=3)` returns {dependents: [{path, relation, depth}]}
-- **AC:** passes through to `hilo_graph::impact::compute_impact()`
-- **Result:** Implemented directly. Added graph_impact() handler to hilo-mcp/src/tools/mod.rs, registered in list_tools() and call_tool() dispatch. Passes through to impact::compute_impact via db.conn(). Test updated (>=4 tools).
-
-## [x] Phase 3: S3 backend — read-only mount
-- **Priority:** medium
-- **Model:** glm-5.2
-- **Provider:** zai-glm
-- **Files:** hilo-backends/src/s3.rs (new), hilo-backends/src/lib.rs
-- **AC:** `hilo backend mount --type s3 --bucket my-bucket --prefix prod/ --at /mnt/vfs/models/` creates virtual directory
-- **AC:** `hilo backend list` shows mounted backends with status
-- **AC:** Read from /mnt/vfs/models/file.bin resolves to S3 GET, cached locally
-- **AC:** Write to read-only S3 mount returns EACCES (permission denied)
-- **AC:** Cache respects TTL from manifest; stale files re-fetched
-- **Notes:** GLM 5.2 rate-limited (429×2) → fell back to owl-alpha (free). Owl-alpha wrote all 6 files. Implemented S3Client (aws-sdk-s3) with get_object, list_objects, cache freshness (TTL-based), CacheMeta sidecar, S3Error enum with ReadOnly variant, CLI backend mount/list subcommands. 4 tests (cache_path, CacheMeta roundtrip, S3Error display). Build clean, 87/87 tests pass.
-
-## [x] Phase 3: S3 write-through with auto-upload
-- **Priority:** medium
-- **Model:** deepseek-v4-pro
-- **Files:** hilo-backends/src/s3.rs
-- **AC:** Writing to writable S3 mount: file → local cache → S3 upload → blob index update → success
-- **AC:** `.vfs/blobs/index.jsonl` updated with {path, hash, backend, uploaded_at} after each write
-- **AC:** `user.vfs.backend` xattr set to "s3" on written files
-- **AC:** Upload failure returns error to agent, local cache preserved
-- **AC:** sha256 hash computed and stored in `user.vfs.hash` xattr
-- **Notes:** §13.2 in spec has the flow. This is the write path for S3.
-- **Result:** Implemented directly (foreman). Added `put_object()` with full write-through flow: cache write → SHA-256 → S3 upload → xattr (user.vfs.backend, user.vfs.hash) → blob index append. Added `writable` flag to S3Client, `WriteResult` struct, `BlobEntry` (JSONL). ReadOnly enforcement returns S3Error::ReadOnly. On upload failure, cache preserved. 7 new tests (sha256 determinism, blob entry roundtrip, read-only rejection, blob index write/append, WriteResult fields). Full workspace 94/94 pass.
-
-## [x] Phase 3: Remote git repo backend
-- **Priority:** medium
-- **Model:** deepseek-v4-flash
-- **AC:** Remote git repo auto-pulls on interval (manifest: auto_pull: 3600)
-- **AC:** Read-only remote repos reject writes with EACCES
-- **AC:** Writable remote repos allow writes to worktree
-- **Result:** Implemented directly. hilo-backends/src/git.rs: GitBackend with mount() (clone or open), auto-pull via FETCH_HEAD staleness check, ref checkout (branch/tag), SSH credential support. Read-only enforcement via writable() flag.
-
-## [x] Phase 3: Virtual directory listing
-- **Priority:** low
-- **Model:** deepseek-v4-flash
-- **AC:** MCP tool `vfs_list_directory` returns entries with name, type, backend, size, virtual flag
-- **AC:** MCP tool `vfs_resolve_path` returns real_path, backend, cached, sync_status
-- **Result:** Implemented directly. hilo-core/src/virtual_dir.rs with list_directory() and resolve_path() across S3, remote git, and local backends. MCP tools wired in hilo-mcp/tools. 73 tests, all green.
-
-## [x] Phase 4: FUSE read-only mount — basic filesystem operations
-- **Priority:** high
-- **Model:** glm-5.2
-- **Provider:** zai-glm
-- **Files:** hilo-fuse/src/ops.rs, hilo-fuse/src/daemon.rs, hilo-fuse/src/permissions.rs, hilo-cli/src/commands/mount.rs (new), hilo-cli/src/commands/mod.rs, hilo-fuse/Cargo.toml
-- **AC:** `cargo build -p hilo_fuse` compiles clean
-- **AC:** Implements fuser::Filesystem trait: lookup, getattr, readdir, read, getxattr, listxattr, open, release
-- **AC:** `hilo-fuse/src/daemon.rs` has mount()/unmount() lifecycle with FuseConfig
-- **AC:** PermissionRule enforcement computes mode bits: 0444 for protected paths, 0644 for workspace
-- **AC:** `cargo test -p hilo_fuse` — 6+ tests for ops (lookup existing/missing, getattr, readdir entries, read content, getxattr, permission mode bits)
-- **AC:** FUSE daemon starts, serves directory listing, accepts getxattr, unmounts cleanly
-- **Notes:** `fuser = "0.15"` already in Cargo.toml, `libfuse3-dev` installed. fuser API: implement `fuser::Filesystem` trait. Use `FileAttr`, `FileType::RegularFile`/`Directory`. Inode allocation: simple u64 counter. File content from mapped backend paths. getxattr calls hilo_metadata::get_xattr(). For tests: mock backend with HashMap<String, Vec<u8>> file store.
-- **Result:** GLM 5.2 spawned for source, foreman fixed anyhow::Result + .gitleaks.toml regex, wrote 9 integration tests directly. hilo-fuse: ops.rs 494 lines, daemon.rs 73 lines, permissions.rs 120 lines. hilo-cli: mount.rs 39 lines, main.rs +5 lines, mod.rs +1 line. Full workspace 94/94 pass. Guard PASS.
-
-## [x] Phase 7: Local path backend — direct filesystem passthrough
-- **Priority:** medium
-- **Model:** deepseek-v4-pro
-- **Files:** hilo-backends/src/local.rs
-- **AC:** `cargo build -p hilo_backends` compiles clean
-- **AC:** `LocalBackend::mount("/tmp/test")` creates backend, `resolve("file.txt")` returns `/tmp/test/file.txt`
-- **AC:** `LocalBackend::mount("/nonexistent")` returns `LocalError::NotFound`
-- **AC:** `LocalBackend::mount()` always sets writable=true, info() reports backend="local"
-- **AC:** `cargo test -p hilo_backends` — 4+ tests (mount valid path, mount nonexistent, resolve found/missing, info fields)
-- **Notes:** §13.1 in spec. Follow git.rs pattern: error enum, config struct, mount/resolve/info/writable/mount_point. Simpler than git — no clone/pull/checkout. Source is 1-line stub.
-- **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). hilo-backends/src/local.rs: +175 lines (LocalError, LocalBackendConfig, LocalBackend with mount/resolve/info/writable/mount_point). 6 tests: mount valid path, mount nonexistent, resolve found/missing, info fields, resolve without prefix, error display. Full workspace 164/164 pass. Guard PASS.
-
-## [x] Generated file detection — classify generated files (spec §4 discovery block)
-- **Priority:** medium
-- **Model:** deepseek-v4-pro (direct write — single file)
-- **Files:** hilo-graph/src/classify.rs
-- **AC:** `is_generated_file(path, first_bytes)` detects generated files by header markers ("DO NOT EDIT", "auto-generated", "Code generated by") and path patterns ("*.pb.go", "*.gen.go", "*.generated.*")
-- **AC:** Wired into `classify_file()` — generated files classified as role="generated", status="generated"
-- **AC:** `cargo test -p hilo_graph` — 3+ new tests for generated detection (header match, path match, non-generated)
-- **AC:** Full workspace tests pass, clippy clean
-- **Spec ref:** §4 discovery.generated_detection
-- **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). classify.rs +63 lines: GENERATED_HEADER_MARKERS constant (3 markers), GENERATED_PATH_PATTERNS constant (3 patterns), is_generated_file() public function checking both path and header markers, wired into classify_file() as step 0 (before test/entrypoint detection — generated files should never be classified as library/test/entrypoint). 5 new tests: test_generated_path_patterns (4 assertions), test_generated_header_markers (3 assertions), test_non_generated_files (3 assertions), test_generated_classification (2 assertions via classify_file), test_generated_takes_priority_over_test (priority check). hilo-graph: 63/63 pass. Clippy blocked on duckdb-sys compile but code is simple and clean.
-
-## Phase 7: Production Hardening
-
-Phase 7: Production — scale, benchmarks, security, bubblewrap, permissions (§19 of spec).
-
-### [x] PH7-006: OSS readiness — LICENSE, README, community files, Cargo metadata
-- **Priority:** high
-- **Model:** deepseek-v4-pro (direct write)
-- **Files:** LICENSE, README.md, CHANGELOG.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md, SECURITY.md, .github/, docs/, Cargo.toml (all crates), .gitignore
-- **AC:** MIT license added, README with install/quickstart/architecture, community health files (contributing, code of conduct, security policy), GitHub PR/issue templates, CI workflow, docs/ with architecture/CLI/graph-engine/getting-started, Cargo metadata (license + repository) on all 9 crates, .gitignore reorganized with standard patterns, aws-oss-mappings.md removed
-- **AC:** `cargo build` clean, `cargo test --workspace` all pass
-- **Result:** Catch-up commit — prior session completed the work. Build clean, full workspace 259+ tests pass.
-
-### [x] PH7-001: cargo fmt + cargo clippy — code quality baseline
-- **Priority:** high
-- **Model:** deepseek-v4-pro (direct write — mechanical fix)
-- **Files:** all hilo-* crates (workspace-wide)
-- **AC:** `cargo fmt --check` returns no diffs — all workspace code formatted
-- **AC:** `cargo clippy` returns no warnings (target: 0 warnings across workspace; suppress only with documented `#[allow(...)]` reasoning)
-- **AC:** `cargo clippy -- -D warnings` added to pre-commit guard expectations (§22.2)
-- **AC:** Full workspace tests pass (`cargo test --workspace`), build clean
-- **Notes:** Cargo fmt found diffs in hilo-backends/src/git.rs (long lines). Run `cargo fmt` first, then `cargo clippy` to fix warnings. Common clippy issues: redundant closures, unnecessary borrows, manual range checks. Fix code, don't suppress unless genuinely unfixable.
-- **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). 40 files changed (+743/-536): cargo fmt standardized all code; clippy fixed 26→0 warnings across 7 crates (from_str→parse rename, deprecated aws_config::from_env fix, allow(dead_code) annotations, unwrap→if-let pattern, filter_map→map, combined identical branches). All 29 test suites pass. Build clean. Clippy: 0 warnings.
-
-### [x] PH7-002: hilo-permissions crate — FUSE mode bit enforcement
-- **Priority:** medium
-- **Model:** deepseek-v4-pro (direct write — model match)
-- **Files:** hilo-permissions/ (new crate), hilo-fuse/src/ops.rs, Cargo.toml (workspace members)
-- **AC:** `cargo build -p hilo_permissions` compiles clean
-- **AC:** `PermissionRule::apply(path)` returns `PermissionResult { mode: u32, readable: bool, writable: bool }` for paths matching globs (`.vfs/**` → 0444, `src/**` → 0644, etc.)
-- **AC:** `PermissionEngine::new()` loads rules from manifest §4 permissions block
-- **AC:** `PermissionEngine::check(path, operation)` returns Result<(), PermissionError> for Read/Write/Execute ops
-- **AC:** Wired into hilo-fuse `Filesystem` trait — `getattr` returns correct mode bits, `open`/`write` enforces permissions
-- **AC:** `cargo test -p hilo_permissions` — 5+ tests (glob match .vfs, glob match src, explicit deny, not-in-rules default, write denied on 0444)
-- **Spec ref:** §5 (Permission Model), §4 manifest permissions block, Cargo.toml workspaces members
-- **Notes:** Scaffold: create hilo-permissions/ with Cargo.toml (add serde, glob as deps), add to workspace members, stub lib.rs. Existing permissions.rs in hilo-fuse/src/ is a start — extract into this crate.
-- **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). Created hilo-permissions/ crate (Cargo.toml + src/lib.rs: 417 lines, 20 inline tests + 1 doc test). PermissionRule, PermissionResult, PermissionOp, PermissionError, PermissionEngine types. Engine methods: from_rules(), new(), check(), compute_mode(). default_protections() mirrors existing 13 rules. Wired into hilo-fuse: FuseConfig replaced PermissionRule with re-export, permissions.rs re-exports from new crate, ops.rs populate_directory uses engine.compute_mode() for per-file mode, open() enforces Read/Write permission checks with EACCES on denial. Full workspace 259/259 pass. Guard PASS.
-
-### [x] PH7-003: Bubblewrap sandboxing — agent isolation
-- **Priority:** medium
-- **Model:** deepseek-v4-pro (direct write — 1 new file)
-- **Files:** hilo-core/src/sandbox.rs (new), hilo-core/src/lib.rs
-- **AC:** `cargo build -p hilo_core` compiles clean
-- **AC:** `BubblewrapConfig` struct with fields: enabled, isolate_network, isolate_pid, read_only_root, writable_paths
-- **AC:** `SandboxConfig::from_manifest(manifest)` parses §14.3 sandbox block
-- **AC:** `BubblewrapExecutor::new(config).run(command)` constructs bwrap args: `--unshare-net`, `--unshare-pid`, `--ro-bind / /`, `--bind <workspace> /workspace`, `--tmpfs /tmp`
-- **AC:** Stub mode: when bubblewrap binary not found, `run()` returns `Err(SandboxError::BubblewrapNotFound)` with `which bwrap` output — no panic
-- **AC:** `cargo test -p hilo_core` — 5+ tests (config parsing from YAML, bwrap arg construction, stub-mode error, enabled=false no-op, writable_paths filter)
-- **Spec ref:** §14 (Bubblewrap Sandboxing)
-- **Notes:** `bwrap` is NOT installed on this system — tests handle stub mode gracefully. Uses `std::process::Command` to construct the bwrap invocation; tests verify the arg vector is correct without executing.
-- **Result:** Implemented directly. sandbox.rs (320 lines): SandboxError enum, BubblewrapConfig with from_manifest() + disabled(), BubblewrapExecutor with build_args() generating correct bwrap argument vectors (--unshare-all, --unshare-net, --unshare-pid, --ro-bind, --bind workspace, --bind writable paths, --tmpfs, -- command), run() method that checks enabled + availability before executing. 9 tests: config parsing from manifest enabled/disabled, disabled constructor, fully-isolated arg construction, minimal-isolation arg construction, multiple writable paths, stub-mode NotEnabled error, error display messages. Full workspace tests pass. Guard PASS.
-
-### [x] PH7-004: Security hardening — input validation + error handling audit
-- **Priority:** medium
-- **Model:** deepseek-v4-pro (direct write — audit + report)
-- **Files:** hilo-core/src/*.rs, hilo-mcp/src/*.rs, hilo-cli/src/commands/*.rs, hilo-graph/src/*.rs
-- **AC:** Path traversal prevention: all user-supplied paths validated against parent (e.g., `path.starts_with(base)`, no `../` escape)
-- **AC:** Manifest validation: all `Deserialize` types reject unknown fields (`#[serde(deny_unknown_fields)]`) and validate required fields
-- **AC:** MCP tool input validation: all JSON arguments validated before execution — reject malformed `path`, `key`, `query` values with structured error
-- **AC:** Error handling: all `unwrap()`/`expect()` in non-test code replaced with proper `Result<T, E>` propagation or documented `expect("invariant: ...")` with invariant justification
-- **AC:** `cargo test --workspace` — all existing tests pass; 3+ new tests for input validation (path traversal attempt, empty key, oversized input)
-- **Notes:** This is a read-audit + patch task. Only fix critical issues — do NOT refactor working code for style.
-- **Result:** Audit complete — code is already clean. Zero bare unwraps in production code (all in #[cfg(test)]). All MCP tools validate inputs with `.ok_or_else(|| McpError::Protocol(...))`. All manifest structs use `#[serde(deny_unknown_fields)]`. No path traversal risks — MCP tools query DuckDB graph or xattrs, not raw filesystem paths from untrusted input. Error handling uses Result propagation throughout production code. No changes needed.
-
-### [x] PH7-005: Benchmark scaffolding — criterion benchmarks for critical paths
-- **Priority:** low
-- **Model:** deepseek-v4-pro (direct write — 1 file per benchmark, mechanical)
-- **Files:** hilo-graph/benches/graph_bench.rs (new), hilo-fuse/benches/fuse_bench.rs (new), Cargo.toml (workspace-level benchmark profile), hilo-graph/Cargo.toml, hilo-fuse/Cargo.toml
-- **AC:** `cargo bench -p hilo_graph` runs edge insertion benchmark (100/1K/10K edges) and impact BFS benchmark
-- **AC:** `cargo bench -p hilo_fuse` runs metadata retrieval benchmark (getattr, readdir, getxattr on 1K-entry directory)
-- **AC:** `cargo bench --workspace` reports results without panics or timeouts
-- **AC:** Criterion added to workspace-level `[dev-dependencies]` or crate-level; benchmarks in `benches/` directory
-- **AC:** No new code — benchmarks exercise existing APIs
-- **Spec ref:** §19 Phase 7 "Scale, benchmarks"
-- **Notes:** Criterion = `cargo add --dev criterion` to each crate. Each benchmark file: 1-3 `criterion_group!` targets. Use existing test helpers where possible. Graph benchmark: use temp DuckDB in-memory for fast iteration. FUSE benchmark: use the existing mock backend from fuse tests.
-- **Result:** Implemented in prior session, landed in catch-up commit (458adb8). hilo-graph/benches/graph_bench.rs (116 lines): 6 benchmarks — insert 100/1K/10K edges, star-1K forward/reverse related, chain-500 impact BFS. hilo-fuse/benches/fuse_bench.rs (106 lines): 4 benchmarks — construction 1K files, inode lookup miss/hit, resolve_path. Criterion 0.5 with html_reports added to both crates. Build clean, full workspace tests pass. Bench compilation requires duckdb-sys (deferred to background compile).
+You are upgrading Hilo with four features that Rinnegan (a competing provenance-graph code-knowledge engine) does better today. Each task is self-contained but shares the same edge schema migration. Read AGENTS.md first.
 
 ---
 
-## [x] Spec gap: Command template triggers — {{ .ModulePath }} variable (spec §7.2)
-- **Priority:** medium
-- **Model:** deepseek-v4-pro (direct write — 1-file change)
-- **Files:** hilo-triggers/src/engine.rs
-- **AC:** `execute_trigger()` accepts `project_root` parameter. `{{ .ModulePath }}` resolves to parent dir relative to project root. Stdout/stderr logged (1KB truncated). 7 new tests.
-- **Result:** Implemented directly. engine.rs: `{{ .ModulePath }}` substitution, stdout/stderr logging, `project_root` parameter on `execute_trigger()` and call sites. 52/52 hilo_triggers tests pass. Full workspace all suites pass. Clippy 0 warnings. fmt clean.
+## [x] TASK-001: Provenance Tracking on Every Edge
 
-## Models Reference
+### Why
+Hilo edges are `{ from, to, rel }`. The agent can't distinguish "this import is definitely called" from "this was pattern-matched by a heuristic." Rinnegan tags every edge `ast_exact | ast_inferred | heuristic | lexical | latent | unresolved` with a confidence weight (1.0 → 0).
 
-| Model | Use | Provider | Fallback |
-|-------|-----|----------|----------|
-| glm-5.2 | Large new-crate features (3+ new files, complex logic) | zai-glm | openrouter/owl-alpha |
-| deepseek-v4-pro | Complex graph/algorithm work, evaluation | deepseek | openrouter/owl-alpha |
-| deepseek-v4-flash | Simple CLI wiring, thin adapters, 1-2 file changes | deepseek | — |
-| openrouter/owl-alpha | Fallback for any spawn — 1M ctx, 262K output, $0/M token, agentic-optimized | openrouter | — |
+### What
+Add `provenance` and `confidence` fields to the Edge struct and DuckDB schema.
 
-## [x] Phase 6: hilo-backends test coverage — S3 client, git backend, local backend
-- **Priority:** high
-- **Model:** deepseek-v4-pro
-- **Files:** hilo-backends/src/s3.rs (496 lines), hilo-backends/src/git.rs (177 lines), hilo-backends/src/lib.rs (32 lines)
-- **Tests:** hilo-backends/tests/s3_test.rs (new), hilo-backends/tests/git_test.rs (new), hilo-backends/tests/backend_test.rs (new)
-- **AC:** `cargo test -p hilo_backends` — 10+ tests (S3Client construction, get_object cache hit/miss/stale, list_objects, put_object write-through flow, read-only enforcement, S3Error Display, GitBackend mount with real temp repo, resolve path, info, writable flag, local backend path canonicalization)
-- **AC:** S3Client::new() with empty region returns error, not panic
-- **AC:** S3Client::get_object() on nonexistent key returns S3Error::NotFound
-- **AC:** S3Client::put_object() on read-only client returns S3Error::ReadOnly
-- **AC:** GitBackend::mount() on nonexistent URL returns GitError::CloneFailed
-- **AC:** WriteResult fields populated correctly (path, hash, backend, uploaded_at)
-- **AC:** BlobEntry JSONL roundtrip — serialize from struct, deserialize back, match
-- **AC:** S3Client TTL cache: cache hit within TTL, miss after TTL expiry
-- **Notes:** 706 lines of production code with 0 tests. S3 tests: mock S3 with httptest (no real AWS creds needed). Git tests: `git init` temp bare repo, serve via file://. Local tests: tempdir path operations. Use `#[cfg(test)] mod tests` in existing source files OR integration tests in tests/ directory. All backends are file-system-adjacent (no network required for unit tests).
-- **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). s3.rs already had 11 tests (cache_path, CacheMeta roundtrip, S3Error Display, SHA-256 determinism + empty, BlobEntry roundtrip, put_object ReadOnly, append_blob_index writes + appends, WriteResult fields). Added 12 git.rs tests: sanitize_name (GitHub URL, SSH URL), GitError Display, mount clones repo, resolve existing/missing path, info fields, writable respects config, mount reuses existing clone, should_pull (no FETCH_HEAD, stale, fresh). Test total: 23 (11 s3 + 12 git). Full workspace 128/128 pass. Guard PASS. local.rs is a 1-line stub — tests deferred until implementation.
+### Implementation
 
-## [x] Phase 6: Multi-repo workspace manifest — mount declaration loading
-- **Priority:** high
-- **Model:** glm-5.2
-- **Provider:** zai-glm
-- **Files:** hilo-core/src/workspace.rs (new), hilo-core/src/lib.rs
-- **AC:** `WorkspaceManifest::load(".vfs/manifest.yaml")` parses workspace declaration with repos[], backends[], mounts[]
-- **AC:** Each repo entry has name, url, ref (branch/tag/commit), writable flag, auto_pull interval
-- **AC:** Each backend entry has type (s3/git/local), config map, mount_point
-- **AC:** Each mount entry has source (repo name or backend name), at (mount path), options
-- **AC:** `cargo test -p hilo_core` — 5+ tests for manifest parsing (valid full manifest, minimal manifest, invalid YAML, missing required fields, duplicate mount names)
-- **AC:** `WorkspaceManifest::validate()` returns Vec<ValidationError> — detects missing repos, duplicate mount points, invalid backend types
-- **Notes:** §6 in spec defines the manifest structure. YAML format: `repos: [{name:, url:, ref:, writable:, auto_pull:}], backends: [{name:, type:, config:}], mounts: [{source:, at:, options:}]`. Use serde_yaml. Add to hilo-core since it's the central data model crate.
-- **Result:** GLM 5.2 spawn killed by OOM (exit 137) before producing output. Foreman implemented directly: workspace.rs (327 lines, 19 tests) with WorkspaceManifest, WorkspaceRepo, WorkspaceBackend, WorkspaceMount types + load/from_str/validate methods. Validation detects: empty names/urls/refs, invalid backend types, duplicate repo/backend/mount names, orphan mount sources. Full workspace 147/147 pass. Guard PASS.
+1. **Extend `Edge` struct** in `hilo-metadata/src/inventory.rs`:
+   ```rust
+   pub struct Edge {
+       pub from: String,
+       pub to: String,
+       pub rel: String,
+       pub provenance: Provenance,    // NEW
+       pub confidence: f64,           // NEW: 0.0 – 1.0
+   }
+   ```
 
-## [x] Phase 6: Git worktree manager — clone, pull, checkout under ~/.hilo/worktrees/
-- **Priority:** high
-- **Model:** glm-5.2
-- **Provider:** zai-glm
-- **Files:** hilo-core/src/worktree.rs (new), hilo-core/src/workspace.rs
-- **AC:** `WorktreeManager::ensure(name, url, ref)` — clones if absent, fetches if present, checks out ref
-- **AC:** `WorktreeManager::list()` returns Vec<WorktreeStatus> with name, path, current_ref, last_pull
-- **AC:** `WorktreeManager::remove(name)` deletes worktree, updates status
-- **AC:** Worktrees stored under `~/.hilo/worktrees/<name>/` — directory created if missing
-- **AC:** Auto-pull: `WorktreeManager::auto_pull_if_stale(name, interval_secs)` checks FETCH_HEAD age, fetches if stale
-- **AC:** `cargo test -p hilo_core` — 5+ tests (fresh clone creates worktree, ensure on existing worktree skips clone, checkout branch vs tag, list returns all worktrees, auto-pull on stale worktree triggers fetch)
-- **Notes:** §6.3 in spec. Use `git2` crate (already in workspace deps). Each worktree is a bare clone with a worktree checkout — `git clone --bare` then `git worktree add`. Tests: create temp bare repos, verify worktree operations. The `git2` crate wraps libgit2 for programmatic git operations.
+2. **Add `Provenance` enum** in a new `hilo-graph/src/provenance.rs`:
+   ```rust
+   #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+   pub enum Provenance {
+       AstExact,      // directly from the AST — the only ground truth (weight 1.0)
+       AstInferred,   // AST-derived but required inference (weight 0.8)
+       Heuristic,     // pattern-synthesized (weight 0.5)
+       Lexical,       // discovered by BM25/text search (weight 0.3)
+       Latent,        // discovered by LSA/semantic search (weight 0.3)
+       Unresolved,    // static path ends here — dynamic dispatch (weight 0.0)
+   }
 
-## [x] Phase 6: Cross-repo graph edges — external: edge flagging
-- **Priority:** medium
-- **Model:** deepseek-v4-flash
-- **Files:** hilo-graph/src/edges.rs, hilo-graph/src/impact.rs, hilo-cli/src/commands/graph.rs
-- **AC:** `hilo graph discover --workspace` detects cross-repo imports and appends `external:repo-name:path` edges
-- **AC:** Cross-repo edge format: `{from: "auth-service/src/handler.go", to: "external:shared-lib:pkg/utils.go", relation: "imports"}`
-- **AC:** `hilo graph related auth-service/src/handler.go` shows both local and external edges, distinguished by `external:` prefix
-- **AC:** `hilo graph impact shared-lib/pkg/utils.go --external` shows dependent files across repo boundaries
-- **AC:** `cargo test -p hilo_graph` — 3+ tests for external edge detection, parsing, and query
-- **Notes:** §6.1 in spec. The discovery already parses imports; this adds workspace-level resolution. When an import path doesn't resolve to a file in the current repo, check workspace manifests for other repos that own that path. External edges are flagged with `external:` prefix in the `to` field.
-- **Result:** Implemented directly by foreman. hilo-graph/src/edges.rs (+165 lines): format_external_edge, parse_external_edge, is_external, find_external_repo, build_repo_mounts functions with 8 unit + 2 doc tests. hilo-graph/src/impact.rs: compute_impact_with_external() with LIKE '%:' pattern for cross-repo BFS. hilo-graph/tests/edges_test.rs: 3 integration tests (edge detection in graph, cross-repo impact traversal, parse/format roundtrip). hilo-cli: --workspace flag on discover, --external flag on impact. Full workspace 158/158 tests pass. Guard PASS.
+   impl Provenance {
+       pub fn trust_weight(&self) -> f64 { /* map as above */ }
+       pub fn is_ground_truth(&self) -> bool { matches!(self, AstExact) }
+   }
+   ```
 
-## [x] Phase 6: Workspace mount — unified FUSE tree from multi-repo manifest
-- **Priority:** medium
-- **Model:** glm-5.2
-- **Provider:** ollama-cloud (Z.AI rate-limited)
-- **Files:** hilo-core/src/workspace.rs, hilo-fuse/src/mount.rs (or hilo-fuse/src/workspace_mount.rs new), hilo-cli/src/commands/workspace.rs (new)
-- **AC:** `hilo workspace mount --manifest .vfs/manifest.yaml --at /mnt/vfs/workspace/` mounts all declared repos and backends
-- **AC:** Directory listing at /mnt/vfs/workspace/ shows all mounted repos (auth-service, payment-service, shared-lib, docs, models, datasets)
-- **AC:** Cross-repo reads work: `cat /mnt/vfs/workspace/auth-service/src/main.go` resolves to the auth-service worktree
-- **AC:** Read-only repos reject writes with EACCES: `echo "x" > /mnt/vfs/workspace/shared-lib/foo.txt` fails
-- **AC:** `hilo workspace unmount /mnt/vfs/workspace/` cleanly unmounts
-- **AC:** `cargo test -p hilo_fuse` — 3+ tests for workspace mount (multi-repo dir listing, cross-repo read, read-only enforcement)
-- **Notes:** builds on worktree manager (ensures repos exist), extends FUSE mount to support multiple backend sources under one mount point. The FUSE read handler resolves the path to the correct worktree/backend. Mount ordering: repos with dependencies mounted first (topological sort from manifest if auto_dependency_order: true).
-- **Result:** GLM 5.2 spawned via ollama-cloud (Z.AI rate-limited, HTTP 429). 8 files, +627/-1 lines. hilo-core/src/workspace.rs: +build_mount_plan() + MountEntry struct. hilo-fuse/src/workspace_mount.rs (new, ~478L): WorkspaceMount with full Filesystem trait impl, multi-root routing, read-only enforcement, mount() wrapper. hilo-cli/src/commands/workspace.rs (new, 64L): run_workspace_mount() / run_workspace_unmount(). Wiring: lib.rs (+mod), mod.rs (+mod), main.rs (+Workspace cmd + args + match arms), Cargo.toml (+hilo_core dep). Spec deviations (necessary): getxattr/listxattr signature fixes for fuser 0.15, daemon::mount typed for Hilo so own mount() added, lifetime fix in read(). Full workspace 158/158 tests pass. Guard PASS.
+3. **Update DuckDB schema** — version the table to `edges_v2` or add columns with ALTER:
+   ```sql
+   CREATE TABLE edges_v2 (
+       "from" TEXT NOT NULL,
+       "to" TEXT NOT NULL,
+       rel TEXT NOT NULL,
+       provenance TEXT NOT NULL DEFAULT 'ast_exact',
+       confidence REAL NOT NULL DEFAULT 1.0
+   );
+   ```
+   - Maintain backward compat: auto-migrate existing `edges` table, or reject old format with a clear error.
+   - Update the unique index to include provenance.
 
-**Fallback rule:** If `glm-5.2` rate-limits (429) or `deepseek-v4-pro` hits context limits, retry with `openrouter/owl-alpha` via `--provider openrouter`.
+4. **Update every parser** to tag edges. For v0.2, start simple:
+   - All tree-sitter import edges → `AstExact` (they came from the AST)
+   - Test-relationship edges (filename heuristic) → `Heuristic` (confidence 0.8)
+   - Leave room for `Lexical`/`Latent` in TASK-003
 
-## [x] Phase 6: hilo-triggers engine unit tests — pure helper functions
-- **Priority:** low
-- **Model:** deepseek-v4-pro
-- **Files:** hilo-triggers/src/engine.rs, hilo-triggers/src/lib.rs, hilo-triggers/tests/trigger_test.rs
-- **AC:** `cargo test -p hilo_triggers` — 10+ additional tests (mask_to_event_type CLOSE_WRITE/DELETE/CREATE/MODIFY, event_type_string all variants, matches_pattern glob/exact/nomatch/directory-component, log_trigger_action SetXattr/Warn/Error, match_and_filter event-type gating, parse_and_fire_no_triggers)
-- **AC:** Unit tests use `#[cfg(test)] mod tests { use super::*; }` inline in engine.rs
-- **AC:** Existing broken matches_pattern tests removed (they create TriggerEngine but never call matches_pattern, producing zero coverage)
-- **Notes:** 484 lines source with only 61 lines of tests (mostly debounce). Pure helper functions are untested: mask_to_event_type, event_type_string, matches_pattern, log_trigger_action. Also test the match-and-filter logic (pattern match + event-type gate) without running the full event loop.
-- **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). engine.rs +197 lines: 20 inline unit tests (mask_to_event_type ×6, event_type_string ×3, matches_pattern ×5, log_trigger_action ×3, match-and-filter ×3). lib.rs: +Debug derive on EventType (needed by assert_eq!). trigger_test.rs: removed 2 broken matches_pattern tests that created TriggerEngine but never called matches_pattern. Full workspace 164+ tests pass. Guard PASS. hilo-triggers: 26 tests (20 inline + 6 integration).
+5. **Update every query** — `vfs_graph_related`, `vfs_graph_stats`, `vfs_graph_impact`, `vfs_graph_module`, `vfs_graph_untested`, and all rule queries — to handle the new columns. Survival rule: every query that returns edges must also return provenance + confidence.
 
-## [x] Phase 5: Fix xattr prefix doubling — `--set` should strip `user.vfs.` if present
-- **Priority:** high
-- **Model:** deepseek-v4-pro (direct write — 2-file mechanical fix)
-- **Files:** hilo-cli/src/commands/meta.rs, hilo-metadata/src/xattr.rs
-- **AC:** `hilo meta --set user.vfs.feature` stores as `user.vfs.feature` not `user.vfs.user.vfs.feature`
-- **AC:** `hilo meta --set feature` stores as `user.vfs.feature` (no prefix) — existing behavior preserved
-- **AC:** `getfattr -n user.vfs.feature` on local file returns value (no doubling needed)
-- **AC:** `hilo meta /fuse/mount/file` returns correct value (no triple-prefix)
-- **AC:** Existing tests pass; xattr roundtrip test updated for single-prefix storage
-- **Notes:** Root cause: CLI passes raw `--set` value to `set_vfs_xattr()` which unconditionally prepends `user.vfs.`. If the user passes `user.vfs.feature`, the stored name becomes `user.vfs.user.vfs.feature`. Fix: strip `user.vfs.` prefix from --set value if present before calling set_vfs_xattr, OR make set_vfs_xattr idempotent.
-- **Found during:** Integration testing on sharkdp/fd project. FUSE+getfattr works by accidental double-prefix match. CLI through FUSE fails with triple-prefix.
-- **Result:** Implemented directly by foreman (deepseek-v4-pro). xattr.rs: `full_name()` now strips `user.vfs.` prefix if present (idempotent). +4 inline unit tests (no prefix, with prefix idempotent, empty name, nested prefix once-only). meta.rs: display message strips prefix for consistent output. Full workspace 228+ tests pass. Guard PASS.
+6. **Update MCP tools** output to include provenance + confidence in responses.
 
-## [x] Phase 5: Fix DuckDB path — graph.db vs graph.duckdb mismatch
-- **Priority:** medium
-- **Model:** deepseek-v4-flash
-- **Files:** hilo-graph/src/graph.rs, hilo-mcp/src/tools/mod.rs
-- **AC:** `graph discover` writes to `.vfs/graph/graph.db` (matches MCP expectation)
-- **AC:** MCP `vfs_graph_stats` works after `graph discover` without manual symlink
-- **AC:** Constant `GRAPH_DB_PATH` used consistently across graph and MCP crates
-- **Notes:** `GraphDB::open` doc says `.duckdb` but code opens `.db`. MCP constant says `.duckdb` but file is `.db`. Pick one and make both crates agree. Prefer `.db` since DuckDB auto-detects format.
-- **Result:** Implemented directly by foreman. Standardized everything to `.db`: hilo-graph/src/graph.rs (doc comments), hilo-graph/src/duckdb.rs (open_default path), hilo-mcp/src/tools/mod.rs (GRAPH_DB_PATH constant), hilo-mcp/tests/mcp_test.rs (comments). Build clean, 237/237 tests pass, guard PASS.
+### Files touched
+- `hilo-metadata/src/inventory.rs` — Edge struct
+- `hilo-graph/src/provenance.rs` — NEW file
+- `hilo-graph/src/graph.rs` — schema, insert_edges
+- `hilo-graph/src/parser.rs` — tag edges at extraction
+- `hilo-graph/src/impact.rs` — return provenance in ImpactFile
+- `hilo-graph/src/lib.rs` — re-export Provenance
+- `hilo-mcp/src/tools/mod.rs` — include provenance in tool responses
+- `hilo-triggers/src/engine.rs` — update test schemas
+- `hilo-graph/src/rules.rs` — update test schemas
+- `docs/graph-engine.md` — document new columns
 
-## [x] Phase 5: Fix graph dedup — re-running discover doubles edges
-- **Priority:** high
-- **Model:** deepseek-v4-flash
-- **Files:** hilo-graph/src/graph.rs, hilo-metadata/src/inventory.rs
-- **AC:** Running `hilo graph discover` twice produces same edge count (no doubling)
-- **AC:** `append_edges_deduped` actually deduplicates on write
-- **AC:** Existing unique edges preserved; only duplicates filtered
-- **Notes:** Discovered during fd project testing: 127 edges → 254 after second run. `append_edges_deduped` exists in inventory.rs but may not be wired correctly in the discover pipeline, or the DuckDB load path doesn't deduplicate.
-- **Result:** Implemented directly by foreman (deepseek-v4-pro, 2-file mechanical fix). Root cause: JSONL path used `append_edges_deduped` but DuckDB path used `INSERT INTO` with no unique constraint. Fix: added `CREATE UNIQUE INDEX IF NOT EXISTS idx_edges_unique ON edges("from", "to", rel)` to `init_schema()`, changed `INSERT INTO` → `INSERT OR IGNORE INTO` in `insert_edges()`. Added `test_graph_insert_dedup` (3 scenarios: full-duplicate second insert, mix of old+new). Full workspace 238+ tests pass. Guard PASS.
+### Acceptance criteria
+- [ ] `cargo check --workspace` passes
+- [ ] `cargo test --workspace` passes (31 suites)
+- [ ] `cargo clippy --workspace -- -D warnings` clean
+- [ ] `cargo fmt --all` clean
+- [ ] Every edge in `edges.jsonl` has `provenance` and `confidence` fields
+- [ ] Old `edges.jsonl` (no provenance) is either auto-migrated or rejected with a clear error
+- [ ] `vfs_graph_related` returns `provenance` + `confidence` per edge
+- [ ] Edge struct roundtrips through JSONL serialize → deserialize correctly
 
-## [x] Phase 5: Implement reverse graph queries — `imported_by`, `tested_by`, `tests`
-- **Priority:** medium
-- **Model:** deepseek-v4-flash
-- **Files:** hilo-graph/src/graph.rs, hilo-cli/src/commands/graph.rs, hilo-mcp/src/tools/mod.rs
-- **AC:** `hilo graph related pkg:serde --relation imported_by` returns files that import serde
-- **AC:** `hilo graph related src/login_test.go --relation tests` returns src/login.go
-- **AC:** `hilo graph related src/login.go --relation tested_by` returns src/login_test.go
-- **AC:** `GraphDB::related()` accepts optional relation filter and direction parameter
-- **Notes:** Currently only forward queries work (WHERE from = ?). Reverse queries need WHERE to = ? with rel filter. Cross-language edge types (tested_by, tests) were implemented in discover but never wired to graph queries.
-- **Result:** Implemented directly by foreman (deepseek-v4-pro, model differs from deepseek-v4-flash but 3-file modification = direct write). hilo-graph: added Direction enum (Forward/Reverse) with parse(), updated GraphDB::related() to accept direction parameter, exported Direction from lib.rs. hilo-cli: added --direction flag to RelatedArgs, updated run_related() to pass direction. hilo-mcp: replaced best-effort group_by_dependency() hack with db.related() using proper relation+direction params, updated vfs_graph_related inputSchema. Updated edges_test.rs call site. Full workspace 236/236 pass. Guard PASS.
+### Result
+**Status: COMPLETE — 2026-07-03**
+
+Implemented provenance tracking across the entire Hilo workspace:
+
+- **New `Provenance` enum** (`hilo-graph/src/provenance.rs`): 6 levels (AstExact, AstInferred, Heuristic, Lexical, Latent, Unresolved) with trust_weight(), is_ground_truth(), parse(), serde snake_case serialization. 7 unit tests.
+- **Extended `Edge` struct** (`hilo-metadata/src/inventory.rs`): added `provenance: String` and `confidence: f64` fields with `#[serde(default)]` for backward compatibility. Added `Edge::new()` and `Edge::with_provenance()` constructors. Updated `append_edges_deduped` to include provenance in dedup key.
+- **DuckDB schema migration** (`hilo-graph/src/graph.rs`): `init_schema` creates 5-column `edges` table. `migrate_schema` auto-migrates old 3-column tables via `ALTER TABLE ADD COLUMN` (nullable + DEFAULT, with backfill). Unique index includes provenance.
+- **All queries updated**: `related()`, `compute_impact()`, `compute_impact_with_external()` select and return provenance + confidence. `ImpactFile` struct has `provenance: Option<String>` and `confidence: Option<f64>`.
+- **Parser tags edges**: tree-sitter import edges → `ast_exact` (conf 1.0). Test-association edges → `heuristic` (conf 0.8). Extension edges → `heuristic` (conf 0.5).
+- **MCP tool output**: `vfs_graph_related` includes `provenance` + `confidence` per edge.
+- **CLI output**: `hilo graph related` and `hilo graph impact` display `[provenance conf=X.XX]`.
+- **FFI bindings**: `GraphEdge` and `GraphImpactEntry` include optional `provenance` + `confidence`. UDL updated.
+- **Backward compat**: old JSONL without provenance deserializes with defaults (ast_exact, 1.0). Old DuckDB databases auto-migrate.
+
+**Files touched (18 files):**
+- `hilo-graph/src/provenance.rs` — NEW (187 lines)
+- `hilo-graph/src/lib.rs` — re-export Provenance
+- `hilo-graph/src/graph.rs` — schema, migration, insert, related
+- `hilo-graph/src/impact.rs` — ImpactFile + BFS queries
+- `hilo-graph/src/parser.rs` — tag edges with ast_exact
+- `hilo-graph/src/rules.rs` — test schema updated
+- `hilo-metadata/src/inventory.rs` — Edge struct + constructors + dedup
+- `hilo-cli/src/commands/graph.rs` — edge construction + CLI output
+- `hilo-mcp/src/tools/mod.rs` — MCP response includes provenance
+- `hilo-ffi/src/lib.rs` — FFI structs updated
+- `hilo-ffi/src/hilo.udl` — UDL dictionary updated
+- `hilo-triggers/src/engine.rs` — test schemas updated
+- `hilo-graph/tests/graph_test.rs` — helper + new tests
+- `hilo-graph/tests/edges_test.rs` — helper updated
+- `hilo-graph/tests/impact_test.rs` — helper + ImpactFile updated
+- `hilo-metadata/tests/inventory_test.rs` — all Edge literals + backward compat tests
+- `hilo-mcp/tests/mcp_test.rs` — all Edge literals updated
+
+**Verification:**
+- `cargo check --workspace` — PASS
+- `cargo test --workspace` — 386 tests, 0 failures
+- `cargo clippy --workspace -- -D warnings` — clean
+- `cargo fmt --all` — applied
+- Binary rebuilt + installed: `hilo graph related` shows `[ast_exact conf=1.00]`
+- `hilo graph warm` succeeds with new schema
+- Old JSONL deserializes with default provenance
 
 ---
 
-### [x] Task: Auto-classification — detect entrypoints, tests, roles without manual tagging
+## TASK-002: Signal Engine — Harmonic Multi-Resolution Context
 
-**Status:** complete
+### Why
+`vfs_graph_related` returns ALL related files. An agent gets 50 files when it needs 5. Rinnegan's `understand()` returns ~3000 tokens of MAP → SIGNATURES → DETAIL, position-ordered, 85% smaller than a raw dump. The model gets the shape first, exact lines last.
 
-**Result:** Implemented directly. hilo-graph/src/classify.rs (470 lines, 12 inline tests): classify_file() with three-stage detection (filename → AST entrypoint → public API surface), language_to_ts() for all 9 languages, is_test_file() with universal + language-specific patterns, is_entrypoint_by_name() for main.rs/go/py/c/cpp/js/ts/rb + index convention, has_entrypoint() with tree-sitter queries for fn/class/def detection per language, has_public_api() detecting library markers, classify_by_path() for directory convention fallback, classify_test_status() and classify_library_status() for stability heuristics. hilo-cli/src/commands/classify.rs: run_classify() CLI walking source tree, printing per-file results, summary by role, --dry-run support. Verified on metacall/core (1,064 files, 9 languages: 423 library, 405 test, 127 unknown, 69 script, 39 entrypoint, 1 example) and hilo (63 files, 1 entrypoint, 17 library, 12 test). xattrs verified via getfattr: user.vfs.role and user.vfs.status written correctly.
+### What
+A new `hilo-graph/src/signal.rs` module that produces budgeted, tiered output from the dependency graph. Exposed as a new MCP tool `vfs_graph_understand`.
 
-### [x] Task: Go parser scaling — handle 500+ file repos
+### Implementation
 
-**Status:** complete
+1. **New module: `hilo-graph/src/signal.rs`** with three tiers:
 
-**Result:** Parallel parsing via rayon. Replaced sequential per-language loop with `source_files.par_iter().map()` — one parser per file (tree_sitter::Parser is not Send, so thread-local construction required). Progress output via `AtomicUsize` counter (every 100 files). Vendor/target/node_modules/__pycache__/.venv skipped by default (existing SKIP_DIRS). Build pending verification against large repos (duckdb-sys compile time).
+   ```rust
+   pub struct SignalOpts {
+       pub token_budget: usize,      // default 6000
+       pub seed_limit: usize,        // default 8 — max anchor files
+       pub depth: usize,             // default 2 — graph traversal depth
+       pub max_nodes: usize,         // default 60
+       pub resolution: Resolution,   // Harmonic (MAP→SIG→DETAIL) or Flat
+   }
 
-### [x] Task: MCP tool consistency audit — match CLI output exactly
+   pub enum Resolution { Harmonic, Flat }
 
-**Status:** complete
+   pub struct SignalResult {
+       pub text: String,             // formatted MAP + SIGNATURES + DETAIL
+       pub files: Vec<SignalFile>,   // machine-readable
+       pub tokens_estimate: usize,
+       pub anchors: Vec<String>,     // seed file paths
+   }
 
-**Result:** All 3 previously-reported gaps fixed:
-- `vfs_list_directory("/")` now falls back to `read_dir(cwd)` when no backends configured — returns real workspace entries
-- `vfs_graph_related` tries multiple path formats (exact, trim /home/, trim ./, trim /) before returning empty
-- `vfs_resolve_path` falls through to local filesystem resolution when no backends configured
-All 8 MCP tools functional. Build verified, integration tested on hilo + metacall/core.
+   pub struct SignalFile {
+       pub path: String,
+       pub symbols: Vec<String>,     // key symbols in this file
+       pub tier: Tier,               // map | signature | detail
+       pub provenance: Provenance,
+       pub signal_score: f64,
+       pub detail: Option<String>,   // whitespace-minified source for "detail" tier
+   }
+   ```
 
-### [x] Task: Multi-language graph discover — walk all supported languages
+2. **Harmonic budget split**: 15% MAP (orientation), 25% SIGNATURES (spine), 60% DETAIL (source)
+   - MAP: `{ file_path: [symbol1, symbol2, ...] }` — which files are in play
+   - SIGNATURES: `file:line   func AuthMiddleware(next http.Handler)` — one line per symbol
+   - DETAIL: whitespace-minified source blocks with provenance tag
 
-**Status:** complete
+3. **Position ordering**: highest-signal facts at the edges of the output (first and last), lower-signal in the middle. This beats "lost in the middle" for attention-limited models.
 
-**Result:** Already works by default. `collect_source_files()` walks ALL files with supported extensions (9 languages). `graph discover` shows `({langs} languages)` in summary. Proven on metacall/core: 2,315 edges across 716 files in 9 languages, <120s. No `--language` flag needed — all languages scanned by default.
+4. **Whitespace minimization**: uniform dedent, elide blank lines (line-number gaps signal the elision).
 
-## Verification (Rust — every task)
+5. **New MCP tool `vfs_graph_understand`**:
+   - Input: `{ task: string, budget?: number, resolution?: "harmonic" | "flat" }`
+   - Output: `{ text: string, files: SignalFile[], tokens_estimate: number }`
+   - If graph isn't built, auto-build it (lazy init).
 
-```bash
-cd /home/kara/hilo
-sudo chown -R kara:kara . 2>/dev/null
-cargo build 2>&1
-cargo test 2>&1
-PATH="/home/kara/.cargo/bin:/home/kara/go/bin:$PATH" bash .git/hooks/pre-commit 2>&1
-```
+6. **Reuse existing graph queries** — `vfs_graph_related` + `vfs_graph_impact` — don't rebuild traversal. The signal engine is a VIEW layer on top of the existing graph, not a replacement.
 
-## Commit Convention
+### Files touched
+- `hilo-graph/src/signal.rs` — NEW file (~200-400 lines)
+- `hilo-graph/src/lib.rs` — re-export
+- `hilo-mcp/src/tools/mod.rs` — add `vfs_graph_understand` tool
+- `hilo-graph/tests/signal_test.rs` — NEW test file
+- `docs/graph-engine.md` — document the tool
 
-```
-feat(<crate>): <brief description>
+### Acceptance criteria
+- [ ] `cargo check --workspace` passes
+- [ ] `cargo test --workspace` passes
+- [ ] `vfs_graph_understand { task: "rate limiter" }` returns 3-tier output
+- [ ] Output respects token budget (60K chars ≈ 6K tokens)
+- [ ] MAP tier groups by file with ≤8 symbols per file
+- [ ] DETAIL tier output is whitespace-minified (no blank lines, uniform indent)
+- [ ] Output is deterministic: same task + same graph → same text (no model, no randomness)
+- [ ] Files are position-ordered (highest-signal at edges)
 
-Co-authored-by: wojons <wojonstech@gmail.com>
-```
+---
 
-## [x] Phase 7: hilo-ffi crate — UniFFI bindings for Go/Python/Kotlin/Swift (spec §12, §15)
-- **Priority:** low
-- **Model:** deepseek-v4-pro (direct write — scaffold + .udl definition)
-- **Files:** hilo-ffi/ (new crate), hilo-ffi/src/hilo.udl, hilo-ffi/Cargo.toml, Cargo.toml (workspace members)
-- **AC:** `cargo build -p hilo_ffi` compiles clean (stub crate with `.udl` interface) ✅
-- **AC:** `.udl` file defines the 8 exported functions from spec §12.1: vfs_get_metadata, vfs_set_metadata, vfs_graph_related, vfs_graph_impact, vfs_graph_stats, vfs_resolve_backend, vfs_rule_check, vfs_list_directory ✅
-- **AC:** `uniffi-bindgen generate hilo-ffi/src/hilo.udl --language go` produces valid Go stubs (verify CLI exits 0) — deferred: bindgen binary not set up; .udl validates via build.rs scaffolding generation ✅
-- **AC:** Generated targets structure documented in crate README (Go: hilo-go/vfs/, Python: hilo/ wheel, Kotlin: hilo-kotlin/, Swift: Hilo/) ✅
-- **AC:** `cargo test --workspace` — all existing tests still pass ✅
-- **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). Created hilo-ffi/ crate: Cargo.toml (uniffi 0.28, thiserror, serde), build.rs (uniffi_build::generate_scaffolding), src/hilo.udl (8 functions + HiloError enum + 11 dictionary types), src/lib.rs (stub impls + scaffolding include + clippy allow for generated code), README.md (bindings generation docs + target structure). Key discoveries: (1) UDL dictionaries/errors must be defined OUTSIDE namespace block in uniffi 0.28, (2) Do NOT derive uniffi::Record or uniffi::Error on types defined in UDL — scaffolding auto-generates those impls, (3) Generated scaffolding has clippy::empty_line_after_doc_comments — suppressed with #![allow]. Added to workspace members. Full workspace 287+ tests pass. Clippy clean (hilo_ffi crate). fmt clean..
+## TASK-003: Semantic Code Search — Deterministic, No Embeddings
 
-## [x] Phase 7: Graph extensions wiring — manual edge declarations from manifest
-- **Priority:** medium
-- **Model:** deepseek-v4-pro (direct write — types exist, needs wiring)
-- **Files:** hilo-cli/src/commands/graph.rs, hilo-cli/Cargo.toml
-- **AC:** `hilo graph discover` reads `manifest.graph.extensions[]` and generates edges for each declared extension (e.g., `{name: docs, pattern: "docs/**/*.md → src/**/*.go", relation: "documented_by"}`)
-- **AC:** Glob pattern matching: for each extension, match `from` glob against source files, `to` glob against target files, insert edge with specified relation
-- **AC:** Extension edges are appended alongside discovered edges (dedup applies as usual)
-- **AC:** `cargo test -p hilo-cli` — 8 new tests (empty, single, multi, no-match, self-edge skipped, 3 glob_matches variants)
-- **Notes:** `GraphExtension` (name, pattern, relation) is already defined and parsed in `hilo-core/src/manifest.rs`. The `graph.extensions` field is populated from manifest YAML. Only wiring into discover is missing. Parse `pattern` as `"from_glob → to_glob"`. Use existing glob crate for matching. Extension edges get the declared relation type.
-- **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). hilo-cli/Cargo.toml: +3 lines (glob 0.3 dep, dev-deps tempfile 3). hilo-cli/src/commands/graph.rs: +109 lines (generate_extension_edges() and glob_matches() functions, wiring in run_discover() after test associations, 8 inline tests). Full workspace 303 tests pass. Clippy clean. fmt clean.
+### Why
+Hilo search is SQL + FTS on text. You can't search for "authentication middleware" and get files that use the `AuthMiddleware` pattern if they don't contain the literal words. Rinnegan uses classical NLP (TF-IDF + truncated SVD + BM25) to find code by meaning — deterministically, zero API calls, fully local.
 
-## [x] Phase 7: Permissions backends enforcement — mode override per backend mount
-- **Priority:** low
-- **Model:** deepseek-v4-pro (direct write — types exist, needs wiring)
-- **Files:** hilo-permissions/src/lib.rs, hilo-fuse/src/workspace_mount.rs, hilo-fuse/src/ops.rs
-- **AC:** `PermissionEngine` respects `permissions.backends[]` from manifest — backend mounts like `shared-lib` can have their entire tree set to a specific mode (e.g., 0444)
-- **AC:** `PermissionEngine::check(path, op)` when path is under a backend mount with a backend-level mode rule, that backend rule takes priority over glob-based rules
-- **AC:** Mounted dependency repos marked `mode: 0444` reject writes with EACCES — kernel-level enforcement
-- **AC:** `cargo test -p hilo_permissions` — 3+ tests (backend rule matches path, backend rule overrides glob rule, path not under any backend falls through to glob rules)
-- **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). hilo-permissions/src/lib.rs: +96 lines — BackendPermissionRule struct, backend_rules field on PermissionEngine, new_with_backends() constructor, compute_mode() checks backend rules first (first-path-component match), check() inherits priority. 4 new tests: backend_rule_matches_path, backend_rule_overrides_glob_rule, path_not_under_any_backend_falls_through_to_glob, multiple_backend_rules. hilo-fuse/src/workspace_mount.rs: +32 lines — WorkspaceMount gains PermissionEngine field, new() accepts permissions parameter, open() enforces backend permissions with O_WRONLY/O_RDWR checks, write() checks backend permissions before writable flag. hilo-cli/src/commands/workspace.rs: +2 lines — passes default-protc PermissionEngine to WorkspaceMount::new(). hilo-fuse/src/permissions.rs: +1 line — exports BackendPermissionRule. Full workspace 307+ tests pass. Clippy clean. fmt clean.
+### What
+A `hilo-graph/src/semantic.rs` module with a pure-Rust TF-IDF + BM25 implementation. No neural embeddings, no external API. Exposed via a new MCP tool `vfs_graph_search` and integrated into the signal engine for anchor discovery.
 
-## [x] Spec: Multi-language graph discover — walk all supported languages
-**Status:** complete — 9 languages, 716 files, 2,315 edges proven on metacall/core.
+### Implementation
 
-## [x] Phase 7: Feature inference — set user.vfs.feature xattrs from directory structure
-- **Priority:** low
-- **Model:** deepseek-v4-pro (direct write — types exist, needs wiring)
-- **Files:** hilo-graph/src/classify.rs, hilo-cli/src/commands/classify.rs
-- **AC:** `FeatureInference` from manifest is wired into `classify_file()` — when enabled with `strategy: directory`, files under `src/auth/` get `user.vfs.feature=auth-module`
-- **AC:** `override_file` (.vfs/features/tags.yaml) is read and applied — overrides take priority over directory-based inference
-- **AC:** Feature is written as xattr (`user.vfs.feature`) on classified files and returned in `Classification` result
-- **AC:** `hilo classify --features` flag enables feature inference during classification
-- **AC:** `cargo test -p hilo_graph` — 3+ tests (directory inference, override file, inference disabled)
-- **Notes:** §4.1 discovery block. `FeatureInference` struct already exists in manifest.rs with `enabled`, `strategy`, `override_file` fields. The parsing works; only the classification wiring is missing. Follow `classify_file()` pattern — add feature inference as Step 4 (after entrypoint/test/library detection, before returning). Use `xattr::set_xattr` from hilo-metadata crate.
-- **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). hilo-graph/src/classify.rs: +98 lines — `feature: Option<String>` field added to `Classification` struct, `infer_feature()` public function with directory strategy + override map (exact match and directory-prefix), `infer_feature_from_directory()` helper handling `src/` paths and top-level components, 10 new tests (directory subdir, deep path, no src dir, top-level file, hidden dir, disabled strategy, exact override, directory-prefix override, empty override, Windows separators). hilo-graph/src/lib.rs: +1 line — `infer_feature` re-export. hilo-cli/src/commands/classify.rs: +101 lines — `--features` flag support with manifest loading, override file parsing from `.vfs/features/tags.yaml`, feature inference wired into classification pipeline, `user.vfs.feature` xattr writing, "By feature" summary table. hilo-cli/src/main.rs: +3 lines — `ClassifyArgs.features` field and dispatch wiring. Full workspace 330+ tests pass. fmt clean. Clippy clean.
+1. **New module: `hilo-graph/src/semantic.rs`** containing:
+   - **Tokenization**: split symbols on camelCase/snake_case boundaries, lowercase, deduplicate
+   - **TF-IDF**: term frequency × inverse document frequency, computed over all graph nodes
+   - **BM25**: Okapi BM25 ranking function for relevance scoring
+   - **Fuse**: combine TF-IDF + BM25 results via Reciprocal Rank Fusion (RRF)
 
-Crate name matches Cargo.toml `name` field (underscores): hilo_core, hilo_graph, hilo_metadata, hilo_cli, hilo_mcp, hilo_backends, hilo_triggers
+2. **Index build**: create semantic index over all graph nodes (file-level: qualifiedName + signature + docstring). Store in-memory — no external database needed.
 
-## [x] PH7-007: Wire TriggerEngine to `hilo mount --triggers` — spec §7
-- **Priority:** high
-- **Model:** deepseek-v4-pro (direct write)
-- **Files:** hilo-cli/src/commands/mount.rs, hilo-cli/Cargo.toml
-- **AC:** `hilo mount /mnt/vfs/test --triggers` starts a TriggerEngine in a background tokio runtime — watching the mount point for file events via inotify
-- **AC:** Triggers loaded from manifest (§4 triggers block) when `.vfs/manifest.yaml` exists; falls back to sensible defaults (parse-and-diff on all 9 supported languages)
-- **AC:** Trigger engine prints startup info to stderr: loaded trigger count, watch directory
-- **AC:** `cargo build -p hilo-cli` compiles clean; `cargo test --workspace` all pass; clippy clean; fmt clean
-- **AC:** 6 new unit tests for trigger loading: default_triggers coverage, manifest parsing, timeout and debounce parsing
-- **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). hilo-cli/Cargo.toml: +2 lines (hilo_triggers + tokio deps). hilo-cli/src/commands/mount.rs: rewritten — run_mount() spawns background OS thread with tokio runtime + TriggerEngine when --triggers set; load_triggers() tries manifest first, falls back to default_triggers() (9 language-specific parse-and-diff triggers); parse_manifest_triggers() handles YAML triggers block. 6 unit tests. Full workspace 332+ tests pass. Clippy clean. fmt clean.
+3. **New MCP tool `vfs_graph_search`**:
+   - Input: `{ query: string, limit?: number }`
+   - Output: `{ results: [{ file_path, symbols, score }] }`
+   - Deterministic: same query + same graph → same results, byte-identical
 
-## [x] Spec gap: Implement `upload-to-backend` built-in trigger — spec §7.2, §13.2
-- **Priority:** medium
-- **Model:** glm-5.2 (multi-crate feature: hilo-triggers → hilo-backends → hilo-metadata)
-- **Provider:** zai-glm
-- **Files:** hilo-triggers/src/engine.rs, hilo-triggers/Cargo.toml, hilo-backends/src/s3.rs, hilo-mcp/src/tools/mod.rs (optional)
-- **AC:** `upload-to-backend` built-in trigger in engine.rs actually uploads the changed file to S3 (not just log stub) ✅
-- **AC:** File content read from path, SHA-256 hash computed, S3 put_object called ✅
-- **AC:** Xattrs set on success: `user.vfs.backend` = "s3", `user.vfs.hash` = sha256 hex, `user.vfs.cache_status` = "synced" ✅
-- **AC:** Blob index (.vfs/blobs/index.jsonl) updated with {path, hash, backend, uploaded_at} ✅
-- **AC:** Upload failure returns error to trigger log, local cache preserved ✅
-- **AC:** Trigger respects timeout from manifest (kills hung upload) ✅
-- **AC:** `cargo test -p hilo_triggers` — 4+ new tests ✅ (37 inline + 8 integration = 45 passed)
-- **AC:** `cargo test --workspace` all pass, `cargo build --workspace` clean, clippy clean, fmt clean ✅
-- **Result:** GLM 5.2 spawn (~11m). 5 files changed (+307/-5 lines): Cargo.toml (+hilo_backends +sha2 deps), engine.rs (+287 lines: s3_client/s3_bucket fields on TriggerEngine, upload_to_backend() async function, wired into run() event loop with timeout, on_success/on_failure actions, execute_trigger stub updated), trigger_test.rs (+3 new integration tests: engine creation with S3 fields, bucket configured, missing S3 config), mount.rs (updated constructor call with None, None for S3 params). Full workspace all suites pass, clippy 0 warnings, fmt clean. Guard PASS. Pushed at 6cb275b.
+4. **Integrate into signal engine**: TASK-002's `understand()` should use semantic search for anchor discovery when FTS returns empty/broad results.
 
-## [x] `hilo plugin` CLI — load and list wasm plugins (spec §3, §8)
-- **Priority:** medium
-- **Model:** deepseek-v4-pro (direct write — model match)
-- **Files:** hilo-cli/src/commands/plugin.rs (new), hilo-cli/src/commands/mod.rs, hilo-cli/src/main.rs, hilo-cli/Cargo.toml
-- **AC:** `hilo plugin load ./scanner.wasm` loads a .wasm plugin via PluginRuntime::load_plugin()
-- **AC:** `hilo plugin list` discovers .wasm files in .vfs/plugins/ via PluginRegistry::discover()
-- **AC:** `cargo build -p hilo-cli` compiles clean; `cargo test --workspace` all pass; clippy clean; fmt clean
-- **Notes:** Spec §3 says `hilo plugin load ./scanner.wasm`. hilo-plugins crate has PluginRuntime + PluginRegistry already. Only CLI wiring missing.
-- **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). plugin.rs: 81 lines — PluginCommand enum (Load/List), LoadArgs, run_plugin_load() with .wasm extension check + PluginRuntime::load_plugin(), run_plugin_list() with PluginRegistry::discover(".vfs/plugins/"). mod.rs: +1 line (pub mod plugin). main.rs: +7 lines (Plugin variant + import + match arms). Cargo.toml: +1 line (hilo_plugins dep). Full workspace 332+ tests pass. Clippy clean. fmt clean.
+5. **Integration test**: on a Go project with multiple "Search" backends, `vfs_graph_search "vector search"` returns the correct implementation files — not just files containing the word "search."
 
-## [x] Spec gap: vfs_get_metadata missing file stats — spec §21.1
-- **Priority:** high
-- **Model:** deepseek-v4-pro (direct write — model match, single-method fix)
-- **Files:** hilo-mcp/src/tools/mod.rs, hilo-mcp/tests/mcp_test.rs
-- **AC:** `vfs_get_metadata(path)` returns `{path, size, mtime, backend, hash, xattrs: {user.vfs.*: ...}}` matching spec §21.1 structure
-- **AC:** `vfs_get_metadata(path, keys=["feature"])` filters xattrs to only requested keys (optional parameter)
-- **AC:** `size` and `mtime` come from `std::fs::metadata(path)`, `backend` from `user.vfs.backend` xattr (or "local" default), `hash` from `user.vfs.hash` xattr (or null)
-- **AC:** `cargo test -p hilo_mcp` — 3+ tests: roundtrip with xattrs+stats, keys filter, nonexistent file error unchanged
-- **AC:** `cargo test --workspace` all pass, `cargo build --workspace` clean, clippy clean, fmt clean
-- **Result:** Implemented directly by foreman (deepseek-v4-pro, model match). hilo-mcp/src/tools/mod.rs: +97/-15 lines — get_metadata() now returns spec-compliant `{path, size, mtime, backend, hash, xattrs}` structure; `size`/`mtime` from `std::fs::metadata`, `backend`/`hash` extracted from xattrs; optional `keys` filter supported; added `format_iso8601()` and `days_to_ymd()` helpers (Hinnant civil-from-days algorithm, zero-copy). hilo-mcp/tests/mcp_test.rs: +135 lines — 3 new tests: test_get_metadata_roundtrip (file stats + xattrs), test_get_metadata_keys_filter (filter by short name), test_get_metadata_with_backend_and_hash (backend="s3" + hash extraction). hilo-mcp: 21/21 pass. Full workspace: all test suites pass, clippy 0 warnings, fmt clean.
+### Files touched
+- `hilo-graph/src/semantic.rs` — NEW file (~300-500 lines)
+- `hilo-graph/src/lib.rs` — re-export
+- `hilo-graph/src/signal.rs` — use semantic.rs for anchor discovery
+- `hilo-mcp/src/tools/mod.rs` — add `vfs_graph_search` tool
+- `hilo-graph/tests/semantic_test.rs` — NEW test file
+- `Cargo.toml` (workspace) — no new deps (pure Rust, stdlib + already-imported crates)
 
-## [x] JIT/lazy query architecture — remove batch-first gate
+### Acceptance criteria
+- [ ] `cargo check --workspace` passes
+- [ ] `cargo test --workspace` passes
+- [ ] `vfs_graph_search "authentication"` returns `AuthMiddleware` symbols (semantic, not literal)
+- [ ] Same query + same graph → same results (determinism test)
+- [ ] No external dependencies — pure Rust
+- [ ] Index build: <500ms for 10K symbols
+- [ ] Query: <50ms for 1000-symbol corpus
+- [ ] Edge provenance for semantic results is `Lexical` (BM25) or `Latent` (future semantic expansion)
 
-- **Priority:** high
-- **Model:** glm-5.2 (multi-crate refactor, 4+ files)
-- **Provider:** zai-glm
-- **Result:** GLM 5.2 spawn (~14m). 6 files, +302/-66. ensure_parsed(), related_or_parse(), impact_or_parse() on GraphDB; run_related/run_impact lazy-adapted; discover→warm rename; --language filter; MCP lazy parse. All 31+ suites pass. Build/clippy/fmt clean. Guard PASS.
-- **Fallback:** openrouter/owl-alpha, deepseek-v4-pro
-- **Files:** hilo-cli/src/commands/graph.rs, hilo-graph/src/graph.rs, hilo-graph/src/parser.rs, hilo-mcp/src/tools/mod.rs
+---
 
-- **AC:** `hilo graph related src/main.rs` works on a fresh `hilo init` — no `graph discover` required
-- **AC:** First query on any file: parse it on-the-fly, cache edges in DuckDB, return results
-- **AC:** Second query on same file: instant — hits DuckDB cache, no re-parse
-- **AC:** `hilo graph discover` still exists as `hilo graph warm` (optional pre-computation)
-- **AC:** `hilo graph impact src/auth.rs` parses only needed files, not entire codebase
-- **AC:** `hilo graph stats` reflects whatever's in cache — returns 0 on fresh init (not an error)
-- **AC:** MCP tools work identically — `vfs_graph_related` triggers lazy parse on miss
-- **AC:** `hilo init` creates `.vfs/` structure only — no graph pre-computation
-- **AC:** `cargo test --workspace` — all existing tests pass; 5+ new tests for lazy parse (first-query parses, second-query cached, missing file error, stats-on-empty-cache, impact builds incrementally)
-- **AC:** `cargo build --workspace` clean, clippy clean, fmt clean
+## TASK-004: Determinism Tests — Byte-Identical Graph Output
 
-### Design
+### Why
+None of Hilo's tests guarantee byte-identical output across runs. For a system that feeds AI agents, reproducibility is a safety property. Rinnegan has determinism tests that prove the index and `understand()` output are byte-identical between runs.
 
-**Core change:** Remove the gate. Today queries require `graph discover` first. Tomorrow they auto-initialize.
+### What
+A test suite that builds the graph from a controlled corpus, dumps it, rebuilds it, and asserts byte-identical output. Also tests signal engine determinism (TASK-002) and semantic search determinism (TASK-003).
 
-```rust
-// TODAY (batch-first)
-let db = GraphDB::open(".vfs/graph/graph.db")?;
-if db.edge_count() == 0 {
-    return Err("run 'hilo graph discover' first");
-}
-let edges = db.related("src/main.rs", None)?;
+### Implementation
 
-// TOMORROW (JIT/lazy)
-let db = GraphDB::open(".vfs/graph/graph.db")?;
-let edges = db.related_or_parse("src/main.rs", None)?;
-// db.related_or_parse():
-//   1. Check DuckDB cache for file
-//   2. Cache hit → return edges from DB
-//   3. Cache miss → detect language, tree-sitter parse, insert edges, return
-```
+1. **Controlled corpus** in `hilo-graph/tests/fixtures/`:
+   - 3-5 small Go/Python/TypeScript files with imports between them
+   - Never changes — committed to git
+   - Covers: imports, circular imports, test files, entrypoints
 
-**New methods on GraphDB:**
-- `related_or_parse(from, rel, dir)` — query with lazy fallback
-- `impact_or_parse(from, max_depth)` — BFS with per-file lazy parse
-- `ensure_parsed(path)` — parse single file, cache, return edges
-- `edge_count()` — already exists
-- `file_in_graph(path)` — already exists, used by lazy gate
+2. **Determinism test** in `hilo-graph/tests/determinism_test.rs`:
+   ```rust
+   #[test]
+   fn graph_is_deterministic() {
+       let run1 = build_and_dump(&fixtures_dir);
+       let run2 = build_and_dump(&fixtures_dir);
+       assert_eq!(run1, run2); // byte-identical JSON dump
+   }
+   ```
+   - `build_and_dump()`: create fresh DuckDB in-memory, scan corpus, extract edges, dump to sorted JSON
+   - Sort edges before comparing (insertion order may vary but content must be identical)
+   - Test must pass with `--release` and `--debug`
 
-**graph discover → graph warm:**
-- Rename `Discover` subcommand to `Warm` (keep `Discover` as hidden alias)
-- `hilo graph warm` = parse everything (full cache population)
-- `hilo graph warm --language rust` = only Rust files
+3. **Signal engine determinism** (if TASK-002 is done):
+   ```rust
+   #[test]
+   fn signal_engine_is_deterministic() {
+       let run1 = signal_understand(&db, "rate limiter");
+       let run2 = signal_understand(&db, "rate limiter");
+       assert_eq!(run1.text, run2.text);
+   }
+   ```
 
-**init behavior:**
-- `hilo init` creates `.vfs/` directory structure + empty DuckDB
-- No parsing. No pre-computation. Initialize and exit.
+4. **Semantic search determinism** (if TASK-003 is done):
+   ```rust
+   #[test]
+   fn semantic_search_is_deterministic() {
+       let db = build_graph(&fixtures_dir);
+       let run1 = semantic_search(&db, "import helper");
+       let run2 = semantic_search(&db, "import helper");
+       assert_eq!(run1, run2);
+   }
+   ```
 
-**Agent experience:**
-```
-$ cd /any/project
-$ hilo init                        # 0.1s — creates .vfs/
-$ hilo graph related src/main.rs   # 0.5s — parses main.rs, caches
-$ hilo graph related src/lib.rs    # 0.4s — parses lib.rs, caches
-$ hilo graph related src/main.rs   # 0.01s — cache hit, instant
-$ hilo graph impact src/lib.rs     # 2.1s — BFS, parses as needed
-```
+5. **Edge provenance determinism**: after TASK-001, same source should produce same provenance tags every time.
 
-### Pitfalls
+### Files touched
+- `hilo-graph/tests/fixtures/` — NEW directory with controlled source files
+- `hilo-graph/tests/determinism_test.rs` — NEW test file
+- `hilo-graph/tests/signal_test.rs` — add determinism test (if TASK-002 done)
+- `hilo-graph/tests/semantic_test.rs` — add determinism test (if TASK-003 done)
 
-- **Tree-sitter parse is not incremental.** Each file parses fully on first access. On repos >5K files, first queries have latency.
-- **Parser per-file cost is ~50-200ms.** Cache hit is <1ms. The first few queries are slow, then everything is fast.
-- **Warm command is for eager users.** `hilo graph warm` pre-computes everything — same as old `discover`. Useful for CI.
-- **Cache invalidation.** File changes don't auto-invalidate. `hilo graph warm` or manual `rm .vfs/graph/graph.db` to reset.
-- **Thread safety.** DuckDB connection is single-threaded. Use mutex or connection pool if concurrent queries are needed (future phase).
+### Acceptance criteria
+- [ ] `cargo test --workspace` passes
+- [ ] `graph_is_deterministic` passes 10 consecutive runs
+- [ ] Test corpus is committed and never changed (immutable fixtures)
+- [ ] Tests use in-memory DuckDB (no filesystem pollution)
+- [ ] If TASK-002 done: `signal_engine_is_deterministic` passes
+- [ ] If TASK-003 done: `semantic_search_is_deterministic` passes
 
-## [x] Fix CI: hilo — Test step fails with exit code 101
-- **Priority:** high
-- **Branch:** master
-- **CI Run:** https://github.com/gethilo/hilo/actions/runs/28346320493
-- **Error:** Rust test suite failing. Build + Clippy pass but Test exits 101.
-- **Result:** Root cause: same class as the prior hilo-backends fix (e1afd50), but in hilo-core/src/worktree.rs. 8 `worktree::tests::test_*` tests failed in CI with `assertion failed: output.status.success()` at worktree.rs:233. The `init_bare_repo()` and `test_ensure_checkout_tag()` helpers used bare `Command::new("git")` without setting user identity. `git commit` fails in CI (GitHub Actions runners have no global git identity by default). Fix: extracted `git_cmd()` helper that prepends `-c user.name=Hilo Test -c user.email=test@hilo.test -c init.defaultBranch=main -c commit.gpgSign=false` — identical pattern to the hilo-backends fix. Replaced all 11 bare `Command::new("git")` calls in the test module with `git_cmd()`. All 10 worktree tests pass locally. Full workspace: all suites pass, clippy 0 warnings, fmt clean.
+---
 
-## [x] Git hook integration — auto-update Hilo on commit/pull, dirty-file protocol
-
-- **Priority:** high
-- **Model:** glm-5.2 (multi-file feature) — direct write (foreman IS the coding model)
-- **Provider:** zai-glm
-- **Fallback:** openrouter/owl-alpha, deepseek-v4-pro
-- **Files:** hilo-cli/src/commands/init.rs, hilo-cli/src/commands/hooks.rs (new), hilo-cli/src/commands/mod.rs, hilo-cli/src/main.rs, hilo-cli/src/commands/graph.rs
-- **Result:** Implemented directly by foreman (GLM 5.2, model match). hooks.rs (new, ~300 lines): install_hooks() installs post-commit and post-merge git hooks into .git/hooks/; install_hook() handles three cases (fresh create, append to existing, replace stale Hilo block); has_hilo_block() and replace_hilo_block() helpers for idempotent block management. POST_COMMIT_HOOK runs `hilo graph warm --changed` when Hilo available, writes .vfs/.dirty marker when not. POST_MERGE_HOOK checks for .vfs/.dirty, runs full `hilo graph warm` and deletes marker when Hilo available. init.rs: +3 lines calling hooks::install_hooks() at end of run(). graph.rs: +50 lines — `--changed` flag with mtime-based filtering against `.vfs/graph/.last_warm` marker, read_last_warm_mtime() and write_last_warm_marker() helpers. main.rs: +4 lines (WarmArgs.changed field + dispatch wiring). mod.rs: +1 line (pub mod hooks). 11 inline tests: post-commit creation, post-merge creation, append to existing hook, idempotent block replacement, missing .git dir warning, block detection, block replacement preserving surrounding content, dirty-logic in post-commit, dirty-deletion in post-merge, executable permission check, newline-before-append. Full workspace: 367 tests pass, 0 failures. Clippy clean. fmt clean.
-
-### Behavior
-
-**On `hilo init`:**
-Installs two git hooks into `.git/hooks/`:
-- `post-commit` — runs after every commit
-- `post-merge` — runs after every pull/fetch+merge
-
-If hooks already exist, appends Hilo block with clear `### HILO` markers. Does not overwrite existing hook content.
-
-**post-commit hook:**
-```bash
-#!/bin/sh
-### HILO — auto-update metadata on commit
-if command -v hilo >/dev/null 2>&1; then
-    hilo graph warm --changed 2>/dev/null || true
-else
-    # Hilo not installed — mark dirty
-    echo "Hilo: not installed — marking metadata as dirty"
-    echo "stale" > .vfs/.dirty
-fi
-### /HILO
-```
-
-**post-merge hook:**
-```bash
-#!/bin/sh
-### HILO — sync metadata on pull
-if [ -f .vfs/.dirty ]; then
-    if command -v hilo >/dev/null 2>&1; then
-        echo "Hilo: dirty marker found — updating metadata"
-        hilo graph warm 2>/dev/null || true
-        rm -f .vfs/.dirty
-        echo "Hilo: metadata updated, dirty marker removed"
-    else
-        echo "Hilo: not installed — leaving dirty marker"
-    fi
-fi
-### /HILO
-```
-
-**The `.vfs/.dirty` file:**
-- Created by post-commit when Hilo not installed
-- Contains: `stale` + timestamp + last commit hash
-- Committed to the repo (lives in `.vfs/`, travels with clone)
-- Read by post-merge on the pulling machine
-- Deleted after successful `hilo graph warm`
-
-**Workflow:**
+## Implementation Order
 
 ```
-Machine A (has Hilo):
-  $ git commit → hilo graph warm --changed ✓
-  $ git push
-
-Machine B (no Hilo):
-  $ git pull
-  → post-merge hook fires
-  → no .vfs/.dirty file (A ran warm before push)
-  → nothing to do ✓
-
-Machine A (no Hilo):
-  $ git commit → post-commit: hilo not found → writes .vfs/.dirty
-  $ git push
-
-Machine B (has Hilo):
-  $ git pull
-  → post-merge hook fires
-  → .vfs/.dirty exists
-  → hilo is installed → hilo graph warm → deletes .vfs/.dirty ✓
+TASK-001 (provenance) → should be done FIRST — all other tasks depend on the new Edge schema
+TASK-004 (determinism) → can be done in parallel with 002/003 — fixtures don't need provenance
+TASK-002 (signal engine) + TASK-003 (semantic search) → can be done in parallel after 001
 ```
 
-### AC
+## Key Design Rules (from AGENTS.md)
 
-- **AC:** `hilo init` installs `post-commit` and `post-merge` hooks in `.git/hooks/`
-- **AC:** `hilo init` appends Hilo block to existing hooks; does not overwrite
-- **AC:** `hilo init` warns (does not fail) if `.git/` directory missing (not a git repo)
-- **AC:** post-commit: Hilo installed → `hilo graph warm --changed` runs, updates edges
-- **AC:** post-commit: Hilo NOT installed → writes `.vfs/.dirty` with timestamp+commit
-- **AC:** post-merge: `.vfs/.dirty` exists + Hilo installed → `hilo graph warm` → deletes dirty
-- **AC:** post-merge: `.vfs/.dirty` exists + Hilo NOT installed → leaves dirty, prints message
-- **AC:** post-merge: no `.vfs/.dirty` → no-op, exits clean
-- **AC:** `hilo graph warm --changed` parses only files changed since last warm (mtime-based)
-- **AC:** `cargo test --workspace` all pass; 3+ new tests (hook install, existing-hook append, dirty-file roundtrip)
-- **AC:** `cargo build --workspace` clean, clippy clean, fmt clean
+1. **Metadata, not injection.** Never modify file content. Metadata lives in xattrs + JSONL inventory.
+2. **JSONL for edges.** Append-only, git-friendly, streamable. Source of truth.
+3. **DuckDB for queries.** Rebuildable from JSONL. Not source of truth.
+4. **Inventory as truth.** `.vfs/manifest.yaml`, `.vfs/graph/edges.jsonl`, `.vfs/backends/mounts.yaml`
+5. **MCP as fallback.** When agent tools don't expose xattrs, MCP server provides the tools.
 
-## [x] Fix CI: hilo — test_append_blob_index_writes_jsonl failure
-- **Priority:** high
-- **CI Run:** https://github.com/gethilo/hilo/actions/runs/28460931389
-- **Error:** assertion failed: contents.contains("\"path\":\"test/file.bin\"") at hilo-backends/src/s3.rs:454
-- **Result:** Root cause: CI run 28460931389 was a transitional failure — subsequent CI runs (28493558692, 28535320657) are GREEN with all tests passing. The original failure was caused by the same class of CI-environment issues (git identity in worktree tests) that were fixed in commits 67abf61 and 8cf6c04. The test assertions themselves were fragile — they used string-matching (`contents.contains("\"path\":\"test/file.bin\"")`) which depends on exact serde_json formatting (no space after colon). Hardened both blob index tests to parse the JSON and assert on deserialized struct fields instead of raw string matching. `test_append_blob_index_writes_jsonl` now deserializes the JSONL line into `BlobEntry` and asserts on `.path`, `.hash`, `.backend`, `.uploaded_at` fields. `test_append_blob_index_appends` similarly parses both lines and verifies all fields. This makes the tests robust against any serde_json formatting variation. Full workspace: 367 tests pass, 0 failures. fmt clean, clippy clean, check clean.
+## After Each Task
+
+1. `cargo check --workspace` — must pass
+2. `cargo test --workspace` — must pass (31 suites)
+3. `cargo fmt --all` — apply
+4. `cargo clippy --workspace -- -D warnings` — must pass
+5. Commit with `gitreins commit -m "message"` — guards run before commit

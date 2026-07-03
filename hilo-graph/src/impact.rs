@@ -16,6 +16,12 @@ pub struct ImpactFile {
     pub relation: String,
     /// Distance from the start file (1 = direct dependent, N = N-hop dependent).
     pub depth: u32,
+    /// How the edge was discovered (provenance string).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<String>,
+    /// Confidence weight (0.0 – 1.0) of the edge.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f64>,
 }
 
 /// Result of an impact analysis.
@@ -50,7 +56,8 @@ pub fn compute_impact(
     let mut queue: VecDeque<(String, u32)> = VecDeque::new();
     queue.push_back((start_path.to_string(), 0));
 
-    let mut stmt = conn.prepare(r#"SELECT "from", rel FROM edges WHERE "to" = ?"#)?;
+    let mut stmt =
+        conn.prepare(r#"SELECT "from", rel, provenance, confidence FROM edges WHERE "to" = ?"#)?;
 
     while let Some((path, depth)) = queue.pop_front() {
         if depth >= max_depth {
@@ -58,16 +65,23 @@ pub fn compute_impact(
         }
 
         let rows = stmt.query_map(params![path], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<f64>>(3)?,
+            ))
         })?;
 
         for row in rows {
-            let (from, rel) = row?;
+            let (from, rel, prov, conf) = row?;
             if visited.insert(from.clone()) {
                 results.push(ImpactFile {
                     path: from.clone(),
                     relation: rel,
                     depth: depth + 1,
+                    provenance: prov,
+                    confidence: conf,
                 });
                 queue.push_back((from, depth + 1));
             }
@@ -99,14 +113,16 @@ pub fn compute_impact_with_external(
     let mut queue: VecDeque<(String, u32)> = VecDeque::new();
     queue.push_back((start_path.to_string(), 0));
 
-    let mut stmt = conn.prepare(r#"SELECT "from", rel FROM edges WHERE "to" = ?"#)?;
+    let mut stmt =
+        conn.prepare(r#"SELECT "from", rel, provenance, confidence FROM edges WHERE "to" = ?"#)?;
     let mut ext_stmt: Option<duckdb::Statement> = None;
 
     if include_external {
         // Match edges where `to` ends with `:path` (the external edge format
         // is `external:repo-name:path`).
-        ext_stmt =
-            Some(conn.prepare(r#"SELECT "from", rel FROM edges WHERE "to" LIKE '%:' || ?"#)?);
+        ext_stmt = Some(conn.prepare(
+            r#"SELECT "from", rel, provenance, confidence FROM edges WHERE "to" LIKE '%:' || ?"#,
+        )?);
     }
 
     while let Some((path, depth)) = queue.pop_front() {
@@ -116,15 +132,22 @@ pub fn compute_impact_with_external(
 
         // Exact match (local edges).
         let rows = stmt.query_map(params![path.clone()], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<f64>>(3)?,
+            ))
         })?;
         for row in rows {
-            let (from, rel) = row?;
+            let (from, rel, prov, conf) = row?;
             if visited.insert(from.clone()) {
                 results.push(ImpactFile {
                     path: from.clone(),
                     relation: rel,
                     depth: depth + 1,
+                    provenance: prov,
+                    confidence: conf,
                 });
                 queue.push_back((from, depth + 1));
             }
@@ -136,15 +159,22 @@ pub fn compute_impact_with_external(
         if let Some(ref mut estmt) = ext_stmt {
             let ext_path = path.replacen('/', ":", 1);
             let rows = estmt.query_map(params![ext_path], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<f64>>(3)?,
+                ))
             })?;
             for row in rows {
-                let (from, rel) = row?;
+                let (from, rel, prov, conf) = row?;
                 if visited.insert(from.clone()) {
                     results.push(ImpactFile {
                         path: from.clone(),
                         relation: rel,
                         depth: depth + 1,
+                        provenance: prov,
+                        confidence: conf,
                     });
                     queue.push_back((from, depth + 1));
                 }

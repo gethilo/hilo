@@ -283,7 +283,10 @@ pub fn run_related(path: &str, relation: Option<&str>, direction: Option<&str>) 
     }
 
     for edge in &edges {
-        println!("{}  →  {}  ({})", edge.from, edge.to, edge.rel);
+        println!(
+            "{}  →  {}  ({})  [{} conf={:.2}]",
+            edge.from, edge.to, edge.rel, edge.provenance, edge.confidence
+        );
     }
 
     Ok(())
@@ -335,9 +338,11 @@ pub fn run_impact(path: &str, max_depth: u32, format: Option<&str>, external: bo
                 println!("No dependents found for '{path}'.");
             } else {
                 for file in &results {
+                    let prov = file.provenance.as_deref().unwrap_or("ast_exact");
+                    let conf = file.confidence.unwrap_or(1.0);
                     println!(
-                        "{}  ←  {}  (depth: {})",
-                        file.path, file.relation, file.depth
+                        "{}  ←  {}  (depth: {})  [{} conf={:.2}]",
+                        file.path, file.relation, file.depth, prov, conf
                     );
                 }
             }
@@ -432,6 +437,8 @@ fn discover_test_associations(source_files: &[PathBuf], cwd: &Path) -> Vec<Edge>
                     from: file_str.clone().into_owned(),
                     to: source_str,
                     rel: "tested_by".to_string(),
+                    provenance: "heuristic".to_string(),
+                    confidence: 0.8,
                 });
             }
         }
@@ -446,6 +453,8 @@ fn discover_test_associations(source_files: &[PathBuf], cwd: &Path) -> Vec<Edge>
                     from: file_str.to_string(),
                     to: test_str,
                     rel: "tests".to_string(),
+                    provenance: "heuristic".to_string(),
+                    confidence: 0.8,
                 });
             }
         }
@@ -598,6 +607,8 @@ fn generate_extension_edges(
                     from: from_rel,
                     to: to_rel,
                     rel: ext.relation.clone(),
+                    provenance: "heuristic".to_string(),
+                    confidence: 0.5,
                 });
             }
         }
