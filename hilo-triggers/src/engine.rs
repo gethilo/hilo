@@ -1569,7 +1569,6 @@ mod tests {
         let file = dir.path().join("src/main.go");
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         std::fs::write(&file, "content").unwrap();
-        let file_path_str = file.display().to_string();
 
         let cfg = TriggerConfig {
             name: "echo-path".into(),
