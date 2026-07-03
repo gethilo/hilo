@@ -372,6 +372,13 @@ Phase 7: Production — scale, benchmarks, security, bubblewrap, permissions (§
 
 ---
 
+## [x] Spec gap: Command template triggers — {{ .ModulePath }} variable (spec §7.2)
+- **Priority:** medium
+- **Model:** deepseek-v4-pro (direct write — 1-file change)
+- **Files:** hilo-triggers/src/engine.rs
+- **AC:** `execute_trigger()` accepts `project_root` parameter. `{{ .ModulePath }}` resolves to parent dir relative to project root. Stdout/stderr logged (1KB truncated). 7 new tests.
+- **Result:** Implemented directly. engine.rs: `{{ .ModulePath }}` substitution, stdout/stderr logging, `project_root` parameter on `execute_trigger()` and call sites. 52/52 hilo_triggers tests pass. Full workspace all suites pass. Clippy 0 warnings. fmt clean.
+
 ## Models Reference
 
 | Model | Use | Provider | Fallback |

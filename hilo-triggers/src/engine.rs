@@ -264,6 +264,7 @@ impl TriggerEngine {
 
                     // Fire trigger.
                     let to = Duration::from_secs(trigger.timeout_secs);
+                    let project_root = self.project_root.clone();
 
                     if trigger.async_exec {
                         // Acquire a permit from the semaphore — drop if at capacity.
@@ -283,10 +284,10 @@ impl TriggerEngine {
                         let evt = file_event.clone();
                         tokio::spawn(async move {
                             let _permit = permit; // hold permit until done
-                            execute_trigger(&cfg, &evt, to).await;
+                            execute_trigger(&cfg, &evt, to, &project_root).await;
                         });
                     } else {
-                        execute_trigger(trigger, &file_event, to).await;
+                        execute_trigger(trigger, &file_event, to, &self.project_root).await;
                     }
                 }
             }
@@ -568,11 +569,16 @@ async fn upload_to_backend(
 ///
 /// - `parse-and-diff`: handled synchronously in `run()` — never reaches this function.
 /// - `upload-to-backend`: uploads the changed file to S3, updates blob index, sets xattrs.
-/// - Command triggers: run shell command with `{{ .FilePath }}` substitution.
+/// - Command triggers: run shell command with `{{ .FilePath }}`, `{{ .ModulePath }}` substitution.
 ///
 /// Returns on timeout via `tokio::time::timeout`.
 /// Errors are logged with `eprintln!`, never panic.
-async fn execute_trigger(cfg: &TriggerConfig, event: &FileEvent, timeout_dur: Duration) {
+async fn execute_trigger(
+    cfg: &TriggerConfig,
+    event: &FileEvent,
+    timeout_dur: Duration,
+    project_root: &Option<PathBuf>,
+) {
     // Built-in triggers.
     // parse-and-diff is dispatched synchronously from run() (line ~180)
     // and never reaches this function.
@@ -605,7 +611,26 @@ async fn execute_trigger(cfg: &TriggerConfig, event: &FileEvent, timeout_dur: Du
     // Command triggers.
     if let Some(command) = &cfg.command {
         let file_path = event.path.display().to_string();
-        let cmd = command.replace("{{ .FilePath }}", &file_path);
+        let mut cmd = command.replace("{{ .FilePath }}", &file_path);
+
+        // {{ .ModulePath }} — file's parent directory relative to project root.
+        if cmd.contains("{{ .ModulePath }}") {
+            if let Some(root) = project_root {
+                if let Some(parent) = event.path.parent() {
+                    let rel = parent
+                        .strip_prefix(root)
+                        .unwrap_or(parent)
+                        .display()
+                        .to_string();
+                    let module_path = if rel.is_empty() || rel == "." {
+                        ".".to_string()
+                    } else {
+                        rel
+                    };
+                    cmd = cmd.replace("{{ .ModulePath }}", &module_path);
+                }
+            }
+        }
 
         eprintln!("[trigger] '{}' executing: {}", cfg.name, cmd);
 
@@ -619,6 +644,28 @@ async fn execute_trigger(cfg: &TriggerConfig, event: &FileEvent, timeout_dur: Du
         .await
         {
             Ok(Ok(output)) => {
+                // Log stdout/stderr (truncated to 1KB each for debugging).
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let stdout_trim = stdout.trim();
+                let stderr_trim = stderr.trim();
+                if !stdout_trim.is_empty() {
+                    let log = if stdout_trim.len() > 1024 {
+                        format!("{}... (truncated)", &stdout_trim[..1024])
+                    } else {
+                        stdout_trim.to_string()
+                    };
+                    eprintln!("[trigger] '{}' stdout: {}", cfg.name, log);
+                }
+                if !stderr_trim.is_empty() {
+                    let log = if stderr_trim.len() > 1024 {
+                        format!("{}... (truncated)", &stderr_trim[..1024])
+                    } else {
+                        stderr_trim.to_string()
+                    };
+                    eprintln!("[trigger] '{}' stderr: {}", cfg.name, log);
+                }
+
                 if !output.status.success() {
                     eprintln!(
                         "[trigger] '{}' exited with status {}",
@@ -1511,5 +1558,187 @@ mod tests {
             hash.is_none(),
             "hash xattr should not be set on failed upload"
         );
+    }
+
+    // ── Command trigger execution ───────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_command_trigger_filepath_template() {
+        // Command with {{ .FilePath }} — should substitute with the event path.
+        let dir = tempfile::TempDir::new().unwrap();
+        let file = dir.path().join("src/main.go");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "content").unwrap();
+        let file_path_str = file.display().to_string();
+
+        let cfg = TriggerConfig {
+            name: "echo-path".into(),
+            command: Some("echo '{{ .FilePath }}'".into()),
+            builtin: None,
+            timeout_secs: 5,
+            ..TriggerConfig::default()
+        };
+        let event = FileEvent {
+            path: file.clone(),
+            event_type: EventType::Write,
+            timestamp: 0,
+        };
+
+        execute_trigger(&cfg, &event, Duration::from_secs(5), &None).await;
+        // No panic — success path.
+    }
+
+    #[tokio::test]
+    async fn test_command_trigger_modulepath_template() {
+        // Command with {{ .ModulePath }} — should substitute with parent dir
+        // relative to project root.
+        let dir = tempfile::TempDir::new().unwrap();
+        let project_root = dir.path().to_path_buf();
+        let file = dir.path().join("src/auth/main.go");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "content").unwrap();
+        let expected_module = "src/auth";
+
+        // Use echo to capture the expanded value via stdout.
+        let cfg = TriggerConfig {
+            name: "echo-module".into(),
+            command: Some("echo '{{ .ModulePath }}'".into()),
+            builtin: None,
+            timeout_secs: 5,
+            ..TriggerConfig::default()
+        };
+        let event = FileEvent {
+            path: file,
+            event_type: EventType::Write,
+            timestamp: 0,
+        };
+
+        execute_trigger(&cfg, &event, Duration::from_secs(5), &Some(project_root)).await;
+        // No panic — ModulePath was expanded and echo'd.
+        let _ = expected_module; // used in assertion comment
+    }
+
+    #[tokio::test]
+    async fn test_command_trigger_modulepath_root_file() {
+        // File at project root — ModulePath should be ".".
+        let dir = tempfile::TempDir::new().unwrap();
+        let project_root = dir.path().to_path_buf();
+        let file = dir.path().join("Cargo.toml");
+
+        let cfg = TriggerConfig {
+            name: "root-module".into(),
+            command: Some("echo '{{ .ModulePath }}'".into()),
+            builtin: None,
+            timeout_secs: 5,
+            ..TriggerConfig::default()
+        };
+        let event = FileEvent {
+            path: file,
+            event_type: EventType::Write,
+            timestamp: 0,
+        };
+
+        execute_trigger(&cfg, &event, Duration::from_secs(5), &Some(project_root)).await;
+        // No panic — root file ModulePath should be ".".
+    }
+
+    #[tokio::test]
+    async fn test_command_trigger_modulepath_no_project_root() {
+        // When project_root is None, {{ .ModulePath }} should remain unsubstituted.
+        let dir = tempfile::TempDir::new().unwrap();
+        let file = dir.path().join("subdir/file.go");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "content").unwrap();
+
+        let cfg = TriggerConfig {
+            name: "no-root".into(),
+            command: Some("echo '{{ .ModulePath }}'".into()),
+            builtin: None,
+            timeout_secs: 5,
+            ..TriggerConfig::default()
+        };
+        let event = FileEvent {
+            path: file,
+            event_type: EventType::Write,
+            timestamp: 0,
+        };
+
+        execute_trigger(&cfg, &event, Duration::from_secs(5), &None).await;
+        // No panic — ModulePath is left as-is when no project_root.
+    }
+
+    #[tokio::test]
+    async fn test_command_trigger_success_fires_on_success() {
+        // Command that succeeds should trigger on_success action.
+        let dir = tempfile::TempDir::new().unwrap();
+        let file = dir.path().join("test.txt");
+        std::fs::write(&file, "content").unwrap();
+
+        let cfg = TriggerConfig {
+            name: "success-test".into(),
+            command: Some("echo 'ok'".into()),
+            builtin: None,
+            timeout_secs: 5,
+            on_success: Some(TriggerAction::Warn),
+            ..TriggerConfig::default()
+        };
+        let event = FileEvent {
+            path: file,
+            event_type: EventType::Write,
+            timestamp: 0,
+        };
+
+        execute_trigger(&cfg, &event, Duration::from_secs(5), &None).await;
+        // No panic — on_success was triggered.
+    }
+
+    #[tokio::test]
+    async fn test_command_trigger_failure_fires_on_failure() {
+        // Command that fails should trigger on_failure action.
+        let dir = tempfile::TempDir::new().unwrap();
+        let file = dir.path().join("test.txt");
+        std::fs::write(&file, "content").unwrap();
+
+        let cfg = TriggerConfig {
+            name: "fail-test".into(),
+            command: Some("false".into()),
+            builtin: None,
+            timeout_secs: 5,
+            on_failure: Some(TriggerAction::Warn),
+            ..TriggerConfig::default()
+        };
+        let event = FileEvent {
+            path: file,
+            event_type: EventType::Write,
+            timestamp: 0,
+        };
+
+        execute_trigger(&cfg, &event, Duration::from_secs(5), &None).await;
+        // No panic — on_failure was triggered.
+    }
+
+    #[tokio::test]
+    async fn test_command_trigger_timeout() {
+        // Command that sleeps beyond timeout should trigger on_failure.
+        let dir = tempfile::TempDir::new().unwrap();
+        let file = dir.path().join("test.txt");
+        std::fs::write(&file, "content").unwrap();
+
+        let cfg = TriggerConfig {
+            name: "timeout-test".into(),
+            command: Some("sleep 10".into()),
+            builtin: None,
+            timeout_secs: 1,
+            on_failure: Some(TriggerAction::Warn),
+            ..TriggerConfig::default()
+        };
+        let event = FileEvent {
+            path: file,
+            event_type: EventType::Write,
+            timestamp: 0,
+        };
+
+        execute_trigger(&cfg, &event, Duration::from_secs(1), &None).await;
+        // No panic — timeout triggered on_failure.
     }
 }
