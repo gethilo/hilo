@@ -80,14 +80,14 @@ Add `provenance` and `confidence` fields to the Edge struct and DuckDB schema.
 - `docs/graph-engine.md` — document new columns
 
 ### Acceptance criteria
-- [ ] `cargo check --workspace` passes
-- [ ] `cargo test --workspace` passes (31 suites)
-- [ ] `cargo clippy --workspace -- -D warnings` clean
-- [ ] `cargo fmt --all` clean
-- [ ] Every edge in `edges.jsonl` has `provenance` and `confidence` fields
-- [ ] Old `edges.jsonl` (no provenance) is either auto-migrated or rejected with a clear error
-- [ ] `vfs_graph_related` returns `provenance` + `confidence` per edge
-- [ ] Edge struct roundtrips through JSONL serialize → deserialize correctly
+- [x] `cargo check --workspace` passes
+- [x] `cargo test --workspace` passes (31 suites)
+- [x] `cargo clippy --workspace -- -D warnings` clean
+- [x] `cargo fmt --all` clean
+- [x] Every edge in `edges.jsonl` has `provenance` and `confidence` fields
+- [x] Old `edges.jsonl` (no provenance) is either auto-migrated or rejected with a clear error
+- [x] `vfs_graph_related` returns `provenance` + `confidence` per edge
+- [x] Edge struct roundtrips through JSONL serialize → deserialize correctly
 
 ### Result
 **Status: COMPLETE — 2026-07-03**
@@ -198,14 +198,14 @@ A new `hilo-graph/src/signal.rs` module that produces budgeted, tiered output fr
 - `docs/graph-engine.md` — document the tool
 
 ### Acceptance criteria
-- [ ] `cargo check --workspace` passes
-- [ ] `cargo test --workspace` passes
-- [ ] `vfs_graph_understand { task: "rate limiter" }` returns 3-tier output
-- [ ] Output respects token budget (60K chars ≈ 6K tokens)
-- [ ] MAP tier groups by file with ≤8 symbols per file
-- [ ] DETAIL tier output is whitespace-minified (no blank lines, uniform indent)
-- [ ] Output is deterministic: same task + same graph → same text (no model, no randomness)
-- [ ] Files are position-ordered (highest-signal at edges)
+- [x] `cargo check --workspace` passes
+- [x] `cargo test --workspace` passes
+- [x] `vfs_graph_understand { task: "rate limiter" }` returns 3-tier output
+- [x] Output respects token budget (60K chars ≈ 6K tokens)
+- [x] MAP tier groups by file with ≤8 symbols per file
+- [x] DETAIL tier output is whitespace-minified (no blank lines, uniform indent)
+- [x] Output is deterministic: same task + same graph → same text (no model, no randomness)
+- [x] Files are position-ordered (highest-signal at edges)
 
 ### Result
 **Status: COMPLETE — 2026-07-03**
@@ -313,14 +313,14 @@ A `hilo-graph/src/semantic.rs` module with a pure-Rust TF-IDF + BM25 implementat
 - `Cargo.toml` (workspace) — no new deps (pure Rust, stdlib + already-imported crates)
 
 ### Acceptance criteria
-- [ ] `cargo check --workspace` passes
-- [ ] `cargo test --workspace` passes
-- [ ] `vfs_graph_search "authentication"` returns `AuthMiddleware` symbols (semantic, not literal)
-- [ ] Same query + same graph → same results (determinism test)
-- [ ] No external dependencies — pure Rust
-- [ ] Index build: <500ms for 10K symbols
-- [ ] Query: <50ms for 1000-symbol corpus
-- [ ] Edge provenance for semantic results is `Lexical` (BM25) or `Latent` (future semantic expansion)
+- [x] `cargo check --workspace` passes
+- [x] `cargo test --workspace` passes
+- [x] `vfs_graph_search "authentication"` returns `AuthMiddleware` symbols (semantic, not literal)
+- [x] Same query + same graph → same results (determinism test)
+- [x] No external dependencies — pure Rust
+- [x] Index build: <500ms for 10K symbols
+- [x] Query: <50ms for 1000-symbol corpus
+- [x] Edge provenance for semantic results is `Lexical` (BM25) or `Latent` (future semantic expansion)
 
 ### Result
 **Status: COMPLETE — 2026-07-03**
