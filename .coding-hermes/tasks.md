@@ -379,7 +379,7 @@ fully local, pure Rust stdlib.
 
 ---
 
-## TASK-004: Determinism Tests — Byte-Identical Graph Output
+## [x] TASK-004: Determinism Tests — Byte-Identical Graph Output
 
 ### Why
 None of Hilo's tests guarantee byte-identical output across runs. For a system that feeds AI agents, reproducibility is a safety property. Rinnegan has determinism tests that prove the index and `understand()` output are byte-identical between runs.
@@ -437,12 +437,63 @@ A test suite that builds the graph from a controlled corpus, dumps it, rebuilds 
 - `hilo-graph/tests/semantic_test.rs` — add determinism test (if TASK-003 done)
 
 ### Acceptance criteria
-- [ ] `cargo test --workspace` passes
-- [ ] `graph_is_deterministic` passes 10 consecutive runs
-- [ ] Test corpus is committed and never changed (immutable fixtures)
-- [ ] Tests use in-memory DuckDB (no filesystem pollution)
-- [ ] If TASK-002 done: `signal_engine_is_deterministic` passes
-- [ ] If TASK-003 done: `semantic_search_is_deterministic` passes
+- [x] `cargo test --workspace` passes
+- [x] `graph_is_deterministic` passes 10 consecutive runs
+- [x] Test corpus is committed and never changed (immutable fixtures)
+- [x] Tests use in-memory DuckDB (no filesystem pollution)
+- [x] If TASK-002 done: `signal_engine_is_deterministic` passes
+- [x] If TASK-003 done: `semantic_search_is_deterministic` passes
+
+### Result
+**Status: COMPLETE — 2026-07-03**
+
+Implemented a comprehensive determinism test suite proving that graph output,
+signal engine output, and semantic search results are byte-identical across
+repeated runs. Uses a controlled corpus of 6 fixture files committed to
+`hilo-graph/tests/fixtures/`.
+
+**Controlled corpus (6 files, immutable):**
+- `main.go` — imports fmt, handler (Go entrypoint)
+- `handler.go` — imports net/http, middleware (Go library)
+- `middleware.go` — imports net/http (Go library, circular via handler)
+- `handler_test.go` — test file, tested_by edge → handler.go
+- `utils.py` — imports os, sys, collections (Python)
+- `app.ts` — imports ./handler, express (TypeScript)
+
+**14 determinism tests:**
+1. `graph_is_deterministic` — 2 builds → byte-identical edge dump
+2. `graph_is_deterministic_10_runs` — 10 consecutive builds match baseline
+3. `graph_has_expected_edges` — sanity: ≥10 edges from corpus
+4. `graph_edge_dump_includes_provenance_and_confidence` — new fields present
+5. `graph_stats_are_deterministic` — all stats fields match across runs
+6. `graph_impact_is_deterministic` — impact analysis reproducible
+7. `signal_engine_is_deterministic_with_fixtures` — understand() byte-identical
+8. `signal_engine_is_deterministic_5_runs` — 5 runs match baseline
+9. `semantic_search_is_deterministic_with_fixtures` — search results identical
+10. `semantic_search_is_deterministic_10_runs` — 10 runs match baseline
+11. `provenance_tags_are_consistent_across_runs` — same source → same provenance
+12. `edge_jsonl_roundtrip_is_deterministic` — serialize → deserialize → re-serialize
+13. `tests_use_in_memory_duckdb` — no filesystem pollution (no .vfs/ created)
+14. `test_corpus_is_committed_and_immutable` — all fixture files exist + cover patterns
+
+**Files touched (7 new files, +627 lines):**
+- `hilo-graph/tests/determinism_test.rs` — NEW (14 tests, ~570 lines)
+- `hilo-graph/tests/fixtures/main.go` — NEW (Go entrypoint)
+- `hilo-graph/tests/fixtures/handler.go` — NEW (Go library)
+- `hilo-graph/tests/fixtures/middleware.go` — NEW (Go middleware)
+- `hilo-graph/tests/fixtures/handler_test.go` — NEW (Go test file)
+- `hilo-graph/tests/fixtures/utils.py` — NEW (Python utils)
+- `hilo-graph/tests/fixtures/app.ts` — NEW (TypeScript app)
+
+**Verification:**
+- `cargo check --workspace` — PASS
+- `cargo test --workspace` — 476 tests, 0 failures, 2 ignored (pre-existing)
+- `cargo clippy --workspace -- -D warnings` — clean
+- `cargo fmt --all` — applied
+- Binary rebuilt + installed: `hilo --help` shows full CLI
+- All 14 determinism tests pass in 4.15s
+- In-memory DuckDB only — no filesystem pollution
+- Fixture corpus committed to git (immutable)
 
 ---
 
