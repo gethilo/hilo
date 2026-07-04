@@ -225,11 +225,26 @@ fn discover_anchors(db: &GraphDB, task: &str, seed_limit: usize) -> Vec<String> 
     // Sort: most matches first, then alphabetically (deterministic).
     scored.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
-    scored
+    let literal_anchors: Vec<String> = scored
         .into_iter()
         .take(seed_limit)
         .map(|(path, _)| path)
-        .collect()
+        .collect();
+
+    if !literal_anchors.is_empty() {
+        return literal_anchors;
+    }
+
+    // Fallback: use semantic search (TF-IDF + BM25) for anchor discovery
+    // when literal matching returns nothing. This finds files by meaning
+    // (camelCase/snake_case tokenization + NLP ranking) rather than
+    // literal substring matching.
+    let search_opts = crate::semantic::SearchOpts { limit: seed_limit };
+    let semantic_results = match crate::semantic::search(db, task, &search_opts) {
+        Ok(results) => results,
+        Err(_) => return Vec::new(),
+    };
+    semantic_results.into_iter().map(|r| r.file_path).collect()
 }
 
 /// Tokenize a task string for anchor matching.

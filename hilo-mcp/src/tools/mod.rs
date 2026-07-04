@@ -9,6 +9,7 @@
 //! - `vfs_graph_module`     — per-module file listing and coverage statistics
 //! - `vfs_graph_impact`     — transitive impact analysis for a file
 //! - `vfs_graph_understand` — harmonic multi-resolution context (signal engine)
+//! - `vfs_graph_search`     — semantic code search (TF-IDF + BM25, deterministic)
 //! - `vfs_rule_list`        — list all rules defined in the manifest
 //! - `vfs_rule_check`       — execute a named rule query against the graph
 //! - `vfs_list_directory`   — list entries in a virtual directory
@@ -152,6 +153,18 @@ pub fn list_tools() -> Vec<Tool> {
             }),
         },
         Tool {
+            name: "vfs_graph_search".into(),
+            description: "Semantic code search using TF-IDF + BM25 + Reciprocal Rank Fusion. Finds files by meaning, not just literal text matches. Deterministic, no external API calls.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query (e.g. 'authentication middleware', 'rate limiter')"},
+                    "limit": {"type": "integer", "description": "Max results to return (default: 20)"}
+                },
+                "required": ["query"]
+            }),
+        },
+        Tool {
             name: "vfs_rule_list".into(),
             description: "List all rules defined in the Hilo manifest (stale-files, untested-critical, transitive-impact, etc.).".into(),
             input_schema: serde_json::json!({
@@ -238,6 +251,7 @@ pub fn call_tool(name: &str, arguments: &serde_json::Value) -> McpResult<serde_j
         "vfs_graph_module" => graph_module(arguments),
         "vfs_graph_impact" => graph_impact(arguments),
         "vfs_graph_understand" => graph_understand(arguments),
+        "vfs_graph_search" => graph_search(arguments),
         "vfs_rule_list" => rule_list(arguments),
         "vfs_rule_check" => rule_check(arguments),
         "vfs_list_directory" => list_directory(arguments),
@@ -628,6 +642,40 @@ fn graph_understand(arguments: &serde_json::Value) -> McpResult<serde_json::Valu
         "files": result.files,
         "tokens_estimate": result.tokens_estimate,
         "anchors": result.anchors
+    }))
+}
+
+/// `vfs_graph_search` — semantic code search using TF-IDF + BM25 + RRF.
+///
+/// Finds files by meaning (camelCase/snake_case tokenization + classical
+/// NLP ranking) rather than literal substring matching. Fully
+/// deterministic: same query + same graph → byte-identical results.
+fn graph_search(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
+    let query = arguments["query"]
+        .as_str()
+        .ok_or_else(|| McpError::Protocol("missing 'query' argument".into()))?;
+
+    let limit = arguments["limit"].as_u64().unwrap_or(20) as usize;
+
+    // Ensure the .vfs/graph directory exists.
+    let db_parent = Path::new(GRAPH_DB_PATH).parent().unwrap_or(Path::new("."));
+    std::fs::create_dir_all(db_parent).ok();
+
+    if !Path::new(GRAPH_DB_PATH).exists() {
+        return Ok(serde_json::json!({
+            "results": [],
+            "total": 0,
+            "message": format!("No graph database found at {GRAPH_DB_PATH}. Run `hilo graph warm` first.")
+        }));
+    }
+
+    let db = hilo_graph::GraphDB::open(GRAPH_DB_PATH)?;
+    let opts = hilo_graph::SearchOpts { limit };
+    let results = hilo_graph::search(&db, query, &opts)?;
+
+    Ok(serde_json::json!({
+        "results": results,
+        "total": results.len()
     }))
 }
 

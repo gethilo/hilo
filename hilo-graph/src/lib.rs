@@ -16,6 +16,7 @@ pub mod impact;
 pub mod parser;
 pub mod provenance;
 pub mod rules;
+pub mod semantic;
 pub mod signal;
 
 pub use classify::{classify_file, infer_feature, Classification};
@@ -28,6 +29,11 @@ pub use rules::{Rule, RuleCheckResult, RuleEngine, RuleError};
 pub use signal::{
     understand, understand_with_source, Resolution, SignalFile, SignalOpts, SignalResult,
     SymbolSignature, Tier,
+};
+
+pub use semantic::tokenize as semantic_tokenize;
+pub use semantic::{
+    reciprocal_rank_fusion, search, search_with_symbols, SearchOpts, SearchResult, TfIdfIndex,
 };
 
 /// Re-export of the shared [`Edge`] type from `hilo_metadata`.

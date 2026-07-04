@@ -128,3 +128,46 @@ filter tokens ≥ 3 chars) and matches tokens against file paths in the graph.
 Files with the most token matches become anchor/seed files. The engine then
 traverses the graph from anchors (BFS, depth 2 by default) to collect related
 files, scoring each by provenance weight × depth factor.
+
+When literal matching returns no anchors, the engine falls back to
+semantic search (TF-IDF + BM25 + Reciprocal Rank Fusion) to find files
+by meaning rather than literal substring matching.
+
+## Semantic Code Search — `vfs_graph_search`
+
+The semantic search module provides deterministic, zero-API code search
+using classical NLP techniques:
+
+- **Tokenization**: splits symbols on camelCase/snake_case boundaries,
+  lowercases, and deduplicates
+- **TF-IDF**: term frequency × inverse document frequency over all graph nodes
+- **BM25**: Okapi BM25 ranking function for relevance scoring
+- **Reciprocal Rank Fusion (RRF)**: combines TF-IDF + BM25 results via RRF
+  (k=60) to produce a single ranked list
+
+### Determinism
+
+Same query + same graph → byte-identical results. No randomness, no
+external API calls, no model inference. Pure Rust, stdlib only.
+
+### MCP Tool
+
+```json
+{
+  "name": "vfs_graph_search",
+  "arguments": {
+    "query": "authentication middleware",
+    "limit": 20
+  }
+}
+```
+
+- `query` (required): search query — tokenized on camelCase/snake_case
+- `limit` (optional): max results, default 20
+
+### Integration with Signal Engine
+
+When the signal engine's literal anchor discovery returns no files,
+it falls back to semantic search for anchor discovery. This enables
+the signal engine to find relevant files even when the task description
+doesn't contain literal path substrings.
