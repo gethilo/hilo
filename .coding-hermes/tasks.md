@@ -520,3 +520,98 @@ TASK-002 (signal engine) + TASK-003 (semantic search) → can be done in paralle
 3. `cargo fmt --all` — apply
 4. `cargo clippy --workspace -- -D warnings` — must pass
 5. Commit with `gitreins commit -m "message"` — guards run before commit
+
+---
+
+## TASK-005: Tier 1 Language Expansion — C#, Kotlin, PHP, Swift
+
+### Why
+Hilo supports 9 languages today. Missing C# (enterprise/.NET), Kotlin (Android), PHP (WordPress/Laravel), and Swift (Apple ecosystem). These are not niche — they're foundational languages with massive codebases.
+
+### What
+Add tree-sitter grammars and integrate into the parser, graph discover, classify, and CLI.
+
+### Implementation
+
+1. **Add crates** to `hilo-graph/Cargo.toml`:
+   - `tree-sitter-c-sharp = "0.23"`
+   - `tree-sitter-kotlin = "0.23"` (community grammar)
+   - `tree-sitter-php = "0.23"`
+   - `tree-sitter-swift = "0.23"`
+
+2. **Extend `Language` enum** in `hilo-graph/src/parser.rs`:
+   - `CSharp`, `Kotlin`, `Php`, `Swift`
+
+3. **Add extension mapping** in `from_extension()`:
+   - `"cs"` → CSharp
+   - `"kt" | "kts"` → Kotlin
+   - `"php" | "phtml"` → Php
+   - `"swift"` → Swift
+
+4. **Wire `language_to_ts()`** match arms with new grammars
+
+5. **Add to `classify.rs`**:
+   - `is_test_file()` patterns: `*Test.cs`, `*Tests.kt`, `*Test.php`, `*Test.swift`
+   - `is_entrypoint_by_name()`: `Program.cs`, `Main.kt`, `index.php`, `main.swift`
+   - `classify_file()` language detection
+
+6. **Add to `hilo-cli/src/commands/graph.rs`**:
+   - `collect_source_files()` extensions: `.cs`, `.kt`, `.kts`, `.php`, `.phtml`, `.swift`
+
+### AC
+
+- **AC:** `hilo graph warm` detects and parses .cs, .kt, .php, .swift files
+- **AC:** `hilo graph stats` counts edges from new languages
+- **AC:** `hilo classify` assigns roles to C#, Kotlin, PHP, Swift files
+- **AC:** Cross-language edges work: `use` in PHP, `import` in Swift/Kotlin, `using` in C#
+- **AC:** `cargo test -p hilo_graph` — 4+ new tests (one per language, parsing valid source)
+- **AC:** `cargo build --workspace` clean, `cargo test --workspace` all pass, clippy clean, fmt clean
+
+### Files
+- `hilo-graph/Cargo.toml` — 4 new tree-sitter deps
+- `hilo-graph/src/parser.rs` — enum + extension mapping + language_to_ts
+- `hilo-graph/src/classify.rs` — test patterns + entrypoint detection
+- `hilo-cli/src/commands/graph.rs` — file extension collection
+
+---
+
+## TASK-006: Tier 2 Language Expansion — Elixir, Haskell, Erlang, Scala, Zig, Lua, Dart
+
+### Why
+Strong communities with real codebases. Elixir (Phoenix), Haskell (functional dominance), Scala (Spark/Kafka), Zig (systems replacement), Lua (embedded/gamedev), Dart (Flutter), Erlang (telecom).
+
+### What
+Same pattern as TASK-005. 7 languages, 7 new tree-sitter grammars.
+
+### AC
+
+- **AC:** All 7 languages parse correctly
+- **AC:** `cargo test -p hilo_graph` — 7+ new tests
+- **AC:** `cargo build --workspace` clean, `cargo test --workspace` all pass
+
+### Files
+- Same files as TASK-005: Cargo.toml, parser.rs, classify.rs, graph.rs
+
+---
+
+## TASK-007: Tier 3 Language Expansion — Clojure, OCaml, R, Julia, Elm, Nim
+
+### Why
+Niche but real. Clojure (JVM functional), OCaml (formal methods/Tezos), R (data science), Julia (scientific computing), Elm (frontend functional), Nim (systems with Python syntax).
+
+### What
+Same pattern. 6 languages.
+
+### AC
+
+- **AC:** All 6 languages parse correctly
+- **AC:** `cargo test -p hilo_graph` — 6+ new tests
+- **AC:** Full workspace clean
+
+### Files
+- Same as TASK-005
+
+### Notes
+- OCaml: tree-sitter-ocaml has `language_ocaml()` + `language_ocaml_interface()` — use both
+- Julia: `tree-sitter-julia` community grammar, verify syntax coverage
+- All crates at 0.23. If a grammar isn't at 0.23, attempt 0.22 or 0.21 fallback
