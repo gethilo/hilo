@@ -77,6 +77,10 @@ pub fn run_warm(workspace: bool, language: Option<String>, changed: bool) -> Res
             "c" => "c",
             "cpp" | "c++" | "cxx" => "cpp",
             "ruby" | "rb" => "rb",
+            "csharp" | "cs" | "c#" => "cs",
+            "kotlin" | "kt" => "kt",
+            "php" => "php",
+            "swift" => "swift",
             other => anyhow::bail!("unknown language: {other}"),
         };
         source_files.retain(|f| f.extension().and_then(|e| e.to_str()) == Some(ext));
@@ -473,6 +477,22 @@ fn test_to_source(name: &str) -> Option<String> {
         Some(format!("{stem}.cpp"))
     } else if let Some(stem) = name.strip_suffix("_test.rb") {
         Some(format!("{stem}.rb"))
+    } else if let Some(stem) = name.strip_suffix("Test.cs") {
+        Some(format!("{stem}.cs"))
+    } else if let Some(stem) = name.strip_suffix("Tests.cs") {
+        Some(format!("{stem}.cs"))
+    } else if let Some(stem) = name.strip_suffix("Test.kt") {
+        Some(format!("{stem}.kt"))
+    } else if let Some(stem) = name.strip_suffix("Tests.kt") {
+        Some(format!("{stem}.kt"))
+    } else if let Some(stem) = name.strip_suffix("Test.php") {
+        Some(format!("{stem}.php"))
+    } else if let Some(stem) = name.strip_suffix("Tests.php") {
+        Some(format!("{stem}.php"))
+    } else if let Some(stem) = name.strip_suffix("Test.swift") {
+        Some(format!("{stem}.swift"))
+    } else if let Some(stem) = name.strip_suffix("Tests.swift") {
+        Some(format!("{stem}.swift"))
     } else if let Some(stem) = name.strip_prefix("test_") {
         if stem.ends_with(".py") || stem.ends_with(".c") {
             Some(stem.to_string())
@@ -509,6 +529,18 @@ fn source_to_test_patterns(name: &str) -> Vec<String> {
         patterns.push(format!("{stem}_test.cpp"));
     } else if let Some(stem) = name.strip_suffix(".rb") {
         patterns.push(format!("{stem}_test.rb"));
+    } else if let Some(stem) = name.strip_suffix(".cs") {
+        patterns.push(format!("{stem}Test.cs"));
+        patterns.push(format!("{stem}Tests.cs"));
+    } else if let Some(stem) = name.strip_suffix(".kt") {
+        patterns.push(format!("{stem}Test.kt"));
+        patterns.push(format!("{stem}Tests.kt"));
+    } else if let Some(stem) = name.strip_suffix(".php") {
+        patterns.push(format!("{stem}Test.php"));
+        patterns.push(format!("{stem}Tests.php"));
+    } else if let Some(stem) = name.strip_suffix(".swift") {
+        patterns.push(format!("{stem}Test.swift"));
+        patterns.push(format!("{stem}Tests.swift"));
     }
     patterns
 }

@@ -523,7 +523,7 @@ TASK-002 (signal engine) + TASK-003 (semantic search) → can be done in paralle
 
 ---
 
-## TASK-005: Tier 1 Language Expansion — C#, Kotlin, PHP, Swift
+## [x] TASK-005: Tier 1 Language Expansion — C#, Kotlin, PHP, Swift
 
 ### Why
 Hilo supports 9 languages today. Missing C# (enterprise/.NET), Kotlin (Android), PHP (WordPress/Laravel), and Swift (Apple ecosystem). These are not niche — they're foundational languages with massive codebases.
@@ -572,6 +572,64 @@ Add tree-sitter grammars and integrate into the parser, graph discover, classify
 - `hilo-graph/src/parser.rs` — enum + extension mapping + language_to_ts
 - `hilo-graph/src/classify.rs` — test patterns + entrypoint detection
 - `hilo-cli/src/commands/graph.rs` — file extension collection
+
+### Result
+**Status: COMPLETE — 2026-07-06**
+
+Added tree-sitter grammars and parser/classify/CLI support for C#, Kotlin, PHP, and Swift, expanding Hilo from 9 to 13 languages.
+
+**Dependency changes:**
+- Upgraded `tree-sitter` core from 0.24 → 0.25 (required for ABI 15 grammars)
+- Upgraded `tree-sitter-go`, `tree-sitter-python`, `tree-sitter-javascript` to 0.25
+- Added `tree-sitter-c-sharp = "0.23"`, `tree-sitter-kotlin-ng = "1.1"`, `tree-sitter-php = "0.24"`, `tree-sitter-swift = "0.7"`
+- Note: `tree-sitter-kotlin-ng` (maintained fork) used instead of `tree-sitter-kotlin` because the latter depends on tree-sitter 0.20 (incompatible with 0.25)
+
+**Parser (`hilo-graph/src/parser.rs`):**
+- Added 4 new `Language` variants: `CSharp`, `Kotlin`, `Php`, `Swift`
+- Extension mapping: `.cs` → CSharp, `.kt/.kts` → Kotlin, `.php/.phtml` → Php, `.swift` → Swift
+- 4 new import extractors:
+  - C#: `using_directive` → `using System.IO;` → `pkg:System.IO`, handles `using static`
+  - Kotlin: `import`/`import_header` → `import kotlin.collections.List` → `pkg:kotlin.collections.List`, handles `as` alias
+  - PHP: `namespace_use_declaration`/`use_declaration` → `use App\Models\User;` → `pkg:App\Models\User`, handles `use function`/`use const`/grouped
+  - Swift: `import_declaration` → `import Foundation` → `pkg:Foundation`, handles `@testable` and `import func/struct/class`
+- 4 new unit tests: `csharp_imports`, `kotlin_imports`, `php_imports`, `swift_imports`
+- Updated `language_from_extension` test with all new extensions
+
+**Classify (`hilo-graph/src/classify.rs`):**
+- `language_to_ts`: 4 new match arms
+- `is_test_file`: patterns for `*Test.cs`, `*Tests.cs`, `*Test.kt`, `*Tests.kt`, `*Test.php`, `*Tests.php`, `*Test.swift`, `*Tests.swift`
+- `is_entrypoint_by_name`: `Program.cs`, `Main.kt`, `index.php`, `main.swift`
+- `has_entrypoint`: C# (static void Main / async Task Main), Kotlin (fun main), PHP (shebang), Swift (@main / @UIApplicationMain)
+- `has_public_api`: C# (public class/interface/static), Kotlin (class/object/fun), PHP (function + class/interface), Swift (public + func/struct/class)
+
+**Signal engine (`hilo-graph/src/signal.rs`):**
+- Added 4 languages to the tree-sitter language match
+- Added symbol extraction for C# (method/class/interface/struct/enum declarations), Kotlin (function/class/object/interface), PHP (function/class/interface), Swift (function/class/struct/protocol/enum)
+- Added generic `extract_generic_signature` for signature extraction from the new languages
+
+**CLI (`hilo-cli/src/commands/graph.rs`):**
+- Language filter: `csharp/cs/c#`, `kotlin/kt`, `php`, `swift`
+- Test association: `*Test.cs`/`*Tests.cs` → `*.cs`, etc. for all 4 languages
+- `source_to_test_patterns` and `test_to_source` updated
+
+**Classify command (`hilo-cli/src/commands/classify.rs`):**
+- `SOURCE_EXTS` extended with `.cs`, `.kt`, `.kts`, `.php`, `.phtml`, `.swift`
+
+**Files touched (7 files):**
+- `hilo-graph/Cargo.toml` — deps upgraded + 4 new grammars
+- `hilo-graph/src/parser.rs` — 4 new languages + extractors + tests
+- `hilo-graph/src/classify.rs` — test/entrypoint/public-API detection for 4 languages
+- `hilo-graph/src/signal.rs` — language match + symbol extraction + generic extractor
+- `hilo-cli/src/commands/graph.rs` — language filter + test associations
+- `hilo-cli/src/commands/classify.rs` — source extensions
+- `.coding-hermes/tasks.md` — task marked complete
+
+**Verification:**
+- `cargo check --workspace` — PASS
+- `cargo test --workspace` — all 36 suites pass, 0 failures (incl. 4 new parser tests)
+- `cargo clippy --workspace -- -D warnings` — clean
+- `cargo fmt --all` — applied
+- Binary rebuilt + installed
 
 ---
 

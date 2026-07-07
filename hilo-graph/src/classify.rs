@@ -138,6 +138,10 @@ fn language_to_ts(lang: Language) -> tree_sitter::Language {
         Language::C => tree_sitter_c::LANGUAGE.into(),
         Language::Cpp => tree_sitter_cpp::LANGUAGE.into(),
         Language::Ruby => tree_sitter_ruby::LANGUAGE.into(),
+        Language::CSharp => tree_sitter_c_sharp::LANGUAGE.into(),
+        Language::Kotlin => tree_sitter_kotlin_ng::LANGUAGE.into(),
+        Language::Php => tree_sitter_php::LANGUAGE_PHP.into(),
+        Language::Swift => tree_sitter_swift::LANGUAGE.into(),
     }
 }
 
@@ -160,6 +164,22 @@ fn is_test_file(path: &str) -> bool {
         return true;
     }
     if lower.ends_with("_spec.rb") {
+        return true;
+    }
+    // C#: *Test.cs, *Tests.cs
+    if lower.ends_with("test.cs") || lower.ends_with("tests.cs") {
+        return true;
+    }
+    // Kotlin: *Test.kt, *Tests.kt
+    if lower.ends_with("test.kt") || lower.ends_with("tests.kt") {
+        return true;
+    }
+    // PHP: *Test.php, *Tests.php
+    if lower.ends_with("test.php") || lower.ends_with("tests.php") {
+        return true;
+    }
+    // Swift: *Test.swift, *Tests.swift
+    if lower.ends_with("test.swift") || lower.ends_with("tests.swift") {
         return true;
     }
     // __test__ directories (Python convention)
@@ -198,6 +218,22 @@ fn is_entrypoint_by_name(path: &str) -> bool {
     if lower.ends_with("__main__.py") {
         return true;
     }
+    // C#: Program.cs (default entrypoint)
+    if lower.ends_with("program.cs") {
+        return true;
+    }
+    // Kotlin: Main.kt (default entrypoint)
+    if lower.ends_with("main.kt") {
+        return true;
+    }
+    // PHP: index.php (web entrypoint)
+    if lower.ends_with("index.php") {
+        return true;
+    }
+    // Swift: main.swift (command-line entrypoint)
+    if lower.ends_with("main.swift") {
+        return true;
+    }
     false
 }
 
@@ -212,6 +248,10 @@ fn has_entrypoint(node: tree_sitter::Node, source: &[u8], language: Language) ->
         Language::Java => has_java_main(node, source),
         Language::C | Language::Cpp => has_c_main(node, source),
         Language::Ruby => has_ruby_entrypoint(node, source),
+        Language::CSharp => has_csharp_main(node, source),
+        Language::Kotlin => has_kotlin_main(node, source),
+        Language::Php => has_php_entrypoint(node, source),
+        Language::Swift => has_swift_entrypoint(node, source),
     }
 }
 
@@ -276,6 +316,46 @@ fn has_ruby_entrypoint(node: tree_sitter::Node, source: &[u8]) -> bool {
     walk_children(node, source, has_ruby_entrypoint)
 }
 
+fn has_csharp_main(node: tree_sitter::Node, source: &[u8]) -> bool {
+    if node.kind() == "method_declaration" {
+        let text = node.utf8_text(source).unwrap_or("");
+        if text.contains("static void Main(") || text.contains("static async Task Main(") {
+            return true;
+        }
+    }
+    walk_children(node, source, has_csharp_main)
+}
+
+fn has_kotlin_main(node: tree_sitter::Node, source: &[u8]) -> bool {
+    if node.kind() == "function_declaration" {
+        let text = node.utf8_text(source).unwrap_or("");
+        if text.starts_with("fun main(") {
+            return true;
+        }
+    }
+    walk_children(node, source, has_kotlin_main)
+}
+
+fn has_php_entrypoint(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let text = node.utf8_text(source).unwrap_or("");
+    // PHP CLI scripts have shebang or top-level execution
+    if text.starts_with("#!/usr/bin/env php") || text.starts_with("#!/usr/bin/php") {
+        return true;
+    }
+    walk_children(node, source, has_php_entrypoint)
+}
+
+fn has_swift_entrypoint(node: tree_sitter::Node, source: &[u8]) -> bool {
+    // Swift uses @main attribute or @UIApplicationMain / @NSApplicationMain
+    if node.kind() == "attribute" {
+        let text = node.utf8_text(source).unwrap_or("");
+        if text == "@main" || text == "@UIApplicationMain" || text == "@NSApplicationMain" {
+            return true;
+        }
+    }
+    walk_children(node, source, has_swift_entrypoint)
+}
+
 // ── Public API surface detection ────────────────────────────────────
 
 fn has_public_api(node: tree_sitter::Node, source: &[u8], language: Language) -> bool {
@@ -287,6 +367,10 @@ fn has_public_api(node: tree_sitter::Node, source: &[u8], language: Language) ->
         Language::Java => has_java_public(node, source),
         Language::C | Language::Cpp => has_c_header_fns(node, source),
         Language::Ruby => has_ruby_public(node, source),
+        Language::CSharp => has_csharp_public(node, source),
+        Language::Kotlin => has_kotlin_public(node, source),
+        Language::Php => has_php_public(node, source),
+        Language::Swift => has_swift_public(node, source),
     }
 }
 
@@ -344,6 +428,29 @@ fn has_c_header_fns(node: tree_sitter::Node, source: &[u8]) -> bool {
 fn has_ruby_public(node: tree_sitter::Node, source: &[u8]) -> bool {
     let text = node.utf8_text(source).unwrap_or("");
     text.contains("def ") && (text.contains("module ") || text.contains("class "))
+}
+
+fn has_csharp_public(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let text = node.utf8_text(source).unwrap_or("");
+    text.contains("public class")
+        || text.contains("public interface")
+        || text.contains("public static")
+}
+
+fn has_kotlin_public(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let text = node.utf8_text(source).unwrap_or("");
+    text.contains("class ") || text.contains("object ") || text.contains("fun ")
+}
+
+fn has_php_public(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let text = node.utf8_text(source).unwrap_or("");
+    text.contains("function ") && (text.contains("class ") || text.contains("interface "))
+}
+
+fn has_swift_public(node: tree_sitter::Node, source: &[u8]) -> bool {
+    let text = node.utf8_text(source).unwrap_or("");
+    text.contains("public ")
+        && (text.contains("func ") || text.contains("struct ") || text.contains("class "))
 }
 
 // ── Path-based classification ──────────────────────────────────────

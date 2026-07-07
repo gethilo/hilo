@@ -397,6 +397,10 @@ fn extract_symbols(path: &str, source: &str) -> Vec<Symbol> {
         Language::C => tree_sitter_c::LANGUAGE.into(),
         Language::Cpp => tree_sitter_cpp::LANGUAGE.into(),
         Language::Ruby => tree_sitter_ruby::LANGUAGE.into(),
+        Language::CSharp => tree_sitter_c_sharp::LANGUAGE.into(),
+        Language::Kotlin => tree_sitter_kotlin_ng::LANGUAGE.into(),
+        Language::Php => tree_sitter_php::LANGUAGE_PHP.into(),
+        Language::Swift => tree_sitter_swift::LANGUAGE.into(),
     };
     if ts_parser.set_language(&ts_lang).is_err() {
         return Vec::new();
@@ -501,6 +505,63 @@ fn extract_symbols_from_ast(node: tree_sitter::Node, source: &[u8], lang: Langua
                 &mut symbols,
                 &["method", "class", "module"],
                 extract_ruby_signature,
+            );
+        }
+        Language::CSharp => {
+            collect_symbols(
+                node,
+                source,
+                &mut symbols,
+                &[
+                    "method_declaration",
+                    "class_declaration",
+                    "interface_declaration",
+                    "struct_declaration",
+                    "enum_declaration",
+                ],
+                extract_generic_signature,
+            );
+        }
+        Language::Kotlin => {
+            collect_symbols(
+                node,
+                source,
+                &mut symbols,
+                &[
+                    "function_declaration",
+                    "class_declaration",
+                    "object_declaration",
+                    "interface_declaration",
+                ],
+                extract_generic_signature,
+            );
+        }
+        Language::Php => {
+            collect_symbols(
+                node,
+                source,
+                &mut symbols,
+                &[
+                    "function_definition",
+                    "class_declaration",
+                    "interface_declaration",
+                ],
+                extract_generic_signature,
+            );
+        }
+        Language::Swift => {
+            collect_symbols(
+                node,
+                source,
+                &mut symbols,
+                &[
+                    "function_declaration",
+                    "class_declaration",
+                    "struct_declaration",
+                    "protocol_declaration",
+                    "enum_declaration",
+                ],
+                extract_generic_signature,
             );
         }
     }
@@ -709,6 +770,71 @@ fn extract_ruby_signature(node: tree_sitter::Node, source: &[u8]) -> Option<Symb
         .unwrap_or(trimmed)
         .trim_end_matches('{')
         .to_string();
+
+    Some(Symbol {
+        name,
+        line,
+        signature: trimmed.to_string(),
+    })
+}
+
+/// Generic signature extractor for languages without a custom extractor.
+/// Extracts the first identifier after common keywords (class, interface, struct, enum, func, function, etc.).
+fn extract_generic_signature(node: tree_sitter::Node, source: &[u8]) -> Option<Symbol> {
+    let text = node.utf8_text(source).ok()?;
+    let line = node.start_position().row + 1;
+    let first_line = text.lines().next().unwrap_or(text);
+    let trimmed = first_line.trim();
+
+    // Try to find the name after any declaration keyword
+    const KEYWORDS: &[&str] = &[
+        "public",
+        "private",
+        "protected",
+        "internal",
+        "open",
+        "final",
+        "abstract",
+        "static",
+        "async",
+        "func",
+        "function",
+        "class",
+        "interface",
+        "struct",
+        "enum",
+        "protocol",
+        "object",
+        "case",
+        "void",
+        "int",
+        "string",
+        "bool",
+        "double",
+        "float",
+        "var",
+        "let",
+        "val",
+    ];
+    let name = trimmed
+        .split_whitespace()
+        .find(|w| !KEYWORDS.contains(w))
+        .map(|w| {
+            w.split(['(', '{', '<', ':', '<'])
+                .next()
+                .unwrap_or(w)
+                .trim_end_matches(',')
+                .to_string()
+        })
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| {
+            trimmed
+                .split_whitespace()
+                .next_back()
+                .unwrap_or(trimmed)
+                .trim_end_matches('{')
+                .to_string()
+        });
 
     Some(Symbol {
         name,

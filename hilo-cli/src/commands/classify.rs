@@ -34,6 +34,12 @@ const SOURCE_EXTS: &[(&str, Language)] = &[
     ("hpp", Language::Cpp),
     ("hxx", Language::Cpp),
     ("rb", Language::Ruby),
+    ("cs", Language::CSharp),
+    ("kt", Language::Kotlin),
+    ("kts", Language::Kotlin),
+    ("php", Language::Php),
+    ("phtml", Language::Php),
+    ("swift", Language::Swift),
 ];
 
 /// Run the classify command.

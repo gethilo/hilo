@@ -10,16 +10,20 @@ description = "Hilo graph engine — tree-sitter AST parsing and DuckDB graph qu
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
-tree-sitter = "0.24"
-tree-sitter-go = "0.23"
-tree-sitter-python = "0.23"
+tree-sitter = "0.25"
+tree-sitter-go = "0.25"
+tree-sitter-python = "0.25"
 tree-sitter-typescript = "0.23"
 tree-sitter-rust = "0.23"
-tree-sitter-javascript = "0.23"
+tree-sitter-javascript = "0.25"
 tree-sitter-java = "0.23"
 tree-sitter-c = "0.23"
 tree-sitter-cpp = "0.23"
 tree-sitter-ruby = "0.23"
+tree-sitter-c-sharp = "0.23"
+tree-sitter-kotlin-ng = "1.1"
+tree-sitter-php = "0.24"
+tree-sitter-swift = "0.7"
 duckdb = { version = "1.1", features = ["bundled"] }
 hilo_metadata = { path = "../hilo-metadata" }
 
