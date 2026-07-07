@@ -1,8 +1,9 @@
-//! AST parsing with tree-sitter for 13 languages.
+//! AST parsing with tree-sitter for 20 languages.
 //!
 //! Supports Go, Python, TypeScript, Rust, JavaScript, Java, C, C++, Ruby,
-//! C#, Kotlin, PHP, and Swift. Each language gets a dedicated extraction
-//! function that understands its specific import/dependency syntax.
+//! C#, Kotlin, PHP, Swift, Elixir, Haskell, Erlang, Scala, Zig, Lua, and Dart.
+//! Each language gets a dedicated extraction function that understands its
+//! specific import/dependency syntax.
 
 use hilo_metadata::inventory::Edge;
 use tree_sitter::{Node, Parser as TsParser};
@@ -25,6 +26,13 @@ pub enum Language {
     Kotlin,
     Php,
     Swift,
+    Elixir,
+    Haskell,
+    Erlang,
+    Scala,
+    Zig,
+    Lua,
+    Dart,
 }
 
 impl Language {
@@ -44,6 +52,13 @@ impl Language {
             "kt" | "kts" => Some(Language::Kotlin),
             "php" | "phtml" => Some(Language::Php),
             "swift" => Some(Language::Swift),
+            "ex" | "exs" => Some(Language::Elixir),
+            "hs" | "lhs" => Some(Language::Haskell),
+            "erl" | "hrl" => Some(Language::Erlang),
+            "scala" | "sc" => Some(Language::Scala),
+            "zig" => Some(Language::Zig),
+            "lua" => Some(Language::Lua),
+            "dart" => Some(Language::Dart),
             _ => None,
         }
     }
@@ -52,7 +67,8 @@ impl Language {
     pub fn all_extensions() -> &'static [&'static str] {
         &[
             "go", "py", "ts", "tsx", "rs", "js", "jsx", "java", "c", "cpp", "cc", "cxx", "rb",
-            "cs", "kt", "kts", "php", "phtml", "swift",
+            "cs", "kt", "kts", "php", "phtml", "swift", "ex", "exs", "hs", "lhs", "erl", "hrl",
+            "scala", "sc", "zig", "lua", "dart",
         ]
     }
 }
@@ -86,6 +102,13 @@ impl Parser {
             Language::Kotlin => tree_sitter_kotlin_ng::LANGUAGE.into(),
             Language::Php => tree_sitter_php::LANGUAGE_PHP.into(),
             Language::Swift => tree_sitter_swift::LANGUAGE.into(),
+            Language::Elixir => tree_sitter_elixir::LANGUAGE.into(),
+            Language::Haskell => tree_sitter_haskell::LANGUAGE.into(),
+            Language::Erlang => tree_sitter_erlang::LANGUAGE.into(),
+            Language::Scala => tree_sitter_scala::LANGUAGE.into(),
+            Language::Zig => tree_sitter_zig::LANGUAGE.into(),
+            Language::Lua => tree_sitter_lua::LANGUAGE.into(),
+            Language::Dart => tree_sitter_dart::LANGUAGE.into(),
         };
         parser.set_language(&lang)?;
         Ok(Parser { parser, language })
@@ -127,6 +150,21 @@ impl Parser {
             Language::Swift => {
                 extract_swift_imports(tree.root_node(), source.as_bytes(), &mut paths)
             }
+            Language::Elixir => {
+                extract_elixir_imports(tree.root_node(), source.as_bytes(), &mut paths)
+            }
+            Language::Haskell => {
+                extract_haskell_imports(tree.root_node(), source.as_bytes(), &mut paths)
+            }
+            Language::Erlang => {
+                extract_erlang_imports(tree.root_node(), source.as_bytes(), &mut paths)
+            }
+            Language::Scala => {
+                extract_scala_imports(tree.root_node(), source.as_bytes(), &mut paths)
+            }
+            Language::Zig => extract_zig_imports(tree.root_node(), source.as_bytes(), &mut paths),
+            Language::Lua => extract_lua_imports(tree.root_node(), source.as_bytes(), &mut paths),
+            Language::Dart => extract_dart_imports(tree.root_node(), source.as_bytes(), &mut paths),
         }
 
         let edges = paths
@@ -479,6 +517,217 @@ fn extract_swift_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
     }
 }
 
+// ── Elixir ──────────────────────────────────────────────────────────
+
+fn extract_elixir_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+    // Elixir uses `alias`, `import`, `require`, and `use` keywords.
+    // These appear as `call` nodes where the function name is the keyword.
+    if node.kind() == "call" {
+        let text = node.utf8_text(source).unwrap_or("");
+        for keyword in &["alias ", "import ", "require ", "use "] {
+            if let Some(rest) = text.strip_prefix(keyword) {
+                // Take module path up to first space/comma (handles `alias Foo.Bar, as: B`)
+                let path = rest.split([',', ' ']).next().unwrap_or(rest).trim();
+                if !path.is_empty() {
+                    paths.push(format!("pkg:{path}"));
+                }
+            }
+        }
+    }
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        extract_elixir_imports(child, source, paths);
+    }
+}
+
+// ── Haskell ─────────────────────────────────────────────────────────
+
+fn extract_haskell_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+    // `import` node: `import qualified Data.Map as Map`
+    if node.kind() == "import" {
+        let text = node.utf8_text(source).unwrap_or("");
+        // Strip `import` prefix
+        let rest = text.strip_prefix("import").unwrap_or(text).trim();
+        // Skip `qualified` keyword
+        let rest = rest.strip_prefix("qualified").unwrap_or(rest).trim();
+        // Take module name up to first space (handles `as`, hiding, etc.)
+        let module = rest.split_whitespace().next().unwrap_or("");
+        if !module.is_empty() {
+            paths.push(format!("pkg:{module}"));
+        }
+        return;
+    }
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        extract_haskell_imports(child, source, paths);
+    }
+}
+
+// ── Erlang ──────────────────────────────────────────────────────────
+
+fn extract_erlang_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+    // `-include_lib("eunit/include/eunit.hrl").` and `-include("records.hrl").`
+    let text = node.utf8_text(source).unwrap_or("");
+    if text.contains("-include_lib(") || text.contains("-include(") {
+        // Extract the string argument
+        if let Some(start) = text.find('"') {
+            if let Some(end) = text[start + 1..].find('"') {
+                let path = &text[start + 1..start + 1 + end];
+                if !path.is_empty() {
+                    paths.push(format!("local:{path}"));
+                }
+            }
+        }
+    }
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        extract_erlang_imports(child, source, paths);
+    }
+}
+
+// ── Scala ───────────────────────────────────────────────────────────
+
+fn extract_scala_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+    if node.kind() == "import_declaration" {
+        let text = node.utf8_text(source).unwrap_or("");
+        // `import scala.collection.mutable._` or `import akka.actor.{Props, Actor}`
+        let rest = text.strip_prefix("import").unwrap_or(text).trim();
+        // Take path up to first `{` (grouped import) or end, then trim trailing dots/whitespace
+        let path = rest.split('{').next().unwrap_or(rest).trim();
+        let path = path.trim_end_matches('.').trim();
+        if !path.is_empty() {
+            paths.push(format!("pkg:{path}"));
+        }
+        return;
+    }
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        extract_scala_imports(child, source, paths);
+    }
+}
+
+// ── Zig ─────────────────────────────────────────────────────────────
+
+fn extract_zig_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+    // Zig uses `@import("module")` builtin calls
+    let text = node.utf8_text(source).unwrap_or("");
+    if text.contains("@import(") {
+        if let Some(start) = text.find("@import(\"") {
+            let rest = &text[start + 9..];
+            if let Some(end) = rest.find('"') {
+                let path = &rest[..end];
+                if !path.is_empty() {
+                    paths.push(format!("local:{path}"));
+                }
+            }
+        }
+    }
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        extract_zig_imports(child, source, paths);
+    }
+}
+
+// ── Lua ─────────────────────────────────────────────────────────────
+
+fn extract_lua_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+    // `require("module")` or `require 'module'`
+    let text = node.utf8_text(source).unwrap_or("");
+    if text.starts_with("require") {
+        // Find quoted argument
+        for quote in &['"', '\''] {
+            let prefix = format!("require({quote}");
+            if let Some(rest) = text.strip_prefix(&prefix) {
+                if let Some(end) = rest.find(*quote) {
+                    let path = rest[..end].trim();
+                    if !path.is_empty() {
+                        paths.push(format!("pkg:{path}"));
+                    }
+                    return;
+                }
+            }
+            // Handle `require 'module'` (space instead of paren)
+            let prefix = format!("require {quote}");
+            if let Some(rest) = text.strip_prefix(&prefix) {
+                if let Some(end) = rest.find(*quote) {
+                    let path = rest[..end].trim();
+                    if !path.is_empty() {
+                        paths.push(format!("pkg:{path}"));
+                    }
+                    return;
+                }
+            }
+        }
+    }
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        extract_lua_imports(child, source, paths);
+    }
+}
+
+// ── Dart ────────────────────────────────────────────────────────────
+
+fn extract_dart_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+    // `import 'package:foo/bar.dart';` or `import '../utils.dart';`
+    // `export 'dart:async';`
+    if node.kind() == "import" || node.kind() == "import_or_export" {
+        let text = node.utf8_text(source).unwrap_or("");
+        let rest = text
+            .strip_prefix("import ")
+            .or_else(|| text.strip_prefix("export "))
+            .unwrap_or(text);
+        // Find quoted path
+        for quote in &['"', '\''] {
+            if let Some(start) = rest.find(*quote) {
+                let after = &rest[start + 1..];
+                if let Some(end) = after.find(*quote) {
+                    let path = &after[..end];
+                    if !path.is_empty() {
+                        // package: → pkg:, dart: → std:, relative → local:
+                        let classified = if path.starts_with("package:") {
+                            let stripped = path.strip_prefix("package:").unwrap_or(path);
+                            format!("pkg:{stripped}")
+                        } else if path.starts_with("dart:") {
+                            let stripped = path.strip_prefix("dart:").unwrap_or(path);
+                            format!("std:{stripped}")
+                        } else {
+                            format!("local:{path}")
+                        };
+                        paths.push(classified);
+                        break;
+                    }
+                }
+            }
+        }
+        return;
+    }
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        extract_dart_imports(child, source, paths);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -582,6 +831,14 @@ mod tests {
         assert_eq!(Language::from_extension("php"), Some(Language::Php));
         assert_eq!(Language::from_extension("phtml"), Some(Language::Php));
         assert_eq!(Language::from_extension("swift"), Some(Language::Swift));
+        assert_eq!(Language::from_extension("ex"), Some(Language::Elixir));
+        assert_eq!(Language::from_extension("exs"), Some(Language::Elixir));
+        assert_eq!(Language::from_extension("hs"), Some(Language::Haskell));
+        assert_eq!(Language::from_extension("erl"), Some(Language::Erlang));
+        assert_eq!(Language::from_extension("scala"), Some(Language::Scala));
+        assert_eq!(Language::from_extension("zig"), Some(Language::Zig));
+        assert_eq!(Language::from_extension("lua"), Some(Language::Lua));
+        assert_eq!(Language::from_extension("dart"), Some(Language::Dart));
         assert_eq!(Language::from_extension("txt"), None);
     }
 
@@ -624,5 +881,76 @@ mod tests {
         assert!(imports.contains(&"pkg:Foundation".into()));
         assert!(imports.contains(&"pkg:UIKit".into()));
         assert!(imports.contains(&"pkg:MyModule".into()));
+    }
+
+    #[test]
+    fn elixir_imports() {
+        let imports = parse(
+            Language::Elixir,
+            "alias MyApp.Repo\nimport Ecto.Query\nuse GenServer\n",
+        );
+        assert!(imports.contains(&"pkg:MyApp.Repo".into()));
+        assert!(imports.contains(&"pkg:Ecto.Query".into()));
+        assert!(imports.contains(&"pkg:GenServer".into()));
+    }
+
+    #[test]
+    fn haskell_imports() {
+        let imports = parse(
+            Language::Haskell,
+            "import qualified Data.Map as Map\nimport Control.Monad\n",
+        );
+        assert!(imports.contains(&"pkg:Data.Map".into()));
+        assert!(imports.contains(&"pkg:Control.Monad".into()));
+    }
+
+    #[test]
+    fn erlang_includes() {
+        let imports = parse(
+            Language::Erlang,
+            "-include_lib(\"eunit/include/eunit.hrl\").\n-module(myapp).\n",
+        );
+        assert!(imports.iter().any(|p| p.contains("eunit.hrl")));
+    }
+
+    #[test]
+    fn scala_imports() {
+        let imports = parse(
+            Language::Scala,
+            "import scala.collection.mutable._\nimport akka.actor.{Props, Actor}\n",
+        );
+        assert!(imports.contains(&"pkg:scala.collection.mutable._".into()));
+        assert!(imports.contains(&"pkg:akka.actor".into()));
+    }
+
+    #[test]
+    fn zig_imports() {
+        let imports = parse(
+            Language::Zig,
+            "const std = @import(\"std\");\nconst foo = @import(\"foo.zig\");\n",
+        );
+        assert!(imports.contains(&"local:std".into()));
+        assert!(imports.contains(&"local:foo.zig".into()));
+    }
+
+    #[test]
+    fn lua_imports() {
+        let imports = parse(
+            Language::Lua,
+            "local json = require(\"json\")\nlocal utils = require 'utils'\n",
+        );
+        assert!(imports.contains(&"pkg:json".into()));
+        assert!(imports.contains(&"pkg:utils".into()));
+    }
+
+    #[test]
+    fn dart_imports() {
+        let imports = parse(
+            Language::Dart,
+            "import 'package:flutter/material.dart';\nimport 'dart:async';\nimport '../utils.dart';\n",
+        );
+        assert!(imports.contains(&"pkg:flutter/material.dart".into()));
+        assert!(imports.contains(&"std:async".into()));
+        assert!(imports.contains(&"local:../utils.dart".into()));
     }
 }

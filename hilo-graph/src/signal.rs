@@ -401,6 +401,13 @@ fn extract_symbols(path: &str, source: &str) -> Vec<Symbol> {
         Language::Kotlin => tree_sitter_kotlin_ng::LANGUAGE.into(),
         Language::Php => tree_sitter_php::LANGUAGE_PHP.into(),
         Language::Swift => tree_sitter_swift::LANGUAGE.into(),
+        Language::Elixir => tree_sitter_elixir::LANGUAGE.into(),
+        Language::Haskell => tree_sitter_haskell::LANGUAGE.into(),
+        Language::Erlang => tree_sitter_erlang::LANGUAGE.into(),
+        Language::Scala => tree_sitter_scala::LANGUAGE.into(),
+        Language::Zig => tree_sitter_zig::LANGUAGE.into(),
+        Language::Lua => tree_sitter_lua::LANGUAGE.into(),
+        Language::Dart => tree_sitter_dart::LANGUAGE.into(),
     };
     if ts_parser.set_language(&ts_lang).is_err() {
         return Vec::new();
@@ -559,6 +566,83 @@ fn extract_symbols_from_ast(node: tree_sitter::Node, source: &[u8], lang: Langua
                     "class_declaration",
                     "struct_declaration",
                     "protocol_declaration",
+                    "enum_declaration",
+                ],
+                extract_generic_signature,
+            );
+        }
+        Language::Elixir => {
+            collect_symbols(
+                node,
+                source,
+                &mut symbols,
+                &["call"],
+                extract_generic_signature,
+            );
+        }
+        Language::Haskell => {
+            collect_symbols(
+                node,
+                source,
+                &mut symbols,
+                &["function", "class", "type_synonym", "newtype", "data_type"],
+                extract_generic_signature,
+            );
+        }
+        Language::Erlang => {
+            collect_symbols(
+                node,
+                source,
+                &mut symbols,
+                &["function_clause"],
+                extract_generic_signature,
+            );
+        }
+        Language::Scala => {
+            collect_symbols(
+                node,
+                source,
+                &mut symbols,
+                &[
+                    "function_declaration",
+                    "class_definition",
+                    "object_definition",
+                    "trait_definition",
+                    "enum_definition",
+                ],
+                extract_generic_signature,
+            );
+        }
+        Language::Zig => {
+            collect_symbols(
+                node,
+                source,
+                &mut symbols,
+                &[
+                    "function_declaration",
+                    "struct_declaration",
+                    "enum_declaration",
+                ],
+                extract_generic_signature,
+            );
+        }
+        Language::Lua => {
+            collect_symbols(
+                node,
+                source,
+                &mut symbols,
+                &["function_declaration", "function_definition"],
+                extract_generic_signature,
+            );
+        }
+        Language::Dart => {
+            collect_symbols(
+                node,
+                source,
+                &mut symbols,
+                &[
+                    "function_declaration",
+                    "class_declaration",
                     "enum_declaration",
                 ],
                 extract_generic_signature,

@@ -24,6 +24,13 @@ tree-sitter-c-sharp = "0.23"
 tree-sitter-kotlin-ng = "1.1"
 tree-sitter-php = "0.24"
 tree-sitter-swift = "0.7"
+tree-sitter-elixir = "0.3"
+tree-sitter-haskell = "0.23"
+tree-sitter-scala = "0.26"
+tree-sitter-lua = "0.5"
+tree-sitter-dart = "0.2"
+tree-sitter-erlang = "0.19"
+tree-sitter-zig = "1.1"
 duckdb = { version = "1.1", features = ["bundled"] }
 hilo_metadata = { path = "../hilo-metadata" }
 

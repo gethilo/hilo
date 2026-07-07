@@ -142,6 +142,13 @@ fn language_to_ts(lang: Language) -> tree_sitter::Language {
         Language::Kotlin => tree_sitter_kotlin_ng::LANGUAGE.into(),
         Language::Php => tree_sitter_php::LANGUAGE_PHP.into(),
         Language::Swift => tree_sitter_swift::LANGUAGE.into(),
+        Language::Elixir => tree_sitter_elixir::LANGUAGE.into(),
+        Language::Haskell => tree_sitter_haskell::LANGUAGE.into(),
+        Language::Erlang => tree_sitter_erlang::LANGUAGE.into(),
+        Language::Scala => tree_sitter_scala::LANGUAGE.into(),
+        Language::Zig => tree_sitter_zig::LANGUAGE.into(),
+        Language::Lua => tree_sitter_lua::LANGUAGE.into(),
+        Language::Dart => tree_sitter_dart::LANGUAGE.into(),
     }
 }
 
@@ -180,6 +187,44 @@ fn is_test_file(path: &str) -> bool {
     }
     // Swift: *Test.swift, *Tests.swift
     if lower.ends_with("test.swift") || lower.ends_with("tests.swift") {
+        return true;
+    }
+    // Elixir: *_test.exs, test_*.exs
+    if lower.ends_with("_test.exs") || lower.ends_with(".test.exs") {
+        return true;
+    }
+    if lower.starts_with("test_") && (lower.ends_with(".ex") || lower.ends_with(".exs")) {
+        return true;
+    }
+    // Haskell: *Spec.hs, *Test.hs
+    if lower.ends_with("spec.hs") || lower.ends_with("test.hs") || lower.ends_with("tests.hs") {
+        return true;
+    }
+    // Erlang: *_SUITE.erl (Common Test suites)
+    if lower.ends_with("_suite.erl") {
+        return true;
+    }
+    // Scala: *Test.scala, *Tests.scala, *Spec.scala
+    if lower.ends_with("test.scala")
+        || lower.ends_with("tests.scala")
+        || lower.ends_with("spec.scala")
+    {
+        return true;
+    }
+    // Zig: *_test.zig, test.zig
+    if lower.ends_with("_test.zig") || lower.ends_with(".test.zig") {
+        return true;
+    }
+    // Lua: _test.lua, _spec.lua, test_*.lua
+    if lower.ends_with("_test.lua") || lower.ends_with("_spec.lua") || lower.ends_with(".test.lua")
+    {
+        return true;
+    }
+    if lower.starts_with("test_") && lower.ends_with(".lua") {
+        return true;
+    }
+    // Dart: *_test.dart, test_*.dart
+    if lower.ends_with("_test.dart") || lower.ends_with(".test.dart") {
         return true;
     }
     // __test__ directories (Python convention)
@@ -234,6 +279,34 @@ fn is_entrypoint_by_name(path: &str) -> bool {
     if lower.ends_with("main.swift") {
         return true;
     }
+    // Elixir: myapp.exs, mix.exs, application.ex
+    if lower.ends_with("mix.exs") || lower.ends_with("application.ex") {
+        return true;
+    }
+    // Haskell: Main.hs
+    if lower.ends_with("main.hs") || lower.ends_with("main.lhs") {
+        return true;
+    }
+    // Erlang: escript, main.erl
+    if lower.ends_with("escript.erl") || lower.ends_with("main.erl") {
+        return true;
+    }
+    // Scala: Main.scala, App.scala
+    if lower.ends_with("main.scala") || lower.ends_with("app.scala") {
+        return true;
+    }
+    // Zig: main.zig
+    if lower.ends_with("main.zig") {
+        return true;
+    }
+    // Lua: main.lua, init.lua
+    if lower.ends_with("main.lua") || lower.ends_with("init.lua") {
+        return true;
+    }
+    // Dart: main.dart, index.dart
+    if lower.ends_with("main.dart") {
+        return true;
+    }
     false
 }
 
@@ -252,6 +325,13 @@ fn has_entrypoint(node: tree_sitter::Node, source: &[u8], language: Language) ->
         Language::Kotlin => has_kotlin_main(node, source),
         Language::Php => has_php_entrypoint(node, source),
         Language::Swift => has_swift_entrypoint(node, source),
+        Language::Elixir => has_elixir_entrypoint(node, source),
+        Language::Haskell => has_haskell_entrypoint(node, source),
+        Language::Erlang => has_erlang_entrypoint(node, source),
+        Language::Scala => has_scala_entrypoint(node, source),
+        Language::Zig => has_zig_entrypoint(node, source),
+        Language::Lua => has_lua_entrypoint(node, source),
+        Language::Dart => has_dart_entrypoint(node, source),
     }
 }
 
@@ -356,6 +436,78 @@ fn has_swift_entrypoint(node: tree_sitter::Node, source: &[u8]) -> bool {
     walk_children(node, source, has_swift_entrypoint)
 }
 
+fn has_elixir_entrypoint(node: tree_sitter::Node, source: &[u8]) -> bool {
+    // Elixir scripts often start with shebang or have a top-level `main/0` def
+    let text = node.utf8_text(source).unwrap_or("");
+    if text.contains("def main(") || text.starts_with("#!") {
+        return true;
+    }
+    walk_children(node, source, has_elixir_entrypoint)
+}
+
+fn has_haskell_entrypoint(node: tree_sitter::Node, source: &[u8]) -> bool {
+    // `main =` is the entrypoint in Haskell
+    let text = node.utf8_text(source).unwrap_or("");
+    if text
+        .lines()
+        .any(|l| l.trim().starts_with("main") || l.trim().starts_with("main ="))
+    {
+        return true;
+    }
+    walk_children(node, source, has_haskell_entrypoint)
+}
+
+fn has_erlang_entrypoint(node: tree_sitter::Node, source: &[u8]) -> bool {
+    // `-module(main).` or scripts with `-module(escript)` / shebang
+    let text = node.utf8_text(source).unwrap_or("");
+    if text.contains("-module(main)") || text.starts_with("#!") {
+        return true;
+    }
+    walk_children(node, source, has_erlang_entrypoint)
+}
+
+fn has_scala_entrypoint(node: tree_sitter::Node, source: &[u8]) -> bool {
+    // `def main(args: Array[String]): Unit =` or `@main def myApp() =`
+    let text = node.utf8_text(source).unwrap_or("");
+    if text.contains("def main(") || text.contains("@main") {
+        return true;
+    }
+    // Scala 3: extends App trait
+    if text.contains("extends App") {
+        return true;
+    }
+    walk_children(node, source, has_scala_entrypoint)
+}
+
+fn has_zig_entrypoint(node: tree_sitter::Node, source: &[u8]) -> bool {
+    // `pub fn main()` is the entrypoint
+    let text = node.utf8_text(source).unwrap_or("");
+    if text.contains("pub fn main(") {
+        return true;
+    }
+    walk_children(node, source, has_zig_entrypoint)
+}
+
+fn has_lua_entrypoint(node: tree_sitter::Node, source: &[u8]) -> bool {
+    // Lua scripts often have shebang or top-level calls
+    let text = node.utf8_text(source).unwrap_or("");
+    if text.starts_with("#!") {
+        return true;
+    }
+    walk_children(node, source, has_lua_entrypoint)
+}
+
+fn has_dart_entrypoint(node: tree_sitter::Node, source: &[u8]) -> bool {
+    // `void main()` or `main()` function declaration
+    if node.kind() == "function_declaration" || node.kind() == "function_signature" {
+        let text = node.utf8_text(source).unwrap_or("");
+        if text.contains("main()") || text.contains("main(List") {
+            return true;
+        }
+    }
+    walk_children(node, source, has_dart_entrypoint)
+}
+
 // ── Public API surface detection ────────────────────────────────────
 
 fn has_public_api(node: tree_sitter::Node, source: &[u8], language: Language) -> bool {
@@ -371,6 +523,13 @@ fn has_public_api(node: tree_sitter::Node, source: &[u8], language: Language) ->
         Language::Kotlin => has_kotlin_public(node, source),
         Language::Php => has_php_public(node, source),
         Language::Swift => has_swift_public(node, source),
+        Language::Elixir => has_elixir_public(node, source),
+        Language::Haskell => has_haskell_public(node, source),
+        Language::Erlang => has_erlang_public(node, source),
+        Language::Scala => has_scala_public(node, source),
+        Language::Zig => has_zig_public(node, source),
+        Language::Lua => has_lua_public(node, source),
+        Language::Dart => has_dart_public(node, source),
     }
 }
 
@@ -451,6 +610,51 @@ fn has_swift_public(node: tree_sitter::Node, source: &[u8]) -> bool {
     let text = node.utf8_text(source).unwrap_or("");
     text.contains("public ")
         && (text.contains("func ") || text.contains("struct ") || text.contains("class "))
+}
+
+fn has_elixir_public(node: tree_sitter::Node, source: &[u8]) -> bool {
+    // Elixir: `def` (public) functions and `defmodule`
+    let text = node.utf8_text(source).unwrap_or("");
+    text.contains("defmodule ") || text.contains("def ")
+}
+
+fn has_haskell_public(node: tree_sitter::Node, source: &[u8]) -> bool {
+    // Haskell exports: `module Foo (...) where` or top-level function definitions
+    let text = node.utf8_text(source).unwrap_or("");
+    text.contains("module ") && text.contains("where")
+}
+
+fn has_erlang_public(node: tree_sitter::Node, source: &[u8]) -> bool {
+    // Erlang exports: `-export([func/arity, ...]).`
+    let text = node.utf8_text(source).unwrap_or("");
+    text.contains("-export(")
+}
+
+fn has_scala_public(node: tree_sitter::Node, source: &[u8]) -> bool {
+    // Scala: class, object, trait, or def declarations
+    let text = node.utf8_text(source).unwrap_or("");
+    text.contains("class ")
+        || text.contains("object ")
+        || text.contains("trait ")
+        || text.contains("def ")
+}
+
+fn has_zig_public(node: tree_sitter::Node, source: &[u8]) -> bool {
+    // Zig: `pub` keyword for exported symbols
+    let text = node.utf8_text(source).unwrap_or("");
+    text.contains("pub ")
+}
+
+fn has_lua_public(node: tree_sitter::Node, source: &[u8]) -> bool {
+    // Lua modules: functions and tables returned via `module` or `return`
+    let text = node.utf8_text(source).unwrap_or("");
+    text.contains("function ") || text.contains("return ") || text.contains("local M")
+}
+
+fn has_dart_public(node: tree_sitter::Node, source: &[u8]) -> bool {
+    // Dart: class, function, or typedef declarations
+    let text = node.utf8_text(source).unwrap_or("");
+    text.contains("class ") || text.contains("void ") || text.contains("typedef ")
 }
 
 // ── Path-based classification ──────────────────────────────────────

@@ -81,6 +81,13 @@ pub fn run_warm(workspace: bool, language: Option<String>, changed: bool) -> Res
             "kotlin" | "kt" => "kt",
             "php" => "php",
             "swift" => "swift",
+            "elixir" | "ex" | "exs" => "ex",
+            "haskell" | "hs" => "hs",
+            "erlang" | "erl" => "erl",
+            "scala" => "scala",
+            "zig" => "zig",
+            "lua" => "lua",
+            "dart" => "dart",
             other => anyhow::bail!("unknown language: {other}"),
         };
         source_files.retain(|f| f.extension().and_then(|e| e.to_str()) == Some(ext));
@@ -493,6 +500,28 @@ fn test_to_source(name: &str) -> Option<String> {
         Some(format!("{stem}.swift"))
     } else if let Some(stem) = name.strip_suffix("Tests.swift") {
         Some(format!("{stem}.swift"))
+    } else if let Some(stem) = name.strip_suffix("_test.exs") {
+        Some(format!("{stem}.ex"))
+    } else if let Some(stem) = name.strip_suffix("Spec.hs") {
+        Some(format!("{stem}.hs"))
+    } else if let Some(stem) = name.strip_suffix("Test.hs") {
+        Some(format!("{stem}.hs"))
+    } else if let Some(stem) = name.strip_suffix("Tests.hs") {
+        Some(format!("{stem}.hs"))
+    } else if let Some(stem) = name.strip_suffix("_SUITE.erl") {
+        Some(format!("{stem}.erl"))
+    } else if let Some(stem) = name.strip_suffix("Test.scala") {
+        Some(format!("{stem}.scala"))
+    } else if let Some(stem) = name.strip_suffix("Tests.scala") {
+        Some(format!("{stem}.scala"))
+    } else if let Some(stem) = name.strip_suffix("Spec.scala") {
+        Some(format!("{stem}.scala"))
+    } else if let Some(stem) = name.strip_suffix("_test.zig") {
+        Some(format!("{stem}.zig"))
+    } else if let Some(stem) = name.strip_suffix("_test.lua") {
+        Some(format!("{stem}.lua"))
+    } else if let Some(stem) = name.strip_suffix("_test.dart") {
+        Some(format!("{stem}.dart"))
     } else if let Some(stem) = name.strip_prefix("test_") {
         if stem.ends_with(".py") || stem.ends_with(".c") {
             Some(stem.to_string())
@@ -541,6 +570,29 @@ fn source_to_test_patterns(name: &str) -> Vec<String> {
     } else if let Some(stem) = name.strip_suffix(".swift") {
         patterns.push(format!("{stem}Test.swift"));
         patterns.push(format!("{stem}Tests.swift"));
+    } else if let Some(stem) = name.strip_suffix(".ex") {
+        patterns.push(format!("{stem}_test.exs"));
+    } else if let Some(stem) = name.strip_suffix(".exs") {
+        patterns.push(format!("{stem}_test.exs"));
+    } else if let Some(stem) = name.strip_suffix(".hs") {
+        patterns.push(format!("{stem}Spec.hs"));
+        patterns.push(format!("{stem}Test.hs"));
+    } else if let Some(stem) = name.strip_suffix(".lhs") {
+        patterns.push(format!("{stem}Spec.lhs"));
+    } else if let Some(stem) = name.strip_suffix(".erl") {
+        patterns.push(format!("{stem}_SUITE.erl"));
+    } else if let Some(stem) = name.strip_suffix(".scala") {
+        patterns.push(format!("{stem}Test.scala"));
+        patterns.push(format!("{stem}Spec.scala"));
+    } else if let Some(stem) = name.strip_suffix(".sc") {
+        patterns.push(format!("{stem}Test.sc"));
+    } else if let Some(stem) = name.strip_suffix(".zig") {
+        patterns.push(format!("{stem}_test.zig"));
+    } else if let Some(stem) = name.strip_suffix(".lua") {
+        patterns.push(format!("{stem}_test.lua"));
+        patterns.push(format!("{stem}_spec.lua"));
+    } else if let Some(stem) = name.strip_suffix(".dart") {
+        patterns.push(format!("{stem}_test.dart"));
     }
     patterns
 }

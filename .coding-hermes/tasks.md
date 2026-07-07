@@ -633,7 +633,7 @@ Added tree-sitter grammars and parser/classify/CLI support for C#, Kotlin, PHP, 
 
 ---
 
-## TASK-006: Tier 2 Language Expansion — Elixir, Haskell, Erlang, Scala, Zig, Lua, Dart
+## [x] TASK-006: Tier 2 Language Expansion — Elixir, Haskell, Erlang, Scala, Zig, Lua, Dart
 
 ### Why
 Strong communities with real codebases. Elixir (Phoenix), Haskell (functional dominance), Scala (Spark/Kafka), Zig (systems replacement), Lua (embedded/gamedev), Dart (Flutter), Erlang (telecom).
@@ -649,6 +649,75 @@ Same pattern as TASK-005. 7 languages, 7 new tree-sitter grammars.
 
 ### Files
 - Same files as TASK-005: Cargo.toml, parser.rs, classify.rs, graph.rs
+
+### Result
+**Status: COMPLETE — 2026-07-06**
+
+Added tree-sitter grammars and parser/classify/signal/CLI support for Elixir,
+Haskell, Erlang, Scala, Zig, Lua, and Dart, expanding Hilo from 13 to 20 languages.
+
+**Dependency changes:**
+- Added `tree-sitter-elixir = "0.3"`, `tree-sitter-haskell = "0.23"`,
+  `tree-sitter-scala = "0.26"`, `tree-sitter-lua = "0.5"`,
+  `tree-sitter-dart = "0.2"`, `tree-sitter-erlang = "0.19"`,
+  `tree-sitter-zig = "1.1"`
+- All 7 grammars compile cleanly with tree-sitter 0.25 (ABI 15)
+
+**Parser (`hilo-graph/src/parser.rs`):**
+- Added 7 new `Language` variants: `Elixir`, `Haskell`, `Erlang`, `Scala`,
+  `Zig`, `Lua`, `Dart`
+- Extension mapping: `.ex/.exs` → Elixir, `.hs/.lhs` → Haskell,
+  `.erl/.hrl` → Erlang, `.scala/.sc` → Scala, `.zig` → Zig,
+  `.lua` → Lua, `.dart` → Dart
+- 7 new import extractors:
+  - Elixir: `alias`/`import`/`require`/`use` call nodes → `pkg:Module.Path`
+  - Haskell: `import` nodes, handles `qualified`/`as` → `pkg:Module.Name`
+  - Erlang: `-include_lib("...")`/`-include("...")` → `local:path`
+  - Scala: `import_declaration` nodes, handles grouped `{A,B}` → `pkg:path`
+  - Zig: `@import("path")` builtin calls → `local:path`
+  - Lua: `require("mod")`/`require 'mod'` → `pkg:module`
+  - Dart: `import`/`export` nodes, classifies `package:` → `pkg:`,
+    `dart:` → `std:`, relative → `local:`
+- 7 new unit tests: `elixir_imports`, `haskell_imports`,
+  `erlang_includes`, `scala_imports`, `zig_imports`, `lua_imports`,
+  `dart_imports`
+- Updated `language_from_extension` test with all new extensions
+
+**Classify (`hilo-graph/src/classify.rs`):**
+- `language_to_ts`: 7 new match arms
+- `is_test_file`: patterns for `*_test.exs`, `*Spec.hs`/`*Test.hs`,
+  `*_SUITE.erl`, `*Test.scala`/`*Spec.scala`, `*_test.zig`,
+  `*_test.lua`/`*_spec.lua`, `*_test.dart`
+- `is_entrypoint_by_name`: `mix.exs`, `Main.hs`, `escript.erl`,
+  `Main.scala`, `main.zig`, `main.lua`/`init.lua`, `main.dart`
+- `has_entrypoint`: 7 new detection functions
+- `has_public_api`: 7 new detection functions
+
+**Signal engine (`hilo-graph/src/signal.rs`):**
+- Added 7 languages to the tree-sitter language match
+- Added symbol extraction for all 7 new languages using `extract_generic_signature`
+
+**CLI:**
+- `graph.rs`: language filter for all 7 new languages, test associations
+  for `*_test.exs`, `*Spec.hs`, `*_SUITE.erl`, `*Test.scala`,
+  `*_test.zig`, `*_test.lua`, `*_test.dart`
+- `classify.rs`: SOURCE_EXTS extended with all 7 new extensions
+
+**Files touched (6 files):**
+- `hilo-graph/Cargo.toml` — 7 new tree-sitter deps
+- `hilo-graph/src/parser.rs` — 7 new languages + extractors + tests
+- `hilo-graph/src/classify.rs` — test/entrypoint/public-API detection for 7 languages
+- `hilo-graph/src/signal.rs` — language match + symbol extraction
+- `hilo-cli/src/commands/graph.rs` — language filter + test associations
+- `hilo-cli/src/commands/classify.rs` — source extensions
+
+**Verification:**
+- `cargo check --workspace` — PASS
+- `cargo test --workspace` — all suites pass, 492 tests, 0 failures
+  (incl. 7 new parser tests)
+- `cargo clippy --workspace -- -D warnings` — clean
+- `cargo fmt --all` — applied
+- Binary rebuilt + installed: `hilo graph warm` discovers 267 edges across 75 files
 
 ---
 
