@@ -1,8 +1,8 @@
-//! AST parsing with tree-sitter for 25 languages.
+//! AST parsing with tree-sitter for 26 languages.
 //!
 //! Supports Go, Python, TypeScript, Rust, JavaScript, Java, C, C++, Ruby,
 //! C#, Kotlin, PHP, Swift, Elixir, Haskell, Erlang, Scala, Zig, Lua, Dart,
-//! Clojure, OCaml, R, Julia, and Elm.
+//! Clojure, OCaml, R, Julia, Elm, and Nim.
 //! Each language gets a dedicated extraction function that understands its
 //! specific import/dependency syntax.
 
@@ -39,6 +39,7 @@ pub enum Language {
     R,
     Julia,
     Elm,
+    Nim,
 }
 
 impl Language {
@@ -70,6 +71,7 @@ impl Language {
             "r" | "R" => Some(Language::R),
             "jl" => Some(Language::Julia),
             "elm" => Some(Language::Elm),
+            "nim" => Some(Language::Nim),
             _ => None,
         }
     }
@@ -80,7 +82,7 @@ impl Language {
             "go", "py", "ts", "tsx", "rs", "js", "jsx", "java", "c", "cpp", "cc", "cxx", "rb",
             "cs", "kt", "kts", "php", "phtml", "swift", "ex", "exs", "hs", "lhs", "erl", "hrl",
             "scala", "sc", "zig", "lua", "dart", "clj", "cljs", "cljc", "edn", "ml", "mli", "r",
-            "jl", "elm",
+            "jl", "elm", "nim",
         ]
     }
 }
@@ -126,6 +128,7 @@ impl Parser {
             Language::R => tree_sitter_r::LANGUAGE.into(),
             Language::Julia => tree_sitter_julia::LANGUAGE.into(),
             Language::Elm => tree_sitter_elm::LANGUAGE.into(),
+            Language::Nim => tree_sitter_nim::language(),
         };
         parser.set_language(&lang)?;
         Ok(Parser { parser, language })
@@ -193,6 +196,7 @@ impl Parser {
                 extract_julia_imports(tree.root_node(), source.as_bytes(), &mut paths)
             }
             Language::Elm => extract_elm_imports(tree.root_node(), source.as_bytes(), &mut paths),
+            Language::Nim => extract_nim_imports(tree.root_node(), source.as_bytes(), &mut paths),
         }
 
         let edges = paths
@@ -1059,6 +1063,66 @@ fn extract_elm_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
     }
 }
 
+// ── Nim ────────────────────────────────────────────────────────────
+
+fn extract_nim_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+    // Nim: `import module`, `import module1, module2`, `import module as alias`,
+    // `from module import ident1, ident2`, `import module except: ident`
+    // Classify std/ prefixes as "std:", everything else as "pkg:".
+
+    if node.kind() == "import_statement" {
+        let text = node.utf8_text(source).unwrap_or("");
+        let body = text.strip_prefix("import ").unwrap_or(text).trim();
+        // Split on commas to handle `import a, b, c`
+        for part in body.split(',') {
+            let part = part.trim();
+            // Skip `except` clause content: "module except: ident"
+            let module = part.split("except").next().unwrap_or(part).trim();
+            // Handle `as` alias: "module as alias"
+            let name = module.split_whitespace().next().unwrap_or(module).trim();
+            if !name.is_empty() && name.chars().next().is_some_and(|c| c.is_alphabetic()) {
+                if name.starts_with("std/") {
+                    let stripped = name.strip_prefix("std/").unwrap_or(name);
+                    paths.push(format!("std:{stripped}"));
+                } else {
+                    paths.push(format!("pkg:{name}"));
+                }
+            }
+        }
+        return;
+    }
+
+    // `from module import ident1, ident2`
+    if node.kind() == "import_from_statement" {
+        // The module is in a child with field_name "module"
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "identifier" || child.kind() == "dot_expression" {
+                if let Ok(text) = child.utf8_text(source) {
+                    let name = text.trim();
+                    if !name.is_empty() {
+                        if name.starts_with("std/") {
+                            let stripped = name.strip_prefix("std/").unwrap_or(name);
+                            paths.push(format!("std:{stripped}"));
+                        } else {
+                            paths.push(format!("pkg:{name}"));
+                        }
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        extract_nim_imports(child, source, paths);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1177,6 +1241,7 @@ mod tests {
         assert_eq!(Language::from_extension("r"), Some(Language::R));
         assert_eq!(Language::from_extension("jl"), Some(Language::Julia));
         assert_eq!(Language::from_extension("elm"), Some(Language::Elm));
+        assert_eq!(Language::from_extension("nim"), Some(Language::Nim));
         assert_eq!(Language::from_extension("txt"), None);
     }
 
@@ -1347,5 +1412,19 @@ mod tests {
         assert!(imports.contains(&"pkg:Html".into()));
         assert!(imports.contains(&"pkg:Browser".into()));
         assert!(imports.contains(&"pkg:Json.Decode".into()));
+    }
+
+    #[test]
+    fn nim_imports() {
+        let imports = parse(
+            Language::Nim,
+            "import std/os\nimport strutils, sequtils\nimport tables as tbl\nfrom std/os import walkDir\nimport std/math except: PI\n",
+        );
+        assert!(imports.contains(&"std:os".into()));
+        assert!(imports.contains(&"pkg:strutils".into()));
+        assert!(imports.contains(&"pkg:sequtils".into()));
+        assert!(imports.contains(&"pkg:tables".into()));
+        assert!(imports.contains(&"std:os".into()));
+        assert!(imports.contains(&"std:math".into()));
     }
 }

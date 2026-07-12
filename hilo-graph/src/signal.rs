@@ -413,6 +413,7 @@ fn extract_symbols(path: &str, source: &str) -> Vec<Symbol> {
         Language::R => tree_sitter_r::LANGUAGE.into(),
         Language::Julia => tree_sitter_julia::LANGUAGE.into(),
         Language::Elm => tree_sitter_elm::LANGUAGE.into(),
+        Language::Nim => tree_sitter_nim::language(),
     };
     if ts_parser.set_language(&ts_lang).is_err() {
         return Vec::new();
@@ -712,6 +713,24 @@ fn extract_symbols_from_ast(node: tree_sitter::Node, source: &[u8], lang: Langua
                     "type_declaration",
                     "type_alias_declaration",
                     "module_declaration",
+                ],
+                extract_generic_signature,
+            );
+        }
+        Language::Nim => {
+            collect_symbols(
+                node,
+                source,
+                &mut symbols,
+                &[
+                    "proc_declaration",
+                    "func_declaration",
+                    "method_declaration",
+                    "type_declaration",
+                    "macro_declaration",
+                    "template_declaration",
+                    "iterator_declaration",
+                    "converter_declaration",
                 ],
                 extract_generic_signature,
             );

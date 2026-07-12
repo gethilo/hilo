@@ -154,6 +154,7 @@ fn language_to_ts(lang: Language) -> tree_sitter::Language {
         Language::R => tree_sitter_r::LANGUAGE.into(),
         Language::Julia => tree_sitter_julia::LANGUAGE.into(),
         Language::Elm => tree_sitter_elm::LANGUAGE.into(),
+        Language::Nim => tree_sitter_nim::language(),
     }
 }
 
@@ -265,6 +266,13 @@ fn is_test_file(path: &str) -> bool {
     if lower.ends_with("test.elm") || lower.ends_with("tests.elm") {
         return true;
     }
+    // Nim: *_test.nim, test_*.nim
+    if lower.ends_with("_test.nim") || lower.ends_with(".test.nim") {
+        return true;
+    }
+    if lower.starts_with("test_") && lower.ends_with(".nim") {
+        return true;
+    }
     // __test__ directories (Python convention)
     if lower.contains("__test__") {
         return true;
@@ -365,6 +373,10 @@ fn is_entrypoint_by_name(path: &str) -> bool {
     if lower.ends_with("main.elm") {
         return true;
     }
+    // Nim: main.nim
+    if lower.ends_with("main.nim") {
+        return true;
+    }
     false
 }
 
@@ -395,6 +407,7 @@ fn has_entrypoint(node: tree_sitter::Node, source: &[u8], language: Language) ->
         Language::R => has_r_entrypoint(node, source),
         Language::Julia => has_julia_entrypoint(node, source),
         Language::Elm => has_elm_entrypoint(node, source),
+        Language::Nim => has_nim_entrypoint(node, source),
     }
 }
 
@@ -618,6 +631,15 @@ fn has_elm_entrypoint(node: tree_sitter::Node, source: &[u8]) -> bool {
     walk_children(node, source, has_elm_entrypoint)
 }
 
+fn has_nim_entrypoint(node: tree_sitter::Node, source: &[u8]) -> bool {
+    // Nim: `when isMainModule:` block (compile-time check)
+    let text = node.utf8_text(source).unwrap_or("");
+    if text.contains("isMainModule") && text.contains("when") {
+        return true;
+    }
+    walk_children(node, source, has_nim_entrypoint)
+}
+
 // ── Public API surface detection ────────────────────────────────────
 
 fn has_public_api(node: tree_sitter::Node, source: &[u8], language: Language) -> bool {
@@ -645,6 +667,7 @@ fn has_public_api(node: tree_sitter::Node, source: &[u8], language: Language) ->
         Language::R => has_r_public(node, source),
         Language::Julia => has_julia_public(node, source),
         Language::Elm => has_elm_public(node, source),
+        Language::Nim => has_nim_public(node, source),
     }
 }
 
@@ -809,6 +832,19 @@ fn has_elm_public(node: tree_sitter::Node, source: &[u8]) -> bool {
     text.contains("module ") && text.contains("exposing")
         || text.contains("type ")
         || text.contains("type alias ")
+}
+
+fn has_nim_public(node: tree_sitter::Node, source: &[u8]) -> bool {
+    // Nim: exported symbols use `*` suffix (proc*, type*, var*, const*)
+    let text = node.utf8_text(source).unwrap_or("");
+    // Check for export markers on definitions
+    text.contains("proc*")
+        || text.contains("func*")
+        || text.contains("type*")
+        || text.contains("var*")
+        || text.contains("const*")
+        || text.contains("macro*")
+        || text.contains("template*")
 }
 
 // ── Path-based classification ──────────────────────────────────────

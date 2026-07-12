@@ -93,6 +93,7 @@ pub fn run_warm(workspace: bool, language: Option<String>, changed: bool) -> Res
             "r" => "r",
             "julia" | "jl" => "jl",
             "elm" => "elm",
+            "nim" => "nim",
             other => anyhow::bail!("unknown language: {other}"),
         };
         source_files.retain(|f| f.extension().and_then(|e| e.to_str()) == Some(ext));
@@ -541,6 +542,8 @@ fn test_to_source(name: &str) -> Option<String> {
         Some(format!("{stem}.elm"))
     } else if let Some(stem) = name.strip_suffix("Tests.elm") {
         Some(format!("{stem}.elm"))
+    } else if let Some(stem) = name.strip_suffix("_test.nim") {
+        Some(format!("{stem}.nim"))
     } else if let Some(stem) = name.strip_prefix("test_") {
         if stem.ends_with(".py")
             || stem.ends_with(".c")
@@ -548,6 +551,7 @@ fn test_to_source(name: &str) -> Option<String> {
             || stem.ends_with(".cljs")
             || stem.ends_with(".r")
             || stem.ends_with(".jl")
+            || stem.ends_with(".nim")
         {
             Some(stem.to_string())
         } else {
@@ -642,6 +646,9 @@ fn source_to_test_patterns(name: &str) -> Vec<String> {
     } else if let Some(stem) = name.strip_suffix(".elm") {
         patterns.push(format!("{stem}Test.elm"));
         patterns.push(format!("{stem}Tests.elm"));
+    } else if let Some(stem) = name.strip_suffix(".nim") {
+        patterns.push(format!("{stem}_test.nim"));
+        patterns.push(format!("test_{stem}.nim"));
     }
     patterns
 }

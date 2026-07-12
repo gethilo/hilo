@@ -60,6 +60,7 @@ const SOURCE_EXTS: &[(&str, Language)] = &[
     ("r", Language::R),
     ("jl", Language::Julia),
     ("elm", Language::Elm),
+    ("nim", Language::Nim),
 ];
 
 /// Run the classify command.
