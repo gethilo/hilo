@@ -88,6 +88,11 @@ pub fn run_warm(workspace: bool, language: Option<String>, changed: bool) -> Res
             "zig" => "zig",
             "lua" => "lua",
             "dart" => "dart",
+            "clojure" | "clj" => "clj",
+            "ocaml" | "ml" => "ml",
+            "r" => "r",
+            "julia" | "jl" => "jl",
+            "elm" => "elm",
             other => anyhow::bail!("unknown language: {other}"),
         };
         source_files.retain(|f| f.extension().and_then(|e| e.to_str()) == Some(ext));
@@ -522,8 +527,34 @@ fn test_to_source(name: &str) -> Option<String> {
         Some(format!("{stem}.lua"))
     } else if let Some(stem) = name.strip_suffix("_test.dart") {
         Some(format!("{stem}.dart"))
+    } else if let Some(stem) = name.strip_suffix("_test.clj") {
+        Some(format!("{stem}.clj"))
+    } else if let Some(stem) = name.strip_suffix("_test.cljs") {
+        Some(format!("{stem}.cljs"))
+    } else if let Some(stem) = name.strip_suffix("_test.ml") {
+        Some(format!("{stem}.ml"))
+    } else if let Some(stem) = name.strip_suffix("_test.mli") {
+        Some(format!("{stem}.mli"))
+    } else if let Some(stem) = name.strip_suffix("_test.jl") {
+        Some(format!("{stem}.jl"))
+    } else if let Some(stem) = name.strip_suffix("Test.elm") {
+        Some(format!("{stem}.elm"))
+    } else if let Some(stem) = name.strip_suffix("Tests.elm") {
+        Some(format!("{stem}.elm"))
     } else if let Some(stem) = name.strip_prefix("test_") {
-        if stem.ends_with(".py") || stem.ends_with(".c") {
+        if stem.ends_with(".py")
+            || stem.ends_with(".c")
+            || stem.ends_with(".clj")
+            || stem.ends_with(".cljs")
+            || stem.ends_with(".r")
+            || stem.ends_with(".jl")
+        {
+            Some(stem.to_string())
+        } else {
+            None
+        }
+    } else if let Some(stem) = name.strip_prefix("test-") {
+        if stem.ends_with(".r") {
             Some(stem.to_string())
         } else {
             None
@@ -593,6 +624,24 @@ fn source_to_test_patterns(name: &str) -> Vec<String> {
         patterns.push(format!("{stem}_spec.lua"));
     } else if let Some(stem) = name.strip_suffix(".dart") {
         patterns.push(format!("{stem}_test.dart"));
+    } else if let Some(stem) = name.strip_suffix(".clj") {
+        patterns.push(format!("{stem}_test.clj"));
+        patterns.push(format!("test_{stem}.clj"));
+    } else if let Some(stem) = name.strip_suffix(".cljs") {
+        patterns.push(format!("{stem}_test.cljs"));
+    } else if let Some(stem) = name.strip_suffix(".ml") {
+        patterns.push(format!("{stem}_test.ml"));
+    } else if let Some(stem) = name.strip_suffix(".mli") {
+        patterns.push(format!("{stem}_test.mli"));
+    } else if let Some(stem) = name.strip_suffix(".r") {
+        patterns.push(format!("test_{stem}.r"));
+        patterns.push(format!("test-{stem}.r"));
+    } else if let Some(stem) = name.strip_suffix(".jl") {
+        patterns.push(format!("{stem}_test.jl"));
+        patterns.push(format!("test_{stem}.jl"));
+    } else if let Some(stem) = name.strip_suffix(".elm") {
+        patterns.push(format!("{stem}Test.elm"));
+        patterns.push(format!("{stem}Tests.elm"));
     }
     patterns
 }

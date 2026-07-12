@@ -1,7 +1,8 @@
-//! AST parsing with tree-sitter for 20 languages.
+//! AST parsing with tree-sitter for 25 languages.
 //!
 //! Supports Go, Python, TypeScript, Rust, JavaScript, Java, C, C++, Ruby,
-//! C#, Kotlin, PHP, Swift, Elixir, Haskell, Erlang, Scala, Zig, Lua, and Dart.
+//! C#, Kotlin, PHP, Swift, Elixir, Haskell, Erlang, Scala, Zig, Lua, Dart,
+//! Clojure, OCaml, R, Julia, and Elm.
 //! Each language gets a dedicated extraction function that understands its
 //! specific import/dependency syntax.
 
@@ -33,6 +34,11 @@ pub enum Language {
     Zig,
     Lua,
     Dart,
+    Clojure,
+    OCaml,
+    R,
+    Julia,
+    Elm,
 }
 
 impl Language {
@@ -59,6 +65,11 @@ impl Language {
             "zig" => Some(Language::Zig),
             "lua" => Some(Language::Lua),
             "dart" => Some(Language::Dart),
+            "clj" | "cljs" | "cljc" | "edn" => Some(Language::Clojure),
+            "ml" | "mli" => Some(Language::OCaml),
+            "r" | "R" => Some(Language::R),
+            "jl" => Some(Language::Julia),
+            "elm" => Some(Language::Elm),
             _ => None,
         }
     }
@@ -68,7 +79,8 @@ impl Language {
         &[
             "go", "py", "ts", "tsx", "rs", "js", "jsx", "java", "c", "cpp", "cc", "cxx", "rb",
             "cs", "kt", "kts", "php", "phtml", "swift", "ex", "exs", "hs", "lhs", "erl", "hrl",
-            "scala", "sc", "zig", "lua", "dart",
+            "scala", "sc", "zig", "lua", "dart", "clj", "cljs", "cljc", "edn", "ml", "mli", "r",
+            "jl", "elm",
         ]
     }
 }
@@ -109,6 +121,11 @@ impl Parser {
             Language::Zig => tree_sitter_zig::LANGUAGE.into(),
             Language::Lua => tree_sitter_lua::LANGUAGE.into(),
             Language::Dart => tree_sitter_dart::LANGUAGE.into(),
+            Language::Clojure => tree_sitter_clojure::LANGUAGE.into(),
+            Language::OCaml => tree_sitter_ocaml::LANGUAGE_OCAML.into(),
+            Language::R => tree_sitter_r::LANGUAGE.into(),
+            Language::Julia => tree_sitter_julia::LANGUAGE.into(),
+            Language::Elm => tree_sitter_elm::LANGUAGE.into(),
         };
         parser.set_language(&lang)?;
         Ok(Parser { parser, language })
@@ -165,6 +182,17 @@ impl Parser {
             Language::Zig => extract_zig_imports(tree.root_node(), source.as_bytes(), &mut paths),
             Language::Lua => extract_lua_imports(tree.root_node(), source.as_bytes(), &mut paths),
             Language::Dart => extract_dart_imports(tree.root_node(), source.as_bytes(), &mut paths),
+            Language::Clojure => {
+                extract_clojure_imports(tree.root_node(), source.as_bytes(), &mut paths)
+            }
+            Language::OCaml => {
+                extract_ocaml_imports(tree.root_node(), source.as_bytes(), &mut paths)
+            }
+            Language::R => extract_r_imports(tree.root_node(), source.as_bytes(), &mut paths),
+            Language::Julia => {
+                extract_julia_imports(tree.root_node(), source.as_bytes(), &mut paths)
+            }
+            Language::Elm => extract_elm_imports(tree.root_node(), source.as_bytes(), &mut paths),
         }
 
         let edges = paths
@@ -728,6 +756,309 @@ fn extract_dart_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
     }
 }
 
+// ── Clojure ────────────────────────────────────────────────────────
+
+fn extract_clojure_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+    // Clojure: `require` / `use` in `ns` form, or standalone calls.
+    // `(ns my.namespace (:require [clojure.string :as str]))`
+    // `(require '[clojure.set :as s])`
+    // `(use '[clojure.java.io :only [file]])`
+    // `(import '[java.util Date Calendar])`
+    //
+    // The grammar uses s-expression nodes: list_lit, sym_lit, vec_lit, str_lit.
+    // We walk looking for list_lit nodes whose first child sym_lit is
+    // require/use/import, then extract namespace/package from args.
+    if node.kind() == "list_lit" {
+        let text = node.utf8_text(source).unwrap_or("");
+        // Standalone: `(require ...)`, `(use ...)`, `(import ...)`
+        let trimmed = text.trim_start_matches('(').trim();
+        if let Some(rest) = trimmed.strip_prefix("require ") {
+            extract_clojure_lib(rest, paths);
+            return;
+        }
+        if let Some(rest) = trimmed.strip_prefix("use ") {
+            extract_clojure_lib(rest, paths);
+            return;
+        }
+        if let Some(rest) = trimmed.strip_prefix("import ") {
+            extract_clojure_import(rest, paths);
+            return;
+        }
+        // Inside ns: `(:require ...)`, `(:use ...)`, `(:import ...)`
+        if let Some(rest) = trimmed.strip_prefix(":require ") {
+            extract_clojure_lib(rest, paths);
+            return;
+        }
+        if let Some(rest) = trimmed.strip_prefix(":use ") {
+            extract_clojure_lib(rest, paths);
+            return;
+        }
+        if let Some(rest) = trimmed.strip_prefix(":import ") {
+            extract_clojure_import(rest, paths);
+            return;
+        }
+        // `(ns my.namespace ...)` — walk children to find nested require/use/import
+        if trimmed.starts_with("ns ") || trimmed.starts_with("ns\t") {
+            let children: Vec<Node> = {
+                let mut c = node.walk();
+                node.children(&mut c).collect()
+            };
+            for child in children {
+                extract_clojure_imports(child, source, paths);
+            }
+            return;
+        }
+    }
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        extract_clojure_imports(child, source, paths);
+    }
+}
+
+/// Extract namespace from a `require`/`use` body.
+/// Handles: `[clojure.string :as str]`, `clojure.set`, `[clojure.core :refer [join]]`
+/// Multiple specs: `[a.b :as ab] [c.d :as cd]`
+fn extract_clojure_lib(rest: &str, paths: &mut Vec<String>) {
+    // Each `[ns ...]` vector or bare symbol is one require spec.
+    // Split on `[` to isolate each spec, take only the first valid symbol.
+    // Handle bare symbols (not in vectors): `[clojure.set :as s]` vs `clojure.set`
+    // For `[ns1 :as a] [ns2 :as b]`, split on `[` gives:
+    //   "", "ns1 :as a] ", "ns2 :as b]"
+    for segment in rest.split('[') {
+        let segment = segment.trim();
+        // Skip segments that follow :refer/:only keywords — these are
+        // function lists, not namespace specs: `[clojure.set :refer [union]]`
+        if segment.starts_with(':') {
+            continue;
+        }
+        // If the segment before this one contained :refer or :only at the end,
+        // it's a function list. Check by looking at whether the preceding
+        // segment (before the last `[`) ended with a keyword.
+        // Simpler: just check if this segment's first token looks like a
+        // function name (short, no dots) AND it's not the first segment.
+        // But the cleanest fix: skip segments that don't look like namespaces.
+        // Namespaced Clojure libs use dots: `clojure.string`, `my-app.core`.
+        // Bare function names like `union`, `str` are not namespaces.
+        for token in segment.split([' ', '\t', '\n', '\r', ']']) {
+            let token = token.trim_matches('\'');
+            if token.is_empty() || token.starts_with(':') {
+                continue;
+            }
+            if token
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '.' || c == '-' || c == '_')
+            {
+                classify_clojure_ns(token, paths);
+                break; // Only first valid symbol per spec
+            }
+        }
+    }
+}
+
+/// Extract package from an `import` body: `[java.util Date Calendar]`
+fn extract_clojure_import(rest: &str, paths: &mut Vec<String>) {
+    // Form: `[package.Class Name ...]` or `'package.Class`
+    for token in rest.split(['[', ']', '{', '}', ' ', '\t', '\n', '\r']) {
+        let token = token.trim_matches('\'');
+        if token.is_empty() {
+            continue;
+        }
+        if token.starts_with(':') {
+            continue;
+        }
+        // First symbol is the package/class path
+        if token
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '.' || c == '_' || c == '$')
+        {
+            paths.push(format!("pkg:{token}"));
+            break;
+        }
+    }
+}
+
+fn classify_clojure_ns(ns: &str, paths: &mut Vec<String>) {
+    // Clojure require/use namespaces are typically dotted paths
+    // (e.g. `clojure.string`, `my-app.core`). Bare single-word names
+    // without dots are likely aliases or referred function names
+    // (from `:refer [name]`), not real namespaces.
+    if ns.contains('.') && !ns.starts_with('-') {
+        paths.push(format!("pkg:{ns}"));
+    }
+    // Skip bare names — they're not namespace specs
+}
+
+// ── OCaml ──────────────────────────────────────────────────────────
+
+fn extract_ocaml_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+    // OCaml: `open Module`, `include Module`, `#load "module"` (for scripts)
+    // The grammar exposes `open_module` / `include_module` node kinds.
+    // We match on the node kind and extract the module path from children.
+    if node.kind() == "open_module" || node.kind() == "include_module" {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "module_path" {
+                if let Ok(text) = child.utf8_text(source) {
+                    let module_name = text.trim();
+                    if !module_name.is_empty() {
+                        paths.push(format!("pkg:{module_name}"));
+                    }
+                }
+            }
+        }
+        return;
+    }
+    // `#load "module.cma"` and `#use "file.ml"` directives
+    let text = node.utf8_text(source).unwrap_or("");
+    if text.starts_with("#load ") || text.starts_with("#use ") {
+        if let Some(start) = text.find('"') {
+            if let Some(end) = text[start + 1..].find('"') {
+                let path = &text[start + 1..start + 1 + end];
+                if !path.is_empty() {
+                    paths.push(format!("local:{path}"));
+                }
+            }
+        }
+        return;
+    }
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        extract_ocaml_imports(child, source, paths);
+    }
+}
+
+// ── R ──────────────────────────────────────────────────────────────
+
+fn extract_r_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+    // R uses `library(pkg)`, `require(pkg)`, and `source("file.R")`.
+    // These appear as `call` nodes.
+    if node.kind() == "call" {
+        let text = node.utf8_text(source).unwrap_or("");
+        for func in &["library(", "require("] {
+            if let Some(rest) = text.strip_prefix(func) {
+                // Extract package name (may be quoted or bare)
+                let cleaned = rest
+                    .trim()
+                    .trim_end_matches(')')
+                    .trim()
+                    .trim_matches('"')
+                    .trim_matches('\'')
+                    .split([',', ' '])
+                    .next()
+                    .unwrap_or("")
+                    .trim();
+                if !cleaned.is_empty() {
+                    paths.push(format!("pkg:{cleaned}"));
+                }
+                return;
+            }
+        }
+        if let Some(rest) = text.strip_prefix("source(") {
+            let cleaned = rest.trim().trim_end_matches(')').trim();
+            for quote in &['"', '\''] {
+                if let Some(s) = cleaned.strip_prefix(*quote) {
+                    if let Some(end) = s.find(*quote) {
+                        let path = &s[..end];
+                        if !path.is_empty() {
+                            paths.push(format!("local:{path}"));
+                        }
+                        return;
+                    }
+                }
+            }
+            return;
+        }
+    }
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        extract_r_imports(child, source, paths);
+    }
+}
+
+// ── Julia ──────────────────────────────────────────────────────────
+
+fn extract_julia_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+    // Julia: `using Module`, `import Module`, `using Module: name`,
+    // `import Module: name`, `include("file.jl")`
+    // The grammar exposes `using_statement`, `import_statement`, `using`,
+    // `import`, `import_path` node kinds.
+    let text = node.utf8_text(source).unwrap_or("");
+    // `include("file.jl")` — a call expression
+    if text.starts_with("include(") || text.starts_with("include ") {
+        if let Some(start) = text.find('"') {
+            if let Some(end) = text[start + 1..].find('"') {
+                let path = &text[start + 1..start + 1 + end];
+                if !path.is_empty() {
+                    paths.push(format!("local:{path}"));
+                }
+                return;
+            }
+        }
+    }
+    // `using Package` / `import Package` / `using Package: name1, name2`
+    if node.kind() == "using_statement"
+        || node.kind() == "import_statement"
+        || node.kind() == "using"
+        || node.kind() == "import"
+    {
+        let rest = text
+            .strip_prefix("using")
+            .or_else(|| text.strip_prefix("import"))
+            .unwrap_or(text)
+            .trim();
+        // Take module path up to `:` or whitespace
+        let module = rest.split([':', ' ', '\t', '\n']).next().unwrap_or("");
+        if !module.is_empty()
+            && module != "using"
+            && module != "import"
+            && module.chars().next().is_some_and(|c| c.is_alphabetic())
+        {
+            paths.push(format!("pkg:{module}"));
+        }
+        return;
+    }
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        extract_julia_imports(child, source, paths);
+    }
+}
+
+// ── Elm ────────────────────────────────────────────────────────────
+
+fn extract_elm_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+    // Elm: `import Module exposing (..)` / `import Module as M`
+    // The grammar exposes `import_clause` node kind.
+    if node.kind() == "import_clause" || node.kind() == "import" {
+        let text = node.utf8_text(source).unwrap_or("");
+        let rest = text.strip_prefix("import ").unwrap_or(text).trim();
+        // Take module name up to first space (handles `exposing`, `as`)
+        let module = rest.split_whitespace().next().unwrap_or("");
+        if !module.is_empty() {
+            paths.push(format!("pkg:{module}"));
+        }
+        return;
+    }
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        extract_elm_imports(child, source, paths);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -839,6 +1170,13 @@ mod tests {
         assert_eq!(Language::from_extension("zig"), Some(Language::Zig));
         assert_eq!(Language::from_extension("lua"), Some(Language::Lua));
         assert_eq!(Language::from_extension("dart"), Some(Language::Dart));
+        assert_eq!(Language::from_extension("clj"), Some(Language::Clojure));
+        assert_eq!(Language::from_extension("cljs"), Some(Language::Clojure));
+        assert_eq!(Language::from_extension("ml"), Some(Language::OCaml));
+        assert_eq!(Language::from_extension("mli"), Some(Language::OCaml));
+        assert_eq!(Language::from_extension("r"), Some(Language::R));
+        assert_eq!(Language::from_extension("jl"), Some(Language::Julia));
+        assert_eq!(Language::from_extension("elm"), Some(Language::Elm));
         assert_eq!(Language::from_extension("txt"), None);
     }
 
@@ -952,5 +1290,62 @@ mod tests {
         assert!(imports.contains(&"pkg:flutter/material.dart".into()));
         assert!(imports.contains(&"std:async".into()));
         assert!(imports.contains(&"local:../utils.dart".into()));
+    }
+
+    #[test]
+    fn clojure_imports() {
+        let imports = parse(
+            Language::Clojure,
+            "(ns my-app.core\n  (:require [clojure.string :as str]\n            [clojure.set :refer [union]])\n  (:import [java.util Date Calendar]))\n(require '[clojure.java.io :as io])\n",
+        );
+        assert!(imports.contains(&"pkg:clojure.string".into()));
+        assert!(imports.contains(&"pkg:clojure.set".into()));
+        assert!(imports.contains(&"pkg:java.util".into()));
+        assert!(imports.contains(&"pkg:clojure.java.io".into()));
+    }
+
+    #[test]
+    fn ocaml_imports() {
+        let imports = parse(
+            Language::OCaml,
+            "open Base\nopen Stdio\ninclude Comparable\n#load \"unix.cma\"\n",
+        );
+        assert!(imports.contains(&"pkg:Base".into()));
+        assert!(imports.contains(&"pkg:Stdio".into()));
+        assert!(imports.contains(&"pkg:Comparable".into()));
+    }
+
+    #[test]
+    fn r_imports() {
+        let imports = parse(
+            Language::R,
+            "library(ggplot2)\nrequire(dplyr)\nsource(\"utils.R\")\n",
+        );
+        assert!(imports.contains(&"pkg:ggplot2".into()));
+        assert!(imports.contains(&"pkg:dplyr".into()));
+        assert!(imports.contains(&"local:utils.R".into()));
+    }
+
+    #[test]
+    fn julia_imports() {
+        let imports = parse(
+            Language::Julia,
+            "using DataFrames\nusing Statistics: mean, std\nimport Dates\ninclude(\"helper.jl\")\n",
+        );
+        assert!(imports.contains(&"pkg:DataFrames".into()));
+        assert!(imports.contains(&"pkg:Statistics".into()));
+        assert!(imports.contains(&"pkg:Dates".into()));
+        assert!(imports.contains(&"local:helper.jl".into()));
+    }
+
+    #[test]
+    fn elm_imports() {
+        let imports = parse(
+            Language::Elm,
+            "module Main exposing (main)\nimport Html\nimport Browser\nimport Json.Decode as D exposing (Decoder)\n",
+        );
+        assert!(imports.contains(&"pkg:Html".into()));
+        assert!(imports.contains(&"pkg:Browser".into()));
+        assert!(imports.contains(&"pkg:Json.Decode".into()));
     }
 }

@@ -408,6 +408,11 @@ fn extract_symbols(path: &str, source: &str) -> Vec<Symbol> {
         Language::Zig => tree_sitter_zig::LANGUAGE.into(),
         Language::Lua => tree_sitter_lua::LANGUAGE.into(),
         Language::Dart => tree_sitter_dart::LANGUAGE.into(),
+        Language::Clojure => tree_sitter_clojure::LANGUAGE.into(),
+        Language::OCaml => tree_sitter_ocaml::LANGUAGE_OCAML.into(),
+        Language::R => tree_sitter_r::LANGUAGE.into(),
+        Language::Julia => tree_sitter_julia::LANGUAGE.into(),
+        Language::Elm => tree_sitter_elm::LANGUAGE.into(),
     };
     if ts_parser.set_language(&ts_lang).is_err() {
         return Vec::new();
@@ -644,6 +649,69 @@ fn extract_symbols_from_ast(node: tree_sitter::Node, source: &[u8], lang: Langua
                     "function_declaration",
                     "class_declaration",
                     "enum_declaration",
+                ],
+                extract_generic_signature,
+            );
+        }
+        Language::Clojure => {
+            collect_symbols(
+                node,
+                source,
+                &mut symbols,
+                &["list_lit"],
+                extract_generic_signature,
+            );
+        }
+        Language::OCaml => {
+            collect_symbols(
+                node,
+                source,
+                &mut symbols,
+                &[
+                    "value_definition",
+                    "function_definition",
+                    "type_definition",
+                    "module_definition",
+                    "class_definition",
+                    "let_binding",
+                ],
+                extract_generic_signature,
+            );
+        }
+        Language::R => {
+            collect_symbols(
+                node,
+                source,
+                &mut symbols,
+                &["function_definition"],
+                extract_generic_signature,
+            );
+        }
+        Language::Julia => {
+            collect_symbols(
+                node,
+                source,
+                &mut symbols,
+                &[
+                    "function_definition",
+                    "struct_definition",
+                    "module_definition",
+                    "abstract_definition",
+                    "const_statement",
+                ],
+                extract_generic_signature,
+            );
+        }
+        Language::Elm => {
+            collect_symbols(
+                node,
+                source,
+                &mut symbols,
+                &[
+                    "function_declaration_left",
+                    "type_declaration",
+                    "type_alias_declaration",
+                    "module_declaration",
                 ],
                 extract_generic_signature,
             );

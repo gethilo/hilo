@@ -149,6 +149,11 @@ fn language_to_ts(lang: Language) -> tree_sitter::Language {
         Language::Zig => tree_sitter_zig::LANGUAGE.into(),
         Language::Lua => tree_sitter_lua::LANGUAGE.into(),
         Language::Dart => tree_sitter_dart::LANGUAGE.into(),
+        Language::Clojure => tree_sitter_clojure::LANGUAGE.into(),
+        Language::OCaml => tree_sitter_ocaml::LANGUAGE_OCAML.into(),
+        Language::R => tree_sitter_r::LANGUAGE.into(),
+        Language::Julia => tree_sitter_julia::LANGUAGE.into(),
+        Language::Elm => tree_sitter_elm::LANGUAGE.into(),
     }
 }
 
@@ -225,6 +230,39 @@ fn is_test_file(path: &str) -> bool {
     }
     // Dart: *_test.dart, test_*.dart
     if lower.ends_with("_test.dart") || lower.ends_with(".test.dart") {
+        return true;
+    }
+    // Clojure: *_test.clj, test_*.clj, *_test.cljs
+    if lower.ends_with("_test.clj") || lower.ends_with(".test.clj") || lower.ends_with("_test.cljs")
+    {
+        return true;
+    }
+    if lower.starts_with("test_") && (lower.ends_with(".clj") || lower.ends_with(".cljs")) {
+        return true;
+    }
+    // OCaml: *_test.ml, test_*.ml, *_test.mli
+    if lower.ends_with("_test.ml") || lower.ends_with(".test.ml") || lower.ends_with("_test.mli") {
+        return true;
+    }
+    // R: test-*.R, test_*.R
+    if lower.starts_with("test-") && lower.ends_with(".r") {
+        return true;
+    }
+    if lower.starts_with("test_") && lower.ends_with(".r") {
+        return true;
+    }
+    // Julia: *_test.jl, test_*.jl, runtests.jl
+    if lower.ends_with("_test.jl") || lower.ends_with(".test.jl") {
+        return true;
+    }
+    if lower.starts_with("test_") && lower.ends_with(".jl") {
+        return true;
+    }
+    if lower.ends_with("runtests.jl") {
+        return true;
+    }
+    // Elm: *Test.elm, *Tests.elm
+    if lower.ends_with("test.elm") || lower.ends_with("tests.elm") {
         return true;
     }
     // __test__ directories (Python convention)
@@ -307,6 +345,26 @@ fn is_entrypoint_by_name(path: &str) -> bool {
     if lower.ends_with("main.dart") {
         return true;
     }
+    // Clojure: core.clj, main.clj
+    if lower.ends_with("core.clj") || lower.ends_with("main.clj") {
+        return true;
+    }
+    // OCaml: main.ml
+    if lower.ends_with("main.ml") {
+        return true;
+    }
+    // R: main.R
+    if lower.ends_with("main.r") {
+        return true;
+    }
+    // Julia: main.jl
+    if lower.ends_with("main.jl") {
+        return true;
+    }
+    // Elm: Main.elm
+    if lower.ends_with("main.elm") {
+        return true;
+    }
     false
 }
 
@@ -332,6 +390,11 @@ fn has_entrypoint(node: tree_sitter::Node, source: &[u8], language: Language) ->
         Language::Zig => has_zig_entrypoint(node, source),
         Language::Lua => has_lua_entrypoint(node, source),
         Language::Dart => has_dart_entrypoint(node, source),
+        Language::Clojure => has_clojure_entrypoint(node, source),
+        Language::OCaml => has_ocaml_entrypoint(node, source),
+        Language::R => has_r_entrypoint(node, source),
+        Language::Julia => has_julia_entrypoint(node, source),
+        Language::Elm => has_elm_entrypoint(node, source),
     }
 }
 
@@ -508,6 +571,53 @@ fn has_dart_entrypoint(node: tree_sitter::Node, source: &[u8]) -> bool {
     walk_children(node, source, has_dart_entrypoint)
 }
 
+fn has_clojure_entrypoint(node: tree_sitter::Node, source: &[u8]) -> bool {
+    // Clojure: `(-main & args)` function or shebang
+    let text = node.utf8_text(source).unwrap_or("");
+    if text.contains("(-main") || text.starts_with("#!") {
+        return true;
+    }
+    walk_children(node, source, has_clojure_entrypoint)
+}
+
+fn has_ocaml_entrypoint(node: tree_sitter::Node, source: &[u8]) -> bool {
+    // OCaml: no standard main function, but scripts may have shebang
+    let text = node.utf8_text(source).unwrap_or("");
+    if text.starts_with("#!") {
+        return true;
+    }
+    walk_children(node, source, has_ocaml_entrypoint)
+}
+
+fn has_r_entrypoint(node: tree_sitter::Node, source: &[u8]) -> bool {
+    // R scripts often have shebang
+    let text = node.utf8_text(source).unwrap_or("");
+    if text.starts_with("#!") {
+        return true;
+    }
+    walk_children(node, source, has_r_entrypoint)
+}
+
+fn has_julia_entrypoint(node: tree_sitter::Node, source: &[u8]) -> bool {
+    // Julia: `function main()` or shebang
+    let text = node.utf8_text(source).unwrap_or("");
+    if text.contains("function main(") || text.starts_with("#!") {
+        return true;
+    }
+    walk_children(node, source, has_julia_entrypoint)
+}
+
+fn has_elm_entrypoint(node: tree_sitter::Node, source: &[u8]) -> bool {
+    // Elm: `main =` declaration (program entrypoint)
+    let text = node.utf8_text(source).unwrap_or("");
+    if text.lines().any(|l| l.trim().starts_with("main "))
+        || text.lines().any(|l| l.trim().starts_with("main="))
+    {
+        return true;
+    }
+    walk_children(node, source, has_elm_entrypoint)
+}
+
 // ── Public API surface detection ────────────────────────────────────
 
 fn has_public_api(node: tree_sitter::Node, source: &[u8], language: Language) -> bool {
@@ -530,6 +640,11 @@ fn has_public_api(node: tree_sitter::Node, source: &[u8], language: Language) ->
         Language::Zig => has_zig_public(node, source),
         Language::Lua => has_lua_public(node, source),
         Language::Dart => has_dart_public(node, source),
+        Language::Clojure => has_clojure_public(node, source),
+        Language::OCaml => has_ocaml_public(node, source),
+        Language::R => has_r_public(node, source),
+        Language::Julia => has_julia_public(node, source),
+        Language::Elm => has_elm_public(node, source),
     }
 }
 
@@ -655,6 +770,45 @@ fn has_dart_public(node: tree_sitter::Node, source: &[u8]) -> bool {
     // Dart: class, function, or typedef declarations
     let text = node.utf8_text(source).unwrap_or("");
     text.contains("class ") || text.contains("void ") || text.contains("typedef ")
+}
+
+fn has_clojure_public(node: tree_sitter::Node, source: &[u8]) -> bool {
+    // Clojure: `defn` (public), `defmacro`, `defrecord`, `defprotocol`
+    let text = node.utf8_text(source).unwrap_or("");
+    text.contains("(defn ")
+        || text.contains("(defmacro ")
+        || text.contains("(defrecord ")
+        || text.contains("(defprotocol ")
+        || text.contains("(def ")
+}
+
+fn has_ocaml_public(node: tree_sitter::Node, source: &[u8]) -> bool {
+    // OCaml: `let` declarations, `type` definitions, `module` declarations
+    let text = node.utf8_text(source).unwrap_or("");
+    text.contains("let ") || text.contains("type ") || text.contains("module ")
+}
+
+fn has_r_public(node: tree_sitter::Node, source: &[u8]) -> bool {
+    // R: function definitions
+    let text = node.utf8_text(source).unwrap_or("");
+    text.contains("function(") || text.contains("function (") || text.contains("<- ")
+}
+
+fn has_julia_public(node: tree_sitter::Node, source: &[u8]) -> bool {
+    // Julia: function, struct, module declarations
+    let text = node.utf8_text(source).unwrap_or("");
+    text.contains("function ")
+        || text.contains("struct ")
+        || text.contains("module ")
+        || text.contains("const ")
+}
+
+fn has_elm_public(node: tree_sitter::Node, source: &[u8]) -> bool {
+    // Elm: module declaration with exposing, type/function declarations
+    let text = node.utf8_text(source).unwrap_or("");
+    text.contains("module ") && text.contains("exposing")
+        || text.contains("type ")
+        || text.contains("type alias ")
 }
 
 // ── Path-based classification ──────────────────────────────────────

@@ -51,6 +51,15 @@ const SOURCE_EXTS: &[(&str, Language)] = &[
     ("zig", Language::Zig),
     ("lua", Language::Lua),
     ("dart", Language::Dart),
+    ("clj", Language::Clojure),
+    ("cljs", Language::Clojure),
+    ("cljc", Language::Clojure),
+    ("edn", Language::Clojure),
+    ("ml", Language::OCaml),
+    ("mli", Language::OCaml),
+    ("r", Language::R),
+    ("jl", Language::Julia),
+    ("elm", Language::Elm),
 ];
 
 /// Run the classify command.
