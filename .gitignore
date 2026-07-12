@@ -30,3 +30,6 @@ Thumbs.db
 
 # Agent artifacts (not part of the project)
 .coding-hermes/
+
+# Fleet infrastructure (bootstrapped in wrong directory)
+scheduler/
