@@ -721,7 +721,7 @@ Haskell, Erlang, Scala, Zig, Lua, and Dart, expanding Hilo from 13 to 20 languag
 
 ---
 
-## TASK-007: Tier 3 Language Expansion — Clojure, OCaml, R, Julia, Elm, Nim
+## [x] TASK-007: Tier 3 Language Expansion — Clojure, OCaml, R, Julia, Elm, Nim
 
 ### Why
 Niche but real. Clojure (JVM functional), OCaml (formal methods/Tezos), R (data science), Julia (scientific computing), Elm (frontend functional), Nim (systems with Python syntax).
