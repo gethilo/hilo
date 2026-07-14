@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hilo — Project Dashboard</title>
+<style>
+  :root { --bg: #0d1117; --card: #161b22; --border: #30363d; --text: #c9d1d9; --muted: #8b949e; --green: #3fb950; --blue: #58a6ff; --purple: #bc8cff; --orange: #d2991d; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); padding: 2rem; line-height: 1.6; }
+  h1 { font-size: 2rem; margin-bottom: 0.25rem; }
+  .subtitle { color: var(--muted); margin-bottom: 2rem; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1.5rem; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem; }
+  .card h3 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 1rem; }
+  .stat { font-size: 2.5rem; font-weight: 700; color: var(--blue); }
+  .stat-small { font-size: 1.5rem; font-weight: 600; }
+  .green { color: var(--green); }
+  .purple { color: var(--purple); }
+  .orange { color: var(--orange); }
+  .pill { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 20px; font-size: 0.8rem; margin: 0.15rem; }
+  .pill-done { background: #1a3a1a; color: var(--green); }
+  .pill-lang { background: #1a1a3a; color: var(--blue); }
+  .commit { font-size: 0.85rem; padding: 0.4rem 0; border-bottom: 1px solid var(--border); }
+  .commit:last-child { border-bottom: none; }
+  .commit .hash { color: var(--orange); font-family: monospace; margin-right: 0.5rem; }
+  .commit .msg { color: var(--text); }
+  .status-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 0.5rem; }
+  .dot-green { background: var(--green); }
+  .lang-cloud { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+  th, td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; }
+  .full { grid-column: 1 / -1; }
+  .footer { margin-top: 2rem; color: var(--muted); font-size: 0.8rem; text-align: center; }
+</style>
+</head>
+<body>
+
+<h1>🪡 Hilo</h1>
+<p class="subtitle">Agent-First Code Knowledge Graph — 26 languages, metadata-first architecture</p>
+
+<div class="grid">
+  <div class="card">
+    <h3>Languages</h3>
+    <div class="stat green">26</div>
+    <div class="lang-cloud">
+      <span class="pill pill-lang">Go</span><span class="pill pill-lang">Python</span><span class="pill pill-lang">TypeScript</span><span class="pill pill-lang">Rust</span>
+      <span class="pill pill-lang">JavaScript</span><span class="pill pill-lang">Java</span><span class="pill pill-lang">C</span><span class="pill pill-lang">C++</span>
+      <span class="pill pill-lang">Ruby</span><span class="pill pill-lang">C#</span><span class="pill pill-lang">Kotlin</span><span class="pill pill-lang">PHP</span>
+      <span class="pill pill-lang">Swift</span><span class="pill pill-lang">Elixir</span><span class="pill pill-lang">Haskell</span><span class="pill pill-lang">Erlang</span>
+      <span class="pill pill-lang">Scala</span><span class="pill pill-lang">Zig</span><span class="pill pill-lang">Lua</span><span class="pill pill-lang">Dart</span>
+      <span class="pill pill-lang">Clojure</span><span class="pill pill-lang">OCaml</span><span class="pill pill-lang">R</span><span class="pill pill-lang">Julia</span>
+      <span class="pill pill-lang">Elm</span><span class="pill pill-lang">Nim</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Tasks — Hilo v0.2</h3>
+    <table>
+      <tr><th>Task</th><th>Name</th><th>Status</th></tr>
+      <tr><td>001</td><td>Provenance Tracking</td><td><span class="pill pill-done">✓</span></td></tr>
+      <tr><td>002</td><td>Signal Engine</td><td><span class="pill pill-done">✓</span></td></tr>
+      <tr><td>003</td><td>Semantic Search</td><td><span class="pill pill-done">✓</span></td></tr>
+      <tr><td>004</td><td>Determinism Tests</td><td><span class="pill pill-done">✓</span></td></tr>
+      <tr><td>005</td><td>C#, Kotlin, PHP, Swift</td><td><span class="pill pill-done">✓</span></td></tr>
+      <tr><td>006</td><td>Elixir, Haskell, Erlang, Scala, Zig, Lua, Dart</td><td><span class="pill pill-done">✓</span></td></tr>
+      <tr><td>007</td><td>Clojure, OCaml, R, Julia, Elm, Nim</td><td><span class="pill pill-done">✓</span></td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <h3>Quality Gates</h3>
+    <div style="margin-bottom:1rem">
+      <span class="status-dot dot-green"></span><strong>Tier 1 Guard</strong> — PASS<br>
+      <span style="color:var(--muted);font-size:0.85rem;margin-left:1.2rem">secrets · tests · static_analysis · lsp</span>
+    </div>
+    <div style="margin-bottom:1rem">
+      <span class="status-dot dot-green"></span><strong>Tier 2 Judge</strong> — PASS<br>
+      <span style="color:var(--muted);font-size:0.85rem;margin-left:1.2rem">DeepSeek V4 Pro · line-level AC verification</span>
+    </div>
+    <div>
+      <span class="status-dot dot-green"></span><strong>CI (gethilo/hilo)</strong> — GREEN<br>
+      <span style="color:var(--muted);font-size:0.85rem;margin-left:1.2rem">build · test · clippy · fmt on push</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Codebase</h3>
+    <div class="stat-small orange">57</div><span style="color:var(--muted)"> Rust source files</span>
+    <br><br>
+    <div class="stat-small purple">10</div><span style="color:var(--muted)"> crates</span>
+    <br><br>
+    <div class="stat-small">~500</div><span style="color:var(--muted)"> tests</span>
+    <br><br>
+    <span style="color:var(--muted);font-size:0.85rem">hilo-core · hilo-metadata · hilo-graph · hilo-cli · hilo-mcp · hilo-fuse · hilo-triggers · hilo-backends · hilo-plugins · hilo-ffi</span>
+  </div>
+
+  <div class="card">
+    <h3>Core Features</h3>
+    <table>
+      <tr><td>AST Parsing</td><td><span class="pill pill-done">26 languages</span></td></tr>
+      <tr><td>Graph Engine</td><td><span class="pill pill-done">DuckDB + JSONL</span></td></tr>
+      <tr><td>Impact Analysis</td><td><span class="pill pill-done">Transitive BFS</span></td></tr>
+      <tr><td>Semantic Search</td><td><span class="pill pill-done">TF-IDF + BM25</span></td></tr>
+      <tr><td>Signal Engine</td><td><span class="pill pill-done">Harmonic 3-tier</span></td></tr>
+      <tr><td>MCP Server</td><td><span class="pill pill-done">8 tools</span></td></tr>
+      <tr><td>FUSE Mount</td><td><span class="pill pill-done">xattr passthrough</span></td></tr>
+      <tr><td>Auto-Sync</td><td><span class="pill pill-done">inotify triggers</span></td></tr>
+    </table>
+  </div>
+
+  <div class="card full">
+    <h3>Recent Commits</h3>
+    <div class="commit"><span class="hash">34dbd05</span><span class="msg">chore: add scheduler/ to .gitignore</span></div>
+    <div class="commit"><span class="hash">1a7f379</span><span class="msg">chore: mark all tasks complete — Hilo v0.2 Rinnegan batch + 17 languages done</span></div>
+    <div class="commit"><span class="hash">8edc04d</span><span class="msg">feat: add Nim language support — 26th language, tree-sitter parser, classify, signal, CLI</span></div>
+    <div class="commit"><span class="hash">0c0d69d</span><span class="msg">feat(graph): TASK-007 add Clojure, OCaml, R, Julia, Elm language support</span></div>
+    <div class="commit"><span class="hash">89333f2</span><span class="msg">feat: TASK-006 add 7 languages — Elixir, Haskell, Erlang, Scala, Zig, Lua, Dart</span></div>
+    <div class="commit"><span class="hash">00db76a</span><span class="msg">feat(graph): TASK-005 add C#, Kotlin, PHP, Swift language support</span></div>
+    <div class="commit"><span class="hash">8ad53e4</span><span class="msg">Add TASK-005/006/007: 17-language expansion across 3 tiers</span></div>
+    <div class="commit"><span class="hash">ff57129</span><span class="msg">test(cli): add integration tests for classify, graph warm, graph impact</span></div>
+    <div class="commit"><span class="hash">5da0967</span><span class="msg">docs: add SKILL.md (Vercel Agent Skills compatible)</span></div>
+    <div class="commit"><span class="hash">1a2bed7</span><span class="msg">chore: mark all AC checkboxes [x]</span></div>
+  </div>
+</div>
+
+<div class="footer">
+  Hilo · gethilo/hilo · MIT · Generated 2026-07-12 · Foreman: deepseek-v4-pro on deepseek-foreman (PAYG)
+</div>
+
+</body>
+</html>
