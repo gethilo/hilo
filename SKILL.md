@@ -1,6 +1,6 @@
 ---
 name: hilo
-description: "Agent-first virtual filesystem — pre-computes dependency graphs, metadata, and semantic context for AI coding agents. Written in Rust, 10 crates, 9-language AST parsing."
+description: "Agent-first virtual filesystem — pre-computes dependency graphs, metadata, and semantic context for AI coding agents. Written in Rust, 10 crates, 26-language AST parsing."
 version: "0.1.0"
 license: MIT
 language: rust
@@ -81,7 +81,7 @@ cargo clippy --workspace -- -D warnings
 ```
 hilo-core/          # Manifest, config, sandbox, workspace, virtual dirs
 hilo-metadata/      # xattr read/write, inventory files (JSONL)
-hilo-graph/         # AST parsing (9 langs), DuckDB graph, edges, impact, classify,
+hilo-graph/         # AST parsing (26 langs), DuckDB graph, edges, impact, classify,
                     #   provenance, signal engine, semantic search, determinism tests
 hilo-cli/           # CLI shim (init, meta, graph, classify, mount, serve, workspace)
 hilo-mcp/           # MCP server (10 tools), JSON-RPC

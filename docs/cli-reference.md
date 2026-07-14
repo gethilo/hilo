@@ -39,8 +39,10 @@ hilo graph discover
 hilo graph discover --workspace
 ```
 
-Supported languages: Go, Python, TypeScript, Rust, JavaScript, Java,
-C, C++, Ruby. Directories skipped: `target/`, `node_modules/`, `vendor/`,
+Supported languages (26): Go, Python, TypeScript, Rust, JavaScript,
+Java, C, C++, Ruby, C#, Kotlin, PHP, Swift, Elixir, Haskell, Erlang,
+Scala, Zig, Lua, Dart, Clojure, OCaml, R, Julia, Elm, Nim.
+Directories skipped: `target/`, `node_modules/`, `vendor/`,
 `__pycache__/`, `.venv/`.
 
 ### `stats`

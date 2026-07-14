@@ -6,10 +6,11 @@ All notable changes to Hilo are documented in this file.
 
 ### Added
 
-- **9-language AST parsing** — Go, Python, TypeScript, Rust, JavaScript,
-  Java, C, C++, Ruby via tree-sitter
+- **26-language AST parsing** — Go, Python, TypeScript, Rust, JavaScript,
+  Java, C, C++, Ruby, C#, Kotlin, PHP, Swift, Elixir, Haskell, Erlang,
+  Scala, Zig, Lua, Dart, Clojure, OCaml, R, Julia, Elm, Nim via tree-sitter
 - **Auto-classification** — `hilo classify` detects entrypoints, test
-  files, library roles, stability status across all 9 languages
+  files, library roles, stability status across all 26 languages
 - **Parallel graph discovery** — rayon-powered, progress output every
   100 files
 - **Dependency graph** — DuckDB-backed with forward/reverse queries,

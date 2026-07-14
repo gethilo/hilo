@@ -1,6 +1,6 @@
 # AGENTS.md — Hilo
 
-Agent-first metadata filesystem. Written in Rust, 10 crates, 9-language AST parsing.
+Agent-first metadata filesystem. Written in Rust, 10 crates, 26-language AST parsing.
 
 ## Build & Test
 
@@ -17,7 +17,7 @@ cargo clippy --workspace -- -D warnings
 ```
 hilo-core/          # Manifest, config, sandbox, workspace, virtual dirs
 hilo-metadata/      # xattr read/write, inventory files (JSONL)
-hilo-graph/         # AST parsing (9 langs), DuckDB graph, edges, impact, classify
+hilo-graph/         # AST parsing (26 langs), DuckDB graph, edges, impact, classify
 hilo-cli/           # CLI shim (init, meta, graph, classify, mount, serve, workspace)
 hilo-mcp/           # MCP server (8 tools), JSON-RPC
 hilo-backends/      # S3 (read/write-thru), Git (clone/pull), local

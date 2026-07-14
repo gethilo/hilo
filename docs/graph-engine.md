@@ -5,7 +5,7 @@
 The graph engine parses source code with tree-sitter, extracts import
 relationships, and stores them in DuckDB for querying.
 
-## Supported Languages
+## Supported Languages (26)
 
 | Language | Parser | Import Detection |
 |----------|--------|-----------------|
@@ -18,6 +18,23 @@ relationships, and stores them in DuckDB for querying.
 | C | `tree-sitter-c` | `#include "..."`, `#include <...>` |
 | C++ | `tree-sitter-cpp` | `#include "..."`, `#include <...>` |
 | Ruby | `tree-sitter-ruby` | `require "..."`, `require_relative "..."` |
+| C# | `tree-sitter-c-sharp` | `using ...` |
+| Kotlin | `tree-sitter-kotlin-ng` | `import ...` |
+| PHP | `tree-sitter-php` | `use ...`, `use function ...`, `use const ...` |
+| Swift | `tree-sitter-swift` | `import ...` |
+| Elixir | `tree-sitter-elixir` | `alias/import/require/use` |
+| Haskell | `tree-sitter-haskell` | `import ...`, `import qualified ...` |
+| Erlang | `tree-sitter-erlang` | `-include(...)`, `-include_lib(...)` |
+| Scala | `tree-sitter-scala` | `import ...` |
+| Zig | `tree-sitter-zig` | `@import(...)` |
+| Lua | `tree-sitter-lua` | `require(...)` |
+| Dart | `tree-sitter-dart` | `import ...`, `export ...` |
+| Clojure | `tree-sitter-clojure` | `:require`, `import` |
+| OCaml | `tree-sitter-ocaml` | `open ...`, `include ...` |
+| R | `tree-sitter-r` | `library(...)`, `require(...)` |
+| Julia | `tree-sitter-julia` | `import ...`, `using ...` |
+| Elm | `tree-sitter-elm` | `import ...` |
+| Nim | `tree-sitter-nim` | `import ...`, `include ...` |
 
 ## Edge Types
 
@@ -42,11 +59,13 @@ relationships, and stores them in DuckDB for querying.
 CREATE TABLE IF NOT EXISTS edges (
     "from" TEXT NOT NULL,
     "to" TEXT NOT NULL,
-    rel TEXT NOT NULL DEFAULT 'imports'
+    rel TEXT NOT NULL DEFAULT 'imports',
+    provenance TEXT NOT NULL DEFAULT 'ast_exact',
+    confidence REAL NOT NULL DEFAULT 1.0
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_edges_unique
-    ON edges("from", "to", rel);
+    ON edges("from", "to", rel, provenance);
 ```
 
 ## Impact Analysis

@@ -37,10 +37,10 @@ for structural questions.
 
 ```
 $ hilo init              # Create .vfs/ metadata directory
-$ hilo graph discover    # Parse AST, build graph (9 languages)
+$ hilo graph warm        # Parse AST, build graph (26 languages)
   parsing 100/817 files...
   parsing 817/817 files...
-  Discovered 2315 edges across 716 files (9 languages)
+  Discovered 2315 edges across 716 files (26 languages)
 
 $ hilo graph impact 'sys:gtest/gtest.h' --max-depth 5
   349 files impacted — 347 C++, 2 headers
@@ -76,8 +76,9 @@ $ hilo classify          # Auto-tag every file with role + stability
 
 ## Features
 
-- **9-language AST parsing** — Go, Python, TypeScript, Rust, JavaScript,
-  Java, C, C++, Ruby
+- **26-language AST parsing** — Go, Python, TypeScript, Rust, JavaScript,
+  Java, C, C++, Ruby, C#, Kotlin, PHP, Swift, Elixir, Haskell, Erlang,
+  Scala, Zig, Lua, Dart, Clojure, OCaml, R, Julia, Elm, Nim
 - **Auto-classification** — detects entrypoints, test files, libraries
   without manual tagging
 - **Cross-language impact** — "what C headers does the Python loader
