@@ -1,6 +1,6 @@
 # MCP Tools
 
-Hilo exposes 10 tools via JSON-RPC over stdio. Agents query the
+Hilo exposes 15 tools via JSON-RPC over stdio. Agents query the
 dependency graph and metadata without reading files.
 
 ## Tool List
