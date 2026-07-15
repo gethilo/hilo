@@ -1,6 +1,6 @@
 # MCP Tools
 
-Hilo exposes 8 tools via JSON-RPC over stdio. Agents query the
+Hilo exposes 10 tools via JSON-RPC over stdio. Agents query the
 dependency graph and metadata without reading files.
 
 ## Tool List
@@ -104,6 +104,46 @@ Resolve a virtual path to its real storage location.
 ```
 
 Returns: `{ "real_path": "/home/user/project/src/main.rs", "backend": "local", "cached": false }`
+
+### `vfs_graph_understand`
+
+Harmonic multi-resolution context compression — budgeted, tiered output from the dependency graph.
+
+```json
+{
+  "name": "vfs_graph_understand",
+  "arguments": {
+    "task": "rate limiter",
+    "budget": 6000,
+    "resolution": "harmonic"
+  }
+}
+```
+
+- `task` (required): natural language description of what the agent is working on
+- `budget` (optional): max token budget (default 6000)
+- `resolution` (optional): `"harmonic"` (MAP → SIGNATURES → DETAIL) or `"flat"`
+
+Returns: `{ "text": "...", "files": SignalFile[], "tokens_estimate": 4120, "anchors": ["src/middleware.rs"] }`
+
+### `vfs_graph_search`
+
+Deterministic semantic code search using TF-IDF + Okapi BM25 + Reciprocal Rank Fusion. No embeddings, no external API calls.
+
+```json
+{
+  "name": "vfs_graph_search",
+  "arguments": {
+    "query": "authentication middleware",
+    "limit": 10
+  }
+}
+```
+
+- `query` (required): natural language search query
+- `limit` (optional): max results (default 10)
+
+Returns: `{ "results": [{ "file_path": "src/auth.rs", "symbols": ["AuthMiddleware"], "score": 0.89, "provenance": "lexical" }], "total": 5 }`
 
 ## Integration
 
