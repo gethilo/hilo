@@ -86,8 +86,8 @@ $ hilo classify          # Auto-tag every file with role + stability
 - **Metadata-first** — xattrs + JSONL inventory. File content is
   never modified
 - **Parallel parsing** — rayon-powered, 800+ files in seconds
-- **MCP server** — 8 tools (`vfs_graph_impact`, `vfs_graph_related`,
-  `vfs_resolve_path`, etc.) for direct agent integration
+- **MCP server** — 10 tools (`vfs_graph_impact`, `vfs_graph_related`,
+  `vfs_graph_understand`, `vfs_graph_search`, `vfs_resolve_path`, etc.) for direct agent integration
 - **FUSE mount** — standard `ls`, `cat`, `getfattr` through kernel
   filesystem
 
@@ -98,7 +98,7 @@ $ hilo classify          # Auto-tag every file with role + stability
 hilo init
 
 # Build the dependency graph
-hilo graph discover
+hilo graph warm
 
 # Classify every file
 hilo classify
