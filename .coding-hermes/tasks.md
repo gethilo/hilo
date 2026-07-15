@@ -743,4 +743,13 @@ Same pattern. 6 languages.
 - Julia: `tree-sitter-julia` community grammar, verify syntax coverage
 - All crates at 0.23. If a grammar isn't at 0.23, attempt 0.22 or 0.21 fallback
 
-## [ ] Fix CI: gethilo/hilo — run #6 — LOG_ACCESS_DENIED: 404 from gh run view
+## [ ] INFRA — Enable GitHub Pages on gethilo/hilo repository (Pages deploy fails — `actions/configure-pages@v4` returns HttpError: Not Found)
+
+**Diagnosis (2026-07-15):** CI workflow (`ci.yml`) passes on all recent runs. Only the `Deploy Docs to GitHub Pages` workflow (`pages.yml`) fails — consistently on every push with 9-14s runtime. Root cause: GitHub Pages is NOT enabled on the repository (`gh api repos/gethilo/hilo/pages` → 404). The `pages.yml` workflow, permissions, and docs/ path are all correct.
+
+**Fix (manual, requires repo admin):**
+1. Go to https://github.com/gethilo/hilo/settings/pages
+2. Under "Source", select "GitHub Actions"
+3. Re-run the failed workflow
+
+**No code changes needed.** This is an infrastructure configuration issue.
