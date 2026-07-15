@@ -743,13 +743,15 @@ Same pattern. 6 languages.
 - Julia: `tree-sitter-julia` community grammar, verify syntax coverage
 - All crates at 0.23. If a grammar isn't at 0.23, attempt 0.22 or 0.21 fallback
 
-## [ ] INFRA — Enable GitHub Pages on gethilo/hilo repository (Pages deploy fails — `actions/configure-pages@v4` returns HttpError: Not Found)
+## [x] INFRA — Enable GitHub Pages on gethilo/hilo repository (Pages deploy fails — `actions/configure-pages@v4` returns HttpError: Not Found)
 
-**Diagnosis (2026-07-15):** CI workflow (`ci.yml`) passes on all recent runs. Only the `Deploy Docs to GitHub Pages` workflow (`pages.yml`) fails — consistently on every push with 9-14s runtime. Root cause: GitHub Pages is NOT enabled on the repository (`gh api repos/gethilo/hilo/pages` → 404). The `pages.yml` workflow, permissions, and docs/ path are all correct.
+**Status: RESOLVED — 2026-07-15**
 
-**Fix (manual, requires repo admin):**
-1. Go to https://github.com/gethilo/hilo/settings/pages
-2. Under "Source", select "GitHub Actions"
-3. Re-run the failed workflow
+Enabled GitHub Pages via `gh api` (no manual settings visit needed):
+1. Created Pages site: `gh api repos/gethilo/hilo/pages --method POST -F "source[branch]=master" -F "source[path]=/docs"`
+2. Switched to workflow build type: `gh api repos/gethilo/hilo/pages --method PUT -F "build_type=workflow"`
+3. Re-ran failed workflow: `gh run rerun -R gethilo/hilo 29422582551`
+4. Deploy succeeded (15s), artifact `github-pages` created
+5. Site live: https://gethilo.github.io/hilo/ → HTTP 200
 
-**No code changes needed.** This is an infrastructure configuration issue.
+**Root cause:** GitHub Pages was never enabled on the repository. The `pages.yml` workflow and permissions were correct all along.
