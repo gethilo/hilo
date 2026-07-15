@@ -742,3 +742,5 @@ Same pattern. 6 languages.
 - OCaml: tree-sitter-ocaml has `language_ocaml()` + `language_ocaml_interface()` — use both
 - Julia: `tree-sitter-julia` community grammar, verify syntax coverage
 - All crates at 0.23. If a grammar isn't at 0.23, attempt 0.22 or 0.21 fallback
+
+## [ ] Fix CI: gethilo/hilo — run #6 — LOG_ACCESS_DENIED: 404 from gh run view
