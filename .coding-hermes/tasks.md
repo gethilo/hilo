@@ -758,7 +758,7 @@ Enabled GitHub Pages via `gh api` (no manual settings visit needed):
 
 ---
 
-## [ ] DOC — Document 5 undocumented MCP tools in docs/mcp-tools.md
+## [x] DOC — Document 5 undocumented MCP tools in docs/mcp-tools.md
 
 The MCP server registers 15 tools but `docs/mcp-tools.md` only documents 10.
 Missing: `vfs_set_metadata`, `vfs_graph_module`, `vfs_graph_untested`,
@@ -766,5 +766,12 @@ Missing: `vfs_set_metadata`, `vfs_graph_module`, `vfs_graph_untested`,
 
 ### AC
 
-- [ ] All 15 MCP tools documented in `docs/mcp-tools.md` with input/output schemas
-- [ ] Documentation matches actual tool signatures in `hilo-mcp/src/tools/mod.rs`
+- [x] All 15 MCP tools documented in `docs/mcp-tools.md` with input/output schemas
+- [x] Documentation matches actual tool signatures in `hilo-mcp/src/tools/mod.rs`
+
+### Result
+**Status: COMPLETE — 2026-07-15**
+
+Added documentation for 5 undocumented MCP tools (+78 lines). All 15 tool docs
+verified against actual registrations in `hilo-mcp/src/tools/mod.rs` — exact
+1:1 match, including input schemas and return shapes sourced from handler code.
