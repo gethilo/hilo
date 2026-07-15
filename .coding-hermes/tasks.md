@@ -755,3 +755,16 @@ Enabled GitHub Pages via `gh api` (no manual settings visit needed):
 5. Site live: https://gethilo.github.io/hilo/ → HTTP 200
 
 **Root cause:** GitHub Pages was never enabled on the repository. The `pages.yml` workflow and permissions were correct all along.
+
+---
+
+## [ ] DOC — Document 5 undocumented MCP tools in docs/mcp-tools.md
+
+The MCP server registers 15 tools but `docs/mcp-tools.md` only documents 10.
+Missing: `vfs_set_metadata`, `vfs_graph_module`, `vfs_graph_untested`,
+`vfs_backend_status`, `vfs_sync_backend`.
+
+### AC
+
+- [ ] All 15 MCP tools documented in `docs/mcp-tools.md` with input/output schemas
+- [ ] Documentation matches actual tool signatures in `hilo-mcp/src/tools/mod.rs`
