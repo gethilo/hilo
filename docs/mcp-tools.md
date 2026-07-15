@@ -105,6 +105,84 @@ Resolve a virtual path to its real storage location.
 
 Returns: `{ "real_path": "/home/user/project/src/main.rs", "backend": "local", "cached": false }`
 
+### `vfs_set_metadata`
+
+Set a Hilo extended attribute (`user.vfs.*`) on a file. Returns the previous value for the attribute if one existed.
+
+```json
+{
+  "name": "vfs_set_metadata",
+  "arguments": {
+    "path": "src/auth.rs",
+    "key": "feature",
+    "value": "authentication"
+  }
+}
+```
+
+- `path` (required): path to the file
+- `key` (required): attribute name — do NOT include the `user.vfs.` prefix; it is added automatically (e.g., `"feature"` becomes `"user.vfs.feature"`)
+- `value` (required): attribute value to set
+
+Returns: `{ "success": true, "path": "src/auth.rs", "key": "user.vfs.feature", "value": "authentication", "previous_value": null }`
+
+### `vfs_graph_untested`
+
+List files that have import edges but no test coverage — i.e., no `tested_by` edge points at them. Useful for finding untested source files.
+
+```json
+{ "name": "vfs_graph_untested", "arguments": {} }
+```
+
+Takes no arguments.
+
+Returns: `{ "files": ["src/parser.rs", "src/signal.rs"], "total": 2 }`
+
+### `vfs_graph_module`
+
+Get per-module (directory-prefixed) file listing and test coverage statistics from the dependency graph.
+
+```json
+{
+  "name": "vfs_graph_module",
+  "arguments": { "module_name": "src/auth/" }
+}
+```
+
+- `module_name` (required): directory prefix to query (e.g., `"src/auth/"`, `"pkg/"`)
+
+Returns: `{ "module": "src/auth/", "files": ["src/auth/login.rs", "src/auth/middleware.rs"], "edges_count": 24, "test_coverage_pct": 67.0 }`
+
+### `vfs_backend_status`
+
+Get backend information for a file — which backend owns it (local, s3, git), whether it's cached locally, its remote URL (for s3/git backends), and last sync state.
+
+```json
+{
+  "name": "vfs_backend_status",
+  "arguments": { "path": "src/main.rs" }
+}
+```
+
+- `path` (required): file path to query backend status for
+
+Returns: `{ "backend": "local", "cache_hit": true, "cache_path": "/home/user/project/src/main.rs", "remote_url": null, "last_synced": null }`
+
+### `vfs_sync_backend`
+
+Sync the backend for a file. For local backends this is a no-op (always in sync). For S3/git backends, reports the current cache state.
+
+```json
+{
+  "name": "vfs_sync_backend",
+  "arguments": { "path": "docs/index.html" }
+}
+```
+
+- `path` (required): file path to sync the backend for
+
+Returns: `{ "synced_files": 1, "errors": [] }`
+
 ### `vfs_graph_understand`
 
 Harmonic multi-resolution context compression — budgeted, tiered output from the dependency graph.
