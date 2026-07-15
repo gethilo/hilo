@@ -770,8 +770,15 @@ Missing: `vfs_set_metadata`, `vfs_graph_module`, `vfs_graph_untested`,
 - [x] Documentation matches actual tool signatures in `hilo-mcp/src/tools/mod.rs`
 
 ### Result
-**Status: COMPLETE — 2026-07-15**
-
-Added documentation for 5 undocumented MCP tools (+78 lines). All 15 tool docs
-verified against actual registrations in `hilo-mcp/src/tools/mod.rs` — exact
-1:1 match, including input schemas and return shapes sourced from handler code.
+|**Status: COMPLETE — 2026-07-15**|
+|
+|Added documentation for 5 undocumented MCP tools (+78 lines). All 15 tool docs
+|verified against actual registrations in `hilo-mcp/src/tools/mod.rs` — exact
+|1:1 match, including input schemas and return shapes sourced from handler code.
+|
+|### Discovery sweep follow-up — 2026-07-15
+|
+|- **Added `docs/index.html`** — GitHub Pages requires an `index.html` for the
+|  root URL to resolve. Without it, `https://gethilo.github.io/hilo/` returns 404
+|  even though the deploy workflow succeeds. The landing page links to all 5 docs.
+|- **Fixed stale MCP tool count** in AGENTS.md (8→15 tools)

@@ -19,7 +19,7 @@ hilo-core/          # Manifest, config, sandbox, workspace, virtual dirs
 hilo-metadata/      # xattr read/write, inventory files (JSONL)
 hilo-graph/         # AST parsing (26 langs), DuckDB graph, edges, impact, classify
 hilo-cli/           # CLI shim (init, meta, graph, classify, mount, serve, workspace)
-hilo-mcp/           # MCP server (8 tools), JSON-RPC
+hilo-mcp/           # MCP server (15 tools), JSON-RPC
 hilo-backends/      # S3 (read/write-thru), Git (clone/pull), local
 hilo-fuse/          # FUSE daemon, mount ops, xattr passthrough, workspace mount
 hilo-triggers/      # inotify watchers, debounce, re-discover on change

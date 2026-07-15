@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hilo — Agent-First Virtual Filesystem</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --fg: #c9d1d9;
+      --accent: #58a6ff;
+      --border: #30363d;
+      --code-bg: #161b22;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      line-height: 1.6;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 2rem 1.5rem 4rem;
+    }
+    h1 { font-size: 2.5rem; margin-bottom: 0.5rem; }
+    h2 { font-size: 1.5rem; margin-top: 2rem; margin-bottom: 1rem; border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+    h3 { font-size: 1.2rem; margin-top: 1.5rem; margin-bottom: 0.5rem; }
+    p { margin-bottom: 1rem; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    ul { margin-bottom: 1rem; padding-left: 1.5rem; }
+    li { margin-bottom: 0.3rem; }
+    .tagline { font-size: 1.2rem; color: #8b949e; margin-bottom: 2rem; }
+    .card {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem 1.5rem;
+      margin-bottom: 1rem;
+    }
+    .card h3 { margin-top: 0; }
+    code { background: var(--code-bg); padding: 0.2rem 0.4rem; border-radius: 4px; font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <h1>Hilo</h1>
+  <p class="tagline">An agent-first virtual filesystem for AI coding agents</p>
+
+  <p>Hilo pre-computes a dependency graph of your codebase and exposes it through standard filesystem tools and an MCP server — so AI agents can answer structural questions without reading files and burning context tokens.</p>
+
+  <h2>Docs</h2>
+
+  <div class="card">
+    <h3><a href="getting-started">Getting Started</a></h3>
+    <p>Install, initialize, build your first graph.</p>
+  </div>
+
+  <div class="card">
+    <h3><a href="graph-engine">Graph Engine</a></h3>
+    <p>Dependency graph, impact analysis, signal engine, semantic search.</p>
+  </div>
+
+  <div class="card">
+    <h3><a href="mcp-tools">MCP Tools Reference</a></h3>
+    <p>All 15 MCP server tools with input/output schemas.</p>
+  </div>
+
+  <div class="card">
+    <h3><a href="cli-reference">CLI Reference</a></h3>
+    <p>All command-line interface commands.</p>
+  </div>
+
+  <div class="card">
+    <h3><a href="architecture">Architecture</a></h3>
+    <p>System architecture, crate layout, design decisions.</p>
+  </div>
+
+  <h2>Quick Links</h2>
+  <ul>
+    <li><a href="https://github.com/gethilo/hilo">GitHub Repository</a></li>
+    <li><a href="getting-started">Installation Guide</a></li>
+    <li><a href="mcp-tools">MCP Tools</a></li>
+  </ul>
+
+  <footer style="margin-top: 3rem; color: #8b949e; font-size: 0.85rem;">
+    MIT License &mdash; <a href="https://github.com/gethilo/hilo">gethilo/hilo</a>
+  </footer>
+</body>
+</html>
