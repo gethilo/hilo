@@ -782,3 +782,33 @@ Missing: `vfs_set_metadata`, `vfs_graph_module`, `vfs_graph_untested`,
 |  root URL to resolve. Without it, `https://gethilo.github.io/hilo/` returns 404
 |  even though the deploy workflow succeeds. The landing page links to all 5 docs.
 |- **Fixed stale MCP tool count** in AGENTS.md (8→15 tools)
+
+---
+
+## [ ] SEC — Upgrade transitive deps: crossbeam-epoch, quinn-proto, rustls-webpki (5 vulns)
+
+### Why
+`cargo audit` found 5 vulnerabilities across 3 transitive crates:
+- **quinn-proto v0.11.14** — RUSTSEC-2026-0185 (HIGH 7.5): Remote memory exhaustion from unbounded out-of-order stream reassembly
+- **rustls-webpki v0.101.7** — RUSTSEC-2026-0099: Name constraints accepted for wildcard names
+- **rustls-webpki v0.101.7** — RUSTSEC-2026-0104: Reachable panic in CRL parsing
+- **rustls-webpki v0.101.7** — RUSTSEC-2026-0098: Name constraints for URI names incorrectly accepted
+- **crossbeam-epoch v0.9.18** — RUSTSEC-2026-0204: Invalid pointer dereference in fmt::Pointer
+
+### What
+Bump all affected transitive deps to their patched versions.
+
+### AC
+- [ ] `cargo update` resolves all 5 advisories
+- [ ] `cargo audit` returns 0 vulnerabilities
+- [ ] `cargo check --workspace` passes
+- [ ] `cargo test --workspace` passes
+- [ ] `cargo clippy --workspace -- -D warnings` clean
+- [ ] `cargo fmt --all` clean
+
+### Files
+- `Cargo.lock` — dependency resolution
+- (no source changes expected — these are transitive deps)
+
+### Discovered
+2026-07-16 discovery sweep — cargo-audit v0.22.2 installed as part of this tick.
