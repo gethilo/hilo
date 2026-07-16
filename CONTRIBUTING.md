@@ -26,7 +26,7 @@ hilo/
 ├── hilo-core/        # Manifest, workspace, sandbox, virtual dirs
 ├── hilo-metadata/    # xattr read/write, JSONL inventory
 ├── hilo-graph/       # Tree-sitter parsers, DuckDB queries, classify
-├── hilo-mcp/         # JSON-RPC MCP server (8 tools)
+├── hilo-mcp/         # JSON-RPC MCP server (15 tools)
 ├── hilo-cli/         # CLI (init, meta, graph, classify, mount, serve)
 ├── hilo-fuse/        # FUSE daemon, ops, permissions
 ├── hilo-backends/    # S3, Git, local storage backends
