@@ -785,7 +785,7 @@ Missing: `vfs_set_metadata`, `vfs_graph_module`, `vfs_graph_untested`,
 
 ---
 
-## [ ] SEC — Upgrade transitive deps: crossbeam-epoch, quinn-proto, rustls-webpki (5 vulns)
+## [x] SEC — Upgrade transitive deps: crossbeam-epoch, quinn-proto, rustls-webpki (5 vulns)
 
 ### Why
 `cargo audit` found 5 vulnerabilities across 3 transitive crates:
@@ -799,16 +799,33 @@ Missing: `vfs_set_metadata`, `vfs_graph_module`, `vfs_graph_untested`,
 Bump all affected transitive deps to their patched versions.
 
 ### AC
-- [ ] `cargo update` resolves all 5 advisories
-- [ ] `cargo audit` returns 0 vulnerabilities
-- [ ] `cargo check --workspace` passes
-- [ ] `cargo test --workspace` passes
-- [ ] `cargo clippy --workspace -- -D warnings` clean
-- [ ] `cargo fmt --all` clean
+- [x] `cargo update` resolves all 5 advisories
+- [x] `cargo audit` returns 0 vulnerabilities
+- [x] `cargo check --workspace` passes
+- [x] `cargo test --workspace` passes
+- [x] `cargo clippy --workspace -- -D warnings` clean
+- [x] `cargo fmt --all` clean
 
 ### Files
 - `Cargo.lock` — dependency resolution
-- (no source changes expected — these are transitive deps)
+- `hilo-backends/Cargo.toml` — disabled default features on aws-sdk-s3/aws-config to drop old TLS chain
 
-### Discovered
-2026-07-16 discovery sweep — cargo-audit v0.22.2 installed as part of this tick.
+### Result
+**Status: COMPLETE — 2026-07-16. Commit: 65386a4**
+
+Resolved all 5 cargo-audit vulnerabilities:
+
+1. **crossbeam-epoch v0.9.18→0.9.20** (RUSTSEC-2026-0204) — `cargo update` bumped via semver-compatible upgrade
+2. **quinn-proto v0.11.14→0.11.16** (RUSTSEC-2026-0185, HIGH 7.5) — `cargo update` bumped via semver-compatible upgrade
+3-5. **rustls-webpki v0.101.7** (RUSTSEC-2026-0098/0099/0104) — resolved by disabling default features on `aws-sdk-s3` and `aws-config` in `hilo-backends/Cargo.toml`. The AWS SDK v1.x defaults pull `rustls-aws-lc` which enables the old `hyper-rustls 0.24` → `rustls 0.21` → `rustls-webpki 0.101.7` chain. Switching to `default-features = false` with explicit `features = ["behavior-version-latest", "rt-tokio", "default-https-client"]` uses the modern TLS stack (`hyper-rustls 0.27` → `rustls 0.23` → `rustls-webpki 0.103.13`).
+
+**Key design decision:** Rather than a big-bang AWS SDK v2 migration, we kept the v1.x SDK and simply dropped the old TLS feature. The `default-https-client` feature was explicitly re-enabled to keep S3 functionality working (3 S3 tests confirmed green).
+
+**Verification:**
+- `cargo audit` — 0 vulnerabilities (was 5)
+- `cargo check --workspace` — PASS
+- `cargo test --workspace` — all suites PASS (0 failures)
+- `cargo clippy --workspace -- -D warnings` — clean
+- `cargo fmt --all` — clean
+- Dependency count reduced: 642→603 crates
+- `gitreins guard` — PASS (secrets, tests full, static_analysis, lsp)
