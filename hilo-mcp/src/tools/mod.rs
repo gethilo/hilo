@@ -1,6 +1,6 @@
 //! Tool definitions and dispatch for the Hilo MCP server.
 //!
-//! Fourteen tools are exposed:
+//! Fifteen tools are exposed:
 //! - `vfs_get_metadata`     — read Hilo xattrs for a file
 //! - `vfs_set_metadata`     — write Hilo xattr for a file
 //! - `vfs_graph_related`    — find related files via the dependency graph
