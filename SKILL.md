@@ -1,7 +1,7 @@
 ---
 name: hilo
 description: "Agent-first virtual filesystem — pre-computes dependency graphs, metadata, and semantic context for AI coding agents. Written in Rust, 10 crates, 26-language AST parsing."
-version: "0.1.0"
+version: "0.2.0"
 license: MIT
 language: rust
 repository: https://github.com/gethilo/hilo
