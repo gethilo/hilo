@@ -47,7 +47,7 @@ impl PluginRegistry {
                 PluginManifest {
                     name,
                     wasm_path: path,
-                    version: "0.1.0".into(),
+                    version: "0.2.0".into(),
                     hooks: vec![HookRef {
                         on: "file_write".into(),
                         priority: 0,

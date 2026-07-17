@@ -743,6 +743,33 @@ Same pattern. 6 languages.
 - Julia: `tree-sitter-julia` community grammar, verify syntax coverage
 - All crates at 0.23. If a grammar isn't at 0.23, attempt 0.22 or 0.21 fallback
 
+## [ ] DOC — bump version from 0.1.0 to 0.2.0 across workspace (stale version from discovery sweep)
+
+### Why
+All 10 Cargo.toml files, CHANGELOG.md, hilo-mcp/src/server.rs, and hilo-plugins/src/registry.rs still carry version "0.1.0". The project has delivered massive features: provenance tracking, signal engine, semantic search, determinism tests, and 26-language expansion (9→26). The tasks.md is titled "Hilo v0.2."
+
+### What
+Mechanical version bump: update all Cargo.toml workspace members, CHANGELOG add v0.2.0 entry, update MCP server version string, update plugin registry default version.
+
+### AC
+- [ ] All 10 Cargo.toml `version = "0.1.0"` → `version = "0.2.0"`
+- [ ] CHANGELOG.md: add `## [0.2.0] — 2026-07-16` with Rinnegan-upgrade summary
+- [ ] `hilo-mcp/src/server.rs`: MCP server version string `"0.1.0"` → `"0.2.0"`
+- [ ] `hilo-plugins/src/registry.rs`: default version `"0.1.0"` → `"0.2.0"`
+- [ ] `cargo check --workspace` passes
+- [ ] `cargo test --workspace` passes
+- [ ] `gitreins guard` passes
+
+### Files
+- `Cargo.toml` (workspace root)
+- `hilo-core/Cargo.toml`, `hilo-metadata/Cargo.toml`, `hilo-graph/Cargo.toml`
+- `hilo-cli/Cargo.toml`, `hilo-mcp/Cargo.toml`, `hilo-backends/Cargo.toml`
+- `hilo-fuse/Cargo.toml`, `hilo-triggers/Cargo.toml`, `hilo-plugins/Cargo.toml`
+- `hilo-permissions/Cargo.toml`, `hilo-ffi/Cargo.toml`
+- `CHANGELOG.md`, `hilo-mcp/src/server.rs`, `hilo-plugins/src/registry.rs`
+
+---
+
 ## [x] INFRA — Enable GitHub Pages on gethilo/hilo repository (Pages deploy fails — `actions/configure-pages@v4` returns HttpError: Not Found)
 
 **Status: RESOLVED — 2026-07-15**
