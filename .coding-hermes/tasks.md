@@ -1045,7 +1045,17 @@ daemons. No log levels, no structured fields, no JSON output.
 - **Note:** 3 `git2` RUSTSEC advisories — no semver-compatible fix (0.19 pinned). Monitor.
 - **Result:** 28 crates updated (+syn v3.0.0 added). All 152 workspace tests pass, clippy clean, fmt clean. Guard: PASS. Pre-existing git2 advisories remain (6 allowed warnings).
 
-## [ ] DB-001 — Populate DuckBrain namespace with project context
+## [x] DB-001 — Populate DuckBrain namespace with project context (COMPLETE 2026-07-19)
 - **Priority:** low
-- **Current:** 1 entry
-- **Needed:** architecture decisions, patterns, pitfalls from past ticks, spec-to-code mapping
+- **Current:** 5 entries (was 1)
+- **Result:** 5 entries written: project status, architecture overview (10 crates, 26 languages), git2 advisory pitfall, dep-upgrade pattern, DEPS-001 event. Covers status, architecture, pitfalls, and patterns.
+
+---
+
+## [ ] NEVER-DONE — Run coding-hermes-never-done 11-point audit
+
+Load coding-hermes-never-done skill. Run ALL 11 checks: spec alignment,
+doc coverage, test gaps, package upgrades, pitfall hunt, performance audit,
+endpoint verification, CI/CD health, DuckBrain sync, code quality,
+middle-out wiring. Create a task for EVERY gap found. This task is never
+complete — the audit always finds something.
