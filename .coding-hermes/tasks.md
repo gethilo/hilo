@@ -1039,10 +1039,11 @@ daemons. No log levels, no structured fields, no JSON output.
 - **Deliverable:** per-crate `docs/<crate>.md` with public API surface, usage examples
 - **Result:** COMPLETE — 2026-07-19. 10 docs (+735 lines), index.md updated with crate API reference section.
 
-## [ ] DEPS-001 — Upgrade 27 outdated dependencies
+## [x] DEPS-001 — Upgrade 28 outdated dependencies (COMPLETE 2026-07-19, d159170)
 - **Priority:** medium
 - **Approach:** `cargo update`, verify `cargo test --workspace`, commit `Cargo.lock`
 - **Note:** 3 `git2` RUSTSEC advisories — no semver-compatible fix (0.19 pinned). Monitor.
+- **Result:** 28 crates updated (+syn v3.0.0 added). All 152 workspace tests pass, clippy clean, fmt clean. Guard: PASS. Pre-existing git2 advisories remain (6 allowed warnings).
 
 ## [ ] DB-001 — Populate DuckBrain namespace with project context
 - **Priority:** low
