@@ -82,23 +82,57 @@ impl S3Client {
     /// Create a new S3 client for a specific bucket/prefix.
     /// cache_dir: local directory for cached files (e.g., .vfs/cache/)
     /// ttl_seconds: cache TTL; 0 means never expire
+    ///
+    /// If AWS_ENDPOINT_URL is set (S3-compatible endpoint such as MinIO),
+    /// the client is configured explicitly for that endpoint with static
+    /// credentials from AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY and
+    /// path-style addressing, which MinIO requires.
     pub async fn new(
         region: &str,
         cache_dir: &Path,
         ttl_seconds: u32,
         writable: bool,
     ) -> S3Result<Self> {
-        let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
-            .region(s3::config::Region::new(region.to_string()))
-            .load()
-            .await;
-        let client = s3::Client::new(&config);
+        let client = if let Ok(endpoint) = std::env::var("AWS_ENDPOINT_URL") {
+            if endpoint.is_empty() {
+                Self::default_client(region).await
+            } else {
+                Self::endpoint_client(region, &endpoint)
+            }
+        } else {
+            Self::default_client(region).await
+        };
         Ok(Self {
             client,
             cache_dir: cache_dir.to_path_buf(),
             ttl_seconds,
             writable,
         })
+    }
+
+    /// Client built from the standard AWS config chain (real AWS).
+    async fn default_client(region: &str) -> s3::Client {
+        let config = aws_config::defaults(aws_config::BehaviorVersion::latest())
+            .region(s3::config::Region::new(region.to_string()))
+            .load()
+            .await;
+        s3::Client::new(&config)
+    }
+
+    /// Client for an explicit S3-compatible endpoint (MinIO et al.).
+    /// Path-style addressing is required by MinIO.
+    fn endpoint_client(region: &str, endpoint: &str) -> s3::Client {
+        let access_key = std::env::var("AWS_ACCESS_KEY_ID").unwrap_or_default();
+        let secret_key = std::env::var("AWS_SECRET_ACCESS_KEY").unwrap_or_default();
+        let creds = s3::config::Credentials::new(access_key, secret_key, None, None, "static");
+        let config = s3::Config::builder()
+            .behavior_version(s3::config::BehaviorVersion::latest())
+            .region(s3::config::Region::new(region.to_string()))
+            .endpoint_url(endpoint)
+            .credentials_provider(creds)
+            .force_path_style(true)
+            .build();
+        s3::Client::from_conf(config)
     }
 
     /// Read an object from S3, caching it locally.

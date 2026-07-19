@@ -11,15 +11,13 @@
 //   AWS_SECRET_ACCESS_KEY — MinIO secret key (default: hilo_test)
 //   AWS_REGION            — AWS region (default: us-east-1)
 //
-// If AWS_ENDPOINT_URL is not set, all tests are skipped gracefully (they
-// return early and pass), so `cargo test` never fails on machines without
-// Docker/MinIO running.
+// Tests are skipped gracefully (return early and pass) when AWS_ENDPOINT_URL
+// is not set OR when the endpoint is not reachable, so `cargo test` never
+// fails on machines without Docker/MinIO running.
 //
-// The production `S3Client` picks up the endpoint and credentials from the
-// AWS_* environment via aws_config's default chain (aws-config >= 1.7
-// honors AWS_ENDPOINT_URL). A raw `aws_sdk_s3::Client` with
-// force_path_style(true) is used for head/delete operations that the
-// backend does not expose.
+// The production `S3Client` honors AWS_ENDPOINT_URL explicitly with
+// path-style addressing (required by MinIO). A raw `aws_sdk_s3::Client`
+// is used for head/delete operations that the backend does not expose.
 
 use aws_sdk_s3 as s3;
 use hilo_backends::{S3Client, WriteResult};
@@ -28,9 +26,48 @@ use tempfile::TempDir;
 
 const BUCKET: &str = "hilo-test-bucket";
 
-/// Check whether MinIO is configured. Returns None if not.
-fn check_minio_configured() -> Option<String> {
-    env::var("AWS_ENDPOINT_URL").ok().filter(|e| !e.is_empty())
+/// Check whether the MinIO integration environment is configured AND the
+/// endpoint is actually reachable. Returns the endpoint URL on success,
+/// None when the tests should be skipped.
+async fn check_minio_available() -> Option<String> {
+    let endpoint = env::var("AWS_ENDPOINT_URL")
+        .ok()
+        .filter(|e| !e.is_empty())?;
+
+    // Probe the MinIO liveness endpoint; skip when nothing is listening.
+    let health_url = format!("{}/minio/health/live", endpoint.trim_end_matches('/'));
+    let probe = tokio::process::Command::new("curl")
+        .args([
+            "-s",
+            "-o",
+            "/dev/null",
+            "-w",
+            "%{http_code}",
+            "--max-time",
+            "2",
+        ])
+        .arg(&health_url)
+        .output()
+        .await
+        .ok()?;
+    let status = String::from_utf8_lossy(&probe.stdout).trim().to_string();
+    if status != "200" {
+        return None;
+    }
+    Some(endpoint)
+}
+
+/// Skip helper: returns true when the test should be skipped.
+macro_rules! require_minio {
+    () => {
+        match check_minio_available().await {
+            Some(e) => e,
+            None => {
+                eprintln!("SKIP: AWS_ENDPOINT_URL not set or MinIO not reachable");
+                return;
+            }
+        }
+    };
 }
 
 /// Create a fresh S3Client pointed at the configured endpoint.
@@ -45,7 +82,7 @@ async fn create_test_client() -> (S3Client, TempDir) {
 
 /// Build a low-level aws_sdk_s3::Client against the MinIO endpoint with
 /// static credentials and path-style addressing (required by MinIO).
-async fn raw_s3_client() -> s3::Client {
+fn raw_s3_client() -> s3::Client {
     let endpoint = env::var("AWS_ENDPOINT_URL").expect("AWS_ENDPOINT_URL");
     let access_key = env::var("AWS_ACCESS_KEY_ID").unwrap_or_else(|_| "hilo_test".into());
     let secret_key = env::var("AWS_SECRET_ACCESS_KEY").unwrap_or_else(|_| "hilo_test".into());
@@ -82,10 +119,7 @@ async fn put_test_object(
 /// put_object → get_object round-trip; verifies content matches.
 #[tokio::test]
 async fn test_put_and_get_object() {
-    let Some(endpoint) = check_minio_configured() else {
-        eprintln!("SKIP: AWS_ENDPOINT_URL not set");
-        return;
-    };
+    let endpoint = require_minio!();
     eprintln!("Using MinIO at {endpoint}");
 
     let (client, _cache) = create_test_client().await;
@@ -109,7 +143,7 @@ async fn test_put_and_get_object() {
     assert_eq!(roundtrip, content);
 
     // Cleanup.
-    let raw = raw_s3_client().await;
+    let raw = raw_s3_client();
     raw.delete_object()
         .bucket(BUCKET)
         .key(key)
@@ -121,10 +155,7 @@ async fn test_put_and_get_object() {
 /// put two objects under a prefix → list_objects returns both.
 #[tokio::test]
 async fn test_list_objects() {
-    if check_minio_configured().is_none() {
-        eprintln!("SKIP: AWS_ENDPOINT_URL not set");
-        return;
-    }
+    let _ = require_minio!();
 
     let (client, _cache) = create_test_client().await;
     let prefix = "integration/list-test/";
@@ -147,7 +178,7 @@ async fn test_list_objects() {
     );
 
     // Cleanup.
-    let raw = raw_s3_client().await;
+    let raw = raw_s3_client();
     for suffix in ["a.txt", "b.txt"] {
         raw.delete_object()
             .bucket(BUCKET)
@@ -161,10 +192,7 @@ async fn test_list_objects() {
 /// get_object on a missing key returns an error (NotFound).
 #[tokio::test]
 async fn test_get_object_not_found() {
-    if check_minio_configured().is_none() {
-        eprintln!("SKIP: AWS_ENDPOINT_URL not set");
-        return;
-    }
+    let _ = require_minio!();
 
     let (client, _cache) = create_test_client().await;
     let key = "integration/does-not-exist.txt";
@@ -179,10 +207,7 @@ async fn test_get_object_not_found() {
 /// head_object reports the correct content_length for an uploaded object.
 #[tokio::test]
 async fn test_head_object() {
-    if check_minio_configured().is_none() {
-        eprintln!("SKIP: AWS_ENDPOINT_URL not set");
-        return;
-    }
+    let _ = require_minio!();
 
     let (client, _cache) = create_test_client().await;
     let key = "integration/head-test.txt";
@@ -190,7 +215,7 @@ async fn test_head_object() {
 
     put_test_object(&client, BUCKET, key, content).await;
 
-    let raw = raw_s3_client().await;
+    let raw = raw_s3_client();
     let head = raw
         .head_object()
         .bucket(BUCKET)
@@ -217,17 +242,14 @@ async fn test_head_object() {
 /// delete_object removes the object; a subsequent get fails.
 #[tokio::test]
 async fn test_delete_object() {
-    if check_minio_configured().is_none() {
-        eprintln!("SKIP: AWS_ENDPOINT_URL not set");
-        return;
-    }
+    let _ = require_minio!();
 
     let (client, _cache) = create_test_client().await;
     let key = "integration/delete-test.txt";
 
     put_test_object(&client, BUCKET, key, b"delete me").await;
 
-    let raw = raw_s3_client().await;
+    let raw = raw_s3_client();
     raw.delete_object()
         .bucket(BUCKET)
         .key(key)
@@ -245,10 +267,7 @@ async fn test_delete_object() {
 /// 64 KiB payload round-trip verifies content integrity end to end.
 #[tokio::test]
 async fn test_put_object_content_integrity() {
-    if check_minio_configured().is_none() {
-        eprintln!("SKIP: AWS_ENDPOINT_URL not set");
-        return;
-    }
+    let _ = require_minio!();
 
     let (client, _cache) = create_test_client().await;
     let key = "integration/large-object.bin";
@@ -270,7 +289,7 @@ async fn test_put_object_content_integrity() {
     assert_eq!(roundtrip, data);
 
     // Cleanup.
-    let raw = raw_s3_client().await;
+    let raw = raw_s3_client();
     raw.delete_object()
         .bucket(BUCKET)
         .key(key)
