@@ -1052,7 +1052,7 @@ daemons. No log levels, no structured fields, no JSON output.
 
 ---
 
-## [ ] IMPL-004 — Add CLI subcommands for MCP-only graph tools (understand, search, module, untested)
+## [x] IMPL-004 — Add CLI subcommands for MCP-only graph tools (understand, search, module, untested)
 
 ### Why
 4 MCP tools (`vfs_graph_understand`, `vfs_graph_search`, `vfs_graph_module`, `vfs_graph_untested`) are wired in `hilo-mcp/src/tools/mod.rs` but have **no CLI subcommands** under `hilo graph`. The spec says "same binary" for all operations. These are inaccessible from the CLI.
@@ -1061,18 +1061,29 @@ daemons. No log levels, no structured fields, no JSON output.
 Add `hilo graph understand`, `hilo graph search`, `hilo graph module`, `hilo graph untested` subcommands to `hilo-cli/src/commands/graph.rs`, each delegating to the existing `hilo-graph` library functions (`signal::understand`, `semantic::search`, `graph::module_stats`, `graph::untested_files`).
 
 ### AC
-- `hilo graph understand "authentication"` → 3-tier harmonic output
-- `hilo graph search "middleware"` → ranked search results
-- `hilo graph module` → per-module statistics
-- `hilo graph untested` → untested file list
-- `cargo check --workspace` passes
-- `cargo test --workspace` passes
-- `cargo clippy --workspace -- -D warnings` clean
-- `cargo fmt --all` clean
+- [x] `hilo graph understand "authentication"` → 3-tier harmonic output
+- [x] `hilo graph search "middleware"` → ranked search results
+- [x] `hilo graph module` → per-module statistics
+- [x] `hilo graph untested` → untested file list
+- [x] `cargo check --workspace` passes
+- [x] `cargo test --workspace` passes
+- [x] `cargo clippy --workspace -- -D warnings` clean
+- [x] `cargo fmt --all` clean
 
 ### Files
-- `hilo-cli/src/commands/graph.rs` — 4 new subcommands
-- `hilo-cli/Cargo.toml` — no new deps (uses existing hilo-graph APIs)
+- `hilo-cli/src/commands/graph.rs` — 4 new functions (+131 lines)
+- `hilo-cli/src/main.rs` — GraphCommand variants + args + dispatch (+38 lines)
+
+### Result
+**Status: COMPLETE — 2026-07-19. Commit: c925da3**
+
+Added 4 new CLI subcommands delegating to existing hilo-graph library functions:
+- `hilo graph understand <task>` — signal engine harmonic output (--budget flag)
+- `hilo graph search <query>` — TF-IDF + BM25 search (--limit flag)
+- `hilo graph module <prefix>` — per-module stats + test coverage
+- `hilo graph untested` — lists files with no test coverage
+
+All 4 subcommands tested: understand ("dependency graph" → 3-tier), search ("rate limit" → rate_limiter.rs), module ("hilo-cli/src" → 11 files/36 edges), untested (77 files). Full workspace: check ✓, clippy ✓, fmt ✓, 37 hilo-cli tests ✓, guard: PASS.
 
 ---
 
