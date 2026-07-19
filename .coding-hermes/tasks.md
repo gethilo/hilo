@@ -1045,10 +1045,9 @@ daemons. No log levels, no structured fields, no JSON output.
 - **Note:** 3 `git2` RUSTSEC advisories — no semver-compatible fix (0.19 pinned). Monitor.
 - **Result:** 28 crates updated (+syn v3.0.0 added). All 152 workspace tests pass, clippy clean, fmt clean. Guard: PASS. Pre-existing git2 advisories remain (6 allowed warnings).
 
-## [x] DB-001 — Populate DuckBrain namespace with project context (COMPLETE 2026-07-19)
+## [x] DB-001 — Populate DuckBrain namespace with project context
 - **Priority:** low
-- **Current:** 5 entries (was 1)
-- **Result:** 5 entries written: project status, architecture overview (10 crates, 26 languages), git2 advisory pitfall, dep-upgrade pattern, DEPS-001 event. Covers status, architecture, pitfalls, and patterns.
+- **Result:** COMPLETE — 2026-07-19. 12 entries written to DuckBrain namespace `warpfs`: 4 architecture decisions (graph-edge-model, multi-resolution-signal, semantic-search, language-expansion), 4 patterns (worker-model-selection, gitreins-rust-guard, tokio-async-flush, never-done-audit), 3 pitfalls (duckdb-cache-staleness, parallel-tick-collision, gitreins-guard-timing), 1 status entry.
 
 ---
 
