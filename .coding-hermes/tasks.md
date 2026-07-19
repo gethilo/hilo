@@ -1026,11 +1026,12 @@ daemons. No log levels, no structured fields, no JSON output.
 - **Priority:** high
 - **Result:** 4 tasks created. Board was stale (IMPL-003 unchecked). Audit: CI failing (s3 test race), 27 deps outdated, 0 per-crate docs, DuckBrain thin.
 
-## [ ] CI-001 — Fix flaky S3 test `test_append_blob_index_writes_jsonl`
+## [x] CI-001 — Fix flaky S3 test `test_append_blob_index_writes_jsonl`
 - **Priority:** high
 - **File:** `hilo-backends/src/s3.rs:456`
 - **Symptom:** CI panics with "EOF while parsing a value, line: 1, column: 0" — Tokio async write not flushed before `read_to_string`. Passes locally.
-- **Fix:** Add explicit `flush` or switch to `std::fs` for test tempdir sync I/O
+- **Fix:** Added `file.flush().await?` after `file.write_all()` in `append_blob_index` (line 303). Tokio's `write_all` doesn't guarantee disk persistence; explicit flush ensures data is on disk before the async file handle is dropped, eliminating the race between write completion and subsequent reads.
+- **Result: COMPLETE — 2026-07-19. Commit: 4289883. 1-line fix, tests pass locally (both append tests), cargo check/clippy/fmt clean.**
 
 ## [ ] CI-002 — Document 10 crate public APIs in docs/
 - **Priority:** medium
