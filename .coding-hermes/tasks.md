@@ -1022,9 +1022,10 @@ daemons. No log levels, no structured fields, no JSON output.
 - `hilo-fuse/Cargo.toml`, `hilo-fuse/src/daemon.rs`
 - `hilo-triggers/Cargo.toml`, `hilo-triggers/src/engine.rs`
 
-## [x] NEVER-DONE — Run 11-point audit next tick (completed 2026-07-19 13:29)
+## [x] NEVER-DONE — Run 11-point audit next tick (completed 2026-07-19 13:29 → re-run 2026-07-19 20:34)
 - **Priority:** high
-- **Result:** 4 tasks created. Board was stale (IMPL-003 unchecked). Audit: CI failing (s3 test race), 27 deps outdated, 0 per-crate docs, DuckBrain thin.
+- **Result 13:29:** 4 tasks created. Board was stale (IMPL-003 unchecked). Audit: CI failing (s3 test race), 27 deps outdated, 0 per-crate docs, DuckBrain thin.
+- **Result 20:34:** 1 task created (IMPL-004 — CLI subcommands for MCP-only tools). All checks clean: build/tests/clippy/fmt all green, CI passing, 0 TODOs, .gitignore comprehensive, all crates tested, deps current, CHANGELOG has 0.2.0 entry, GitHub Pages live. Only gap: 4 MCP tools (understand/search/module/untested) have no CLI equivalents.
 
 ## [x] CI-001 — Fix flaky S3 test `test_append_blob_index_writes_jsonl`
 - **Priority:** high
@@ -1048,6 +1049,30 @@ daemons. No log levels, no structured fields, no JSON output.
 ## [x] DB-001 — Populate DuckBrain namespace with project context
 - **Priority:** low
 - **Result:** COMPLETE — 2026-07-19. 12 entries written to DuckBrain namespace `warpfs`: 4 architecture decisions (graph-edge-model, multi-resolution-signal, semantic-search, language-expansion), 4 patterns (worker-model-selection, gitreins-rust-guard, tokio-async-flush, never-done-audit), 3 pitfalls (duckdb-cache-staleness, parallel-tick-collision, gitreins-guard-timing), 1 status entry.
+
+---
+
+## [ ] IMPL-004 — Add CLI subcommands for MCP-only graph tools (understand, search, module, untested)
+
+### Why
+4 MCP tools (`vfs_graph_understand`, `vfs_graph_search`, `vfs_graph_module`, `vfs_graph_untested`) are wired in `hilo-mcp/src/tools/mod.rs` but have **no CLI subcommands** under `hilo graph`. The spec says "same binary" for all operations. These are inaccessible from the CLI.
+
+### What
+Add `hilo graph understand`, `hilo graph search`, `hilo graph module`, `hilo graph untested` subcommands to `hilo-cli/src/commands/graph.rs`, each delegating to the existing `hilo-graph` library functions (`signal::understand`, `semantic::search`, `graph::module_stats`, `graph::untested_files`).
+
+### AC
+- `hilo graph understand "authentication"` → 3-tier harmonic output
+- `hilo graph search "middleware"` → ranked search results
+- `hilo graph module` → per-module statistics
+- `hilo graph untested` → untested file list
+- `cargo check --workspace` passes
+- `cargo test --workspace` passes
+- `cargo clippy --workspace -- -D warnings` clean
+- `cargo fmt --all` clean
+
+### Files
+- `hilo-cli/src/commands/graph.rs` — 4 new subcommands
+- `hilo-cli/Cargo.toml` — no new deps (uses existing hilo-graph APIs)
 
 ---
 
