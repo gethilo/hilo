@@ -11,7 +11,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::Semaphore;
+use tokio::sync::{Notify, Semaphore};
 use tokio::time::timeout;
 
 pub struct TriggerEngine {
@@ -41,6 +41,8 @@ pub struct TriggerEngine {
     s3_client: Option<hilo_backends::S3Client>,
     /// S3 bucket name used by the `upload-to-backend` builtin.
     s3_bucket: Option<String>,
+    /// Channel to signal graceful shutdown to the event loop.
+    shutdown_signal: Notify,
 }
 
 impl TriggerEngine {
@@ -79,6 +81,7 @@ impl TriggerEngine {
             project_root,
             s3_client,
             s3_bucket,
+            shutdown_signal: Notify::new(),
         }
     }
 
@@ -123,10 +126,17 @@ impl TriggerEngine {
 
         loop {
             // Read raw events (blocking — inotify fd is in blocking mode).
-            let events = self
-                .watcher
-                .read_events(&mut buffer)
-                .map_err(|e| io::Error::other(e.to_string()))?;
+            let events = match self.watcher.read_events(&mut buffer) {
+                Ok(events) => events,
+                Err(e) => {
+                    // If all watches have been removed (by shutdown()), this is
+                    // a graceful exit — return Ok. Otherwise propagate the error.
+                    if self.watches.is_empty() {
+                        return Ok(());
+                    }
+                    return Err(io::Error::other(e.to_string()));
+                }
+            };
 
             for event in events {
                 let mask = event.mask;
@@ -294,11 +304,24 @@ impl TriggerEngine {
         }
     }
 
-    /// Stop the watcher.
+    /// Stop the watcher gracefully.
+    ///
+    /// Removes all inotify watches (which unblocks any pending `read_events` call)
+    /// and notifies the event loop to exit. The caller should then `.await` the
+    /// `run()` future — it will return `Ok(())` after the current iteration
+    /// completes.
+    ///
+    /// If `shutdown()` is not called, `Drop` on the engine will still close the
+    /// inotify fd as a fallback, causing `run()` to return an error.
     pub fn shutdown(&mut self) {
-        // Inotify fd is closed when the engine is dropped.
-        // This method is a placeholder for graceful shutdown signalling.
-        eprintln!("[trigger-engine] shutdown requested");
+        // Remove all watches — this unblocks any blocking read_events() call
+        // with an empty result or error, allowing the loop to check for shutdown.
+        for wd in self.watches.values() {
+            let _ = self.watcher.watches().remove(wd.clone());
+        }
+        self.watches.clear();
+        // Signal the event loop to break cleanly.
+        self.shutdown_notify.notify_one();
     }
 }
 
@@ -1113,6 +1136,20 @@ mod tests {
 
         assert!(!pattern_match, "pattern *.rs should not match main.go");
         assert!(event_match, "write event should pass if pattern matched");
+    }
+
+    // ── graceful shutdown ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_shutdown_before_run_exits_cleanly() {
+        let mut engine = TriggerEngine::new(vec![], 500, None, None, None, None);
+
+        engine.shutdown();
+
+        tokio::time::timeout(Duration::from_secs(1), engine.run())
+            .await
+            .expect("run should observe a shutdown requested before it starts")
+            .expect("shutdown should exit the watcher loop cleanly");
     }
 
     // ── max_concurrent semaphore enforcement ────────────────────────────
