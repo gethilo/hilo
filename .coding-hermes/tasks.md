@@ -1087,6 +1087,20 @@ All 4 subcommands tested: understand ("dependency graph" → 3-tier), search ("r
 
 ---
 
+## [ ] DOC-001 — Fix stale repo URL in specs/warpfs-spec.md
+- **Priority:** low
+- **File:** `specs/warpfs-spec.md:5`
+- **Issue:** Spec references old org `totalwindupflightsystems/hilo`. Actual repo is `gethilo/hilo`.
+- **Fix:** Replace `totalwindupflightsystems/hilo` with `gethilo/hilo` in the spec.
+
+## [ ] TEST-004 — hilo-permissions: add integration tests 
+- **Priority:** low
+- **File:** `hilo-permissions/` (688 lines, used only by hilo-fuse)
+- **Issue:** 0 integration test files in `tests/`. 24 unit tests exist in `src/lib.rs` but no integration-level test. Only consumer is hilo-fuse which has its own tests. FUSE is non-critical path.
+- **AC:** 3+ integration tests covering permission rule matching, mode computation, and deny-by-default behavior.
+
+---
+
 ## [ ] NEVER-DONE — Run coding-hermes-never-done 11-point audit
 
 Load coding-hermes-never-done skill. Run ALL 11 checks: spec alignment,
@@ -1094,3 +1108,21 @@ doc coverage, test gaps, package upgrades, pitfall hunt, performance audit,
 endpoint verification, CI/CD health, DuckBrain sync, code quality,
 middle-out wiring. Create a task for EVERY gap found. This task is never
 complete — the audit always finds something.
+
+### Audit Result — 2026-07-19 16:59 (tick)
+
+| Check | Status | Notes |
+|-------|--------|-------|
+| Spec alignment | 1 gap | `warpfs-spec.md` has old repo URL (`totalwindupflightsystems` → `gethilo`) |
+| Doc coverage | PASS | All 18 docs present. README, CONTRIBUTING, CHANGELOG, per-crate API docs |
+| Test gaps | 1 gap | hilo-permissions: 0 integration test files (24 unit tests exist) |
+| Package upgrades | PASS | 0 new vulns. 6 pre-existing (bincode, paste, fuser, git2×3 — no fixes available) |
+| Pitfall hunt | PASS | Zero TODOs/FIXMEs/HACKs/stubs/panics in production code |
+| Performance | PASS | Largest file 1,792 lines. No statically-detectable N+1 or allocation issues |
+| Endpoint/CLI | PASS | All 9 subcommands present. Binary runs. CLI tool — no HTTP endpoints |
+| CI/CD health | PASS | Latest run success (716c9f7). All 5 recent runs green |
+| DuckBrain sync | PASS | 12 entries populated in DB-001 — current |
+| Code quality | PASS | .gitignore comprehensive, fmt/clippy clean, no TODOs, files under 2,000 lines |
+| Middle-out wiring | PASS | main.rs imports all 9 command modules. All subcommands wired |
+
+**Findings:** 2 tasks created (DOC-001, TEST-004). Both low priority. Project in excellent shape — 376+ tests, 0 failures, CI green, docs comprehensive, all CLI paths wired.
