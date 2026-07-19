@@ -1004,7 +1004,7 @@ Implemented token-bucket rate limiter in `hilo-mcp/src/rate_limiter.rs`:
 
 ---
 
-## [ ] IMPL-003 — Structured Logging (tracing) for Daemon Mode
+## [x] IMPL-003 — Structured Logging (tracing) for Daemon Mode
 
 ### Why
 135 `println!`/`eprintln!` calls — fine for CLI, but MCP/FUSE/triggers run as
@@ -1022,6 +1022,27 @@ daemons. No log levels, no structured fields, no JSON output.
 - `hilo-fuse/Cargo.toml`, `hilo-fuse/src/daemon.rs`
 - `hilo-triggers/Cargo.toml`, `hilo-triggers/src/engine.rs`
 
-## [ ] NEVER-DONE — Run 11-point audit next tick
+## [x] NEVER-DONE — Run 11-point audit next tick (completed 2026-07-19 13:29)
 - **Priority:** high
-- **Trigger:** Board needs self-improvement scan. Foreman must load `coding-hermes-never-done` skill and run full 11-point audit on next tick (spec alignment, doc coverage, test gaps, deps, pitfalls, perf, endpoint verification, CI/CD health, DuckBrain sync, code quality, middle-out wiring).
+- **Result:** 4 tasks created. Board was stale (IMPL-003 unchecked). Audit: CI failing (s3 test race), 27 deps outdated, 0 per-crate docs, DuckBrain thin.
+
+## [ ] CI-001 — Fix flaky S3 test `test_append_blob_index_writes_jsonl`
+- **Priority:** high
+- **File:** `hilo-backends/src/s3.rs:456`
+- **Symptom:** CI panics with "EOF while parsing a value, line: 1, column: 0" — Tokio async write not flushed before `read_to_string`. Passes locally.
+- **Fix:** Add explicit `flush` or switch to `std::fs` for test tempdir sync I/O
+
+## [ ] CI-002 — Document 10 crate public APIs in docs/
+- **Priority:** medium
+- **Scope:** `hilo-graph`, `hilo-mcp`, `hilo-fuse`, `hilo-core`, `hilo-backends`, `hilo-metadata`, `hilo-permissions`, `hilo-plugins`, `hilo-triggers`, `hilo-ffi`
+- **Deliverable:** per-crate `docs/<crate>.md` with public API surface, usage examples
+
+## [ ] DEPS-001 — Upgrade 27 outdated dependencies
+- **Priority:** medium
+- **Approach:** `cargo update`, verify `cargo test --workspace`, commit `Cargo.lock`
+- **Note:** 3 `git2` RUSTSEC advisories — no semver-compatible fix (0.19 pinned). Monitor.
+
+## [ ] DB-001 — Populate DuckBrain namespace with project context
+- **Priority:** low
+- **Current:** 1 entry
+- **Needed:** architecture decisions, patterns, pitfalls from past ticks, spec-to-code mapping
