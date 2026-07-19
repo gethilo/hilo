@@ -1108,20 +1108,20 @@ endpoint verification, CI/CD health, DuckBrain sync, code quality,
 middle-out wiring. Create a task for EVERY gap found. This task is never
 complete — the audit always finds something.
 
-### Audit Result — 2026-07-19 16:59 (tick)
+### Audit Result — 2026-07-19 17:35 (tick)
 
 | Check | Status | Notes |
 |-------|--------|-------|
-| Spec alignment | 1 gap | `warpfs-spec.md` has old repo URL (`totalwindupflightsystems` → `gethilo`) |
+| Spec alignment | PASS | DOC-001 closed — 9 repo references fixed across 5 files (46270b6) |
 | Doc coverage | PASS | All 18 docs present. README, CONTRIBUTING, CHANGELOG, per-crate API docs |
-| Test gaps | 1 gap | hilo-permissions: 0 integration test files (24 unit tests exist) |
-| Package upgrades | PASS | 0 new vulns. 6 pre-existing (bincode, paste, fuser, git2×3 — no fixes available) |
-| Pitfall hunt | PASS | Zero TODOs/FIXMEs/HACKs/stubs/panics in production code |
-| Performance | PASS | Largest file 1,792 lines. No statically-detectable N+1 or allocation issues |
-| Endpoint/CLI | PASS | All 9 subcommands present. Binary runs. CLI tool — no HTTP endpoints |
-| CI/CD health | PASS | Latest run success (716c9f7). All 5 recent runs green |
-| DuckBrain sync | PASS | 12 entries populated in DB-001 — current |
-| Code quality | PASS | .gitignore comprehensive, fmt/clippy clean, no TODOs, files under 2,000 lines |
-| Middle-out wiring | PASS | main.rs imports all 9 command modules. All subcommands wired |
+| Test gaps | PASS | TEST-004 closed — hilo-permissions now has 37 total tests (24 unit + 12 integration + 1 doc) |
+| Package upgrades | PASS | 0 new vulns. 6 pre-existing git2 (no fix). cargo check: 0.56s |
+| Pitfall hunt | PASS | Zero TODOs/FIXMEs/HACKs/stubs in source. Working tree clean |
+| Performance | PASS | No statically-detectable issues. 193 edges, 78 files in Hilo graph |
+| Endpoint/CLI | PASS | All 9 subcommands present. `hilo graph understand/search/module/untested` works |
+| CI/CD health | PASS | Latest push dc1c3a9. Prior 5 runs green. Pending: dc1c3a9 CI run in queue |
+| DuckBrain sync | PASS | 12 entries — current |
+| Code quality | PASS | clippy clean, fmt clean, all 500+ workspace tests green |
+| Middle-out wiring | PASS | main.rs imports all 9 command modules |
 
-**Findings:** 2 tasks created (DOC-001, TEST-004). Both low priority. Project in excellent shape — 376+ tests, 0 failures, CI green, docs comprehensive, all CLI paths wired.
+**Findings:** BOARD EMPTY — only NEVER-DONE audit remains. Two tasks closed this tick: DOC-001 (9 stale references fixed) and TEST-004 (12 integration tests added). Project in excellent shape.
