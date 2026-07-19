@@ -1087,17 +1087,16 @@ All 4 subcommands tested: understand ("dependency graph" → 3-tier), search ("r
 
 ---
 
-## [ ] DOC-001 — Fix stale repo URL in specs/warpfs-spec.md
+## [x] DOC-001 — Fix stale repo URL in specs/warpfs-spec.md
 - **Priority:** low
-- **File:** `specs/warpfs-spec.md:5`
-- **Issue:** Spec references old org `totalwindupflightsystems/hilo`. Actual repo is `gethilo/hilo`.
-- **Fix:** Replace `totalwindupflightsystems/hilo` with `gethilo/hilo` in the spec.
+- **Result: COMPLETE — 2026-07-19. Commit: 46270b6**
+- **Scope expanded:** Fixed 9 references across 5 files (not just warpfs-spec.md). README, CONTRIBUTING, docs/getting-started, docs/index also had stale totalwindupflightsystems→gethilo repo URLs.
+- **Files:** specs/warpfs-spec.md, README.md, CONTRIBUTING.md, docs/getting-started.md, docs/index.md
 
-## [ ] TEST-004 — hilo-permissions: add integration tests 
+## [x] TEST-004 — hilo-permissions: add integration tests (COMPLETE 2026-07-19, 86247e0)
 - **Priority:** low
-- **File:** `hilo-permissions/` (688 lines, used only by hilo-fuse)
-- **Issue:** 0 integration test files in `tests/`. 24 unit tests exist in `src/lib.rs` but no integration-level test. Only consumer is hilo-fuse which has its own tests. FUSE is non-critical path.
-- **AC:** 3+ integration tests covering permission rule matching, mode computation, and deny-by-default behavior.
+- **Result:** 12 integration tests in `hilo-permissions/tests/permission_test.rs` covering rule matching, mode computation, deny-by-default, default protections, PermissionError display, and backend rule priority. 37 total tests (24 unit + 12 integration + 1 doc-test). All pass.
+- **Files:** `hilo-permissions/tests/permission_test.rs` (+214 lines)
 
 ---
 
