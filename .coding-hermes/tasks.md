@@ -943,23 +943,24 @@ AC target was 10+ — 15 tests exceed it. Covers registry, WASM loading, host fu
 
 ---
 
-## [ ] IMPL-001 — Graceful Shutdown in hilo-triggers (stub → real)
+## [x] IMPL-001 — Graceful Shutdown in hilo-triggers (stub → real) — COMPLETE 2026-07-19, a8bf05e
 
 ### Why
 `hilo-triggers/src/engine.rs:300` — `shutdown()` prints a message and returns.
 Inotify watcher relies on Drop to close fds. No clean shutdown signalling.
 
-### AC
-- Add `tokio::sync::Notify` channel, wire through TriggerEngine
-- Watcher loop exits cleanly on signal
-- Drop still works as fallback
-
-### Files
-- `hilo-triggers/src/engine.rs`
+### Result
+Implemented via AtomicBool flag (Notify channel approach failed CI — field not found).
+- Added shutdown_flag (Arc<AtomicBool>) to TriggerEngine
+- run() checks flag before each read_events() call
+- shutdown() sets flag + removes all inotify watches
+- Drop still works as safety-net fallback
+- Event loop returns Ok(()) on graceful exit
+- All 8 triggers tests pass
 
 ---
 
-## [ ] INFRA-001 — Docker Compose for Backend Integration Tests
+## [x] INFRA-001 — Docker Compose for Backend Integration Tests (COMPLETE 2026-07-19, 3ad7a9f)
 
 ### Why
 S3 and Git backends have unit tests but **no integration tests can run**
