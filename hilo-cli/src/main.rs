@@ -83,6 +83,14 @@ enum GraphCommand {
     Related(RelatedArgs),
     /// Find all files that transitively depend on a given file (impact analysis).
     Impact(ImpactArgs),
+    /// Multi-resolution harmonic context output for a natural-language task.
+    Understand(UnderstandArgs),
+    /// Deterministic semantic code search (TF-IDF + BM25).
+    Search(SearchArgs),
+    /// Per-module statistics and test coverage.
+    Module(ModuleArgs),
+    /// List source files with no test coverage.
+    Untested,
     /// List all rules defined in the manifest.
     RuleList,
     /// Execute a named rule query against the dependency graph.
@@ -149,6 +157,30 @@ struct RuleCheckArgs {
 }
 
 #[derive(clap::Args)]
+struct UnderstandArgs {
+    /// Natural-language description of what you need to understand.
+    task: String,
+    /// Token budget override (default: 6000).
+    #[arg(long)]
+    budget: Option<usize>,
+}
+
+#[derive(clap::Args)]
+struct SearchArgs {
+    /// Semantic search query.
+    query: String,
+    /// Max results to return (default: 20).
+    #[arg(long)]
+    limit: Option<usize>,
+}
+
+#[derive(clap::Args)]
+struct ModuleArgs {
+    /// Directory prefix for the module (e.g. "hilo-graph/src").
+    prefix: String,
+}
+
+#[derive(clap::Args)]
 struct ServeArgs {
     /// Run as an MCP server.
     #[arg(long)]
@@ -212,6 +244,12 @@ fn main() {
             args.format.as_deref(),
             args.external,
         ),
+        Commands::Graph(GraphCommand::Understand(args)) => {
+            graph::run_understand(&args.task, args.budget)
+        }
+        Commands::Graph(GraphCommand::Search(args)) => graph::run_search(&args.query, args.limit),
+        Commands::Graph(GraphCommand::Module(args)) => graph::run_module(&args.prefix),
+        Commands::Graph(GraphCommand::Untested) => graph::run_untested(),
         Commands::Graph(GraphCommand::RuleList) => graph::run_rule_list(),
         Commands::Graph(GraphCommand::RuleCheck(args)) => graph::run_rule_check(&args.name),
         Commands::Serve(args) => serve::run(args.mcp),

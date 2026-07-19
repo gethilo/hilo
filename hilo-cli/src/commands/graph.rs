@@ -818,6 +818,137 @@ pub fn run_rule_list() -> Result<()> {
     Ok(())
 }
 
+/// `hilo graph understand <task>` — multi-resolution harmonic context output.
+///
+/// Runs the signal engine against the graph and prints the 3-tier harmonic
+/// output (MAP → SIGNATURES → DETAIL). See `hilo-graph/src/signal.rs`.
+pub fn run_understand(task: &str, budget: Option<usize>) -> Result<()> {
+    let cwd = std::env::current_dir().context("failed to determine the current directory")?;
+    let graph_db = cwd.join(".vfs").join("graph").join("graph.db");
+
+    if !graph_db.exists() {
+        anyhow::bail!("No graph data. Run `hilo graph warm` first.");
+    }
+
+    let graph_db_str = graph_db.to_str().unwrap_or(".vfs/graph/graph.db");
+    let graph = GraphDB::open(graph_db_str).context("failed to open DuckDB graph database")?;
+
+    let mut opts = hilo_graph::signal::SignalOpts::default();
+    if let Some(b) = budget {
+        opts.token_budget = b;
+    }
+
+    let result = hilo_graph::signal::understand(&graph, task, &opts)
+        .context("failed to run signal engine")?;
+
+    println!("{}", result.text);
+    Ok(())
+}
+
+/// `hilo graph search <query>` — deterministic semantic code search.
+///
+/// Uses TF-IDF + BM25 + Reciprocal Rank Fusion over all graph nodes.
+/// Zero external APIs, fully deterministic. See `hilo-graph/src/semantic.rs`.
+pub fn run_search(query: &str, limit: Option<usize>) -> Result<()> {
+    let cwd = std::env::current_dir().context("failed to determine the current directory")?;
+    let graph_db = cwd.join(".vfs").join("graph").join("graph.db");
+
+    if !graph_db.exists() {
+        anyhow::bail!("No graph data. Run `hilo graph warm` first.");
+    }
+
+    let graph_db_str = graph_db.to_str().unwrap_or(".vfs/graph/graph.db");
+    let graph = GraphDB::open(graph_db_str).context("failed to open DuckDB graph database")?;
+
+    let mut opts = hilo_graph::semantic::SearchOpts::default();
+    if let Some(l) = limit {
+        opts.limit = l;
+    }
+
+    let results = hilo_graph::semantic::search(&graph, query, &opts)
+        .context("failed to run semantic search")?;
+
+    if results.is_empty() {
+        println!("No results found for '{}'.", query);
+        return Ok(());
+    }
+
+    for r in &results {
+        println!("{:.4}  {}  [{}]", r.score, r.file_path, r.provenance);
+        if !r.symbols.is_empty() {
+            println!("         symbols: {}", r.symbols.join(", "));
+        }
+    }
+
+    Ok(())
+}
+
+/// `hilo graph module <prefix>` — per-module statistics.
+///
+/// Returns file list, edge count, and test coverage for files under a
+/// directory prefix (e.g. "hilo-graph/src"). See `GraphDB::module_files`.
+pub fn run_module(module_name: &str) -> Result<()> {
+    let cwd = std::env::current_dir().context("failed to determine the current directory")?;
+    let graph_db = cwd.join(".vfs").join("graph").join("graph.db");
+
+    if !graph_db.exists() {
+        anyhow::bail!("No graph data. Run `hilo graph warm` first.");
+    }
+
+    let graph_db_str = graph_db.to_str().unwrap_or(".vfs/graph/graph.db");
+    let graph = GraphDB::open(graph_db_str).context("failed to open DuckDB graph database")?;
+
+    let stats = graph
+        .module_files(module_name)
+        .context("failed to query module stats")?;
+
+    println!("Module: {}", stats.module);
+    println!("Files:  {}", stats.files.len());
+    println!("Edges:  {}", stats.edges_count);
+    println!("Tests:  {:.1}%", stats.test_coverage_pct);
+
+    if !stats.files.is_empty() {
+        println!("── Files ──");
+        for f in &stats.files {
+            println!("  {f}");
+        }
+    }
+
+    Ok(())
+}
+
+/// `hilo graph untested` — list source files with no test coverage.
+///
+/// Queries all files that have `imports` edges but no `tested_by` edges.
+/// See `GraphDB::untested_files`.
+pub fn run_untested() -> Result<()> {
+    let cwd = std::env::current_dir().context("failed to determine the current directory")?;
+    let graph_db = cwd.join(".vfs").join("graph").join("graph.db");
+
+    if !graph_db.exists() {
+        anyhow::bail!("No graph data. Run `hilo graph warm` first.");
+    }
+
+    let graph_db_str = graph_db.to_str().unwrap_or(".vfs/graph/graph.db");
+    let graph = GraphDB::open(graph_db_str).context("failed to open DuckDB graph database")?;
+
+    let files = graph
+        .untested_files()
+        .context("failed to query untested files")?;
+
+    if files.is_empty() {
+        println!("All files have test coverage.");
+        return Ok(());
+    }
+
+    println!("{} untested file(s):", files.len());
+    for f in &files {
+        println!("  {f}");
+    }
+
+    Ok(())
+}
+
 /// `hilo graph rule-check <name>` — execute a named rule against the graph.
 pub fn run_rule_check(name: &str) -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
