@@ -1033,10 +1033,11 @@ daemons. No log levels, no structured fields, no JSON output.
 - **Fix:** Added `file.flush().await?` after `file.write_all()` in `append_blob_index` (line 303). Tokio's `write_all` doesn't guarantee disk persistence; explicit flush ensures data is on disk before the async file handle is dropped, eliminating the race between write completion and subsequent reads.
 - **Result: COMPLETE — 2026-07-19. Commit: 4289883. 1-line fix, tests pass locally (both append tests), cargo check/clippy/fmt clean.**
 
-## [ ] CI-002 — Document 10 crate public APIs in docs/
+## [x] CI-002 — Document 10 crate public APIs in docs/
 - **Priority:** medium
-- **Scope:** `hilo-graph`, `hilo-mcp`, `hilo-fuse`, `hilo-core`, `hilo-backends`, `hilo-metadata`, `hilo-permissions`, `hilo-plugins`, `hilo-triggers`, `hilo-ffi`
+- **Scope:** `hilo-graph`, `hilo-mcp`, `hilo-core`, `hilo-backends`, `hilo-metadata`, `hilo-permissions`, `hilo-plugins`, `hilo-triggers`, `hilo-fuse`, `hilo-cli`
 - **Deliverable:** per-crate `docs/<crate>.md` with public API surface, usage examples
+- **Result:** COMPLETE — 2026-07-19. 10 docs (+735 lines), index.md updated with crate API reference section.
 
 ## [ ] DEPS-001 — Upgrade 27 outdated dependencies
 - **Priority:** medium

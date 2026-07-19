@@ -13,6 +13,19 @@ without reading files.
 - **[MCP Tools](mcp-tools.md)** — agent integration via JSON-RPC
 - **[Graph Engine](graph-engine.md)** — AST parsing, DuckDB, impact analysis
 
+## Crate API Reference
+
+- **[hilo-graph](hilo-graph.md)** — graph engine: AST parsing, DuckDB queries, impact, signal, semantic search
+- **[hilo-mcp](hilo-mcp.md)** — MCP server: 15 tools over stdio JSON-RPC
+- **[hilo-core](hilo-core.md)** — manifest, config, workspace, sandbox
+- **[hilo-metadata](hilo-metadata.md)** — xattr I/O, JSONL inventory, shared `Edge` type
+- **[hilo-backends](hilo-backends.md)** — S3, Git, and local storage backends
+- **[hilo-fuse](hilo-fuse.md)** — kernel-level FUSE virtual filesystem
+- **[hilo-triggers](hilo-triggers.md)** — inotify event engine: parse-and-diff, upload-to-backend
+- **[hilo-plugins](hilo-plugins.md)** — Extism WASM plugin runtime
+- **[hilo-permissions](hilo-permissions.md)** — glob-based permission engine with mode bits
+- **[hilo-cli](hilo-cli.md)** — command-line interface: all subcommands and flags
+
 ## Quick Links
 
 - [GitHub Repository](https://github.com/totalwindupflightsystems/hilo)
