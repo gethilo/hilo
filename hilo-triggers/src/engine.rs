@@ -9,9 +9,10 @@ use inotify::{EventMask, Inotify, WatchDescriptor, WatchMask};
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{Notify, Semaphore};
+use tokio::sync::Semaphore;
 use tokio::time::timeout;
 
 pub struct TriggerEngine {
@@ -41,8 +42,8 @@ pub struct TriggerEngine {
     s3_client: Option<hilo_backends::S3Client>,
     /// S3 bucket name used by the `upload-to-backend` builtin.
     s3_bucket: Option<String>,
-    /// Channel to signal graceful shutdown to the event loop.
-    shutdown_signal: Notify,
+    /// Flag to signal graceful shutdown. Set by `shutdown()`, checked by `run()`.
+    shutdown_flag: Arc<AtomicBool>,
 }
 
 impl TriggerEngine {
@@ -81,7 +82,7 @@ impl TriggerEngine {
             project_root,
             s3_client,
             s3_bucket,
-            shutdown_signal: Notify::new(),
+            shutdown_flag: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -113,7 +114,7 @@ impl TriggerEngine {
         Ok(count)
     }
 
-    /// Run the event loop. Blocks until cancelled.
+    /// Run the event loop. Blocks until shutdown() is called.
     ///
     /// For each inotify event:
     /// 1. Convert mask to EventType
@@ -125,12 +126,21 @@ impl TriggerEngine {
         let mut buffer = [0u8; 4096];
 
         loop {
+            // Check shutdown flag before blocking on read_events.
+            if self.shutdown_flag.load(Ordering::Relaxed) {
+                break Ok(());
+            }
+
             // Read raw events (blocking — inotify fd is in blocking mode).
             let events = match self.watcher.read_events(&mut buffer) {
                 Ok(events) => events,
                 Err(e) => {
-                    // If all watches have been removed (by shutdown()), this is
-                    // a graceful exit — return Ok. Otherwise propagate the error.
+                    // If shutdown was requested, this is a graceful exit.
+                    if self.shutdown_flag.load(Ordering::Relaxed) {
+                        break Ok(());
+                    }
+                    // If all watches have been removed (by shutdown()), this
+                    // is also a graceful exit.
                     if self.watches.is_empty() {
                         return Ok(());
                     }
@@ -306,22 +316,25 @@ impl TriggerEngine {
 
     /// Stop the watcher gracefully.
     ///
-    /// Removes all inotify watches (which unblocks any pending `read_events` call)
-    /// and notifies the event loop to exit. The caller should then `.await` the
-    /// `run()` future — it will return `Ok(())` after the current iteration
-    /// completes.
+    /// Stop the watcher gracefully.
     ///
-    /// If `shutdown()` is not called, `Drop` on the engine will still close the
-    /// inotify fd as a fallback, causing `run()` to return an error.
+    /// Sets the shutdown flag (checked by the event loop before each
+    /// `read_events` call) and removes all inotify watches to unblock
+    /// any in-progress blocking read. The event loop will exit on the
+    /// next iteration.
+    ///
+    /// The inotify fd is also closed when the engine is dropped (Drop
+    /// still works as a safety net).
     pub fn shutdown(&mut self) {
-        // Remove all watches — this unblocks any blocking read_events() call
-        // with an empty result or error, allowing the loop to check for shutdown.
+        self.shutdown_flag.store(true, Ordering::Relaxed);
+
+        // Remove all watches to unblock any in-progress read_events().
         for wd in self.watches.values() {
             let _ = self.watcher.watches().remove(wd.clone());
         }
         self.watches.clear();
-        // Signal the event loop to break cleanly.
-        self.shutdown_notify.notify_one();
+
+        eprintln!("[trigger-engine] shutdown requested");
     }
 }
 
