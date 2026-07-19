@@ -2,9 +2,9 @@
 
 **Status:** Spec Phase  
 **Date:** June 2026  
-**Repo:** [totalwindupflightsystems/hilo](https://github.com/totalwindupflightsystems/hilo)  
+**Repo:** [gethilo/hilo](https://github.com/gethilo/hilo)  
 **Language:** Pure Rust  
-**Design Reference:** [Hermes VFS Design v2](https://totalwindupflightsystems.github.io/reports/hermes-vfs-design.html)
+**Design Reference:** [Hermes VFS Design v2](https://gethilo.github.io/hilo/hermes-vfs-design.html)
 
 ---
 
@@ -643,7 +643,7 @@ namespace hilo {
 
 | Language | Output | Usage |
 |---|---|---|
-| Go | `hilo-go/vfs/` | `import "github.com/totalwindupflightsystems/hilo-go/vfs"` |
+| Go | `hilo-go/vfs/` | `import "github.com/gethilo/hilo-go/vfs"` |
 | Python | `hilo/` wheel | `import hilo` |
 | Kotlin | `hilo-kotlin/` | JVM/Swift interop |
 | Swift | `Hilo/` | Native Apple platforms |
@@ -1030,4 +1030,4 @@ assert!(tmp.path().join(".vfs/manifest.yaml").exists());
 ---
 
 *Hilo — Implementation Specification v2 — June 2026*  
-*totalwindupflightsystems/hilo*
+*gethilo/hilo*

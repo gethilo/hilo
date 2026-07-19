@@ -3,7 +3,7 @@
 ## Development Setup
 
 ```bash
-git clone https://github.com/totalwindupflightsystems/hilo.git
+git clone https://github.com/gethilo/hilo.git
 cd hilo
 
 # Build
@@ -50,7 +50,7 @@ Crate name matches Cargo.toml `name` field: `hilo_core`, `hilo_graph`,
 
 ## Pre-commit Checks
 
-Hilo uses [GitReins](https://github.com/totalwindupflightsystems/gitreins)
+Hilo uses [GitReins](https://github.com/gethilo/gitreins)
 for pre-commit enforcement:
 
 - **Tier 1** (blocks commit): secrets scan, `cargo test`, LSP diagnostics,

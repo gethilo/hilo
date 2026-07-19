@@ -28,7 +28,7 @@ without reading files.
 
 ## Quick Links
 
-- [GitHub Repository](https://github.com/totalwindupflightsystems/hilo)
+- [GitHub Repository](https://github.com/gethilo/hilo)
 - [Design Document](https://totalwindupflightsystems.github.io/reports/hermes-vfs-design.html)
 - [Value Test Report](https://totalwindupflightsystems.github.io/reports/hilo-value-test.html)
 

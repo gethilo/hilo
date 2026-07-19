@@ -10,7 +10,7 @@ test coverage, blast radius — without burning context window on file reads.
 ## Install
 
 ```bash
-git clone https://github.com/totalwindupflightsystems/hilo.git
+git clone https://github.com/gethilo/hilo.git
 cd hilo && cargo build --release
 ./target/release/hilo-cli --help
 ```
