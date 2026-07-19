@@ -786,6 +786,9 @@ pub struct Performance {
     pub duckdb: DuckDbPerf,
     #[serde(default)]
     pub triggers: TriggerPerf,
+    /// Max requests per second for the MCP server (0 = unlimited).
+    #[serde(default)]
+    pub rate_limit_rps: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

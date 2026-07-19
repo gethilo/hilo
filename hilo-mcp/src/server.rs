@@ -6,22 +6,48 @@
 use std::io::{BufRead, BufReader, Write};
 
 use crate::error::{McpError, McpResult};
+use crate::rate_limiter::RateLimiter;
 use crate::tools;
 
-/// Run the MCP server on stdin/stdout.
+/// Run the MCP server on stdin/stdout with optional rate limiting.
 ///
+/// `rate_limit_rps` is the maximum requests per second. 0 disables rate limiting.
 /// Blocks until stdin reaches EOF (client disconnects).
-pub fn run() -> McpResult<()> {
+pub fn run(rate_limit_rps: u32) -> McpResult<()> {
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     let reader = BufReader::new(stdin.lock());
     let mut writer = stdout.lock();
+    let mut limiter = RateLimiter::new(rate_limit_rps);
 
     for line_result in reader.lines() {
         let line = line_result?;
 
         // Skip blank lines between requests.
         if line.trim().is_empty() {
+            continue;
+        }
+
+        // Rate-limit check before processing.
+        if !limiter.check() {
+            let retry_secs = limiter.retry_after_secs().ceil() as u64;
+            let response = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": null,
+                "error": {
+                    "code": -32000,
+                    "message": format!(
+                        "Rate limit exceeded. Retry after {} seconds.",
+                        retry_secs
+                    ),
+                    "data": {
+                        "retry_after_seconds": retry_secs
+                    }
+                }
+            });
+            let response_line = serde_json::to_string(&response)? + "\n";
+            writer.write_all(response_line.as_bytes())?;
+            writer.flush()?;
             continue;
         }
 
