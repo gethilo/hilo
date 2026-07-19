@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
+use tracing::info;
 
 pub struct TriggerEngine {
     watcher: Inotify,
@@ -231,7 +232,7 @@ impl TriggerEngine {
                                     .await;
                                     match result {
                                         Ok(Ok(())) => {
-                                            eprintln!(
+                                            info!(
                                                 "[trigger] upload-to-backend: {} uploaded successfully",
                                                 file_path_str
                                             );
@@ -244,7 +245,7 @@ impl TriggerEngine {
                                             }
                                         }
                                         Ok(Err(e)) => {
-                                            eprintln!(
+                                            info!(
                                                 "[trigger] upload-to-backend: {} failed: {}",
                                                 file_path_str, e
                                             );
@@ -257,7 +258,7 @@ impl TriggerEngine {
                                             }
                                         }
                                         Err(_) => {
-                                            eprintln!(
+                                            info!(
                                                 "[trigger] upload-to-backend: {} timed out after {:?}",
                                                 file_path_str, to
                                             );
@@ -272,7 +273,7 @@ impl TriggerEngine {
                                     }
                                 }
                                 _ => {
-                                    eprintln!(
+                                    info!(
                                         "[trigger] upload-to-backend: S3 client or bucket not configured for {}",
                                         file_path_str
                                     );
@@ -291,7 +292,7 @@ impl TriggerEngine {
                         let permit = match self.semaphore.clone().try_acquire_owned() {
                             Ok(p) => p,
                             Err(_) => {
-                                eprintln!(
+                                info!(
                                     "[trigger] dropped '{}' for {} (max_concurrent={} reached)",
                                     trigger.name,
                                     path.display(),
@@ -334,7 +335,7 @@ impl TriggerEngine {
         }
         self.watches.clear();
 
-        eprintln!("[trigger-engine] shutdown requested");
+        info!("[trigger-engine] shutdown requested");
     }
 }
 
@@ -399,7 +400,7 @@ fn matches_pattern(path: &Path, pattern: &str) -> bool {
 /// 8. Set user.vfs.impact xattr on each impacted file
 /// 9. Update AST cache with new parse result
 ///
-/// Errors are logged via `eprintln!` — never panics.
+/// Errors are logged via `tracing::error!` — never panics.
 fn parse_and_diff_sync(
     cfg: &TriggerConfig,
     event: &FileEvent,
@@ -411,7 +412,7 @@ fn parse_and_diff_sync(
     let content = match std::fs::read_to_string(&event.path) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!(
+            info!(
                 "[trigger] parse-and-diff: cannot read {}: {e}",
                 event.path.display()
             );
@@ -428,7 +429,7 @@ fn parse_and_diff_sync(
     let lang = match hilo_graph::Language::from_extension(ext) {
         Some(l) => l,
         None => {
-            eprintln!("[trigger] parse-and-diff: unsupported extension .{ext}");
+            info!("[trigger] parse-and-diff: unsupported extension .{ext}");
             return;
         }
     };
@@ -437,7 +438,7 @@ fn parse_and_diff_sync(
     let mut parser = match hilo_graph::Parser::for_language(lang) {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("[trigger] parse-and-diff: parser init failed: {e}");
+            info!("[trigger] parse-and-diff: parser init failed: {e}");
             return;
         }
     };
@@ -445,7 +446,7 @@ fn parse_and_diff_sync(
     let edges = match parser.parse_imports(&file_path_str, &content) {
         Ok(e) => e,
         Err(e) => {
-            eprintln!("[trigger] parse-and-diff: parse failed: {e}");
+            info!("[trigger] parse-and-diff: parse failed: {e}");
             return;
         }
     };
@@ -468,7 +469,7 @@ fn parse_and_diff_sync(
         if let Some(root) = project_root {
             let edges_path = root.join(".vfs/graph/edges.jsonl");
             if let Err(e) = hilo_metadata::inventory::append_edges(&edges_path, &new_edges) {
-                eprintln!("[trigger] parse-and-diff: failed to append edges: {e}");
+                info!("[trigger] parse-and-diff: failed to append edges: {e}");
             }
         }
     }
@@ -481,7 +482,7 @@ fn parse_and_diff_sync(
     let iso_ts = unix_to_iso(ts);
     let last_mod_key = vfs_xattr_name("last_modified");
     if let Err(e) = xattr::set(&event.path, &last_mod_key, iso_ts.as_bytes()) {
-        eprintln!("[trigger] parse-and-diff: failed to set last_modified xattr: {e}");
+        info!("[trigger] parse-and-diff: failed to set last_modified xattr: {e}");
     }
 
     // 7. Impact computation (best-effort).
@@ -495,20 +496,20 @@ fn parse_and_diff_sync(
                     let imp_path = Path::new(&f.path);
                     let val = format!("{} (depth {})", f.relation, f.depth);
                     if let Err(e) = xattr::set(imp_path, &impact_key, val.as_bytes()) {
-                        eprintln!(
+                        info!(
                             "[trigger] parse-and-diff: failed to set impact xattr on {}: {e}",
                             f.path
                         );
                     }
                 }
-                eprintln!(
+                info!(
                     "[trigger] parse-and-diff: {} impacted files for {}",
                     impacted.len(),
                     file_path_str
                 );
             }
             Err(e) => {
-                eprintln!("[trigger] parse-and-diff: impact computation failed: {e}");
+                info!("[trigger] parse-and-diff: impact computation failed: {e}");
             }
         }
     }
@@ -516,7 +517,7 @@ fn parse_and_diff_sync(
     // 9. Update AST cache.
     ast_cache.insert(cache_key, (content, edges.clone()));
 
-    eprintln!(
+    info!(
         "[trigger] parse-and-diff: {} processed — {} edges ({} new)",
         file_path_str,
         edges.len(),
@@ -580,19 +581,19 @@ async fn upload_to_backend(
     let hash_key = vfs_xattr_name("hash");
     let status_key = vfs_xattr_name("cache_status");
     if let Err(e) = xattr::set(&event.path, &backend_key, b"s3") {
-        eprintln!(
+        info!(
             "[trigger] upload-to-backend: failed to set backend xattr on {}: {}",
             file_path_str, e
         );
     }
     if let Err(e) = xattr::set(&event.path, &hash_key, hash.as_bytes()) {
-        eprintln!(
+        info!(
             "[trigger] upload-to-backend: failed to set hash xattr on {}: {}",
             file_path_str, e
         );
     }
     if let Err(e) = xattr::set(&event.path, &status_key, b"synced") {
-        eprintln!(
+        info!(
             "[trigger] upload-to-backend: failed to set cache_status xattr on {}: {}",
             file_path_str, e
         );
@@ -608,7 +609,7 @@ async fn upload_to_backend(
 /// - Command triggers: run shell command with `{{ .FilePath }}`, `{{ .ModulePath }}` substitution.
 ///
 /// Returns on timeout via `tokio::time::timeout`.
-/// Errors are logged with `eprintln!`, never panic.
+/// Errors are logged with `tracing::error!`, never panic.
 async fn execute_trigger(
     cfg: &TriggerConfig,
     event: &FileEvent,
@@ -619,7 +620,7 @@ async fn execute_trigger(
     // parse-and-diff is dispatched synchronously from run() (line ~180)
     // and never reaches this function.
     if let Some(builtin) = &cfg.builtin {
-        eprintln!(
+        info!(
             "[trigger] builtin '{}' fired for '{}' ({})",
             builtin,
             event.path.display(),
@@ -629,16 +630,14 @@ async fn execute_trigger(
         match builtin.as_str() {
             "parse-and-diff" => {
                 // Should never reach here — handled synchronously in run().
-                eprintln!("[trigger] parse-and-diff reached execute_trigger (should not happen)");
+                info!("[trigger] parse-and-diff reached execute_trigger (should not happen)");
             }
             "upload-to-backend" => {
                 // Should never reach here — handled synchronously in run().
-                eprintln!(
-                    "[trigger] upload-to-backend reached execute_trigger (should not happen)"
-                );
+                info!("[trigger] upload-to-backend reached execute_trigger (should not happen)");
             }
             _ => {
-                eprintln!("[trigger] unknown builtin '{}'", builtin);
+                info!("[trigger] unknown builtin '{}'", builtin);
             }
         }
         return;
@@ -668,7 +667,7 @@ async fn execute_trigger(
             }
         }
 
-        eprintln!("[trigger] '{}' executing: {}", cfg.name, cmd);
+        info!("[trigger] '{}' executing: {}", cfg.name, cmd);
 
         match timeout(timeout_dur, async {
             tokio::process::Command::new("sh")
@@ -691,7 +690,7 @@ async fn execute_trigger(
                     } else {
                         stdout_trim.to_string()
                     };
-                    eprintln!("[trigger] '{}' stdout: {}", cfg.name, log);
+                    info!("[trigger] '{}' stdout: {}", cfg.name, log);
                 }
                 if !stderr_trim.is_empty() {
                     let log = if stderr_trim.len() > 1024 {
@@ -699,11 +698,11 @@ async fn execute_trigger(
                     } else {
                         stderr_trim.to_string()
                     };
-                    eprintln!("[trigger] '{}' stderr: {}", cfg.name, log);
+                    info!("[trigger] '{}' stderr: {}", cfg.name, log);
                 }
 
                 if !output.status.success() {
-                    eprintln!(
+                    info!(
                         "[trigger] '{}' exited with status {}",
                         cfg.name, output.status
                     );
@@ -717,13 +716,13 @@ async fn execute_trigger(
                 }
             }
             Ok(Err(e)) => {
-                eprintln!("[trigger] '{}' command failed: {}", cfg.name, e);
+                info!("[trigger] '{}' command failed: {}", cfg.name, e);
                 if let Some(on_failure) = &cfg.on_failure {
                     log_trigger_action(on_failure, &event.path, event.timestamp);
                 }
             }
             Err(_) => {
-                eprintln!("[trigger] '{}' timed out after {:?}", cfg.name, timeout_dur);
+                info!("[trigger] '{}' timed out after {:?}", cfg.name, timeout_dur);
                 if let Some(on_failure) = &cfg.on_failure {
                     log_trigger_action(on_failure, &event.path, event.timestamp);
                 }
@@ -733,7 +732,7 @@ async fn execute_trigger(
     }
 
     // No command or builtin configured.
-    eprintln!(
+    info!(
         "[trigger] '{}' has no command or builtin — nothing to execute",
         cfg.name
     );
@@ -743,7 +742,7 @@ async fn execute_trigger(
 ///
 /// For `SetXattr`, actually calls `xattr::set()` with `user.vfs.` prefix.
 /// Template variables `{{ .FilePath }}` and `{{ .Timestamp }}` are expanded.
-/// Errors are logged via `eprintln!` — trigger actions are best-effort.
+/// Errors are logged via `tracing::error!` — trigger actions are best-effort.
 fn log_trigger_action(action: &TriggerAction, path: &Path, timestamp: u64) {
     match action {
         TriggerAction::SetXattr {
@@ -761,7 +760,7 @@ fn log_trigger_action(action: &TriggerAction, path: &Path, timestamp: u64) {
             let full_key = vfs_xattr_name(key);
             match xattr::set(path, &full_key, value.as_bytes()) {
                 Ok(()) => {
-                    eprintln!(
+                    info!(
                         "[trigger-action] setxattr {}={} on {}",
                         full_key,
                         value,
@@ -769,7 +768,7 @@ fn log_trigger_action(action: &TriggerAction, path: &Path, timestamp: u64) {
                     );
                 }
                 Err(e) => {
-                    eprintln!(
+                    info!(
                         "[trigger-action] setxattr {} failed on {}: {}",
                         full_key,
                         path.display(),
@@ -779,10 +778,10 @@ fn log_trigger_action(action: &TriggerAction, path: &Path, timestamp: u64) {
             }
         }
         TriggerAction::Warn => {
-            eprintln!("[trigger-action] warn for {}", path.display());
+            info!("[trigger-action] warn for {}", path.display());
         }
         TriggerAction::Error => {
-            eprintln!("[trigger-action] error for {}", path.display());
+            info!("[trigger-action] error for {}", path.display());
         }
     }
 }

@@ -5,6 +5,8 @@
 
 use std::io::{BufRead, BufReader, Write};
 
+use tracing::{debug, info, warn};
+
 use crate::error::{McpError, McpResult};
 use crate::rate_limiter::RateLimiter;
 use crate::tools;
@@ -20,6 +22,8 @@ pub fn run(rate_limit_rps: u32) -> McpResult<()> {
     let mut writer = stdout.lock();
     let mut limiter = RateLimiter::new(rate_limit_rps);
 
+    info!("MCP server started (rate_limit_rps={rate_limit_rps})");
+
     for line_result in reader.lines() {
         let line = line_result?;
 
@@ -31,6 +35,7 @@ pub fn run(rate_limit_rps: u32) -> McpResult<()> {
         // Rate-limit check before processing.
         if !limiter.check() {
             let retry_secs = limiter.retry_after_secs().ceil() as u64;
+            warn!("rate limit exceeded, retry after {retry_secs}s");
             let response = serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": null,
@@ -63,6 +68,7 @@ pub fn run(rate_limit_rps: u32) -> McpResult<()> {
         }
     }
 
+    info!("MCP server stopped");
     Ok(())
 }
 
@@ -108,6 +114,7 @@ pub fn handle_request(line: &str) -> McpResult<Option<serde_json::Value>> {
     // `inner` is Ok(value) for successful handler results, Err(e) for
     // handler failures (which become -32603 errors).  The unknown-method
     // arm diverges early with a -32601 response.
+    debug!("MCP method: {method}");
     let inner: Result<serde_json::Value, McpError> = match method {
         "initialize" => Ok(serde_json::json!({
             "protocolVersion": "2024-11-05",

@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use fuser::MountOption;
+use tracing::info;
 
 use crate::ops::Hilo;
 use crate::FuseConfig;
@@ -22,7 +23,9 @@ pub fn mount(fs: Hilo, config: &FuseConfig) -> anyhow::Result<()> {
         }
     }
 
+    info!("mounting Hilo at {}", config.mount_point.display());
     fuser::mount2(fs, &config.mount_point, &mount_options(config))?;
+    info!("Hilo mounted successfully");
     Ok(())
 }
 
@@ -31,6 +34,7 @@ pub fn mount(fs: Hilo, config: &FuseConfig) -> anyhow::Result<()> {
 /// On Linux this uses the `fusermount -u` helper. If the mount is not active
 /// the call is a silent no-op.
 pub fn unmount(mount_point: &Path) -> anyhow::Result<()> {
+    info!("unmounting Hilo from {}", mount_point.display());
     // Try fusermount first (preferred), fall back to umount.
     let result = std::process::Command::new("fusermount")
         .arg("-u")

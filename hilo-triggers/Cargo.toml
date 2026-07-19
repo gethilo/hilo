@@ -10,6 +10,7 @@ description = "Hilo trigger engine — inotify file watching, debouncing, async 
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
 inotify = "0.10"
+tracing = "0.1"
 tokio = { version = "1", features = ["full"] }
 xattr = "1"
 hilo_graph = { path = "../hilo-graph" }

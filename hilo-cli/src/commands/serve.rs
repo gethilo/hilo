@@ -7,8 +7,10 @@ use anyhow::Result;
 /// Reads `rate_limit_rps` from the manifest's `performance` section.
 /// If no manifest is present or `rate_limit_rps` is unset, rate limiting
 /// is disabled (0 = unlimited).
+/// Logging is JSON-formatted (daemon mode) via tracing.
 pub fn run(mcp: bool) -> Result<()> {
     if mcp {
+        hilo_core::logging::init_logging(true);
         let rate_limit_rps = load_rate_limit_rps();
         hilo_mcp::server::run(rate_limit_rps)?;
         Ok(())

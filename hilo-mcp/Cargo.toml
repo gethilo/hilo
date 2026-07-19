@@ -10,6 +10,7 @@ description = "Hilo MCP server — stdio-based Model Context Protocol server"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
+tracing = "0.1"
 hilo_metadata = { path = "../hilo-metadata" }
 hilo_graph = { path = "../hilo-graph" }
 hilo_core = { path = "../hilo-core" }

@@ -975,20 +975,31 @@ without real infra. No docker-compose.yml, no MinIO/LocalStack, no Makefile.
 
 ---
 
-## [ ] IMPL-002 — Rate Limiting on MCP Server
+## [x] IMPL-002 — Rate Limiting on MCP Server (COMPLETE 2026-07-19, 5a200ad)
 
 ### Why
 `hilo serve --mcp` has zero rate limiting. Rogue agent at 1000 req/s can
 exhaust CPU/memory with no backpressure.
 
-### AC
-- Token bucket rate limiter, configurable via manifest (`rate_limit_rps`)
-- 429 response with `Retry-After` on limit exceeded
-- Unit tests for rate limiter
+### Result
+Implemented token-bucket rate limiter in `hilo-mcp/src/rate_limiter.rs`:
+- `RateLimiter::new(rate_rps)` — configurable capacity, 0 = unlimited
+- `check()` — consumes one token, returns false when bucket empty
+- `retry_after_secs()` — seconds until next token (for Retry-After hints)
+- Wired into `server.rs` run() loop: rejects rate-limited requests with
+  JSON-RPC error -32000 + `retry_after_seconds` in data
+- Configurable via `manifest.yaml` → `performance.rate_limit_rps` (u32)
+- `hilo-cli serve` reads manifest and passes rate to server
+- 7 unit tests: unlimited mode, capacity enforcement, time refill,
+  retry-after calculation, full-bucket state, capacity match
+- `cargo check/clippy/fmt`: clean. Full workspace tests: 0 failures.
 
 ### Files
-- `hilo-mcp/src/rate_limiter.rs` (new)
-- `hilo-mcp/src/server.rs`
+- `hilo-mcp/src/rate_limiter.rs` — NEW (token bucket + 7 tests)
+- `hilo-mcp/src/server.rs` — rate-limit check before handle_request
+- `hilo-mcp/src/lib.rs` — register rate_limiter module
+- `hilo-core/src/manifest.rs` — add rate_limit_rps to Performance
+- `hilo-cli/src/commands/serve.rs` — load rate_limit_rps from manifest
 
 ---
 

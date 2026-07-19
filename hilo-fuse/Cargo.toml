@@ -10,6 +10,7 @@ description = "Hilo FUSE daemon — kernel-level virtual filesystem with permiss
 serde = { version = "1", features = ["derive"] }
 fuser = "0.15"
 anyhow = "1"
+tracing = "0.1"
 tokio = { version = "1", features = ["full"] }
 glob = "0.3"
 libc = "0.2"
