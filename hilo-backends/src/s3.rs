@@ -300,6 +300,7 @@ impl S3Client {
             .open(&index_path)
             .await?;
         file.write_all(line.as_bytes()).await?;
+        file.flush().await?;
 
         Ok(())
     }
