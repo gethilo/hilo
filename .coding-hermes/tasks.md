@@ -1111,46 +1111,27 @@ All 4 subcommands tested: understand ("dependency graph" → 3-tier), search ("r
 - **Result: COMPLETE — 2026-07-20 tick #6. Commit: 0555c72**
 - Upgraded 12 crates (7 targeted + 4 wasm transitive + tokio 1.53.1). cargo check ✓, clippy ✓, fmt ✓, test --no-run ✓ (execution blocked by host resource exhaustion). cargo audit: 6 pre-existing git2 warnings (unchanged).
 
-## [ ] CODE-QUALITY-001 — Fix .vfs/ gitignore to track edges.jsonl
+## [x] CODE-QUALITY-001 — Fix .vfs/ gitignore to track edges.jsonl
 
 ### Why
 `.gitignore` has `/.vfs/` which blocks the entire `.vfs/` directory from git tracking. Per the Hilo skill spec, `edges.jsonl` (442 lines, canonical graph data) must be tracked for cross-machine graph synchronization via post-commit/merge hooks. Only the rebuildable DuckDB cache files should be gitignored.
 
-### What
-Replace `/.vfs/` in `.gitignore` with specific exclusions for the rebuildable cache files only, then `git add -f .vfs/graph/edges.jsonl` to start tracking the canonical graph.
+### Result
+**Status: COMPLETE — 2026-07-20. Commit: 928856d**
 
-### AC
-- `.gitignore` excludes: `.vfs/graph/graph.db`, `.vfs/graph/graph.db.wal`, `.vfs/graph/graph.duckdb`, `.vfs/graph/.last_warm`
-- `.vfs/graph/edges.jsonl` is tracked in git
-- `.vfs/.dirty` remains tracked (cross-machine signal)
-- `git status` shows edges.jsonl as tracked, cache files as gitignored
-- `cargo check --workspace` passes
-
-### Files
-- `.gitignore`
+Replaced `/.vfs/` with specific exclusions: `.vfs/graph/graph.db`, `.vfs/graph/graph.db.wal`, `.vfs/graph/graph.duckdb`, `.vfs/graph/.last_warm`. Tracked `edges.jsonl` (442 lines, +546 lines in commit) and `manifest.yaml` (104 lines). cargo check ✓, guard PASS (secrets, tests full, static_analysis, lsp).
 
 ---
 
-## [ ] DEPS-003 — Upgrade 2 minor zerocopy dependencies
+## [x] DEPS-003 — Upgrade 2 minor zerocopy dependencies
 
 ### Why
 `cargo update --dry-run` shows 2 minor semver-compatible upgrades: zerocopy v0.8.54→v0.8.55, zerocopy-derive v0.8.54→v0.8.55.
 
-### What
-`cargo update`, verify `cargo check --workspace`, commit `Cargo.lock`.
+### Result
+**Status: COMPLETE — 2026-07-20. Commit: 8db7932**
 
-### AC
-- `cargo update` resolves both zerocopy crates
-- `cargo check --workspace` passes
-- `cargo clippy --workspace -- -D warnings` clean
-- `cargo fmt --all` clean
-- 6 pre-existing git2 warnings unchanged (no fix available)
-
-### Files
-- `Cargo.lock`
-
-### Found
-2026-07-20 tick #7 audit
+Upgraded 2 crates. cargo check ✓, clippy ✓, fmt ✓, guard PASS (secrets, tests full, static_analysis, lsp). 6 pre-existing git2 warnings unchanged.
 
 ---
 
@@ -1252,20 +1233,20 @@ complete — the audit always finds something.
 
 **Findings:** 0 tasks created. DEPS-002 completed this tick. Board empty after tick. Productive tick — no escalation needed.
 
-### Audit Result — 2026-07-20 13:50 (tick #7)
+### Audit Result — 2026-07-20 14:28 (tick #8)
 
 | Check | Status | Notes |
 |-------|--------|-------|
-| Spec alignment | PASS | 2 specs present, verified |
+| Spec alignment | PASS | 2 specs present |
 | Doc coverage | PASS | 18 docs (10 per-crate + 8 general) |
-| Test gaps | PASS | All 10 crates compile tests. Execution blocked by host resource exhaustion (INFRA) |
-| Package upgrades | MINOR | 2 zerocopy deps (v0.8.54→v0.8.55). Created DEPS-003 |
-| Pitfall hunt | PASS | Zero TODOs/FIXMEs/HACKs. Zero unreachable!() in source |
-| Performance | PASS | Hilo: 195 edges, 79 files. 2 bench files |
-| Endpoint/CLI | PASS | All 9 subcommands present |
-| CI/CD health | PASS | Latest run (607a965) tests in progress; prior (0555c72) green |
-| DuckBrain sync | PASS | 30+ entries in warpfs namespace |
-| Code quality | MINOR | .vfs/ gitignore blocks edges.jsonl tracking per Hilo spec. Created CODE-QUALITY-001 |
-| Middle-out wiring | PASS | main.rs imports all 9 command modules |
+| Test gaps | PASS | All 10 crates tested (integration + unit). Zero untested. |
+| Package upgrades | PASS | 0 outdated. DEPS-003 completed this tick. 6 pre-existing git2 warnings. |
+| Pitfall hunt | PASS | Zero TODOs/FIXMEs/HACKs/stubs. cargo audit: 6 allowed. |
+| Performance | PASS | 2 bench files (graph_bench, fuse_bench) |
+| Endpoint/CLI | PASS | All 9 subcommands present + working |
+| CI/CD health | PASS | Latest (board update) in_progress. Prior 2 green. |
+| DuckBrain sync | PASS | 45+ entries in warpfs namespace |
+| Code quality | PASS | clippy clean, fmt clean, .gitignore fixed (928856d), git status clean |
+| Middle-out wiring | PASS | main.rs imports all command modules |
 
-**Findings:** 2 tasks created — CODE-QUALITY-001 (.vfs/ gitignore fix) and DEPS-003 (2 zerocopy dep upgrades).
+**Findings:** 0 tasks created. 2 tasks completed this tick: CODE-QUALITY-001 (.vfs/ gitignore fix, 928856d) and DEPS-003 (zerocopy bumps, 8db7932). Productive tick — idle counter reset to 0.
