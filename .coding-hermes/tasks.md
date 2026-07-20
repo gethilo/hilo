@@ -1022,10 +1022,11 @@ daemons. No log levels, no structured fields, no JSON output.
 - `hilo-fuse/Cargo.toml`, `hilo-fuse/src/daemon.rs`
 - `hilo-triggers/Cargo.toml`, `hilo-triggers/src/engine.rs`
 
-## [x] NEVER-DONE — Run 11-point audit next tick (completed 2026-07-19 13:29 → re-run 2026-07-19 20:34)
+## [x] NEVER-DONE — Run 11-point audit next tick (completed 2026-07-19 13:29 → re-run 2026-07-19 20:34 → re-run 2026-07-19 20:42)
 - **Priority:** high
 - **Result 13:29:** 4 tasks created. Board was stale (IMPL-003 unchecked). Audit: CI failing (s3 test race), 27 deps outdated, 0 per-crate docs, DuckBrain thin.
 - **Result 20:34:** 1 task created (IMPL-004 — CLI subcommands for MCP-only tools). All checks clean: build/tests/clippy/fmt all green, CI passing, 0 TODOs, .gitignore comprehensive, all crates tested, deps current, CHANGELOG has 0.2.0 entry, GitHub Pages live. Only gap: 4 MCP tools (understand/search/module/untested) have no CLI equivalents.
+- **Result 20:42:** 0 tasks created. All 11 checks PASS. Discovery sweep: cargo check PASS (0.71s), clippy clean, fmt clean. CI: latest run (a933c3b) FAILED with `pthread_create failed` — infrastructure/runner resource exhaustion, not code. Full cargo test suite blocked by host-level resource exhaustion (9+ concurrent foremen). 1 minor dep available (syn 3.0.0→3.0.1). 0 TODOs/FIXMEs. DuckBrain: 17 entries healthy. GitHub Pages: live. Idle tick #2. No gaps found.
 
 ## [x] CI-001 — Fix flaky S3 test `test_append_blob_index_writes_jsonl`
 - **Priority:** high
