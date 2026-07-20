@@ -1,0 +1,442 @@
+{"from":"warpfs-core/src/workspace.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-core/src/workspace.rs","to":"pkg:serde","rel":"imports"}
+{"from":"warpfs-core/src/workspace.rs","to":"pkg:thiserror","rel":"imports"}
+{"from":"warpfs-core/src/manifest.rs","to":"pkg:serde","rel":"imports"}
+{"from":"warpfs-core/src/manifest.rs","to":"pkg:thiserror","rel":"imports"}
+{"from":"warpfs-core/src/virtual_dir.rs","to":"pkg:serde","rel":"imports"}
+{"from":"warpfs-core/src/virtual_dir.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-core/src/worktree.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-core/src/worktree.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-core/src/worktree.rs","to":"pkg:thiserror","rel":"imports"}
+{"from":"warpfs-core/src/worktree.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-core/src/worktree.rs","to":"pkg:tempfile","rel":"imports"}
+{"from":"warpfs-core/tests/manifest_test.rs","to":"pkg:warpfs_core","rel":"imports"}
+{"from":"warpfs-cli/src/main.rs","to":"pkg:clap","rel":"imports"}
+{"from":"warpfs-cli/src/main.rs","to":"pkg:commands","rel":"imports"}
+{"from":"warpfs-cli/src/commands/workspace.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-cli/src/commands/workspace.rs","to":"pkg:anyhow","rel":"imports"}
+{"from":"warpfs-cli/src/commands/workspace.rs","to":"pkg:warpfs_core","rel":"imports"}
+{"from":"warpfs-cli/src/commands/workspace.rs","to":"pkg:warpfs_fuse","rel":"imports"}
+{"from":"warpfs-cli/src/commands/backend.rs","to":"pkg:anyhow","rel":"imports"}
+{"from":"warpfs-cli/src/commands/backend.rs","to":"pkg:clap","rel":"imports"}
+{"from":"warpfs-cli/src/commands/init.rs","to":"pkg:anyhow","rel":"imports"}
+{"from":"warpfs-cli/src/commands/init.rs","to":"pkg:warpfs_core","rel":"imports"}
+{"from":"warpfs-cli/src/commands/init.rs","to":"pkg:warpfs_metadata","rel":"imports"}
+{"from":"warpfs-cli/src/commands/meta.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-cli/src/commands/meta.rs","to":"pkg:anyhow","rel":"imports"}
+{"from":"warpfs-cli/src/commands/meta.rs","to":"pkg:warpfs_metadata","rel":"imports"}
+{"from":"warpfs-cli/src/commands/graph.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-cli/src/commands/graph.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-cli/src/commands/graph.rs","to":"pkg:anyhow","rel":"imports"}
+{"from":"warpfs-cli/src/commands/graph.rs","to":"pkg:warpfs_graph","rel":"imports"}
+{"from":"warpfs-cli/src/commands/graph.rs","to":"pkg:warpfs_graph","rel":"imports"}
+{"from":"warpfs-cli/src/commands/graph.rs","to":"pkg:warpfs_metadata","rel":"imports"}
+{"from":"warpfs-cli/src/commands/serve.rs","to":"pkg:anyhow","rel":"imports"}
+{"from":"warpfs-cli/src/commands/mount.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-cli/src/commands/mount.rs","to":"pkg:anyhow","rel":"imports"}
+{"from":"warpfs-cli/src/commands/mount.rs","to":"pkg:warpfs_fuse","rel":"imports"}
+{"from":"warpfs-cli/tests/cli.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-cli/tests/cli.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-cli/tests/cli.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-cli/tests/cli.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-backends/src/lib.rs","to":"pkg:pub use git","rel":"imports"}
+{"from":"warpfs-backends/src/lib.rs","to":"pkg:pub use s3","rel":"imports"}
+{"from":"warpfs-backends/src/git.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-backends/src/git.rs","to":"pkg:git2","rel":"imports"}
+{"from":"warpfs-backends/src/git.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-backends/src/git.rs","to":"pkg:tempfile","rel":"imports"}
+{"from":"warpfs-backends/src/local.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-backends/src/local.rs","to":"pkg:tempfile","rel":"imports"}
+{"from":"warpfs-backends/src/s3.rs","to":"pkg:aws_config;","rel":"imports"}
+{"from":"warpfs-backends/src/s3.rs","to":"pkg:aws_sdk_s3 as s3;","rel":"imports"}
+{"from":"warpfs-backends/src/s3.rs","to":"pkg:sha2","rel":"imports"}
+{"from":"warpfs-backends/src/s3.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-backends/src/s3.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-backends/src/s3.rs","to":"pkg:tokio","rel":"imports"}
+{"from":"warpfs-backends/src/s3.rs","to":"pkg:tokio","rel":"imports"}
+{"from":"warpfs-backends/src/s3.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-backends/src/s3.rs","to":"pkg:tokio","rel":"imports"}
+{"from":"warpfs-fuse/src/ops.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-fuse/src/ops.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-fuse/src/ops.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-fuse/src/ops.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-fuse/src/ops.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-fuse/src/ops.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-fuse/src/ops.rs","to":"pkg:fuser","rel":"imports"}
+{"from":"warpfs-fuse/src/ops.rs","to":"pkg:libc","rel":"imports"}
+{"from":"warpfs-fuse/src/daemon.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-fuse/src/daemon.rs","to":"pkg:fuser","rel":"imports"}
+{"from":"warpfs-fuse/src/workspace_mount.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-fuse/src/workspace_mount.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-fuse/src/workspace_mount.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-fuse/src/workspace_mount.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-fuse/src/workspace_mount.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-fuse/src/workspace_mount.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-fuse/src/workspace_mount.rs","to":"pkg:fuser","rel":"imports"}
+{"from":"warpfs-fuse/src/workspace_mount.rs","to":"pkg:libc","rel":"imports"}
+{"from":"warpfs-fuse/src/workspace_mount.rs","to":"pkg:warpfs_core","rel":"imports"}
+{"from":"warpfs-fuse/src/triggers.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-fuse/src/lib.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-fuse/src/lib.rs","to":"pkg:pub use ops","rel":"imports"}
+{"from":"warpfs-fuse/src/permissions.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-fuse/tests/fuse_test.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-fuse/tests/fuse_test.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-fuse/tests/fuse_test.rs","to":"pkg:warpfs_fuse","rel":"imports"}
+{"from":"warpfs-fuse/tests/fuse_test.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-fuse/tests/fuse_test.rs","to":"pkg:warpfs_fuse","rel":"imports"}
+{"from":"warpfs-triggers/src/lib.rs","to":"pkg:pub use debounce","rel":"imports"}
+{"from":"warpfs-triggers/src/lib.rs","to":"pkg:pub use engine","rel":"imports"}
+{"from":"warpfs-triggers/src/lib.rs","to":"pkg:pub use std","rel":"imports"}
+{"from":"warpfs-triggers/src/debounce.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-triggers/src/debounce.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-triggers/src/debounce.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-triggers/src/engine.rs","to":"pkg:inotify","rel":"imports"}
+{"from":"warpfs-triggers/src/engine.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-triggers/src/engine.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-triggers/src/engine.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-triggers/src/engine.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-triggers/src/engine.rs","to":"pkg:tokio","rel":"imports"}
+{"from":"warpfs-triggers/src/engine.rs","to":"pkg:inotify","rel":"imports"}
+{"from":"warpfs-triggers/src/engine.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-triggers/tests/trigger_test.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-triggers/tests/trigger_test.rs","to":"pkg:warpfs_triggers","rel":"imports"}
+{"from":"warpfs-mcp/src/tools/mod.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-mcp/src/tools/mod.rs","to":"pkg:serde","rel":"imports"}
+{"from":"warpfs-mcp/src/error.rs","to":"pkg:warpfs_graph","rel":"imports"}
+{"from":"warpfs-mcp/src/error.rs","to":"pkg:warpfs_metadata","rel":"imports"}
+{"from":"warpfs-mcp/src/server.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-mcp/tests/mcp_test.rs","to":"pkg:warpfs_mcp","rel":"imports"}
+{"from":"warpfs-graph/src/rules.rs","to":"pkg:duckdb","rel":"imports"}
+{"from":"warpfs-graph/src/rules.rs","to":"pkg:serde","rel":"imports"}
+{"from":"warpfs-graph/src/rules.rs","to":"pkg:duckdb","rel":"imports"}
+{"from":"warpfs-graph/src/lib.rs","to":"pkg:pub use error","rel":"imports"}
+{"from":"warpfs-graph/src/lib.rs","to":"pkg:pub use graph","rel":"imports"}
+{"from":"warpfs-graph/src/lib.rs","to":"pkg:pub use impact","rel":"imports"}
+{"from":"warpfs-graph/src/lib.rs","to":"pkg:pub use parser","rel":"imports"}
+{"from":"warpfs-graph/src/lib.rs","to":"pkg:pub use rules","rel":"imports"}
+{"from":"warpfs-graph/src/lib.rs","to":"pkg:pub use warpfs_metadata","rel":"imports"}
+{"from":"warpfs-graph/src/lib.rs","to":"pkg:pub use serde_json;","rel":"imports"}
+{"from":"warpfs-graph/src/duckdb.rs","to":"pkg:pub use crate","rel":"imports"}
+{"from":"warpfs-graph/src/edges.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-graph/src/parser.rs","to":"pkg:tree_sitter","rel":"imports"}
+{"from":"warpfs-graph/src/parser.rs","to":"pkg:warpfs_metadata","rel":"imports"}
+{"from":"warpfs-graph/src/graph.rs","to":"pkg:duckdb","rel":"imports"}
+{"from":"warpfs-graph/src/graph.rs","to":"pkg:warpfs_metadata","rel":"imports"}
+{"from":"warpfs-graph/src/impact.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-graph/src/impact.rs","to":"pkg:duckdb","rel":"imports"}
+{"from":"warpfs-graph/src/impact.rs","to":"pkg:serde","rel":"imports"}
+{"from":"warpfs-graph/src/error.rs","to":"pkg:thiserror","rel":"imports"}
+{"from":"warpfs-graph/tests/edges_test.rs","to":"pkg:warpfs_graph","rel":"imports"}
+{"from":"warpfs-graph/tests/edges_test.rs","to":"pkg:warpfs_graph","rel":"imports"}
+{"from":"warpfs-graph/tests/edges_test.rs","to":"pkg:warpfs_graph","rel":"imports"}
+{"from":"warpfs-graph/tests/edges_test.rs","to":"pkg:warpfs_metadata","rel":"imports"}
+{"from":"warpfs-graph/tests/impact_test.rs","to":"pkg:warpfs_graph","rel":"imports"}
+{"from":"warpfs-graph/tests/impact_test.rs","to":"pkg:warpfs_graph","rel":"imports"}
+{"from":"warpfs-graph/tests/impact_test.rs","to":"pkg:warpfs_metadata","rel":"imports"}
+{"from":"warpfs-graph/tests/parser_test.rs","to":"pkg:warpfs_graph","rel":"imports"}
+{"from":"warpfs-graph/tests/graph_test.rs","to":"pkg:warpfs_graph","rel":"imports"}
+{"from":"warpfs-graph/tests/graph_test.rs","to":"pkg:warpfs_metadata","rel":"imports"}
+{"from":"warpfs-metadata/src/lib.rs","to":"pkg:pub use inventory","rel":"imports"}
+{"from":"warpfs-metadata/src/lib.rs","to":"pkg:pub use xattr","rel":"imports"}
+{"from":"warpfs-metadata/src/inventory.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-metadata/src/inventory.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-metadata/src/inventory.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-metadata/src/xattr.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-metadata/src/xattr.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-metadata/src/xattr.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-metadata/src/xattr.rs","to":"pkg:tempfile","rel":"imports"}
+{"from":"warpfs-metadata/tests/xattr_test.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-metadata/tests/xattr_test.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-metadata/tests/xattr_test.rs","to":"pkg:tempfile","rel":"imports"}
+{"from":"warpfs-metadata/tests/xattr_test.rs","to":"pkg:warpfs_metadata","rel":"imports"}
+{"from":"warpfs-metadata/tests/inventory_test.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-metadata/tests/inventory_test.rs","to":"pkg:tempfile","rel":"imports"}
+{"from":"warpfs-metadata/tests/inventory_test.rs","to":"pkg:warpfs_metadata","rel":"imports"}
+{"from":"warpfs-plugins/src/runtime.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-plugins/src/host_functions.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-plugins/src/lib.rs","to":"pkg:pub use host_functions","rel":"imports"}
+{"from":"warpfs-plugins/src/lib.rs","to":"pkg:pub use registry","rel":"imports"}
+{"from":"warpfs-plugins/src/lib.rs","to":"pkg:pub use runtime","rel":"imports"}
+{"from":"warpfs-plugins/src/registry.rs","to":"pkg:std","rel":"imports"}
+{"from":"warpfs-plugins/tests/plugin_test.rs","to":"pkg:warpfs_plugins","rel":"imports"}
+{"from":"hilo-graph/src/rules.rs","to":"pkg:duckdb","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/src/rules.rs","to":"pkg:serde","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/src/rules.rs","to":"pkg:duckdb","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/src/lib.rs","to":"pkg:pub use classify","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/src/lib.rs","to":"pkg:pub use error","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/src/lib.rs","to":"pkg:pub use graph","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/src/lib.rs","to":"pkg:pub use impact","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/src/lib.rs","to":"pkg:pub use parser","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/src/lib.rs","to":"pkg:pub use provenance","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/src/lib.rs","to":"pkg:pub use rules","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/src/lib.rs","to":"pkg:pub use hilo_metadata","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/src/lib.rs","to":"pkg:pub use serde_json;","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/src/duckdb.rs","to":"pkg:pub use crate","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/src/classify.rs","to":"pkg:tree_sitter","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/src/edges.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/src/parser.rs","to":"pkg:hilo_metadata","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/src/parser.rs","to":"pkg:tree_sitter","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/src/graph.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/src/graph.rs","to":"pkg:duckdb","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/src/graph.rs","to":"pkg:hilo_metadata","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/src/provenance.rs","to":"pkg:serde","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/src/impact.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/src/impact.rs","to":"pkg:duckdb","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/src/impact.rs","to":"pkg:serde","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/src/error.rs","to":"pkg:thiserror","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/benches/graph_bench.rs","to":"pkg:criterion","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/benches/graph_bench.rs","to":"pkg:hilo_graph","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/benches/graph_bench.rs","to":"pkg:hilo_metadata","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/tests/edges_test.rs","to":"pkg:hilo_graph","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/tests/edges_test.rs","to":"pkg:hilo_graph","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/tests/edges_test.rs","to":"pkg:hilo_graph","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/tests/edges_test.rs","to":"pkg:hilo_metadata","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/tests/impact_test.rs","to":"pkg:hilo_graph","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/tests/impact_test.rs","to":"pkg:hilo_graph","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/tests/impact_test.rs","to":"pkg:hilo_metadata","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/tests/parser_test.rs","to":"pkg:hilo_graph","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/tests/graph_test.rs","to":"pkg:hilo_graph","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/tests/graph_test.rs","to":"pkg:hilo_graph","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/tests/graph_test.rs","to":"pkg:hilo_metadata","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-fuse/src/ops.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-fuse/src/ops.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-fuse/src/ops.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-fuse/src/ops.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-fuse/src/ops.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-fuse/src/ops.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-fuse/src/ops.rs","to":"pkg:fuser","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-fuse/src/ops.rs","to":"pkg:libc","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-fuse/src/daemon.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-fuse/src/daemon.rs","to":"pkg:fuser","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-fuse/src/workspace_mount.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-fuse/src/workspace_mount.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-fuse/src/workspace_mount.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-fuse/src/workspace_mount.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-fuse/src/workspace_mount.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-fuse/src/workspace_mount.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-fuse/src/workspace_mount.rs","to":"pkg:fuser","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-fuse/src/workspace_mount.rs","to":"pkg:libc","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-fuse/src/workspace_mount.rs","to":"pkg:hilo_core","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-fuse/src/triggers.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-fuse/src/lib.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-fuse/src/lib.rs","to":"pkg:pub use hilo_core","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-fuse/src/lib.rs","to":"pkg:pub use ops","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-fuse/src/lib.rs","to":"pkg:pub use hilo_permissions","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-fuse/src/permissions.rs","to":"pkg:pub use hilo_permissions","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-fuse/src/permissions.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-fuse/benches/fuse_bench.rs","to":"pkg:criterion","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-fuse/benches/fuse_bench.rs","to":"pkg:hilo_fuse","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-fuse/benches/fuse_bench.rs","to":"pkg:hilo_fuse","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-fuse/benches/fuse_bench.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-fuse/tests/fuse_test.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-fuse/tests/fuse_test.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-fuse/tests/fuse_test.rs","to":"pkg:hilo_fuse","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-fuse/tests/fuse_test.rs","to":"pkg:hilo_fuse","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-fuse/tests/fuse_test.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-metadata/src/lib.rs","to":"pkg:pub use inventory","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-metadata/src/lib.rs","to":"pkg:pub use xattr","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-metadata/src/inventory.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-metadata/src/inventory.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-metadata/src/inventory.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-metadata/src/xattr.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-metadata/src/xattr.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-metadata/src/xattr.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-metadata/src/xattr.rs","to":"pkg:tempfile","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-metadata/tests/xattr_test.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-metadata/tests/xattr_test.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-metadata/tests/xattr_test.rs","to":"pkg:hilo_metadata","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-metadata/tests/xattr_test.rs","to":"pkg:tempfile","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-metadata/tests/inventory_test.rs","to":"pkg:hilo_metadata","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-metadata/tests/inventory_test.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-metadata/tests/inventory_test.rs","to":"pkg:tempfile","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-backends/src/lib.rs","to":"pkg:pub use git","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-backends/src/lib.rs","to":"pkg:pub use s3","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-backends/src/git.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-backends/src/git.rs","to":"pkg:git2","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-backends/src/git.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-backends/src/git.rs","to":"pkg:tempfile","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-backends/src/local.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-backends/src/local.rs","to":"pkg:tempfile","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-backends/src/s3.rs","to":"pkg:aws_config;","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-backends/src/s3.rs","to":"pkg:aws_sdk_s3 as s3;","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-backends/src/s3.rs","to":"pkg:sha2","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-backends/src/s3.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-backends/src/s3.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-backends/src/s3.rs","to":"pkg:tokio","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-backends/src/s3.rs","to":"pkg:tokio","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-backends/src/s3.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-plugins/src/runtime.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-plugins/src/host_functions.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-plugins/src/lib.rs","to":"pkg:pub use host_functions","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-plugins/src/lib.rs","to":"pkg:pub use registry","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-plugins/src/lib.rs","to":"pkg:pub use runtime","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-plugins/src/registry.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-plugins/tests/plugin_test.rs","to":"pkg:hilo_plugins","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-permissions/src/lib.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/main.rs","to":"pkg:clap","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/main.rs","to":"pkg:commands","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/main.rs","to":"pkg:commands","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/workspace.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/workspace.rs","to":"pkg:anyhow","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/workspace.rs","to":"pkg:hilo_core","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/workspace.rs","to":"pkg:hilo_fuse","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/workspace.rs","to":"pkg:hilo_fuse","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/hooks.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/hooks.rs","to":"pkg:anyhow","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/hooks.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/hooks.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/hooks.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/backend.rs","to":"pkg:anyhow","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/backend.rs","to":"pkg:clap","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/init.rs","to":"pkg:anyhow","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/init.rs","to":"pkg:hilo_core","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/init.rs","to":"pkg:hilo_metadata","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/meta.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/meta.rs","to":"pkg:anyhow","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/meta.rs","to":"pkg:hilo_metadata","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/classify.rs","to":"pkg:anyhow","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/classify.rs","to":"pkg:anyhow","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/classify.rs","to":"pkg:hilo_core","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/classify.rs","to":"pkg:hilo_graph","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/classify.rs","to":"pkg:hilo_metadata","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/classify.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/classify.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/classify.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/plugin.rs","to":"pkg:anyhow","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/plugin.rs","to":"pkg:clap","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/plugin.rs","to":"pkg:hilo_plugins","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/plugin.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/graph.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/graph.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/graph.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/graph.rs","to":"pkg:anyhow","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/graph.rs","to":"pkg:hilo_graph","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/graph.rs","to":"pkg:hilo_graph","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/graph.rs","to":"pkg:hilo_metadata","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/graph.rs","to":"pkg:rayon","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/graph.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/graph.rs","to":"pkg:tempfile","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/serve.rs","to":"pkg:anyhow","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/mount.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/mount.rs","to":"pkg:anyhow","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/mount.rs","to":"pkg:hilo_fuse","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/mount.rs","to":"pkg:hilo_triggers","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/tests/cli.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/tests/cli.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/tests/cli.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/tests/cli.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-core/src/workspace.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-core/src/workspace.rs","to":"pkg:serde","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-core/src/workspace.rs","to":"pkg:thiserror","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-core/src/manifest.rs","to":"pkg:serde","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-core/src/manifest.rs","to":"pkg:thiserror","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-core/src/sandbox.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-core/src/sandbox.rs","to":"pkg:thiserror","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-core/src/virtual_dir.rs","to":"pkg:serde","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-core/src/virtual_dir.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-core/src/worktree.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-core/src/worktree.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-core/src/worktree.rs","to":"pkg:thiserror","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-core/src/worktree.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-core/src/worktree.rs","to":"pkg:tempfile","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-core/tests/manifest_test.rs","to":"pkg:hilo_core","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-triggers/src/lib.rs","to":"pkg:pub use debounce","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-triggers/src/lib.rs","to":"pkg:pub use engine","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-triggers/src/lib.rs","to":"pkg:pub use std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-triggers/src/debounce.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-triggers/src/debounce.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-triggers/src/debounce.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-triggers/src/engine.rs","to":"pkg:inotify","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-triggers/src/engine.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-triggers/src/engine.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-triggers/src/engine.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-triggers/src/engine.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-triggers/src/engine.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-triggers/src/engine.rs","to":"pkg:tokio","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-triggers/src/engine.rs","to":"pkg:tokio","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-triggers/src/engine.rs","to":"pkg:sha2","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-triggers/src/engine.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-triggers/src/engine.rs","to":"pkg:inotify","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-triggers/src/engine.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-triggers/src/engine.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-triggers/src/engine.rs","to":"pkg:tokio","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-triggers/src/engine.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-triggers/src/engine.rs","to":"pkg:tokio","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-triggers/tests/trigger_test.rs","to":"pkg:hilo_triggers","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-triggers/tests/trigger_test.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-mcp/src/tools/mod.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-mcp/src/tools/mod.rs","to":"pkg:serde","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-mcp/src/tools/mod.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-mcp/src/error.rs","to":"pkg:hilo_graph","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-mcp/src/error.rs","to":"pkg:hilo_metadata","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-mcp/src/server.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-mcp/tests/mcp_test.rs","to":"pkg:hilo_mcp","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-mcp/tests/mcp_test.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-mcp/tests/mcp_test.rs","to":"pkg:tempfile","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-mcp/tests/mcp_test.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-mcp/tests/mcp_test.rs","to":"pkg:tempfile","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-mcp/tests/mcp_test.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-mcp/tests/mcp_test.rs","to":"pkg:tempfile","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-mcp/tests/mcp_test.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-mcp/tests/mcp_test.rs","to":"pkg:tempfile","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-mcp/tests/mcp_test.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-mcp/tests/mcp_test.rs","to":"pkg:tempfile","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-mcp/tests/mcp_test.rs","to":"pkg:hilo_graph","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-mcp/tests/mcp_test.rs","to":"pkg:hilo_metadata","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-mcp/tests/mcp_test.rs","to":"pkg:hilo_graph","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-mcp/tests/mcp_test.rs","to":"pkg:hilo_metadata","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-mcp/tests/mcp_test.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-mcp/tests/mcp_test.rs","to":"pkg:tempfile","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-mcp/tests/mcp_test.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-mcp/tests/mcp_test.rs","to":"pkg:tempfile","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/src/lib.rs","to":"pkg:pub use signal","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/src/lib.rs","to":"pkg:pub use semantic","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/src/lib.rs","to":"pkg:pub use semantic","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/src/signal.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/src/signal.rs","to":"pkg:serde","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/src/signal.rs","to":"pkg:hilo_metadata","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/src/semantic.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/src/semantic.rs","to":"pkg:serde","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/src/semantic.rs","to":"pkg:hilo_metadata","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/tests/fixtures/handler.go","to":"std:net/http","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/tests/fixtures/handler.go","to":"pkg:example.com/internal/middleware","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/tests/fixtures/handler_test.go","to":"std:testing","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/tests/fixtures/main.go","to":"std:fmt","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/tests/fixtures/main.go","to":"pkg:example.com/internal/handler","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/tests/fixtures/middleware.go","to":"std:net/http","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/tests/fixtures/utils.py","to":"pkg:os","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/tests/fixtures/utils.py","to":"pkg:sys","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/tests/fixtures/utils.py","to":"pkg:collections","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/tests/fixtures/app.ts","to":"local:./handler","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/tests/fixtures/app.ts","to":"pkg:express","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/tests/signal_test.rs","to":"pkg:hilo_graph","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/tests/signal_test.rs","to":"pkg:hilo_graph","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/tests/signal_test.rs","to":"pkg:hilo_metadata","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/tests/semantic_test.rs","to":"pkg:hilo_graph","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/tests/semantic_test.rs","to":"pkg:hilo_graph","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/tests/semantic_test.rs","to":"pkg:hilo_metadata","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/tests/determinism_test.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/tests/determinism_test.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/tests/determinism_test.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/tests/determinism_test.rs","to":"pkg:hilo_graph","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/tests/determinism_test.rs","to":"pkg:hilo_graph","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/tests/determinism_test.rs","to":"pkg:hilo_graph","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/tests/determinism_test.rs","to":"pkg:hilo_graph","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/tests/determinism_test.rs","to":"pkg:hilo_graph","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/tests/determinism_test.rs","to":"pkg:hilo_metadata","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-graph/tests/fixtures/handler.go","to":"hilo-graph/tests/fixtures/handler_test.go","rel":"tests","provenance":"heuristic","confidence":0.8}
+{"from":"hilo-graph/tests/fixtures/handler_test.go","to":"hilo-graph/tests/fixtures/handler.go","rel":"tested_by","provenance":"heuristic","confidence":0.8}
+{"from":"hilo-fuse/src/daemon.rs","to":"pkg:tracing","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-backends/tests/s3_integration_test.rs","to":"pkg:aws_sdk_s3 as s3;","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-backends/tests/s3_integration_test.rs","to":"pkg:hilo_backends","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-backends/tests/s3_integration_test.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-backends/tests/s3_integration_test.rs","to":"pkg:tempfile","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-core/src/logging.rs","to":"pkg:tracing_subscriber","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-core/src/logging.rs","to":"pkg:tracing_subscriber","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-triggers/src/engine.rs","to":"pkg:tracing","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-mcp/src/rate_limiter.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-mcp/src/rate_limiter.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-mcp/src/rate_limiter.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-mcp/src/server.rs","to":"pkg:tracing","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-permissions/tests/permission_test.rs","to":"pkg:hilo_permissions","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-permissions/tests/permission_test.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}

@@ -1,8 +1,11 @@
 # Rust build artifacts
 target/
 
-# WarpFS local state
-/.vfs/
+# WarpFS local state — cache files (rebuildable)
+.vfs/graph/graph.db
+.vfs/graph/graph.db.wal
+.vfs/graph/graph.duckdb
+.vfs/graph/.last_warm
 
 # GitReins local state
 .gitreins/tasks.yaml
