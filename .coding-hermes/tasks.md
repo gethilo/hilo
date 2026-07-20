@@ -1101,6 +1101,16 @@ All 4 subcommands tested: understand ("dependency graph" → 3-tier), search ("r
 
 ---
 
+## [ ] DEPS-002 — Upgrade 7 minor semver-compatible dependencies
+
+- Priority: low
+- **Dep updates available:** clap 4.6.2→4.6.3, clap_derive 4.6.1→4.6.3, hyper 1.10.1→1.11.0, serde_json 1.0.150→1.0.151, syn 3.0.0→3.0.2, time 0.3.53→0.3.54, time-macros 0.2.31→0.2.32
+- **Approach:** `cargo update`, verify `cargo test --workspace`, commit `Cargo.lock`
+- **Note:** 6 pre-existing git2 RUSTSEC warnings (no semver-compatible fix). Monitor.
+- **Found:** 2026-07-20 tick #5 audit
+
+---
+
 ## [x] NEVER-DONE — Run coding-hermes-never-done 11-point audit
 
 Load coding-hermes-never-done skill. Run ALL 11 checks: spec alignment,
@@ -1108,6 +1118,24 @@ doc coverage, test gaps, package upgrades, pitfall hunt, performance audit,
 endpoint verification, CI/CD health, DuckBrain sync, code quality,
 middle-out wiring. Create a task for EVERY gap found. This task is never
 complete — the audit always finds something.
+
+### Audit Result — 2026-07-20 10:02 (tick #5)
+
+| Check | Status | Notes |
+|-------|--------|-------|
+| Spec alignment | PASS | 2 specs present, references verified |
+| Doc coverage | PASS | 18 docs (10 per-crate + 8 general) |
+| Test gaps | PASS | All suites green, 0 failures, all 10 crates tested |
+| Package upgrades | MINOR | 7 minor semver-compatible deps (clap, hyper, serde_json, syn, time). 6 pre-existing git2 warnings (no fix). Created DEPS-002 |
+| Pitfall hunt | PASS | Zero TODO/FIXME/HACK in source. `unreachable!()` hits are target/ build artifacts only |
+| Performance | PASS | 2 bench files (graph_bench, fuse_bench) |
+| Endpoint/CLI | PASS | All 9 subcommands working. `hilo graph stats`: 195 edges, 79 files |
+| CI/CD health | PASS | Latest 2 runs green. a933c3b failure was host resource exhaustion (pthread_create) — infra, not code |
+| DuckBrain sync | PASS | 30+ entries in warpfs namespace |
+| Code quality | PASS | clippy clean, fmt clean, .gitignore comprehensive, no untracked files |
+| Middle-out wiring | PASS | main.rs imports all 9 command modules. cargo check: 2.93s |
+
+**Findings:** 1 task created — DEPS-002 (7 minor dep updates). Board had been empty for 4 idle ticks.
 
 ### Audit Result — 2026-07-19 17:35 (tick #1)
 
