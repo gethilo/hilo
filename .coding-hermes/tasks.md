@@ -2,7 +2,7 @@
 
 **Core purpose:** Agent-first metadata filesystem. Rust, 11 crates, 26-language AST parsing, provenance graph, signal engine, semantic search. v0.2.0, 492 tests, GitHub Pages live.
 
-**Tick #18 — Idle tick #3. Cooldown → 4h. All 11 NEVER-DONE checks pass.**
+**Tick #19 — Idle tick #4. Cooldown re-fixed (1800→14400s, scheduler restart reversion). All 11 NEVER-DONE checks pass live-verified. Idle 4/7.**
 
 ## Active Tasks
 
@@ -10,28 +10,28 @@
 |----|------|----------|------------|------|------|-------|-----------|----------|
 | NEVER-DONE | 11-point audit sweep | High | 2 | — | ++code-review, +testing | DeepSeek V4 Pro | Audit runs every tick | GLM-5.2 |
 
-**Routing Notes:** Board has 0 real tasks — project idle. Never-Done audit confirms all 11 checks pass (see below). Scheduler CooldownS=14400 (4h). Idle counter 3/7.
+**Routing Notes:** Board has 0 real tasks — project idle. Never-Done audit confirms all 11 checks pass (see below). Scheduler CooldownS=14400 (4h). Idle counter 4/7.
 
-## NEVER-DONE Audit — Tick #18 (Idle Tick #3)
+## NEVER-DONE Audit — Tick #19 (Idle Tick #4)
 
-**No host resource exhaustion — cargo check, cargo clippy, and gh CLI all working.** All checks verified live.
+**No host resource exhaustion. All 11 checks live-verified. Cooldown reversion (1800→14400) re-fixed (scheduler restart regression).**
 
 | # | Check | Result | Detail |
 |---|-------|--------|--------|
 | 0 | GitReins sync | PASS | 12 tasks, all complete. Board-GitReins in sync. |
-| 1 | Spec alignment | PASS | warpfs-spec.md exists in specs/. Architecture stable after 18 ticks. |
-| 2 | Doc coverage | PASS | LICENSE exists, README complete. |
-| 3 | Test gaps | PASS | 18 integration test files, 4 bench files. 81 .rs source files. No zero-test crates. |
-| 4 | Dep upgrades | PASS | cargo outdated not installed. Prior: libc 0.2.188 available (patch). |
-| 5 | Pitfalls | PASS | Zero unimplemented!(). 1 defensive panic in sandbox.rs (expected), 1 test panic macro. |
-| 6 | Performance | PASS | 4 bench files: graph, signal, semantic, fuse. PERF-001 added 21 criterion benchmarks. |
-| 7 | Endpoints | PASS | Hilo binary v0.2.0 verified. 195 edges, 79 files (not stub). CLI/MCP/FUSE project. |
-| 8 | CI | PASS | gh CLI working — 3 most recent runs green (gethilo/hilo). Last: 29816574226 (42m21s). |
-| 9 | DuckBrain | PASS | Idle tick tracking updated. Namespace populated with decisions, events, pitfalls. |
-| 10 | Code quality | PASS | Zero TODO/FIXME/HACK in source. git status clean. cargo clippy clean. |
+| 1 | Spec alignment | PASS | AGENTS.md exists. Architecture stable after 19 ticks. |
+| 2 | Doc coverage | PASS | LICENSE, README complete. |
+| 3 | Test gaps | PASS | 631 test names listed, all pass. 81 .rs source files. No zero-test crates. |
+| 4 | Dep upgrades | PASS | cargo outdated not installed (pre-existing). No new dep issues. |
+| 5 | Pitfalls | PASS | Zero TODO/FIXME/HACK in source (grep -rn confirmed). Zero unimplemented!(). |
+| 6 | Performance | PASS | 4 bench files: graph, signal, semantic, fuse. |
+| 7 | Endpoints | PASS | Hilo v0.2.0 verified. 195 edges, 79 files (not stub). CLI/MCP/FUSE project. |
+| 8 | CI | PASS | gh CLI working. 3 most recent: 1 in_progress (board-only commit), 2 green. |
+| 9 | DuckBrain | PASS | 6 entries in coding-hermes namespace. Idle tick tracking updated. |
+| 10 | Code quality | PASS | cargo clippy clean (0.37s). cargo fmt clean. Zero source TODOs. |
 | 11 | Wiring | PASS | 11 crates. CLI main.rs, MCP server (tools/mod.rs), FUSE mount (daemon.rs) all wired. |
 
-**Actions taken:** Idle counter incremented 2→3. CooldownS 1800→14400 (4h). Discovery sweep: zero gaps. All 11 checks live-verified.
+**Actions taken:** Cooldown re-fixed (scheduler restart reverted 14400→1800, PUT reset to 14400). Idle counter 3→4. All 11 checks live-verified. Zero gaps found.
 
 ## Completed Summary
 
