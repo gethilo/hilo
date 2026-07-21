@@ -2,24 +2,22 @@
 
 **Core purpose:** Agent-first metadata filesystem. Rust, 11 crates, 26-language AST parsing, provenance graph, signal engine, semantic search. v0.2.0, 492 tests, GitHub Pages live.
 
-**Tick #15 — DEPS-minor completed. Board has 2 real tasks.**
+**Tick #16 — PITFALL-ffi-stubs completed. Board has 1 real task.**
 
 ## Active Tasks
 
 | ID | Task | Priority | Complexity | Deps | Tags | Model | Reasoning | Fallback |
 |----|------|----------|------------|------|------|-------|-----------|----------|
-| PITFALL-ffi-stubs | Wire hilo-ffi stub functions to real crate implementations | High | 4 | hilo-graph, hilo-metadata, hilo-backends | +pitfall, +ffi, +rust | DeepSeek V4 Pro | 8 stub functions (vfs_get_metadata, vfs_set_metadata, vfs_graph_related, vfs_graph_impact, vfs_graph_stats, vfs_resolve_backend, vfs_rule_check, vfs_list_directory) return empty/zero — needs real wiring to graph/metadata/backend crates | DeepSeek V4 Flash |
 | PERF-001 | Add benchmarks for signal engine and semantic search hot paths | Medium | 2 | — | +perf, +rust | DeepSeek V4 Flash | Graph (6 benches) + FUSE (4 benches) exist. Missing: signal engine (understand, tokenize, extract_symbols) and semantic search (index, search, BM25, TF-IDF, RRF) hot paths | GLM-5.2 |
 | NEVER-DONE | 11-point audit sweep | High | 2 | — | ++code-review, +testing | DeepSeek V4 Pro | Audit runs every tick | GLM-5.2 |
 
-**Routing Notes:** PITFALL-ffi-stubs requires understanding of 3 crates (graph, metadata, backends) to wire stub functions → DeepSeek V4 Pro. PERF-001 is narrowed to benchmarks only (complexity dropped 3→2) → DeepSeek V4 Flash. Board has 2 real tasks — active mode.
+**Routing Notes:** PERF-001 is narrowed to benchmarks only (complexity 2). Signal engine hot paths: understand, tokenize, extract_symbols. Semantic search hot paths: index, search, BM25, TF-IDF, RRF. Board has 1 real task — active mode.
 
-**Execution Order:** PITFALL-ffi-stubs (1) → PERF-001 (2) → NEVER-DONE audit (recurring).
-
-**Escalation Conditions:** PITFALL-ffi-stubs may reveal architectural question about FFI design intent. If hilo-ffi stubs are by design (not yet wired, pending language SDK integration), mark as BLOCKED and escalate to Bane for roadmap decision.
+**Execution Order:** PERF-001 (1) → NEVER-DONE audit (recurring).
 
 ## Completed Summary
 
+**PITFALL-ffi-stubs (Tick #16):** All 8 stub functions wired to real crate implementations. vfs_get_metadata→hilo_metadata, vfs_set_metadata→hilo_metadata, vfs_graph_related→hilo_graph, vfs_graph_impact→hilo_graph, vfs_graph_stats→hilo_graph, vfs_resolve_backend→hilo_core+hilo_backends, vfs_rule_check→hilo_graph+hilo_core, vfs_list_directory→std::fs. 195 lines inserted, 29 deleted. Commit 291981b.
 **DEPS-minor (Tick #15):** libc 0.2.186→0.2.187, regalloc2 0.15.1→0.15.2. 492 tests pass. Commit b8c1d6d.
 **TASK-001 (Provenance Tracking):** 6-level Provenance enum (AstExact→Unresolved) with confidence weights. Edge struct extended. DuckDB schema migrated. All queries updated. 18 files touched, 386 tests.
 **TASK-002 (Signal Engine):** Harmonic 3-tier output (MAP 15%, SIGNATURES 25%, DETAIL 60%). Position ordering. Deterministic. MCP tool `vfs_graph_understand`. ~900 lines, 11 integration tests.
