@@ -2268,6 +2268,10 @@ dependencies = [
 name = "hilo_ffi"
 version = "0.2.0"
 dependencies = [
+ "hilo_backends",
+ "hilo_core",
+ "hilo_graph",
+ "hilo_metadata",
  "serde",
  "thiserror 2.0.19",
  "uniffi",

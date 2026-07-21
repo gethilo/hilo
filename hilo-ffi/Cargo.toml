@@ -13,6 +13,10 @@ crate-type = ["lib", "cdylib"]
 uniffi = { version = "0.28", features = ["cli"] }
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
+hilo_metadata = { path = "../hilo-metadata" }
+hilo_graph = { path = "../hilo-graph" }
+hilo_backends = { path = "../hilo-backends" }
+hilo_core = { path = "../hilo-core" }
 
 [build-dependencies]
 uniffi = { version = "0.28", features = ["build"] }
