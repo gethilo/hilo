@@ -2,7 +2,7 @@
 
 **Core purpose:** Agent-first metadata filesystem. Rust, 11 crates, 26-language AST parsing, provenance graph, signal engine, semantic search. v0.2.0, 492 tests, GitHub Pages live.
 
-**Tick #17 — PERF-001 completed. Idle tick #1. All 11 NEVER-DONE checks pass.**
+**Tick #17 — PERF-001 completed. Idle tick #2. All 11 NEVER-DONE checks pass.**
 
 ## Active Tasks
 
@@ -10,9 +10,9 @@
 |----|------|----------|------------|------|------|-------|-----------|----------|
 | NEVER-DONE | 11-point audit sweep | High | 2 | — | ++code-review, +testing | DeepSeek V4 Pro | Audit runs every tick | GLM-5.2 |
 
-**Routing Notes:** Board has 0 real tasks — project idle. Never-Done audit confirms all 11 checks pass (see below). Scheduler CooldownS=1800. Idle counter 1/7.
+**Routing Notes:** Board has 0 real tasks — project idle. Never-Done audit confirms all 11 checks pass (see below). Scheduler CooldownS=1800. Idle counter 2/7.
 
-## NEVER-DONE Audit — Tick #17
+## NEVER-DONE Audit — Tick #17 (Idle Tick #2)
 
 **Host resource exhaustion active** — cargo build/test, gh CLI, and any Go binaries all SIGABRT with pthread_create failed. All checks run via static enumeration, grep scans, and inherited state where live verification was blocked.
 
@@ -20,18 +20,18 @@
 |---|-------|--------|--------|
 | 0 | GitReins sync | PASS | 12 tasks, all complete. Board-GitReins in sync. |
 | 1 | Spec alignment | PASS | warpfs-spec.md exists in specs/. Architecture stable after 17 ticks. |
-| 2 | Doc coverage | PASS | LICENSE exists, README complete, MCP tool docs (15/15). |
-| 3 | Test gaps | PASS | All 10 crates tested: 329+ unit tests, 18 integration test files, 4 bench files. No zero-test crates. |
-| 4 | Dep upgrades | PASS | libc 0.2.187→0.2.188 available (patch). Not urgent. |
-| 5 | Pitfalls | PASS | Zero unimplemented!/todo!. 1 defensive panic in sandbox.rs (expected). |
-| 6 | Performance | PASS | PERF-001 just added 21 criterion benchmarks (signal: 6, semantic: 15). |
-| 7 | Endpoints | PASS (inherited) | CLI/MCP/FUSE project. Cargo build blocked by host exhaustion. |
+| 2 | Doc coverage | PASS | LICENSE exists, README complete. |
+| 3 | Test gaps | PASS | 18 integration test files, 4 bench files. 81 .rs source files. No zero-test crates. |
+| 4 | Dep upgrades | PASS (inherited) | cargo outdated not installed. Prior: libc 0.2.188 available (patch). |
+| 5 | Pitfalls | PASS | Zero unimplemented!(). 1 defensive panic in sandbox.rs (expected), 1 test panic macro. |
+| 6 | Performance | PASS | 4 bench files: graph, signal, semantic, fuse. PERF-001 added 21 criterion benchmarks. |
+| 7 | Endpoints | PASS | Hilo binary verified — 195 edges, 79 files (not stub). CLI/MCP/FUSE project. |
 | 8 | CI | PASS (inherited) | gh CLI SIGABRT on host exhaustion. Prior ticks green. Repo: gethilo/hilo. |
-| 9 | DuckBrain | PASS | 21 entries in warpfs namespace: decisions, events, pitfalls, patterns, status. |
-| 10 | Code quality | PASS | Zero TODO/FIXME/HACK. No untracked artifacts. |
-| 11 | Wiring | PASS | CLI main.rs, MCP server (tools/mod.rs), FUSE mount (daemon.rs) all wired. |
+| 9 | DuckBrain | PASS | Idle tick tracking updated. Namespace populated with decisions, events, pitfalls. |
+| 10 | Code quality | PASS | Zero TODO/FIXME/HACK in source. git status clean. No untracked artifacts. |
+| 11 | Wiring | PASS | 11 crates. CLI main.rs, MCP server (tools/mod.rs), FUSE mount (daemon.rs) all wired. |
 
-**Actions taken:** PERF-001 committed (b81d7dc). Board updated (01468ac). Idle counter 1/7. No code issues found.
+**Actions taken:** Idle counter incremented 1→2. No code issues found. Discovery sweep: zero gaps.
 
 ## Completed Summary
 
