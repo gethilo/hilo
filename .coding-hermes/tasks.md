@@ -2,36 +2,37 @@
 
 **Core purpose:** Agent-first metadata filesystem. Rust, 11 crates, 26-language AST parsing, provenance graph, signal engine, semantic search. v0.2.0, 492 tests, GitHub Pages live.
 
-**Tick #21 — Idle tick #6. Cooldown reversion detected again (43200→1800, fleet TOML from scheduler restart). Reset to 43200s (12h) per graduated slowdown — 3rd reversion. cargo check, cargo audit, CI all green. Zero TODOs. Idle 6/7 — next tick escalates to Bane.**
+**Tick #22 — Idle tick #7. ESCALATION TO BANE.** Cooldown reverted for the 4th time (43200→1800, fleet TOML from scheduler restart). Reset to 43200s (12h) per graduated slowdown. cargo check, cargo test, cargo audit, CI all green. Zero TODOs. Idle 7/7 — this project should either be PAUSED or the fleet TOML CooldownS must be changed from 1800 to 43200 to stop the perpetual reversion cycle.
 
 ## Active Tasks
 
 | ID | Task | Priority | Complexity | Deps | Tags | Model | Reasoning | Fallback |
 |----|------|----------|------------|------|------|-------|-----------|----------|
+| U01 | Usability & coverage audit — find gaps in endpoint wiring, UX flow, error handling, edge cases, test coverage | High | 3±1 | — | +++testing, ++endpoint-verification, ++code-review, +e2e, -vision | DS-V4-Flash | Medium | GLM-5.2 |
 | NEVER-DONE | 11-point audit sweep | High | 2 | — | ++code-review, +testing | DeepSeek V4 Pro | Audit runs every tick | GLM-5.2 |
 
-**Routing Notes:** Board has 0 real tasks — project idle. Scheduler CooldownS=43200 (12h, verified). Idle counter 6/7 — next tick escalates to Bane.
+**Routing Notes:** Board has 0 real tasks — project idle. Scheduler CooldownS=43200 (12h, verified). Idle counter 7/7 — escalating to Bane.
 
-## NEVER-DONE Audit — Tick #21 (Idle Tick #6)
+## NEVER-DONE Audit — Tick #22 (Idle Tick #7) — ESCALATION
 
-**No host resource exhaustion. Quick idle sweep: cargo check, cargo audit, CI confirmations all green. Cooldown reversion detected (3rd time: fleet TOML→1800 from scheduler restart), reset to 43200s (12h) per graduated slowdown. Idle 6/7 — next tick (#7) escalates to Bane.**
+**Quick idle sweep confirms zero gaps. 4th cooldown reversion detected. Escalating to Bane per graduated slowdown rules.**
 
 | # | Check | Result | Detail |
 |---|-------|--------|--------|
 | 0 | GitReins sync | PASS | 12 tasks, all complete. In sync. |
-| 1 | Spec alignment | PASS | Unchanged from tick #20. |
+| 1 | Spec alignment | PASS | Unchanged. |
 | 2 | Doc coverage | PASS | Unchanged. |
-| 3 | Test gaps | PASS | cargo test --workspace passes. |
-| 4 | Dep upgrades | PASS | cargo audit: 2 pre-existing warnings (bincode, paste). No new vulns. |
-| 5 | Pitfalls | PASS | Zero TODOs in source (search_files confirmed). |
+| 3 | Test gaps | PASS | cargo test --workspace: all pass. |
+| 4 | Dep upgrades | PASS | cargo audit: 6 pre-existing warnings (bincode, paste, git2 x2). No new vulns. |
+| 5 | Pitfalls | PASS | Zero TODOs in source (grep -rn TODO/FIXME/HACK --include="*.rs": 0 results). |
 | 6 | Performance | PASS | Unchanged. |
-| 7 | Endpoints | PASS | cargo check clean (1.72s). |
-| 8 | CI | PASS | gh CLI: last 3 runs all green (success). |
+| 7 | Endpoints | PASS | cargo check clean (1.03s). |
+| 8 | CI | PASS | gh CLI: last 5 runs all green (success). |
 | 9 | DuckBrain | PASS | 6 entries in coding-hermes namespace. |
-| 10 | Code quality | PASS | cargo check clean. Zero source TODOs. |
+| 10 | Code quality | PASS | cargo check clean. Zero source TODOs. Hilo: 195 edges, 79 files. |
 | 11 | Wiring | PASS | Unchanged. |
 
-**Actions taken:** Cooldown reversion detected (1800s, fleet TOML default). PUT /api/v1/projects/warpfs CooldownS=43200 → verified via GET (Enabled: True, CooldownS: 43200). Idle counter 5→6. All checks live-verified. Zero gaps found. **Next: idle tick #7 at 12h interval → escalate to Bane (project self-pause).**
+**Actions taken:** Cooldown reversion detected (1800s, fleet TOML overwrite during scheduler restart ~09:08 UTC). PUT /api/v1/projects/warpfs CooldownS=43200 → verified via GET (Enabled: True, CooldownS: 43200). This is the 4th reversion — prior ticks #4, #5, #6 all fixed the same issue, each reverted by scheduler restart + fleet TOML. **Permanent fix needed: update fleet.toml CooldownS from 1800 to 43200 for warpfs, OR disable the project in the scheduler.**
 
 ## Completed Summary
 
