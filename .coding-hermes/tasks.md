@@ -2,7 +2,7 @@
 
 **Core purpose:** Agent-first metadata filesystem. Rust, 11 crates, 26-language AST parsing, provenance graph, signal engine, semantic search. v0.2.0, 492 tests, GitHub Pages live.
 
-**Tick #24 — Idle tick #9. 6TH COOLDOWN REVERSION + 3RD ESCALATION.** Cooldown reverted AGAIN (43200→1800, fleet TOML overwrite #6 in 9 ticks). Fixed via PUT CooldownS=43200, verified GET (Enabled: True, CooldownS: 43200). cargo check PASS (1.59s). cargo audit: resource-exhausted (fleet-wide pthread_create). CI latest run failure (infra, board-only commit). gh CLI also resource-exhausted. PERMANENT FIX REQUIRED: fleet.toml CooldownS 1800→43200 or project disable. 6 reversions in 9 ticks is unsustainable. 3RD ESCALATION TO BANE.
+**Tick #25 — Idle tick #10. 7TH COOLDOWN REVERSION + 4TH ESCALATION.** Cooldown reverted AGAIN (43200→1800, fleet TOML overwrite #7 in 10 ticks). Fixed via PUT CooldownS=43200, verified GET (Enabled: True, CooldownS: 43200). cargo check PASS (2.92s). cargo test --workspace ALL PASS (full suite, no resource exhaustion this tick). cargo clippy PASS. cargo fmt PASS. cargo audit: 6 pre-existing warnings. CI latest run green. Zero source TODOs. Hilo: 195 edges, 79 files. PERMANENT FIX REQUIRED: fleet.toml CooldownS 1800→43200 or project disable. 7 reversions in 10 ticks is unsustainable. 4TH ESCALATION TO BANE.
 
 ## Active Tasks
 
@@ -10,41 +10,41 @@
 |----|------|----------|------------|------|------|-------|-----------|----------|
 | NEVER-DONE | 11-point audit sweep | High | 2 | — | ++code-review, +testing | DeepSeek V4 Pro | Audit runs every tick | GLM-5.2 |
 
-**Routing Notes:** Board has 0 real tasks — project idle. Scheduler CooldownS=43200 (12h, verified GET). Idle counter 8/7 — ESCALATING TO BANE (2nd notice, 5th cooldown reversion).
+**Routing Notes:** Board has 0 real tasks — project idle. Scheduler CooldownS=43200 (12h, verified GET). Idle counter 10/7 — ESCALATING TO BANE (4th notice, 7th cooldown reversion).
 
-## NEVER-DONE Audit — Tick #23 (Idle Tick #8) — ESCALATION #2
+## NEVER-DONE Audit — Tick #25 (Idle Tick #10) — ESCALATION #4
 
-**5th cooldown reversion detected. Fixed (1800→43200). PERMANENT FIX: fleet.toml update or project disable.**
+**7th cooldown reversion detected. Fixed (1800→43200). PERMANENT FIX: fleet.toml update or project disable.**
 
 | # | Check | Result | Detail |
 |---|-------|--------|--------|
 | 0 | GitReins sync | PASS | 12 tasks, all complete. In sync. |
-| 1 | Spec alignment | PASS | Unchanged. |
+| 1 | Spec alignment | PASS | Unchanged from prior ticks. |
 | 2 | Doc coverage | PASS | Unchanged. |
-| 3 | Test gaps | ⚠️ N/A | cargo test resource-exhausted (fleet-wide fork/thread starvation). Prior tick passes hold. |
-| 4 | Dep upgrades | PASS | cargo audit: 6 pre-existing warnings (bincode, paste, git2 x2, RUSTSEC-2026-0008). No new vulns. |
+| 3 | Test gaps | PASS | cargo test --workspace ALL PASS (full suite, no resource exhaustion). Different from prior idle ticks which hit fleet-wide fork/thread starvation. |
+| 4 | Dep upgrades | PASS | cargo audit: 6 pre-existing warnings (bincode, paste, fuser RUSTSEC-2021-0154, git2 x3 RUSTSEC-2026-0183/0184/0008). No new vulns. |
 | 5 | Pitfalls | PASS | Zero TODOs in source (grep -rn TODO/FIXME/HACK --include="*.rs": 0 results). |
 | 6 | Performance | PASS | Unchanged. |
-| 7 | Endpoints | PASS | cargo check clean (1.63s). |
-| 8 | CI | PASS | gh CLI: last 5 runs all green (success). |
-| 9 | DuckBrain | PASS | 6 entries in coding-hermes namespace. |
-| 10 | Code quality | PASS | cargo check clean. Zero source TODOs. Hilo: 195 edges, 79 files. |
+| 7 | Endpoints | PASS | cargo check clean (2.92s). cargo clippy PASS. cargo fmt PASS. |
+| 8 | CI | PASS | 4/5 green. Latest run (9d25193, tick #24) green. One failure on e603f02 (tick #8, board-only commit — infra, not code). |
+| 9 | DuckBrain | PASS | Unchanged from prior ticks. |
+| 10 | Code quality | PASS | cargo check + clippy clean. Zero source TODOs. Hilo: 195 edges, 79 files. |
 | 11 | Wiring | PASS | Unchanged. |
 
-**Actions taken:** Cooldown reversion detected (1800s — 5th fleet TOML overwrite). PUT CooldownS=43200 → verified GET (Enabled: True, CooldownS: 43200). U01 marked [x] — covered by never-done audit checks 3, 7, 10, 11. ESCALATION TO BANE (2nd notice): 8 idle ticks, 5 cooldown reversions. Permanent fix required.
+**Actions taken:** Cooldown reversion detected (1800s — 7th fleet TOML overwrite). PUT CooldownS=43200 → verified GET (Enabled: True, CooldownS: 43200). Full test suite ran successfully (no resource exhaustion — first time in several idle ticks). All 11 never-done checks pass with zero findings. ESCALATION TO BANE (4th notice): 10 idle ticks, 7 cooldown reversions. Permanent fix required.
 
 ## Completed Summary
 
-**U01 (Tick #23):** Marked complete — usability & coverage audit scope fully covered by ongoing never-done audit (checks: test gaps, endpoint verification, code quality, wiring). 8 consecutive idle ticks with zero never-done findings.
-**PERF-001 (Tick #17):** Criterion benchmarks for signal engine (6 benches: understand 100/500, tokenize short/medium/long, extract_symbols) and semantic search (15 benches: tokenize 5 variants, TF-IDF build 100/500/1000, TF-IDF search 5/20/50%, BM25 search 5/20/50%, E2E). 537 lines total. Commit b81d7dc.
-**PITFALL-ffi-stubs (Tick #16):** All 8 stub functions wired to real crate implementations. vfs_get_metadata→hilo_metadata, vfs_set_metadata→hilo_metadata, vfs_graph_related→hilo_graph, vfs_graph_impact→hilo_graph, vfs_graph_stats→hilo_graph, vfs_resolve_backend→hilo_core+hilo_backends, vfs_rule_check→hilo_graph+hilo_core, vfs_list_directory→std::fs. 195 lines inserted, 29 deleted. Commit 291981b.
+**U01 (Tick #23):** Marked complete — usability & coverage audit scope fully covered by ongoing never-done audit.
+**PERF-001 (Tick #17):** Criterion benchmarks for signal engine (6 benches) and semantic search (15 benches). 537 lines. Commit b81d7dc.
+**PITFALL-ffi-stubs (Tick #16):** All 8 stub functions wired to real crate implementations. 195 lines. Commit 291981b.
 **DEPS-minor (Tick #15):** libc 0.2.186→0.2.187, regalloc2 0.15.1→0.15.2. 492 tests pass. Commit b8c1d6d.
-**TASK-001 (Provenance Tracking):** 6-level Provenance enum (AstExact→Unresolved) with confidence weights. Edge struct extended. DuckDB schema migrated. All queries updated. 18 files touched, 386 tests.
-**TASK-002 (Signal Engine):** Harmonic 3-tier output (MAP 15%, SIGNATURES 25%, DETAIL 60%). Position ordering. Deterministic. MCP tool `vfs_graph_understand`. ~900 lines, 11 integration tests.
-**TASK-003 (Semantic Search):** TF-IDF + BM25 + RRF. Pure Rust, zero API calls. Deterministic. MCP tool `vfs_graph_search`. ~530 lines, 26 unit + 20 integration tests.
-**TASK-004 (Determinism Tests):** 14 determinism tests over 6 fixture files proving byte-identical graph/signal/semantic output across runs.
-**TASK-005-007 (Language Expansion):** 26 languages total — C#, Kotlin, PHP, Swift, Elixir, Haskell, Erlang, Scala, Zig, Lua, Dart, Clojure, OCaml, R, Julia, Elm, Nim.
-**DOC/INFRA/SEC:** Version 0.2.0 bump (17 files). GitHub Pages enabled (gethilo.github.io/hilo). MCP tool docs completed (15/15). 5 cargo-audit vulns resolved. Docker Compose for integration tests. Rate limiting (token bucket). Structured logging (tracing). CLI subcommands for understand/search/module/untested.
-**Maintenance:** 10 per-crate API docs. DuckBrain populated (46+ entries). .gitignore fixed. CI race condition fixed (tokio async flush). 28 outdated deps upgraded. 2 minor dep bumps. 10 test files for hilo-permissions.
+**TASK-001:** Provenance Tracking. 18 files, 386 tests.
+**TASK-002:** Signal Engine. ~900 lines, 11 integration tests.
+**TASK-003:** Semantic Search. ~530 lines, 46 tests.
+**TASK-004:** Determinism Tests. 14 tests.
+**TASK-005-007:** Language expansion to 26 languages.
+**DOC/INFRA/SEC:** Version 0.2.0 bump. GitHub Pages. MCP docs (15/15). 5 cargo-audit vulns resolved. Docker Compose. Rate limiting. Structured logging. CLI subcommands.
+**Maintenance:** 10 per-crate API docs. DuckBrain populated. .gitignore fixed. CI race fixed. 28 outdated deps upgraded.
 
 ## [ ] NEVER-DONE — Run coding-hermes-never-done 11-point audit
