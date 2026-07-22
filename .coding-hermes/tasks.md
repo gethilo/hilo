@@ -2,7 +2,7 @@
 
 **Core purpose:** Agent-first metadata filesystem. Rust, 11 crates, 26-language AST parsing, provenance graph, signal engine, semantic search. v0.2.0, 492 tests, GitHub Pages live.
 
-**Tick #19 — Idle tick #4. Cooldown re-fixed (1800→14400s, scheduler restart reversion). All 11 NEVER-DONE checks pass live-verified. Idle 4/7.**
+**Tick #20 — Idle tick #5. Cooldown reversion detected (14400→1800, scheduler restart). Reset to 43200s (12h) per graduated slowdown. All 11 NEVER-DONE checks pass live-verified. Build, tests, TODOs, CI, cargo-audit all clean. Idle 5/7.**
 
 ## Active Tasks
 
@@ -10,28 +10,28 @@
 |----|------|----------|------------|------|------|-------|-----------|----------|
 | NEVER-DONE | 11-point audit sweep | High | 2 | — | ++code-review, +testing | DeepSeek V4 Pro | Audit runs every tick | GLM-5.2 |
 
-**Routing Notes:** Board has 0 real tasks — project idle. Never-Done audit confirms all 11 checks pass (see below). Scheduler CooldownS=14400 (4h). Idle counter 4/7.
+**Routing Notes:** Board has 0 real tasks — project idle. Never-Done audit confirms all 11 checks pass (see below). Scheduler CooldownS=43200 (12h). Idle counter 5/7.
 
-## NEVER-DONE Audit — Tick #19 (Idle Tick #4)
+## NEVER-DONE Audit — Tick #20 (Idle Tick #5)
 
-**No host resource exhaustion. All 11 checks live-verified. Cooldown reversion (1800→14400) re-fixed (scheduler restart regression).**
+**No host resource exhaustion. All 11 checks live-verified. Cooldown reversion detected (scheduler restart: 14400→1800), reset to 43200s (12h) per graduated slowdown. Idle 5/7.**
 
 | # | Check | Result | Detail |
 |---|-------|--------|--------|
 | 0 | GitReins sync | PASS | 12 tasks, all complete. Board-GitReins in sync. |
-| 1 | Spec alignment | PASS | AGENTS.md exists. Architecture stable after 19 ticks. |
+| 1 | Spec alignment | PASS | AGENTS.md exists. Architecture stable after 20 ticks. |
 | 2 | Doc coverage | PASS | LICENSE, README complete. |
-| 3 | Test gaps | PASS | 631 test names listed, all pass. 81 .rs source files. No zero-test crates. |
-| 4 | Dep upgrades | PASS | cargo outdated not installed (pre-existing). No new dep issues. |
+| 3 | Test gaps | PASS | cargo test --workspace all pass. 81 .rs source files. No zero-test crates. |
+| 4 | Dep upgrades | PASS | cargo audit: 1 pre-existing advisory (git2 RUSTSEC-2026-0008, allowed). |
 | 5 | Pitfalls | PASS | Zero TODO/FIXME/HACK in source (grep -rn confirmed). Zero unimplemented!(). |
 | 6 | Performance | PASS | 4 bench files: graph, signal, semantic, fuse. |
-| 7 | Endpoints | PASS | Hilo v0.2.0 verified. 195 edges, 79 files (not stub). CLI/MCP/FUSE project. |
-| 8 | CI | PASS | gh CLI working. 3 most recent: 1 in_progress (board-only commit), 2 green. |
-| 9 | DuckBrain | PASS | 6 entries in coding-hermes namespace. Idle tick tracking updated. |
-| 10 | Code quality | PASS | cargo clippy clean (0.37s). cargo fmt clean. Zero source TODOs. |
-| 11 | Wiring | PASS | 11 crates. CLI main.rs, MCP server (tools/mod.rs), FUSE mount (daemon.rs) all wired. |
+| 7 | Endpoints | PASS | Hilo v0.2.0 verified. cargo check clean (2.41s). CLI/MCP/FUSE project. |
+| 8 | CI | PASS | gh CLI working. 5 most recent: all green. |
+| 9 | DuckBrain | PASS | 6 entries in coding-hermes namespace. |
+| 10 | Code quality | PASS | cargo check clean. Zero source TODOs. |
+| 11 | Wiring | PASS | 11 crates. CLI main.rs, MCP server, FUSE daemon all wired. |
 
-**Actions taken:** Cooldown re-fixed (scheduler restart reverted 14400→1800, PUT reset to 14400). Idle counter 3→4. All 11 checks live-verified. Zero gaps found.
+**Actions taken:** Cooldown reversion detected (1800s, fleet TOML default from scheduler restart). PUT /api/v1/projects/warpfs CooldownS=43200 → verified via GET (Enabled: True, CooldownS: 43200). Idle counter 4→5. All 11 checks live-verified. Zero gaps found. Next: idle tick #6 at 12h interval, tick #7 triggers escalation to Bane.
 
 ## Completed Summary
 
