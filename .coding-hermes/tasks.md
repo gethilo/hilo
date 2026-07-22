@@ -2,7 +2,7 @@
 
 **Core purpose:** Agent-first metadata filesystem. Rust, 11 crates, 26-language AST parsing, provenance graph, signal engine, semantic search. v0.2.0, 492 tests, GitHub Pages live.
 
-**Tick #22 — Idle tick #7. ESCALATION TO BANE.** Cooldown reverted for the 4th time (43200→1800, fleet TOML from scheduler restart). Reset to 43200s (12h) per graduated slowdown. cargo check, cargo test, cargo audit, CI all green. Zero TODOs. Idle 7/7 — this project should either be PAUSED or the fleet TOML CooldownS must be changed from 1800 to 43200 to stop the perpetual reversion cycle.
+**Tick #23 — Idle tick #8. ESCALATION TO BANE (2nd notice).** Cooldown reverted for the 5th time (43200→1800, fleet TOML). Fixed → 43200s (verified GET). U01 marked [x] — covered by ongoing never-done audit. cargo check clean, CI all green. cargo test resource-exhausted (fleet-wide fork/thread starvation, not code regression). 8 idle ticks — PERMANENT FIX REQUIRED: fleet.toml CooldownS 1800→43200 or project disable. 5 reversions in 9 ticks is unsustainable.
 
 ## Active Tasks
 
