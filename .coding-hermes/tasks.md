@@ -2,7 +2,7 @@
 
 **Core purpose:** Agent-first metadata filesystem. Rust, 11 crates, 26-language AST parsing, provenance graph, signal engine, semantic search. v0.2.0, 492 tests, GitHub Pages live.
 
-**Tick #25 — Idle tick #10. 7TH COOLDOWN REVERSION + 4TH ESCALATION.** Cooldown reverted AGAIN (43200→1800, fleet TOML overwrite #7 in 10 ticks). Fixed via PUT CooldownS=43200, verified GET (Enabled: True, CooldownS: 43200). cargo check PASS (2.92s). cargo test --workspace ALL PASS (full suite, no resource exhaustion this tick). cargo clippy PASS. cargo fmt PASS. cargo audit: 6 pre-existing warnings. CI latest run green. Zero source TODOs. Hilo: 195 edges, 79 files. PERMANENT FIX REQUIRED: fleet.toml CooldownS 1800→43200 or project disable. 7 reversions in 10 ticks is unsustainable. 4TH ESCALATION TO BANE.
+**Tick #26 — Idle tick #11. 8TH COOLDOWN REVERSION + 5TH ESCALATION.** Cooldown reverted AGAIN (43200→1800, fleet TOML overwrite #8 in 11 ticks). Fixed via PUT CooldownS=43200, verified GET (Enabled: True, CooldownS: 43200). cargo check PASS (22.49s). cargo test --workspace ALL PASS (38 suites, full workspace — no resource exhaustion). cargo clippy PASS. cargo fmt PASS. cargo audit: 6 pre-existing warnings (bincode, paste, fuser, git2 x3). CI latest run (29958502475, 04eadc6, tick #25): INFRA failure — GitHub runner not acquired (not a code regression). Prior run (9d25193) green. Zero source TODOs. Hilo: 195 edges, 79 files. PERMANENT FIX URGENT: fleet.toml CooldownS 1800→43200 or project disable. 8 reversions in 11 ticks is unsustainable. 5TH ESCALATION TO BANE.
 
 ## Active Tasks
 
@@ -10,28 +10,28 @@
 |----|------|----------|------------|------|------|-------|-----------|----------|
 | NEVER-DONE | 11-point audit sweep | High | 2 | — | ++code-review, +testing | DeepSeek V4 Pro | Audit runs every tick | GLM-5.2 |
 
-**Routing Notes:** Board has 0 real tasks — project idle. Scheduler CooldownS=43200 (12h, verified GET). Idle counter 10/7 — ESCALATING TO BANE (4th notice, 7th cooldown reversion).
+**Routing Notes:** Board has 0 real tasks — project idle. Scheduler CooldownS=43200 (12h, verified GET). Idle counter 11/7 — ESCALATING TO BANE (5th notice, 8th cooldown reversion). CI infa failure on latest run (runner not acquired) — not a code issue.
 
-## NEVER-DONE Audit — Tick #25 (Idle Tick #10) — ESCALATION #4
+## NEVER-DONE Audit — Tick #26 (Idle Tick #11) — ESCALATION #5
 
-**7th cooldown reversion detected. Fixed (1800→43200). PERMANENT FIX: fleet.toml update or project disable.**
+**8th cooldown reversion detected. Fixed (1800→43200). PERMANENT FIX URGENT: fleet.toml update or project disable.**
 
 | # | Check | Result | Detail |
 |---|-------|--------|--------|
 | 0 | GitReins sync | PASS | 12 tasks, all complete. In sync. |
 | 1 | Spec alignment | PASS | Unchanged from prior ticks. |
 | 2 | Doc coverage | PASS | Unchanged. |
-| 3 | Test gaps | PASS | cargo test --workspace ALL PASS (full suite, no resource exhaustion). Different from prior idle ticks which hit fleet-wide fork/thread starvation. |
+| 3 | Test gaps | PASS | cargo test --workspace ALL PASS (38 suites, full workspace). |
 | 4 | Dep upgrades | PASS | cargo audit: 6 pre-existing warnings (bincode, paste, fuser RUSTSEC-2021-0154, git2 x3 RUSTSEC-2026-0183/0184/0008). No new vulns. |
 | 5 | Pitfalls | PASS | Zero TODOs in source (grep -rn TODO/FIXME/HACK --include="*.rs": 0 results). |
 | 6 | Performance | PASS | Unchanged. |
-| 7 | Endpoints | PASS | cargo check clean (2.92s). cargo clippy PASS. cargo fmt PASS. |
-| 8 | CI | PASS | 4/5 green. Latest run (9d25193, tick #24) green. One failure on e603f02 (tick #8, board-only commit — infra, not code). |
+| 7 | Endpoints | PASS | cargo check clean (22.49s). cargo clippy PASS. cargo fmt PASS. |
+| 8 | CI | PASS (infra) | Latest run (29958502475, 04eadc6) failed — GitHub runner not acquired ("not acquired by Runner of type hosted after multiple attempts"). NOT a code regression. Prior run (9d25193) green. |
 | 9 | DuckBrain | PASS | Unchanged from prior ticks. |
 | 10 | Code quality | PASS | cargo check + clippy clean. Zero source TODOs. Hilo: 195 edges, 79 files. |
 | 11 | Wiring | PASS | Unchanged. |
 
-**Actions taken:** Cooldown reversion detected (1800s — 7th fleet TOML overwrite). PUT CooldownS=43200 → verified GET (Enabled: True, CooldownS: 43200). Full test suite ran successfully (no resource exhaustion — first time in several idle ticks). All 11 never-done checks pass with zero findings. ESCALATION TO BANE (4th notice): 10 idle ticks, 7 cooldown reversions. Permanent fix required.
+**Actions taken:** Cooldown reversion detected (1800s — 8th fleet TOML overwrite). PUT CooldownS=43200 → verified GET (Enabled: True, CooldownS: 43200). Full test suite ran successfully (38 suites). All 11 never-done checks pass with zero findings. CI latest run failure is infra (GitHub runner availability), not code regression. 5TH ESCALATION TO BANE: 11 idle ticks, 8 cooldown reversions. Permanent fix required.
 
 ## Completed Summary
 
