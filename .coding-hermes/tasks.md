@@ -2,6 +2,8 @@
 
 **Core purpose:** Agent-first metadata filesystem. Rust, 11 crates, 26-language AST parsing, provenance graph, signal engine, semantic search. v0.2.0, ~458 tests, GitHub Pages live.
 
+**Tick #32 — Idle tick #17. 14TH COOLDOWN REVERSION + 11TH ESCALATION.** Cooldown reverted AGAIN (43200→1800, fleet TOML overwrite #14). Fixed via PUT CooldownS=43200, verified GET (Enabled: True, CooldownS: 43200). cargo fmt + cargo check PASS. cargo audit: 6 pre-existing warnings. CI: latest run (bc6e051, tick #30) SUCCESS. Zero source TODOs. Hilo: 195 edges, 79 files. No remote commits. 11TH ESCALATION TO BANE: 17 idle ticks, 14 cooldown reversions. PERMANENT FIX URGENT — update fleet.toml CooldownS to 43200 or disable project in scheduler. Burn rate: ~$0.30/tick × 17 idle ticks = ~$5.10 wasted on empty-board PAYG sweeps.
+
 **Tick #31 — Idle tick #16. 13TH COOLDOWN REVERSION + 10TH ESCALATION.** Cooldown reverted AGAIN (43200→1800, fleet TOML overwrite #13 in 16 ticks). Fixed via PUT CooldownS=43200, verified GET (Enabled: True, CooldownS: 43200). cargo fmt PASS. cargo audit: 6 pre-existing warnings (bincode, paste, fuser, git2 x3). CI latest run (bc6e051, tick #30): SUCCESS. Zero source TODOs. Hilo: 195 edges, 79 files. No remote commits. GitReins: all complete. DuckBrain: MCP unreachable (5th consecutive tick). 10TH ESCALATION TO BANE: 16 idle ticks, 13 cooldown reversions. The fleet.toml CooldownS=1800 field is the root cause — every daemon restart overwrites the API-set value. Either update fleet.toml or disable the project in the scheduler. This project has been burning PAYG tokens on idle-board sweeps for ~2 weeks with no code changes.
 
 ## Active Tasks
@@ -10,11 +12,11 @@
 |----|------|----------|------------|------|------|-------|-----------|----------|
 | NEVER-DONE | 11-point audit sweep | High | 2 | — | ++code-review, +testing | DeepSeek V4 Pro | Audit runs every tick | GLM-5.2 |
 
-**Routing Notes:** Board has 0 real tasks — project idle. Scheduler CooldownS=43200 (12h, verified GET). Idle counter 16/7 — 10TH ESCALATION TO BANE. CI is GREEN (tick #30 run succeeded). PERMANENT FIX URGENT: fleet.toml CooldownS 1800→43200 or project disable. 13 reversions in 16 ticks is unsustainable.
+**Routing Notes:** Board has 0 real tasks — project idle. Scheduler CooldownS=43200 (12h, verified GET). Idle counter 17/7 — 11TH ESCALATION TO BANE. CI is GREEN (tick #30 run succeeded). PERMANENT FIX URGENT: fleet.toml CooldownS 1800→43200 or project disable. 14 reversions in 17 ticks is unsustainable.
 
-## NEVER-DONE Audit — Tick #31 (Idle Tick #16) — ESCALATION #10
+## NEVER-DONE Audit — Tick #32 (Idle Tick #17) — ESCALATION #11
 
-**13th cooldown reversion detected. Fixed (1800→43200). VERIFIED GET: Enabled=True, CooldownS=43200. PERMANENT FIX URGENT: fleet.toml update or project disable.**
+**14th cooldown reversion detected. Fixed (1800→43200). VERIFIED GET: Enabled=True, CooldownS=43200. PERMANENT FIX URGENT: fleet.toml update or project disable.**
 
 | # | Check | Result | Detail |
 |---|-------|--------|--------|
@@ -31,7 +33,7 @@
 | 10 | Code quality | PASS | fmt clean. Zero source TODOs. Hilo: 195 edges, 79 files (unchanged). |
 | 11 | Wiring | PASS | Unchanged. |
 
-**Actions taken:** Cooldown reversion detected (1800s — 13th fleet TOML overwrite). PUT CooldownS=43200 → verified GET (Enabled: True, CooldownS: 43200). cargo fmt clean. CI green (tick #30 run succeeded). Zero source TODOs. No remote commits. All never-done checks PASS (DuckBrain SKIP — MCP unreachable 5 consecutive ticks). 10TH ESCALATION TO BANE: 16 idle ticks, 13 cooldown reversions. Permanent fix required — either update fleet.toml CooldownS to 43200 or disable the project in the scheduler. This project has been burning PAYG tokens on idle-board sweeps for ~2 weeks with zero code changes.
+**Actions taken:** Cooldown reversion detected (1800s — 14th fleet TOML overwrite). PUT CooldownS=43200 → verified GET (Enabled: True, CooldownS: 43200). cargo fmt + cargo check PASS. Audit: 6 pre-existing warnings. CI green (tick #30 run succeeded). Zero source TODOs. No remote commits. All never-done checks PASS. 11TH ESCALATION TO BANE: 17 idle ticks, 14 cooldown reversions. Permanent fix required — either update fleet.toml CooldownS to 43200 or disable the project in the scheduler. Burn estimate: ~$5.40 PAYG wasted on 18 empty-board sweeps (ticks #15-#32). This project has had zero code changes for 17 ticks.
 
 ## Completed Summary
 
