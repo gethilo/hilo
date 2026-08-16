@@ -260,8 +260,9 @@ tasks:
   - the same bad-URL mount exits with code 1 (non-zero)
   - hilo-cli/src/commands/backend.rs wraps GitBackend::mount errors via map_err with
     a hint mentioning the URL and credentials
-  status: pending
+  status: complete
   created_at: '2026-08-12T21:34:14.833470+00:00'
+  completed_at: '2026-08-16T05:16:25.496314+00:00'
 - id: gap-039-impact-unknown-path
   title: 'GAP-039: hilo graph impact fails loudly on unknown paths'
   criteria:
