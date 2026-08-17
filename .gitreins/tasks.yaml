@@ -394,3 +394,14 @@ tasks:
   status: complete
   created_at: '2026-08-17T11:01:39.675229+00:00'
   completed_at: '2026-08-17T11:14:06.132058+00:00'
+- id: int-ci-002-verify
+  title: Verify INT-CI-002 rerun passed and close as environmental
+  criteria:
+  - 'Verification closure for INT-CI-002: (1) gh api repos/gethilo/hilo/actions/runs?head_sha=b9a396e
+    shows run 31999155382 with conclusion=success (the rerun kicked 2026-08-17 ~11:00Z
+    passed; original failure was runner ''No space left on device'' in post-job steps,
+    all substantive steps had passed). (2) The board row INT-CI-002 in .coding-hermes/board/tasks.jsonl
+    is flipped to status=complete with a summary noting the rerun passed. (3) The
+    tick''s audit event records the CI-health verification.'
+  status: in_progress
+  created_at: '2026-08-17T23:34:03.643889+00:00'
