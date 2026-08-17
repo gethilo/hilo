@@ -48,6 +48,13 @@ pub fn list_tools() -> Vec<Tool> {
                     "path": {
                         "type": "string",
                         "description": "Path to the file"
+                    },
+                    "keys": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "Optional xattr short-name filter (e.g. ['feature', 'risk'])"
                     }
                 },
                 "required": ["path"]

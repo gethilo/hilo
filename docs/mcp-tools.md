@@ -16,6 +16,10 @@ Read all `user.vfs.*` extended attributes for a file.
 }
 ```
 
+- `keys` (optional): array of xattr short names to filter the result —
+  e.g. `{ "path": "src/main.rs", "keys": ["feature", "risk"] }` returns only
+  the requested attributes.
+
 Returns: `{ "user.vfs.role": "entrypoint", "user.vfs.status": "stable" }`
 
 ### `vfs_graph_related`
