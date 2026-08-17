@@ -403,5 +403,6 @@ tasks:
     all substantive steps had passed). (2) The board row INT-CI-002 in .coding-hermes/board/tasks.jsonl
     is flipped to status=complete with a summary noting the rerun passed. (3) The
     tick''s audit event records the CI-health verification.'
-  status: in_progress
+  status: complete
   created_at: '2026-08-17T23:34:03.643889+00:00'
+  completed_at: '2026-08-17T23:34:50.028575+00:00'
