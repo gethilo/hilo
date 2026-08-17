@@ -376,3 +376,13 @@ tasks:
   status: complete
   created_at: '2026-08-15T17:02:34.466237+00:00'
   completed_at: '2026-08-15T17:03:26.410524+00:00'
+- id: gap-041-metadata-keys-schema
+  title: 'GAP-041: declare optional keys filter in vfs_get_metadata input_schema +
+    docs'
+  criteria:
+  - hilo-mcp/src/tools/mod.rs vfs_get_metadata input_schema declares keys (array of
+    strings, optional) AND docs/mcp-tools.md documents the keys filter with an example
+    AND cargo check --workspace PASS AND hilo-mcp tests pass
+  status: complete
+  created_at: '2026-08-17T05:37:44.290123+00:00'
+  completed_at: '2026-08-17T05:46:29.405807+00:00'
