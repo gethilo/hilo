@@ -2,7 +2,7 @@
 
 All notable changes to Hilo are documented in this file.
 
-## [Unreleased] — 2026-08
+## [0.3.0] — 2026-08-17
 
 ### Added
 
