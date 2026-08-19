@@ -15,13 +15,13 @@ Read and write extended attributes on files.
 
 ```bash
 # Read all Hilo xattrs
-hilo meta src/main.rs
+hilo meta hilo-cli/src/main.rs
 
 # Set a specific attribute
-hilo meta --set user.vfs.role --value entrypoint src/main.rs
+hilo meta --set user.vfs.role --value entrypoint hilo-cli/src/main.rs
 
 # Read (prints all xattrs — no per-key read flag)
-hilo meta src/main.rs
+hilo meta hilo-cli/src/main.rs
 ```
 
 ## `hilo graph`
@@ -59,12 +59,13 @@ Aggregate statistics about the dependency graph.
 hilo graph stats
 
 # Output:
-# Total edges: 2252
-# Unique source files: 716
-# Unique dependencies: 531
-# Top dependencies:
-#   sys:gtest/gtest.h: 349
-#   sys:metacall/metacall.h: 175
+# Total edges: 202 distinct / 292 raw (edges.jsonl)
+# Total files: 81
+# Most connected: pkg:std
+# Edge types:
+#   imports: 200
+#   tested_by: 1
+#   tests: 1
 ```
 
 ### `related`
@@ -73,16 +74,16 @@ Find files related to a given path through the dependency graph.
 
 ```bash
 # Forward: what does this file import?
-hilo graph related src/main.rs
+hilo graph related hilo-cli/src/main.rs
 
 # Filter by relation type
-hilo graph related src/main.rs --relation imports
+hilo graph related hilo-cli/src/main.rs --relation imports
 
 # Reverse: what imports this file?
-hilo graph related sys:some-header.h --direction reverse
+hilo graph related hilo-graph/src/lib.rs --direction reverse
 
 # Reverse with relation filter
-hilo graph related src/login.go --direction reverse --relation tested_by
+hilo graph related hilo-graph/tests/fixtures/handler.go --direction reverse --relation tested_by
 ```
 
 ### `impact`
@@ -91,16 +92,16 @@ Find all files that depend on a given file, directly or transitively.
 
 ```bash
 # Direct dependents only
-hilo graph impact sys:metacall/metacall.h --max-depth 1
+hilo graph impact hilo-graph/src/lib.rs --max-depth 1
 
 # Full transitive closure (default: 10)
-hilo graph impact sys:gtest/gtest.h --max-depth 10
+hilo graph impact hilo-graph/src/lib.rs --max-depth 10
 
 # JSON output
-hilo graph impact sys:metacall/metacall.h --format json
+hilo graph impact hilo-graph/src/lib.rs --format json
 
 # Include external cross-repo edges in the traversal
-hilo graph impact src/main.rs --external
+hilo graph impact hilo-graph/src/lib.rs --external
 ```
 
 ### `understand`
@@ -155,10 +156,16 @@ hilo graph rule-list
 
 ### `rule-check`
 
-Execute a named rule query against the dependency graph.
+Execute a named rule query against the dependency graph. Rules are defined
+in the project manifest; this repo currently defines none (see
+`hilo graph rule-list`).
 
 ```bash
-hilo graph rule-check stale-files
+# List rules defined in the manifest
+hilo graph rule-list
+
+# Check a named rule (fails with "Rule not found" unless defined in .vfs/manifest.yaml)
+hilo graph rule-check <RULE_NAME>
 ```
 
 ### `clean`
