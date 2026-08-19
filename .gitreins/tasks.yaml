@@ -406,3 +406,16 @@ tasks:
   status: complete
   created_at: '2026-08-17T23:34:03.643889+00:00'
   completed_at: '2026-08-17T23:34:50.028575+00:00'
+- id: gap-046-cli-ref-examples
+  title: 'GAP-046: docs/cli-reference.md graph examples use repo-real paths'
+  criteria:
+  - 'docs/cli-reference.md no longer contains corpus paths: grep -c ''sys:metacall''
+    == 0, grep -c ''sys:gtest'' == 0, grep -c ''sys:some-header'' == 0, grep -c ''src/login.go''
+    == 0, grep -c ''rule-check stale-files'' == 0; repo-real examples present: grep
+    -c ''hilo graph impact hilo-graph/src/lib.rs'' >= 3; every documented graph command
+    runs: target/release/hilo graph impact hilo-graph/src/lib.rs --max-depth 1 exits
+    0, target/release/hilo graph related hilo-cli/src/main.rs exits 0, target/release/hilo
+    graph impact hilo-graph/src/lib.rs --format json exits 0'
+  status: complete
+  created_at: '2026-08-19T11:30:40.062281+00:00'
+  completed_at: '2026-08-19T11:37:10.496651+00:00'
