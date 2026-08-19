@@ -419,3 +419,14 @@ tasks:
   status: complete
   created_at: '2026-08-19T11:30:40.062281+00:00'
   completed_at: '2026-08-19T11:37:10.496651+00:00'
+- id: gap-043-intra-crate-edges
+  title: 'GAP-043: intra-crate import edges resolve to file paths'
+  criteria:
+  - 'Criterion: (1) cargo test -p hilo_graph passes including new module-resolution
+    tests; (2) cargo check --workspace passes; (3) from repo root, ''hilo graph impact
+    hilo-cli/src/commands/init.rs'' lists hilo-cli/src/main.rs (or commands/mod.rs)
+    as a dependent; (4) grep -c ''"to":"hilo-cli/'' .vfs/graph/edges.jsonl >= 1; (5)
+    ''hilo graph stats'' orphan list does not contain hilo-cli/src/commands/init.rs'
+  status: complete
+  created_at: '2026-08-19T23:19:44.881011+00:00'
+  completed_at: '2026-08-19T23:29:12.128099+00:00'
