@@ -6,6 +6,9 @@
 //! Each language gets a dedicated extraction function that understands its
 //! specific import/dependency syntax.
 
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
 use hilo_metadata::inventory::Edge;
 use tree_sitter::{Node, Parser as TsParser};
 
@@ -154,7 +157,10 @@ impl Parser {
             Language::TypeScript | Language::JavaScript => {
                 extract_js_imports(tree.root_node(), source.as_bytes(), &mut paths);
             }
-            Language::Rust => extract_rust_imports(tree.root_node(), source.as_bytes(), &mut paths),
+            Language::Rust => {
+                let ctx = RustModuleCtx::build(file_path);
+                extract_rust_imports(tree.root_node(), source.as_bytes(), &mut paths, &ctx)
+            }
             Language::Java => extract_java_imports(tree.root_node(), source.as_bytes(), &mut paths),
             Language::C | Language::Cpp => {
                 extract_c_imports(tree.root_node(), source.as_bytes(), &mut paths)
@@ -325,7 +331,179 @@ fn classify_js(path: &str) -> String {
 
 // ── Rust ────────────────────────────────────────────────────────────
 
-fn extract_rust_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+/// Per-crate module context used to resolve intra-crate Rust imports
+/// (`use commands::init;`, `use crate::commands::init;`) to concrete file
+/// paths instead of `pkg:` pseudo-nodes (GAP-043).
+///
+/// The parser emits file→file edges when the imported path names a module
+/// declared in this crate; external crates keep their `pkg:` edges.
+struct RustModuleCtx {
+    /// Crate-root modules (`mod x;` in src/main.rs / src/lib.rs) — used for
+    /// `crate::`-prefixed absolute paths.
+    root: HashMap<String, String>,
+    /// Root modules plus modules declared in the ancestor `mod.rs` files of
+    /// the file being parsed (innermost wins) — used for bare relative paths.
+    local: HashMap<String, String>,
+}
+
+impl RustModuleCtx {
+    /// Build the module context for `file_path`, or an empty context when
+    /// the file does not live under a Cargo package (resolution then falls
+    /// back to `pkg:` edges, preserving pre-GAP-043 behaviour).
+    fn build(file_path: &str) -> Self {
+        let mut ctx = RustModuleCtx {
+            root: HashMap::new(),
+            local: HashMap::new(),
+        };
+        let Some(pkg_dir) = rust_package_dir(file_path) else {
+            return ctx;
+        };
+        let src_dir = pkg_dir.join("src");
+        let root_file = if src_dir.join("main.rs").is_file() {
+            src_dir.join("main.rs")
+        } else {
+            src_dir.join("lib.rs")
+        };
+        if root_file.is_file() {
+            collect_rust_modules(&root_file, &src_dir, &mut ctx.root);
+            ctx.local = ctx.root.clone();
+        }
+        // Ancestor mod.rs chain: modules declared in the file's enclosing
+        // module files are visible as bare paths from this file. Innermost
+        // declarations shadow outer ones (inserted last).
+        let parent = Path::new(file_path).parent().unwrap_or(Path::new(""));
+        let mut chain: Vec<PathBuf> = Vec::new();
+        let mut dir = Some(parent.to_path_buf());
+        while let Some(d) = dir {
+            if d == src_dir {
+                break;
+            }
+            chain.push(d.clone());
+            dir = d.parent().map(Path::to_path_buf);
+        }
+        for d in chain.iter().rev() {
+            let mod_file = d.join("mod.rs");
+            if mod_file.is_file() {
+                collect_rust_modules(&mod_file, d, &mut ctx.local);
+            }
+        }
+        ctx
+    }
+}
+
+/// Walk up from `file` to the nearest directory containing a `Cargo.toml`
+/// with a `[package]` section (the crate root). Workspace-root manifests
+/// are skipped. Returns `None` when no package manifest is found.
+fn rust_package_dir(file: &str) -> Option<PathBuf> {
+    let mut dir = Path::new(file).parent()?.to_path_buf();
+    loop {
+        let manifest = dir.join("Cargo.toml");
+        if manifest.is_file() {
+            if let Ok(text) = std::fs::read_to_string(&manifest) {
+                if text.lines().any(|l| l.trim().starts_with("[package]")) {
+                    return Some(dir);
+                }
+            }
+        }
+        dir = dir.parent()?.to_path_buf();
+    }
+}
+
+/// Parse `mod_file` for file-backed module declarations (`mod x;`) and map
+/// each name to its resolved file path (`<base>/x.rs` or `<base>/x/mod.rs`).
+/// Inline modules (`mod x { ... }`) and declarations with no backing file
+/// are skipped.
+fn collect_rust_modules(mod_file: &Path, base_dir: &Path, map: &mut HashMap<String, String>) {
+    let Ok(source) = std::fs::read_to_string(mod_file) else {
+        return;
+    };
+    let mut ts = tree_sitter::Parser::new();
+    if ts.set_language(&tree_sitter_rust::LANGUAGE.into()).is_err() {
+        return;
+    }
+    let Some(tree) = ts.parse(&source, None) else {
+        return;
+    };
+    collect_rust_mod_items(tree.root_node(), &source, base_dir, map);
+}
+
+fn collect_rust_mod_items(
+    node: Node,
+    source: &str,
+    base_dir: &Path,
+    map: &mut HashMap<String, String>,
+) {
+    if node.kind() == "mod_item" {
+        // Inline `mod x { ... }` has a body; file-backed `mod x;` does not.
+        if node.child_by_field_name("body").is_none() {
+            if let Some(name_node) = node.child_by_field_name("name") {
+                if let Ok(name) = name_node.utf8_text(source.as_bytes()) {
+                    let as_file = base_dir.join(format!("{name}.rs"));
+                    let as_dir = base_dir.join(name).join("mod.rs");
+                    let target = if as_file.is_file() {
+                        Some(as_file)
+                    } else if as_dir.is_file() {
+                        Some(as_dir)
+                    } else {
+                        None
+                    };
+                    if let Some(t) = target {
+                        map.insert(name.to_string(), t.to_string_lossy().into_owned());
+                    }
+                }
+            }
+        }
+        return;
+    }
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        collect_rust_mod_items(child, source, base_dir, map);
+    }
+}
+
+/// Resolve a Rust use path to the concrete file it imports, when the first
+/// segment names a local module. `from_crate_root` selects the crate-root
+/// map (`crate::`-prefixed absolute paths) vs the file's local map (bare
+/// paths). Deeper segments descend into module directories; resolution
+/// stops at the nearest existing file. Returns `None` for external paths.
+fn resolve_rust_path(ctx: &RustModuleCtx, path: &str, from_crate_root: bool) -> Option<String> {
+    let path = path.trim();
+    if path.is_empty() {
+        return None;
+    }
+    let segments: Vec<&str> = path.split("::").filter(|s| !s.is_empty()).collect();
+    let first = *segments.first()?;
+    let entry = if from_crate_root {
+        ctx.root.get(first)
+    } else {
+        ctx.local.get(first)
+    }?
+    .clone();
+    let mut current = PathBuf::from(entry);
+    for seg in &segments[1..] {
+        let is_plain_file = current.file_name().and_then(|n| n.to_str()) != Some("mod.rs");
+        if is_plain_file {
+            // A plain `x.rs` cannot contain file-backed submodules.
+            break;
+        }
+        let dir = current.parent()?;
+        let as_file = dir.join(format!("{seg}.rs"));
+        let as_dir = dir.join(seg).join("mod.rs");
+        if as_file.is_file() {
+            current = as_file;
+        } else if as_dir.is_file() {
+            current = as_dir;
+        } else {
+            break;
+        }
+    }
+    Some(current.to_string_lossy().into_owned())
+}
+
+fn extract_rust_imports(node: Node, source: &[u8], paths: &mut Vec<String>, ctx: &RustModuleCtx) {
     if node.kind() == "use_declaration" {
         let text = node.utf8_text(source).unwrap_or("");
         let mut trimmed = strip_rust_use_visibility(text);
@@ -336,19 +514,28 @@ fn extract_rust_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
         if trimmed.contains('{') {
             // Brace groups: expand to one edge per symbol (`use foo::{a, b}`
             // → pkg:foo::a, pkg:foo::b) instead of leaking the raw group
-            // text (`pkg:{...}` garbage) into the graph.
+            // text (`pkg:{...}` garbage) into the graph. Local module
+            // symbols resolve to file paths (GAP-043).
             for symbol in expand_rust_use_group(trimmed) {
-                push_rust_symbol_edge(&symbol, paths);
+                push_rust_symbol_edge(&symbol, paths, ctx);
             }
         } else {
             let path = strip_rust_alias(trimmed).trim_end_matches(';').trim();
-            let crate_name = path.split("::").next().unwrap_or(path);
-            if !crate_name.is_empty()
-                && crate_name != "crate"
-                && crate_name != "self"
-                && crate_name != "super"
-            {
-                paths.push(format!("pkg:{crate_name}"));
+            let first = path.split("::").next().unwrap_or(path);
+            if first == "crate" {
+                // `use crate::...` — absolute within this crate: resolve to
+                // the module's file, skip when unresolvable.
+                if let Some(target) = resolve_rust_path(ctx, &path["crate".len()..], true) {
+                    paths.push(target);
+                }
+            } else if first == "self" || first == "super" {
+                // Local pseudo-prefixes: skipped (unchanged behaviour).
+            } else if let Some(target) = resolve_rust_path(ctx, path, false) {
+                // Bare path naming a local module: file→file edge.
+                paths.push(target);
+            } else if !first.is_empty() {
+                // External crate: keep the pkg: pseudo-node.
+                paths.push(format!("pkg:{first}"));
             }
         }
         return;
@@ -369,7 +556,7 @@ fn extract_rust_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
         node.children(&mut c).collect()
     };
     for child in children {
-        extract_rust_imports(child, source, paths);
+        extract_rust_imports(child, source, paths, ctx);
     }
 }
 
@@ -399,15 +586,28 @@ fn strip_rust_alias(path: &str) -> &str {
     path.split(" as ").next().unwrap_or(path).trim()
 }
 
-/// Emit one `pkg:` edge per expanded use-symbol; skips local pseudo-prefixes
+/// Emit one edge per expanded use-symbol: file→file for local modules,
+/// `pkg:` for external crates; skips local pseudo-prefixes
 /// (`crate`/`self`/`super`) and empty/alias-only segments.
-fn push_rust_symbol_edge(symbol: &str, paths: &mut Vec<String>) {
+fn push_rust_symbol_edge(symbol: &str, paths: &mut Vec<String>, ctx: &RustModuleCtx) {
     let symbol = strip_rust_alias(symbol).trim_end_matches(';').trim();
     if symbol.is_empty() {
         return;
     }
     let first = symbol.split("::").next().unwrap_or(symbol);
-    if first != "crate" && first != "self" && first != "super" {
+    if first == "crate" {
+        // `use crate::x::y` — absolute path within this crate.
+        if let Some(target) = resolve_rust_path(ctx, &symbol["crate".len()..], true) {
+            paths.push(target);
+        }
+        return;
+    }
+    if first == "self" || first == "super" {
+        return;
+    }
+    if let Some(target) = resolve_rust_path(ctx, symbol, false) {
+        paths.push(target);
+    } else {
         paths.push(format!("pkg:{symbol}"));
     }
 }
@@ -1369,6 +1569,120 @@ use anyhow::{bail, Context as _};
         assert!(imports
             .iter()
             .all(|p| !p.contains('{') && !p.contains("pub")));
+    }
+
+    /// Parse `source` as Rust with `file_path` as the file's path, so the
+    /// intra-crate module context resolves against real fixtures on disk.
+    fn parse_rust_at(file_path: &str, source: &str) -> Vec<String> {
+        let mut p = Parser::for_language(Language::Rust).unwrap();
+        p.parse_imports(file_path, source)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.to)
+            .collect()
+    }
+
+    /// Write a fixture crate (Cargo.toml + module files) inside `dir` and
+    /// return the absolute path of the main source file.
+    fn write_rust_crate(dir: &Path, main: &str) -> String {
+        std::fs::create_dir_all(dir.join("src/commands")).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"fixture-cli\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("src/main.rs"), main).unwrap();
+        std::fs::write(
+            dir.join("src/commands/mod.rs"),
+            "pub mod init;\npub mod plugin;\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("src/commands/init.rs"), "pub fn init() {}\n").unwrap();
+        std::fs::write(dir.join("src/commands/plugin.rs"), "pub fn plugin() {}\n").unwrap();
+        dir.join("src/main.rs").to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn rust_intra_crate_bare_path_resolves_to_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = write_rust_crate(
+            dir.path(),
+            "mod commands;\nuse commands::init;\nuse clap::Parser;\n",
+        );
+        let imports = parse_rust_at(&main, &std::fs::read_to_string(&main).unwrap());
+        let commands_init = dir.path().join("src/commands/init.rs");
+        assert!(
+            imports.contains(&commands_init.to_string_lossy().into_owned()),
+            "bare `use commands::init` must resolve to commands/init.rs, got: {imports:?}"
+        );
+        // External crates keep their pkg: pseudo-node.
+        assert!(imports.contains(&"pkg:clap".into()));
+    }
+
+    #[test]
+    fn rust_intra_crate_brace_group_expands_to_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = write_rust_crate(dir.path(), "mod commands;\nuse commands::{init, plugin};\n");
+        let imports = parse_rust_at(&main, &std::fs::read_to_string(&main).unwrap());
+        let init = dir.path().join("src/commands/init.rs");
+        let plugin = dir.path().join("src/commands/plugin.rs");
+        assert!(
+            imports.contains(&init.to_string_lossy().into_owned()),
+            "group symbol init must resolve to a file, got: {imports:?}"
+        );
+        assert!(
+            imports.contains(&plugin.to_string_lossy().into_owned()),
+            "group symbol plugin must resolve to a file, got: {imports:?}"
+        );
+        assert!(
+            imports.iter().all(|p| !p.starts_with("pkg:commands")),
+            "no pkg:commands pseudo-node may survive resolution, got: {imports:?}"
+        );
+    }
+
+    #[test]
+    fn rust_crate_absolute_path_resolves_to_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = write_rust_crate(dir.path(), "mod commands;\nuse crate::commands::init;\n");
+        let imports = parse_rust_at(&main, &std::fs::read_to_string(&main).unwrap());
+        let init = dir.path().join("src/commands/init.rs");
+        assert!(
+            imports.contains(&init.to_string_lossy().into_owned()),
+            "`use crate::commands::init` must resolve to a file, got: {imports:?}"
+        );
+        assert!(!imports.contains(&"pkg:crate".into()));
+    }
+
+    #[test]
+    fn rust_sibling_module_visible_from_nested_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = write_rust_crate(dir.path(), "mod commands;\n");
+        let plugin = dir.path().join("src/commands/plugin.rs");
+        std::fs::write(&plugin, "use init::Init;\n").unwrap();
+        let imports = parse_rust_at(
+            &plugin.to_string_lossy(),
+            &std::fs::read_to_string(&plugin).unwrap(),
+        );
+        let init = dir.path().join("src/commands/init.rs");
+        assert!(
+            imports.contains(&init.to_string_lossy().into_owned()),
+            "sibling `use init::...` inside commands/plugin.rs must resolve to commands/init.rs, got: {imports:?}"
+        );
+    }
+
+    #[test]
+    fn rust_without_cargo_manifest_keeps_pkg_fallback() {
+        // No Cargo.toml on the walk up → empty module context → pkg: edges.
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src/main.rs");
+        std::fs::create_dir_all(src.parent().unwrap()).unwrap();
+        std::fs::write(&src, "use commands::init;\nuse serde::Serialize;\n").unwrap();
+        let imports = parse_rust_at(
+            &src.to_string_lossy(),
+            &std::fs::read_to_string(&src).unwrap(),
+        );
+        assert!(imports.contains(&"pkg:commands".into()), "{imports:?}");
+        assert!(imports.contains(&"pkg:serde".into()), "{imports:?}");
     }
 
     #[test]
