@@ -178,7 +178,7 @@ where
     });
 
     // 4. Extract symbols and assign tiers.
-    let signal_files = build_signal_files(&sorted_files, &anchors, opts, source_reader)?;
+    let signal_files = build_signal_files(&sorted_files, opts, source_reader)?;
 
     // 5. Format output text.
     let text = format_output(&signal_files, &anchors, opts);
@@ -1176,14 +1176,12 @@ fn extract_identifier(line: &str, _kw1: &str, kw2: &str) -> Option<String> {
 /// and assigning tiers based on score.
 fn build_signal_files<F>(
     sorted: &[(String, f64, String)],
-    anchors: &[String],
     opts: &SignalOpts,
     source_reader: Option<F>,
 ) -> GraphResult<Vec<SignalFile>>
 where
     F: Fn(&str) -> Option<String>,
 {
-    let anchor_set: HashSet<&str> = anchors.iter().map(|s| s.as_str()).collect();
     let n = sorted.len();
 
     // Tier assignment:
@@ -1204,18 +1202,14 @@ where
             Tier::Map
         };
 
-        // Read source for symbol extraction and detail.
-        let source = if tier == Tier::Detail
-            || tier == Tier::Signature
-            || anchor_set.contains(path.as_str())
-        {
-            if let Some(ref reader) = source_reader {
-                reader(path)
-            } else {
-                std::fs::read_to_string(path).ok()
-            }
+        // Read source for symbol extraction and detail. Source is read for
+        // EVERY tier in the (budget-capped) result set: Map-tier files must
+        // show their symbols too — GAP-044 — they previously printed
+        // '(no symbols extracted)' despite being symbol-rich.
+        let source = if let Some(ref reader) = source_reader {
+            reader(path)
         } else {
-            None
+            std::fs::read_to_string(path).ok()
         };
 
         let raw_symbols = if let Some(ref src) = source {
@@ -1673,6 +1667,53 @@ mod tests {
             "symbols should be capped at 8, got {}",
             big_file.symbols.len()
         );
+    }
+
+    #[test]
+    fn understand_map_tier_files_get_symbols() {
+        // GAP-044 regression: low-signal (Map-tier) files must have symbols
+        // extracted. Previously source was read only for Detail/Signature
+        // tiers and anchors, so Map-tier symbol-rich files printed
+        // '(no symbols extracted)'. The budget-capped result set makes
+        // reading source for every row bounded.
+        let db = GraphDB::open(":memory:").unwrap();
+        let edges: Vec<Edge> = (0..12)
+            .map(|i| edge(&format!("src/lib{i}.go"), "src/main.go", "imports"))
+            .collect();
+        db.insert_edges(&edges).unwrap();
+
+        // seed_limit=2 → Detail: 2 files, Signature: 2 files, rest Map.
+        let opts = SignalOpts {
+            seed_limit: 2,
+            ..Default::default()
+        };
+        let reader = |path: &str| -> Option<String> {
+            if path.contains("main") {
+                Some("package main\n\nfunc MainEntry() {}\n".into())
+            } else {
+                Some("package lib\n\nfunc Helper() {}\nstruct Widget {}\n".into())
+            }
+        };
+
+        let result = understand_with_source(&db, "main", &opts, Some(reader)).unwrap();
+
+        let map_files: Vec<&SignalFile> = result
+            .files
+            .iter()
+            .filter(|f| f.tier == Tier::Map)
+            .collect();
+        assert!(
+            !map_files.is_empty(),
+            "fixture must produce Map-tier files, got tiers {:?}",
+            result.files.iter().map(|f| f.tier).collect::<Vec<_>>()
+        );
+        for f in map_files {
+            assert!(
+                !f.symbols.is_empty(),
+                "Map-tier file {} must have symbols, got empty (GAP-044)",
+                f.path
+            );
+        }
     }
 
     #[test]
