@@ -1656,7 +1656,7 @@ use anyhow::{bail, Context as _};
     #[test]
     fn rust_sibling_module_visible_from_nested_file() {
         let dir = tempfile::tempdir().unwrap();
-        let main = write_rust_crate(dir.path(), "mod commands;\n");
+        let _main = write_rust_crate(dir.path(), "mod commands;\n");
         let plugin = dir.path().join("src/commands/plugin.rs");
         std::fs::write(&plugin, "use init::Init;\n").unwrap();
         let imports = parse_rust_at(
