@@ -300,9 +300,17 @@ pub fn run_related(path: &str, relation: Option<&str>, direction: Option<&str>) 
     }
 
     for edge in &edges {
+        // GAP-045: pkg:* targets are external-package pseudo-nodes, not
+        // resolvable file paths — label them so agents don't try to pass
+        // them to meta/impact (GAP-038 covered stats/search only).
+        let external = if edge.from.starts_with("pkg:") || edge.to.starts_with("pkg:") {
+            " [external package]"
+        } else {
+            ""
+        };
         println!(
-            "{}  →  {}  ({})  [{} conf={:.2}]",
-            edge.from, edge.to, edge.rel, edge.provenance, edge.confidence
+            "{}  →  {}  ({})  [{} conf={:.2}]{}",
+            edge.from, edge.to, edge.rel, edge.provenance, edge.confidence, external
         );
     }
 

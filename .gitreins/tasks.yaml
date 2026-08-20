@@ -440,3 +440,13 @@ tasks:
   status: complete
   created_at: '2026-08-20T05:53:10.616978+00:00'
   completed_at: '2026-08-20T05:53:16.898790+00:00'
+- id: gap-044-map-tier-symbols
+  title: 'GAP-044: Map-tier files must show real symbols in understand MAP'
+  criteria:
+  - hilo graph understand manifest (via target/release/hilo) shows real fn/struct
+    symbols for hilo-core/src/workspace.rs and worktree.rs rows; '(no symbols extracted)'
+    remains only for genuinely symbol-free files; RUSTFLAGS='-D warnings' cargo test
+    --workspace --no-run exits 0
+  status: complete
+  created_at: '2026-08-20T12:50:28.575742+00:00'
+  completed_at: '2026-08-20T13:05:47.309628+00:00'
