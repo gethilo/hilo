@@ -430,3 +430,13 @@ tasks:
   status: complete
   created_at: '2026-08-19T23:19:44.881011+00:00'
   completed_at: '2026-08-19T23:29:12.128099+00:00'
+- id: INT-CI-003
+  title: 'CI red: RUSTFLAGS=-D warnings test build fails on unused variable main in
+    hilo-graph/src/parser.rs:1659 (GAP-043 tempdir test)'
+  criteria:
+  - grep -c 'let _main = write_rust_crate' hilo-graph/src/parser.rs >= 1 AND grep
+    -c 'let main = write_rust_crate(dir.path(), "mod commands' hilo-graph/src/parser.rs
+    == 0 AND RUSTFLAGS='-D warnings' cargo test --workspace --no-run exits 0
+  status: complete
+  created_at: '2026-08-20T05:53:10.616978+00:00'
+  completed_at: '2026-08-20T05:53:16.898790+00:00'
