@@ -22,7 +22,7 @@ Clone and build:
 cargo check --workspace
 
 # Build the CLI binary (~20m first time due to duckdb-sys from source)
-cargo build --release -p hilo-cli
+cargo build --release -p hilo_cli
 
 # Install
 cp target/release/hilo ~/.cargo/bin/hilo
@@ -60,10 +60,10 @@ hilo serve --mcp
 cargo test --workspace
 
 # Specific crate
-cargo test -p hilo-graph
+cargo test -p hilo_graph
 
 # Determinism tests (byte-identical output verification)
-cargo test -p hilo-graph --test determinism_test
+cargo test -p hilo_graph --test determinism_test
 ```
 
 ## Linting & Formatting
