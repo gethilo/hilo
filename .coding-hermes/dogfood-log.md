@@ -44,3 +44,30 @@ answer (`graph stats`) ~2 min from start of run including clone.
 
 **Left behind:** docs/dogfood/2026-08-13-integration.md, docs/dogfood/diagnostics.md,
 skills/hilo-usage/SKILL.md, tasks GAP-034..038, this log. Foreman woken 43200→900.
+
+## 2026-08-23 — warpfs (Hilo) — 🟡 PROMISING-BUT-ROUGH (run 2, serde corpus)
+
+**Promise:** agent-first VFS: pre-computed dependency graph + metadata so an
+agent gets blast radius / deps / coverage without reading files.
+
+**Reality:** materially improved since run 1 — every run-1 P0/P1 fix verified
+live (file-level impact WORKS now, brace-group garbage gone, intra-crate
+file→file edges, understand symbols, classify tests). But the headline blast
+radius still answers 6/148 on serde (GAP-048 P0): pkg-resolution matches
+exact targets only, missing brace-expanded member edges. classify role
+metadata is wrong on crate roots (GAP-049). MCP logs to stdout (GAP-050).
+tested_by edges never emitted (GAP-052). SKILL.md build command broken
+(GAP-051). Plumbing (FUSE, MCP, xattr, hooks, determinism, speed) solid.
+
+**Time-to-first-success:** ~3 min (init 30ms + warm 35s + classify 1.2s +
+stats). First real answer (impact file): ~4 min. **Friction count:** 8
+(6 gaps + stale ~/.cargo/bin/hilo Aug-15 binary + search pkg: hits unlabeled).
+
+**Top 3 findings (task IDs):**
+1. GAP-048 (P0) — impact under-counts 96%: 6/148 dependents on serde; resolution misses pkg:serde::* member edges.
+2. GAP-049 (P1) — classify: crate roots role=unknown; build.rs as entrypoint; only tests trustworthy.
+3. GAP-050 (P2) — MCP INFO log on stdout breaks naive JSON-RPC clients (framing violation).
+
+**Left behind:** docs/dogfood/2026-08-23-integration.md, diagnostics.md
+updated, SKILL.md field notes updated, tasks GAP-048..053, this log.
+Foreman wake: PUT CooldownS 21600→900 (board has real work).

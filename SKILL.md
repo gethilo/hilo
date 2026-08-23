@@ -203,3 +203,40 @@ not data loss.
    `vfs_get_metadata`).
 5. Trust FUSE (`--daemon`), MCP protocol, xattr round-trips, and speed claims —
    they all verified clean.
+
+## Field Notes — Dogfood 2026-08-23 (serde corpus, 208 files)
+
+Second real-use run, fresh serde clone + release binary from master.
+Verdict: 🟡 PROMISING-BUT-ROUGH (up from structural breakage; still not
+shippable). GAP-034/035/036/043/044/045 fixes ALL verified live. New gaps
+GAP-048..053 added to board. Read before querying:
+
+**Blast radius is a LOWER BOUND, not truth (GAP-048, P0 — open).**
+`impact serde/src/lib.rs` → 6 dependents; 148 files actually import serde.
+The pkg-resolution layer matches only exact `pkg:serde` targets; the 53+
+brace-expanded `pkg:serde::<member>` edges (from `use serde::{...}`) don't
+resolve. Cross-check small impact counts against `impact 'pkg:<crate>'`
+and `graph stats`. Do not trust a small number from a file-form impact
+query on brace-heavy code.
+
+**classify roles: only `test` is trustworthy (GAP-049, P1 — open).**
+Crate-root lib.rs files (148 importers) get role `unknown`; the only
+"entrypoints" on serde were 4 build.rs scripts; 8/208 files got `library`.
+Tests are detected well (151/208). Don't orient on role xattrs for
+library/entrypoint yet.
+
+**`graph untested` is not a coverage tool (GAP-052, P2 — open).**
+Zero `tested_by` edges are ever emitted; untested = all non-test files.
+
+**MCP stdout is polluted (GAP-050, P2 — open).** `hilo serve --mcp` logs an
+INFO tracing event to stdout at startup; naive clients misparse it as the
+initialize response. Use a client that skips non-JSON lines.
+
+**Build with `-p hilo-cli` (hyphen) (GAP-051, P2 — open).** SKILL.md line 25
+still says `-p hilo_cli` (cargo error); hilo-cli is the only hyphenated
+crate. `-p hilo_graph` for graph tests is correct.
+
+**Still-verified-clean (from run 1, re-confirmed):** FUSE `--daemon` mount
+instant + clean unmount; MCP 15 tools responding; meta/xattr round-trips;
+graph clean → rewarm determinism (598/749 twice); git hooks incremental
+warm; 6-language corpus parses; release impact query 0.84s.

@@ -112,3 +112,60 @@ nothing in the docs tells a user to query `pkg:globset` instead of the file path
 | `understand <file>` printed whole-repo MAP | `<TASK>` is a natural-language task, not a path | pass a task string |
 | untested = 82/82 | classification + untested logic (GAP-036) | none yet |
 | `pkg:{` in search/stats | brace-group truncation (GAP-035) | none yet |
+
+---
+
+# 2026-08-23 Update — Second Real-Use Run (serde corpus, 208 files)
+
+The 2026-08-13 diagnostics said file-level queries were *structurally*
+empty because every edge targets `pkg:*` pseudo-nodes. Since then, the
+foreman landed a **query-time pkg-resolution layer** (d1472bb, GAP-034):
+file-level `impact`/`related` queries now map the file to its `pkg:<name>`
+node and traverse. Verified working on serde: `impact serde/src/lib.rs`
+returns 6 real dependents (was always empty). GAP-035 (brace-group
+expansion), GAP-043 (intra-crate file→file edges — 177 on serde), GAP-044
+(understand symbols), GAP-045 (pkg labeling) all verified live.
+
+## Why the under-count happens (the new structural limit)
+
+The resolution layer matches **exact** `pkg:serde` edge targets only.
+But GAP-035's brace-group expansion emits **per-member** edges —
+`use serde::{Serialize, Deserialize}` → edges to `pkg:serde::Serialize`,
+`pkg:serde::Deserialize`, not `pkg:serde`. On serde: 7 exact edges vs 53+
+member edges; 148 unique files import serde in some form; impact returns 6.
+So the two fixes (GAP-034 resolution, GAP-035 expansion) interact badly:
+the expansion multiplied the edge forms the resolution layer doesn't match.
+The right fix direction is prefix matching (`pkg:serde` matches
+`pkg:serde::*`) in the resolution layer, or resolving member edges back to
+the defining file. Tracked as GAP-048 (P0).
+
+## How classify actually behaves (learned the hard way)
+
+`hilo classify` role heuristics on real code: tests detected well
+(151/208 on serde, incl. nested test_suite/), but crate-root lib.rs files
+with hundreds of importers get role `unknown`; only 8 files got `library`
+(internals/*, private/*); the only `entrypoint`s were 4 build.rs scripts.
+So role xattrs are only trustworthy for tests today (GAP-049).
+
+## The tested_by hole
+
+Nothing in the pipeline ever emits `tested_by` edges (0/749 on serde,
+0/256 on ripgrep in run 1). `graph untested` therefore lists all non-test
+files — including crate roots that the test_suite imports everywhere. It
+is a "not a test file" filter, not a coverage report (GAP-052).
+
+## MCP stdout hygiene
+
+`hilo serve --mcp` writes a tracing INFO event to stdout at startup.
+MCP stdio framing requires stdout to be pure JSON-RPC; a naive client
+crashes on the first line. Log to stderr (GAP-050).
+
+## The right way today (updated)
+
+1. init → warm → classify; expect ~35s/200 files (debug) / faster release.
+2. File-level impact/related WORK — but treat counts as lower bounds while
+   GAP-048 is open; cross-check with `impact 'pkg:<crate>'` and `stats`.
+3. Symbols: `graph understand <path>` (file paths accepted) — real symbols,
+   ugly formatting (GAP-053).
+4. MCP: use a client that skips non-JSON lines until GAP-050 lands.
+5. Build with `-p hilo-cli` (hyphen), not `-p hilo_cli` (GAP-051).
