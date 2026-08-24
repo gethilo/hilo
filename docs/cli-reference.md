@@ -198,7 +198,7 @@ hilo classify --features
 ```
 
 Roles detected: `entrypoint`, `library`, `test`, `script`, `example`,
-`config`, `unknown`.
+`config`, `build`, `generated`, `unknown`.
 
 Statuses detected: `stable`, `beta`, `unstable`, `deprecated`, `unknown`.
 

@@ -219,11 +219,12 @@ resolve. Cross-check small impact counts against `impact 'pkg:<crate>'`
 and `graph stats`. Do not trust a small number from a file-form impact
 query on brace-heavy code.
 
-**classify roles: only `test` is trustworthy (GAP-049, P1 — open).**
-Crate-root lib.rs files (148 importers) get role `unknown`; the only
-"entrypoints" on serde were 4 build.rs scripts; 8/208 files got `library`.
-Tests are detected well (151/208). Don't orient on role xattrs for
-library/entrypoint yet.
+**classify roles: crate roots + build scripts now sane (GAP-049, fixed 2026-08-24).**
+lib.rs/mod.rs crate/module roots classify as `library` even when they are
+macro/re-export walls with few `pub fn` (serde crate roots, 148 importers);
+build.rs/build.zig classify as `build`, never `entrypoint`. Remaining caveat:
+role accuracy on non-root files still varies — `test` detection is the most
+reliable (151/208 on serde).
 
 **`graph untested` is not a coverage tool (GAP-052, P2 — open).**
 Zero `tested_by` edges are ever emitted; untested = all non-test files.

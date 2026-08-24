@@ -11,7 +11,8 @@ use tree_sitter::Parser as TsParser;
 /// Classification labels written as xattrs (user.vfs.*).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Classification {
-    /// "entrypoint", "library", "test", "example", "config", "script", "unknown"
+    /// "entrypoint", "library", "test", "example", "config", "script",
+    /// "build", "generated", "unknown"
     pub role: String,
     /// "stable", "beta", "unstable", "deprecated", "unknown"
     pub status: String,
@@ -78,7 +79,19 @@ pub fn classify_file(
         });
     }
 
-    // 2. Entrypoint detection by filename convention
+    // 2. Build script detection by filename convention (build.rs contains
+    //    `fn main()` and would otherwise be caught by the AST entrypoint
+    //    check below — build scripts are NOT application entrypoints)
+    if is_build_script(file_path) {
+        return Ok(Classification {
+            role: "build".into(),
+            status: "stable".into(),
+            reason: "build script (filename convention)".into(),
+            feature: None,
+        });
+    }
+
+    // 3. Entrypoint detection by filename convention
     if is_entrypoint_by_name(file_path) {
         return Ok(Classification {
             role: "entrypoint".into(),
@@ -88,7 +101,21 @@ pub fn classify_file(
         });
     }
 
-    // 3. AST-based detection for main functions and library markers
+    // 4. Crate/module root convention: lib.rs is the library crate root;
+    //    mod.rs is a module root (src/mod.rs = crate root module, nested
+    //    dirs = module roots). Both are library surface, never entrypoints —
+    //    even when they contain few `pub fn` items (macro/re-export walls
+    //    like serde's lib.rs would otherwise fall through to "unknown").
+    if is_crate_module_root(file_path) {
+        return Ok(Classification {
+            role: "library".into(),
+            status: classify_library_status(file_path),
+            reason: "crate/module root convention (lib.rs/mod.rs)".into(),
+            feature: None,
+        });
+    }
+
+    // 5. AST-based detection for main functions and library markers
     let mut parser = TsParser::new();
     let ts_lang = language_to_ts(language);
     parser
@@ -295,6 +322,26 @@ pub(crate) fn is_test_file(path: &str) -> bool {
 fn classify_test_status(_path: &str) -> String {
     // Test files are inherently less stable than production code
     "beta".into()
+}
+
+// ── Build script detection ──────────────────────────────────────────
+
+/// Build scripts (build.rs for Cargo, build.zig for Zig) run at compile
+/// time and contain `fn main()` — they must never be classified as
+/// application entrypoints.
+fn is_build_script(path: &str) -> bool {
+    let lower = path.to_lowercase();
+    lower.ends_with("build.rs") || lower.ends_with("build.zig")
+}
+
+// ── Crate/module root detection ─────────────────────────────────────
+
+/// `lib.rs` = library crate root; `mod.rs` = module root (either the
+/// crate-root module `src/mod.rs` or a nested `src/foo/mod.rs`). Both are
+/// library surface and never entrypoint files.
+fn is_crate_module_root(path: &str) -> bool {
+    let lower = path.to_lowercase();
+    lower.ends_with("lib.rs") || lower.ends_with("mod.rs")
 }
 
 // ── Entrypoint detection by filename ────────────────────────────────
@@ -1109,6 +1156,58 @@ mod tests {
         assert!(is_entrypoint_by_name("pkg/__main__.py"));
         assert!(!is_entrypoint_by_name("src/lib.rs"));
         assert!(!is_entrypoint_by_name("util/helpers.go"));
+    }
+
+    #[test]
+    fn test_build_script_detection() {
+        assert!(is_build_script("build.rs"));
+        assert!(is_build_script("crates/foo/build.rs"));
+        assert!(is_build_script("serde_derive/build.rs"));
+        assert!(is_build_script("build.zig"));
+        assert!(!is_build_script("src/main.rs"));
+        assert!(!is_build_script("src/lib.rs"));
+        assert!(!is_build_script("build.rs.bak"));
+    }
+
+    #[test]
+    fn test_build_script_not_entrypoint() {
+        // build.rs contains `fn main()` — must classify as "build", not entrypoint
+        let result = classify_file(
+            Language::Rust,
+            "build.rs",
+            "fn main() {\n    println!(\"build\");\n}\n",
+        )
+        .unwrap();
+        assert_eq!(result.role, "build");
+        let result =
+            classify_file(Language::Rust, "crates/foo/build.rs", "fn main() {\n}\n").unwrap();
+        assert_eq!(result.role, "build");
+    }
+
+    #[test]
+    fn test_crate_module_root_detection() {
+        assert!(is_crate_module_root("src/lib.rs"));
+        assert!(is_crate_module_root("serde_core/src/lib.rs"));
+        assert!(is_crate_module_root("src/de/mod.rs"));
+        assert!(is_crate_module_root("src/mod.rs"));
+        assert!(!is_crate_module_root("src/main.rs"));
+        assert!(!is_crate_module_root("src/de/mod2.rs"));
+        assert!(!is_crate_module_root("build.rs"));
+    }
+
+    #[test]
+    fn test_crate_root_classifies_library() {
+        // Macro/re-export wall lib.rs (serde-style) — no pub fns, no entrypoint
+        let source = "#[macro_export]\nmacro_rules! my_macro {\n    () => {};\n}\npub use core::Serialize;\n";
+        let result = classify_file(Language::Rust, "serde/src/lib.rs", source).unwrap();
+        assert_eq!(result.role, "library");
+        // Nested module root
+        let result =
+            classify_file(Language::Rust, "serde/src/de/mod.rs", "pub mod value;\n").unwrap();
+        assert_eq!(result.role, "library");
+        // Entrypoint by name still wins
+        let result = classify_file(Language::Rust, "src/main.rs", "fn main() {}\n").unwrap();
+        assert_eq!(result.role, "entrypoint");
     }
 
     #[test]
