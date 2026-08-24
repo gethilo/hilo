@@ -476,3 +476,13 @@ tasks:
   status: complete
   created_at: '2026-08-23T22:28:10.796979+00:00'
   completed_at: '2026-08-24T04:53:58.571932+00:00'
+- id: gap-051-skill-pkg-name
+  title: 'GAP-051: SKILL.md build command uses the real package name -p hilo-cli'
+  criteria:
+  - 'SKILL.md contains no -p hilo_cli or -p hilo-graph references: grep -c ''cargo
+    build --release -p hilo_cli'' SKILL.md == 0 AND grep -c ''\-p hilo_cli'' SKILL.md
+    == 0 AND grep -c ''cargo build --release -p hilo-cli'' SKILL.md >= 1 AND cargo
+    check -p hilo-cli exits 0'
+  status: complete
+  created_at: '2026-08-24T07:10:28.936388+00:00'
+  completed_at: '2026-08-24T07:14:29.760582+00:00'
