@@ -6,7 +6,7 @@
 //! Each language gets a dedicated extraction function that understands its
 //! specific import/dependency syntax.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use hilo_metadata::inventory::Edge;
@@ -205,22 +205,37 @@ impl Parser {
             Language::Nim => extract_nim_imports(tree.root_node(), source.as_bytes(), &mut paths),
         }
 
-        let edges = paths
-            .into_iter()
-            .map(|path| Edge {
+        // GAP-052: a test file's imports are also coverage edges. Emit
+        // `tested_by` (test → target) alongside `imports` for every unique
+        // target so `graph untested`, module coverage stats, and impact see
+        // what the test suite exercises. Without this, no code path ever
+        // writes `tested_by` and every production file reads as "untested".
+        let is_test = crate::classify::is_test_file(file_path);
+        let mut edges: Vec<Edge> = Vec::with_capacity(paths.len());
+        let mut tested_targets: HashSet<String> = HashSet::new();
+        for path in paths {
+            edges.push(Edge {
                 from: file_path.to_string(),
-                to: path,
+                to: path.clone(),
                 rel: "imports".to_string(),
                 provenance: "ast_exact".to_string(),
                 confidence: 1.0,
-            })
-            .collect();
+            });
+            if is_test && tested_targets.insert(path.clone()) {
+                edges.push(Edge {
+                    from: file_path.to_string(),
+                    to: path,
+                    rel: "tested_by".to_string(),
+                    provenance: "ast_exact".to_string(),
+                    confidence: 1.0,
+                });
+            }
+        }
         Ok(edges)
     }
 }
 
 // ── Go ──────────────────────────────────────────────────────────────
-
 fn extract_go_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
     if node.kind() == "import_spec" {
         let mut cursor = node.walk();
@@ -1474,6 +1489,46 @@ mod tests {
             .into_iter()
             .map(|e| e.to)
             .collect()
+    }
+
+    #[test]
+    fn parse_imports_emits_tested_by_for_test_files() {
+        // GAP-052: a test file's imports double as coverage edges — emit
+        // `tested_by` (test → target) alongside `imports` so `graph untested`
+        // and module coverage see what the suite exercises. Non-test files
+        // must NOT emit `tested_by`.
+        let mut p = Parser::for_language(Language::Rust).unwrap();
+        let edges = p
+            .parse_imports("tests/integration.rs", "use serde::Serialize;\n")
+            .unwrap();
+        let imports: Vec<&str> = edges
+            .iter()
+            .filter(|e| e.rel == "imports")
+            .map(|e| e.to.as_str())
+            .collect();
+        let tested: Vec<&str> = edges
+            .iter()
+            .filter(|e| e.rel == "tested_by")
+            .map(|e| e.to.as_str())
+            .collect();
+        assert!(!imports.is_empty(), "test file must still emit imports");
+        assert_eq!(
+            tested.len(),
+            imports.len(),
+            "every unique import of a test file must also be a tested_by edge"
+        );
+        assert!(
+            tested.iter().all(|t| imports.contains(t)),
+            "tested_by targets must match import targets"
+        );
+
+        // Non-test files: imports only.
+        let mut p2 = Parser::for_language(Language::Rust).unwrap();
+        let edges2 = p2
+            .parse_imports("src/lib.rs", "use serde::Serialize;\n")
+            .unwrap();
+        assert!(edges2.iter().all(|e| e.rel == "imports"));
+        assert_eq!(edges2.len(), 1);
     }
 
     #[test]
