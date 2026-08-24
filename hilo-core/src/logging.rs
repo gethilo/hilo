@@ -17,11 +17,28 @@ use tracing_subscriber::EnvFilter;
 /// If the `RUST_LOG` environment variable is set, it takes precedence
 /// over the default filter (`info`).
 pub fn init_logging(json: bool) {
+    init_logging_to(json, std::io::stdout);
+}
+
+/// Initialize the tracing subscriber writing to a custom sink.
+///
+/// Stdio transports (MCP over stdin/stdout) MUST pass `std::io::stderr`:
+/// stdout is reserved for protocol bytes (newline-delimited JSON-RPC), and
+/// any tracing output there corrupts the framing for naive clients.
+///
+/// `writer` is a writer factory (`Fn() -> W`), matching what
+/// `tracing_subscriber::fmt::SubscriberBuilder::with_writer` accepts.
+pub fn init_logging_to<F, W>(json: bool, writer: F)
+where
+    F: Fn() -> W + Send + Sync + 'static,
+    W: std::io::Write + 'static,
+{
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     let builder = tracing_subscriber::fmt()
         .with_env_filter(filter)
-        .with_span_events(FmtSpan::CLOSE);
+        .with_span_events(FmtSpan::CLOSE)
+        .with_writer(writer);
 
     if json {
         builder.json().init();

@@ -336,3 +336,66 @@ fn serve_without_flag_errors() {
         "stderr should mention --mcp, got: {stderr}"
     );
 }
+
+#[test]
+fn mcp_stdio_stdout_is_pure_jsonrpc() {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let dir = unique_tempdir("mcp-purity");
+    let mut child = Command::new(BIN)
+        .args(["serve", "--mcp"])
+        .current_dir(&dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn hilo serve --mcp");
+
+    // Naive client: send initialize -> tools/list -> tools/call, then EOF.
+    {
+        let stdin = child.stdin.as_mut().expect("stdin not piped");
+        stdin
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n")
+            .expect("failed to write initialize");
+        stdin
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}\n")
+            .expect("failed to write tools/list");
+        stdin
+            .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"vfs_get_metadata\",\"arguments\":{\"path\":\"/nonexistent/hilo-mcp-purity-test\"}}}\n")
+            .expect("failed to write tools/call");
+    } // stdin dropped -> EOF -> server exits
+
+    let output = child
+        .wait_with_output()
+        .expect("failed to wait for hilo serve --mcp");
+    assert!(
+        output.status.success(),
+        "serve --mcp exited non-zero: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Every stdout line must be a JSON-RPC response — zero non-JSON-RPC bytes.
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines.len(),
+        3,
+        "expected exactly 3 JSON-RPC responses, got {lines:?}"
+    );
+    for (line, id) in lines.iter().zip([1i64, 2, 3]) {
+        let v: serde_json::Value = serde_json::from_str(line)
+            .unwrap_or_else(|e| panic!("stdout line is not valid JSON ({e}): {line:?}"));
+        assert_eq!(v["jsonrpc"], "2.0", "stdout line is not JSON-RPC: {line}");
+        assert_eq!(v["id"].as_i64(), Some(id), "response id mismatch: {line}");
+    }
+
+    // Tracing logs must have gone to stderr, proving stdout is protocol-only.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("MCP server started"),
+        "startup log should be on stderr, got: {stderr}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
