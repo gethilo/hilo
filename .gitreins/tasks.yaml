@@ -466,3 +466,13 @@ tasks:
   status: complete
   created_at: '2026-08-22T10:42:13.768259+00:00'
   completed_at: '2026-08-22T10:46:19.872615+00:00'
+- id: gap-048-blast-radius-member-resolution
+  title: 'GAP-048: pkg member-prefix resolution in impact BFS'
+  criteria:
+  - hilo graph impact serde/src/lib.rs and hilo graph impact 'pkg:serde' (release
+    binary, workdir /tmp/dogfood-warpfs/serde, corpus 208 files/749 edges) each return
+    >=140 dependents; cargo test -p hilo_graph --lib impact tests pass; cargo check
+    --workspace passes
+  status: complete
+  created_at: '2026-08-23T22:28:10.796979+00:00'
+  completed_at: '2026-08-24T04:53:58.571932+00:00'

@@ -55,6 +55,43 @@ fn collect(
     Ok(())
 }
 
+/// Collect pkg-family rows (GAP-048): edges whose `to` node is a member of
+/// the crate family — `pkg:<name>::<member>` (brace-expanded imports) or
+/// `pkg:<name>_<sibling>` (underscore companion crates such as serde_derive
+/// for serde). The SQL pattern is deliberately over-broad (`pkg:<name>%`)
+/// and the exact boundary is enforced here in Rust, because LIKE ESCAPE
+/// semantics vary across DuckDB versions and a wildcard `_` in the pattern
+/// would leak unrelated crates that merely share a name prefix (`pkg:ab`
+/// must never match a query on `pkg:a`).
+fn collect_family(
+    rows: impl Iterator<Item = duckdb::Result<(String, String, String, Option<String>, Option<f64>)>>,
+    pkg: &str,
+    results: &mut Vec<ImpactFile>,
+    visited: &mut HashSet<String>,
+    queue: &mut VecDeque<(String, u32)>,
+    depth: u32,
+) -> GraphResult<()> {
+    let member = format!("{pkg}::");
+    let sibling = format!("{pkg}_");
+    for row in rows {
+        let (from, to, rel, prov, conf) = row?;
+        if !to.starts_with(&member) && !to.starts_with(&sibling) {
+            continue;
+        }
+        if visited.insert(from.clone()) {
+            results.push(ImpactFile {
+                path: from.clone(),
+                relation: rel,
+                depth: depth + 1,
+                provenance: prov,
+                confidence: conf,
+            });
+            queue.push_back((from, depth + 1));
+        }
+    }
+    Ok(())
+}
+
 /// Compute transitive impact: find all files that depend on `start_path`,
 /// directly or transitively, up to `max_depth` hops.
 ///
@@ -83,6 +120,17 @@ pub fn compute_impact(
 
     let mut stmt =
         conn.prepare(r#"SELECT "from", rel, provenance, confidence FROM edges WHERE "to" = ?"#)?;
+    // GAP-048: pkg-family edges — member nodes `pkg:<name>::<member>` (the
+    // parser expands brace imports like `use serde::{de::Deserializer}` into
+    // one member pseudo-node per symbol) and underscore-sibling companion
+    // crates `pkg:<name>_<sibling>` (serde_derive, serde_test — the Rust
+    // companion-crate convention), which a crate re-exports into its public
+    // surface. The SQL pattern is deliberately over-broad; the exact family
+    // boundary is enforced in Rust (collect_family) so `pkg:ab` can never
+    // leak into a query on `pkg:a`.
+    let mut family_stmt = conn.prepare(
+        r#"SELECT "from", "to", rel, provenance, confidence FROM edges WHERE "to" LIKE ?"#,
+    )?;
     let mut resolver = PkgResolver::new();
 
     while let Some((path, depth)) = queue.pop_front() {
@@ -110,16 +158,45 @@ pub fn compute_impact(
         // dependents that target its crate's `pkg:<name>` node, because the
         // parser emits `pkg:` edges (not file→file edges). Symbol nodes
         // (`pkg:...`/`sys:...`) are not files and resolve to None.
-        if let Some(pkg) = resolver.pkg_node(&path) {
-            collect(
-                stmt.query_map(params![pkg.clone()], |row| {
+        // GAP-048: a `pkg:<name>` node (whether the query target itself or
+        // resolved from a file) must also match `pkg:<name>::<member>` and
+        // `pkg:<name>_<sibling>` edges — exact matching alone misses
+        // brace-expanded imports (6/148 on serde).
+        let pkg_target = if path.starts_with("pkg:") {
+            // The path is already a bare pkg node: the exact-match query
+            // above covered `to = <path>`; only the family remains.
+            Some(path.clone())
+        } else {
+            resolver.pkg_node(&path)
+        };
+        if let Some(pkg) = pkg_target {
+            if !path.starts_with("pkg:") {
+                collect(
+                    stmt.query_map(params![pkg.clone()], |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                            row.get::<_, Option<f64>>(3)?,
+                        ))
+                    })?,
+                    &mut results,
+                    &mut visited,
+                    &mut queue,
+                    depth,
+                )?;
+            }
+            collect_family(
+                family_stmt.query_map(params![format!("{pkg}%")], |row| {
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, String>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                        row.get::<_, Option<f64>>(3)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<f64>>(4)?,
                     ))
                 })?,
+                &pkg,
                 &mut results,
                 &mut visited,
                 &mut queue,
@@ -155,6 +232,12 @@ pub fn compute_impact_with_external(
 
     let mut stmt =
         conn.prepare(r#"SELECT "from", rel, provenance, confidence FROM edges WHERE "to" = ?"#)?;
+    // GAP-048: pkg-family edges — member nodes and underscore-sibling
+    // companion crates; the exact family boundary is enforced in Rust
+    // (collect_family), see compute_impact for the full rationale.
+    let mut family_stmt = conn.prepare(
+        r#"SELECT "from", "to", rel, provenance, confidence FROM edges WHERE "to" LIKE ?"#,
+    )?;
     let mut ext_stmt: Option<duckdb::Statement> = None;
     let mut resolver = PkgResolver::new();
 
@@ -190,16 +273,43 @@ pub fn compute_impact_with_external(
         // GAP-034: file-level resolution — match dependents that target the
         // file's crate `pkg:<name>` node (the parser emits pkg: edges, not
         // file→file edges). Symbol nodes resolve to None.
-        if let Some(pkg) = resolver.pkg_node(&path) {
-            collect(
-                stmt.query_map(params![pkg.clone()], |row| {
+        // GAP-048: also match the crate family (`pkg:<name>::<member>` and
+        // `pkg:<name>_<sibling>` edges) via the Rust-side family filter.
+        let pkg_target = if path.starts_with("pkg:") {
+            // Bare pkg node queried directly: the exact-match query above
+            // already covered `to = <path>`; only the family remains.
+            Some(path.clone())
+        } else {
+            resolver.pkg_node(&path)
+        };
+        if let Some(pkg) = pkg_target {
+            if !path.starts_with("pkg:") {
+                collect(
+                    stmt.query_map(params![pkg.clone()], |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                            row.get::<_, Option<f64>>(3)?,
+                        ))
+                    })?,
+                    &mut results,
+                    &mut visited,
+                    &mut queue,
+                    depth,
+                )?;
+            }
+            collect_family(
+                family_stmt.query_map(params![format!("{pkg}%")], |row| {
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, String>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                        row.get::<_, Option<f64>>(3)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<f64>>(4)?,
                     ))
                 })?,
+                &pkg,
                 &mut results,
                 &mut visited,
                 &mut queue,
@@ -320,5 +430,191 @@ mod tests {
         insert_edges_into(&conn, &[]).unwrap();
         let results = compute_impact(&conn, &orphan, 10).unwrap();
         assert!(results.is_empty());
+    }
+
+    /// GAP-048: the parser expands brace imports (`use a::{Glob, GlobSet}`)
+    /// into `pkg:a::<member>` pseudo-nodes. Impact on the crate root file —
+    /// and on the bare `pkg:a` node — must match those member edges, or the
+    /// blast radius answers a tiny fraction of the truth (6/148 on serde).
+    #[test]
+    fn impact_on_crate_root_matches_brace_member_edges() {
+        let dir = tempfile::tempdir().unwrap();
+        let write = |rel: &str, content: &str| {
+            let path = dir.path().join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, content).unwrap();
+            path.to_string_lossy().into_owned()
+        };
+        write(
+            "Cargo.toml",
+            "[workspace]\nmembers = [\"crates/a\", \"crates/b\"]\n",
+        );
+        write(
+            "crates/a/Cargo.toml",
+            "[package]\nname = \"a\"\nversion = \"0.1.0\"\n",
+        );
+        let lib = write(
+            "crates/a/src/lib.rs",
+            "pub struct Glob;\npub struct GlobSet;\n",
+        );
+        write(
+            "crates/b/Cargo.toml",
+            "[package]\nname = \"b\"\nversion = \"0.1.0\"\n",
+        );
+        let main = write(
+            "crates/b/src/main.rs",
+            "use a::{Glob, GlobSet};\nfn main() {}\n",
+        );
+
+        let conn = duckdb::Connection::open_in_memory().unwrap();
+        insert_edges_into(&conn, &[]).unwrap();
+        let parse = |path: &str| {
+            let source = std::fs::read_to_string(path).unwrap();
+            let mut parser = Parser::for_language(Language::Rust).unwrap();
+            parser.parse_imports(path, &source).unwrap()
+        };
+        insert_edges_into(&conn, &parse(&lib)).unwrap();
+        insert_edges_into(&conn, &parse(&main)).unwrap();
+
+        // Premise: the parser emits member-prefixed edges, not pkg:a.
+        let member_edges = compute_impact(&conn, "pkg:a::Glob", 10).unwrap();
+        assert!(
+            member_edges.iter().any(|f| f.path == main),
+            "pkg:a::Glob must be found by main.rs, got: {member_edges:?}"
+        );
+
+        // File-level query: the crate root must match member edges via the
+        // pkg prefix (the GAP-048 fix).
+        let via_file = compute_impact(&conn, &lib, 10).unwrap();
+        assert!(
+            via_file.iter().any(|f| f.path == main),
+            "impact on crate root must match pkg:a::<member> edges, got: {via_file:?}"
+        );
+        assert_eq!(via_file[0].depth, 1);
+
+        // Bare pkg node query must match member edges too.
+        let via_pkg = compute_impact(&conn, "pkg:a", 10).unwrap();
+        assert!(
+            via_pkg.iter().any(|f| f.path == main),
+            "impact on pkg:a must match pkg:a::<member> edges, got: {via_pkg:?}"
+        );
+    }
+
+    /// GAP-048 negative: the pkg-family match must be anchored — a query
+    /// for `pkg:a` must not match member edges of a sibling crate whose
+    /// name merely starts with `a` (e.g. `ab`), nor vice versa.
+    #[test]
+    fn impact_member_prefix_does_not_leak_across_sibling_crates() {
+        let dir = tempfile::tempdir().unwrap();
+        let write = |rel: &str, content: &str| {
+            let path = dir.path().join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, content).unwrap();
+            path.to_string_lossy().into_owned()
+        };
+        write(
+            "Cargo.toml",
+            "[workspace]\nmembers = [\"crates/a\", \"crates/ab\", \"crates/b\"]\n",
+        );
+        write(
+            "crates/a/Cargo.toml",
+            "[package]\nname = \"a\"\nversion = \"0.1.0\"\n",
+        );
+        let a_lib = write("crates/a/src/lib.rs", "pub struct Glob;\n");
+        write(
+            "crates/ab/Cargo.toml",
+            "[package]\nname = \"ab\"\nversion = \"0.1.0\"\n",
+        );
+        write("crates/ab/src/lib.rs", "pub struct Thing;\n");
+        write(
+            "crates/b/Cargo.toml",
+            "[package]\nname = \"b\"\nversion = \"0.1.0\"\n",
+        );
+        // b imports ONLY from crate ab — nothing from crate a.
+        let main = write("crates/b/src/main.rs", "use ab::Thing;\nfn main() {}\n");
+
+        let conn = duckdb::Connection::open_in_memory().unwrap();
+        insert_edges_into(&conn, &[]).unwrap();
+        let parse = |path: &str| {
+            let source = std::fs::read_to_string(path).unwrap();
+            let mut parser = Parser::for_language(Language::Rust).unwrap();
+            parser.parse_imports(path, &source).unwrap()
+        };
+        for f in [&a_lib, &main] {
+            insert_edges_into(&conn, &parse(f)).unwrap();
+        }
+
+        // The member edge pkg:ab::Thing must not resolve for a query on
+        // crate a (the anchored family match cannot match pkg:ab::Thing).
+        let via_a = compute_impact(&conn, &a_lib, 10).unwrap();
+        assert!(
+            !via_a.iter().any(|f| f.path == main),
+            "crate a impact must not leak crate ab member edges, got: {via_a:?}"
+        );
+        let via_pkg_a = compute_impact(&conn, "pkg:a", 10).unwrap();
+        assert!(
+            !via_pkg_a.iter().any(|f| f.path == main),
+            "pkg:a impact must not leak pkg:ab member edges, got: {via_pkg_a:?}"
+        );
+    }
+
+    /// GAP-048 family semantics: a crate query also matches its
+    /// underscore-sibling companion crates (`pkg:a_derive` for `pkg:a` —
+    /// the Rust companion-crate convention, e.g. serde/serde_derive),
+    /// which the crate re-exports into its public surface.
+    #[test]
+    fn impact_on_crate_root_matches_underscore_sibling_crates() {
+        let dir = tempfile::tempdir().unwrap();
+        let write = |rel: &str, content: &str| {
+            let path = dir.path().join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, content).unwrap();
+            path.to_string_lossy().into_owned()
+        };
+        write(
+            "Cargo.toml",
+            "[workspace]\nmembers = [\"crates/a\", \"crates/a_derive\", \"crates/b\"]\n",
+        );
+        write(
+            "crates/a/Cargo.toml",
+            "[package]\nname = \"a\"\nversion = \"0.1.0\"\n",
+        );
+        let a_lib = write("crates/a/src/lib.rs", "pub struct Glob;\n");
+        write(
+            "crates/a_derive/Cargo.toml",
+            "[package]\nname = \"a_derive\"\nversion = \"0.1.0\"\n",
+        );
+        write("crates/a_derive/src/lib.rs", "pub struct Derive;\n");
+        write(
+            "crates/b/Cargo.toml",
+            "[package]\nname = \"b\"\nversion = \"0.1.0\"\n",
+        );
+        // b imports ONLY from companion crate a_derive — nothing from a.
+        let main = write(
+            "crates/b/src/main.rs",
+            "use a_derive::Derive;\nfn main() {}\n",
+        );
+
+        let conn = duckdb::Connection::open_in_memory().unwrap();
+        insert_edges_into(&conn, &[]).unwrap();
+        let parse = |path: &str| {
+            let source = std::fs::read_to_string(path).unwrap();
+            let mut parser = Parser::for_language(Language::Rust).unwrap();
+            parser.parse_imports(path, &source).unwrap()
+        };
+        for f in [&a_lib, &main] {
+            insert_edges_into(&conn, &parse(f)).unwrap();
+        }
+
+        let via_file = compute_impact(&conn, &a_lib, 10).unwrap();
+        assert!(
+            via_file.iter().any(|f| f.path == main),
+            "crate a file impact must include a_derive importers, got: {via_file:?}"
+        );
+        let via_pkg_a = compute_impact(&conn, "pkg:a", 10).unwrap();
+        assert!(
+            via_pkg_a.iter().any(|f| f.path == main),
+            "pkg:a impact must include a_derive importers, got: {via_pkg_a:?}"
+        );
     }
 }
