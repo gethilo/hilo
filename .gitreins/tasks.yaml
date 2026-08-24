@@ -486,3 +486,11 @@ tasks:
   status: complete
   created_at: '2026-08-24T07:10:28.936388+00:00'
   completed_at: '2026-08-24T07:14:29.760582+00:00'
+- id: gap-049-role-heuristics
+  title: 'GAP-049 classify role heuristics: crate roots -> library, build.rs -> build'
+  criteria:
+  - 'grep -c ''role: "build"'' hilo-graph/src/classify.rs >= 1 AND grep -c ''lib.rs''
+    hilo-graph/src/classify.rs >= 1 AND cargo check --workspace exits 0'
+  status: complete
+  created_at: '2026-08-24T07:52:51.570164+00:00'
+  completed_at: '2026-08-24T07:55:03.825422+00:00'
