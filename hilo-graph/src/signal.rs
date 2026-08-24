@@ -974,16 +974,35 @@ fn extract_rust_name(line: &str) -> Option<String> {
     if idx >= tokens.len() {
         return None;
     }
-    let _keyword = tokens[idx];
+    let keyword = tokens[idx];
     idx += 1;
+
+    // `impl<'de, T>` spans multiple whitespace tokens — skip the generic
+    // parameter list so the *implemented trait* becomes the name
+    // (`impl<'de, T> Expected for T` → `Expected`, not `T>`). A keyword
+    // that already ends with `>` (`impl<'a>`) has a complete generic list
+    // in one token — no skipping needed.
+    if keyword.starts_with("impl") && keyword.contains('<') && !keyword.ends_with('>') {
+        while idx < tokens.len() && !tokens[idx].ends_with('>') {
+            idx += 1;
+        }
+        idx += 1; // past the closing `>` token
+    }
 
     if idx >= tokens.len() {
         return None;
     }
 
-    // The name is the next token, with trailing punctuation removed.
+    // The name is the next token, cut at the first signature/punctuation
+    // boundary: `fmt(&self,` → `fmt`, `Expected<'a,` → `Expected`,
+    // `S;` → `S`, `T>` → `T`. Prevents truncated signatures leaking into
+    // the MAP symbol list (GAP-053).
     let name = tokens[idx]
-        .trim_end_matches(['(', '{', '<', '='])
+        .split(['(', '<', ',', ';', '{', '=', '>'])
+        .next()
+        .unwrap_or(tokens[idx])
+        .trim_end_matches(['(', '{', '<', '=', ',', ';', '>'])
+        .trim()
         .to_string();
 
     if name.is_empty() || name == "fn" || name == "struct" || name == "enum" {
@@ -1313,18 +1332,22 @@ fn format_output(files: &[SignalFile], anchors: &[String], opts: &SignalOpts) ->
 
     // ── MAP tier (15% budget) ──
     output.push_str("## MAP\n");
-    output.push_str("<file> → <key symbols>\n\n");
+    output.push_str("<file> →\n  - <key symbols, one per line>\n\n");
 
     // Group by file, sorted by score then path (deterministic).
     let map_files: BTreeMap<&str, &SignalFile> =
         files.iter().map(|f| (f.path.as_str(), f)).collect();
     for (path, sf) in &map_files {
-        let sym_list = if sf.symbols.is_empty() {
-            "(no symbols extracted)".to_string()
-        } else {
-            sf.symbols.join(", ")
-        };
-        output.push_str(&format!("{path} → {sym_list}\n"));
+        if sf.symbols.is_empty() {
+            output.push_str(&format!("{path} → (no symbols extracted)\n"));
+            continue;
+        }
+        // One symbol per line — comma-joined symbols become an unreadable
+        // wall of text when names carry truncated signatures (GAP-053).
+        output.push_str(&format!("{path} →\n"));
+        for sym in &sf.symbols {
+            output.push_str(&format!("  - {sym}\n"));
+        }
     }
     output.push('\n');
 
@@ -1806,9 +1829,41 @@ struct Config {
     }
 
     #[test]
+    fn extract_rust_name_truncates_signature_fragments() {
+        // GAP-053: names must be cut at the first signature/punctuation
+        // boundary so truncated first lines never leak into the MAP symbol
+        // list as dangling tokens or doubled commas.
+        assert_eq!(
+            extract_rust_name("fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {")
+                .as_deref(),
+            Some("fmt")
+        );
+        assert_eq!(
+            extract_rust_name("pub fn visit_unit<E>(self, input: T) {").as_deref(),
+            Some("visit_unit")
+        );
+        assert_eq!(
+            extract_rust_name("pub struct Expected<'a, T> {").as_deref(),
+            Some("Expected")
+        );
+        assert_eq!(
+            extract_rust_name("impl<'de, T> Expected for T {").as_deref(),
+            Some("Expected")
+        );
+        assert_eq!(
+            extract_rust_name("impl<'a> fmt::Display for Unexpected<'a> {").as_deref(),
+            Some("fmt::Display")
+        );
+        // Clean names pass through unchanged.
+        assert_eq!(
+            extract_rust_name("fn parse_config(path: &str) -> Config {").as_deref(),
+            Some("parse_config")
+        );
+    }
+
+    #[test]
     fn extract_symbols_rust_pub_use_reexports() {
         let src = r#"use std::io::Read;
-
 pub use crate::glob::{Glob, GlobBuilder, GlobSetBuilder};
 pub use crate::error::Error as HiloError;
 pub use crate::patterns::{self, DoubleEnded, PathExt};
