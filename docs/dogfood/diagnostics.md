@@ -168,4 +168,4 @@ crashes on the first line. Log to stderr (GAP-050).
 3. Symbols: `graph understand <path>` (file paths accepted) — real symbols,
    ugly formatting (GAP-053).
 4. MCP: use a client that skips non-JSON lines until GAP-050 lands.
-5. Build with `-p hilo-cli` (hyphen), not `-p hilo_cli` (GAP-051).
+5. Build with `-p hilo-cli` (hyphen) (GAP-051 — fixed 2026-08-24).

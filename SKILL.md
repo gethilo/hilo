@@ -22,7 +22,7 @@ Clone and build:
 cargo check --workspace
 
 # Build the CLI binary (~20m first time due to duckdb-sys from source)
-cargo build --release -p hilo_cli
+cargo build --release -p hilo-cli
 
 # Install
 cp target/release/hilo ~/.cargo/bin/hilo
@@ -232,9 +232,9 @@ Zero `tested_by` edges are ever emitted; untested = all non-test files.
 INFO tracing event to stdout at startup; naive clients misparse it as the
 initialize response. Use a client that skips non-JSON lines.
 
-**Build with `-p hilo-cli` (hyphen) (GAP-051, P2 — open).** SKILL.md line 25
-still says `-p hilo_cli` (cargo error); hilo-cli is the only hyphenated
-crate. `-p hilo_graph` for graph tests is correct.
+**Build with `-p hilo-cli` (hyphen) (GAP-051, P2 — fixed 2026-08-24).**
+SKILL.md line 25 now uses the real package name; hilo-cli is the only
+hyphenated crate, `-p hilo_graph` for graph tests is correct.
 
 **Still-verified-clean (from run 1, re-confirmed):** FUSE `--daemon` mount
 instant + clean unmount; MCP 15 tools responding; meta/xattr round-trips;
