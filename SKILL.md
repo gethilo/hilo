@@ -211,13 +211,12 @@ Verdict: 🟡 PROMISING-BUT-ROUGH (up from structural breakage; still not
 shippable). GAP-034/035/036/043/044/045 fixes ALL verified live. New gaps
 GAP-048..053 added to board. Read before querying:
 
-**Blast radius is a LOWER BOUND, not truth (GAP-048, P0 — open).**
-`impact serde/src/lib.rs` → 6 dependents; 148 files actually import serde.
-The pkg-resolution layer matches only exact `pkg:serde` targets; the 53+
-brace-expanded `pkg:serde::<member>` edges (from `use serde::{...}`) don't
-resolve. Cross-check small impact counts against `impact 'pkg:<crate>'`
-and `graph stats`. Do not trust a small number from a file-form impact
-query on brace-heavy code.
+**Blast radius on crate roots resolves the pkg family (GAP-048, P0 — fixed 2026-08-24).**
+`impact serde/src/lib.rs` → 147 dependents (was 6); `impact 'pkg:serde'` → 148.
+Family matching covers brace-expanded `pkg:serde::<member>` members (from
+`use serde::{...}`) AND underscore companions (`serde_derive`/`serde_test`),
+with an exact-boundary guard so `pkg:a_%` never leaks `pkg:ab` siblings.
+Cross-check large counts against `impact 'pkg:<crate>'` and `graph stats`.
 
 **classify roles: crate roots + build scripts now sane (GAP-049, fixed 2026-08-24).**
 lib.rs/mod.rs crate/module roots classify as `library` even when they are
@@ -226,12 +225,13 @@ build.rs/build.zig classify as `build`, never `entrypoint`. Remaining caveat:
 role accuracy on non-root files still varies — `test` detection is the most
 reliable (151/208 on serde).
 
-**`graph untested` is not a coverage tool (GAP-052, P2 — open).**
-Zero `tested_by` edges are ever emitted; untested = all non-test files.
+**`graph untested` now reads real `tested_by` edges (GAP-052, P2 — fixed 2026-08-24).**
+Test files' imports emit `tested_by` edges (visible in `graph stats` edge
+types); `untested` = files with import edges but no incoming `tested_by` edge.
 
-**MCP stdout is polluted (GAP-050, P2 — open).** `hilo serve --mcp` logs an
-INFO tracing event to stdout at startup; naive clients misparse it as the
-initialize response. Use a client that skips non-JSON lines.
+**MCP stdout is pure JSON-RPC (GAP-050, P2 — fixed 2026-08-24).** `hilo serve
+--mcp` sends tracing to stderr; stdout carries only JSON-RPC 2.0 responses
+(initialize → tools/list → tools/call), safe for naive clients.
 
 **Build with `-p hilo-cli` (hyphen) (GAP-051, P2 — fixed 2026-08-24).**
 SKILL.md line 25 now uses the real package name; hilo-cli is the only
