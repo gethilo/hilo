@@ -522,3 +522,12 @@ tasks:
   status: complete
   created_at: '2026-08-24T09:50:15.322567+00:00'
   completed_at: '2026-08-24T10:05:42.257745+00:00'
+- id: gap-054-stale-open-markers
+  title: SKILL.md stale open markers for closed gaps
+  criteria:
+  - "grep -c 'GAP-048, P0 \u2014 open' SKILL.md == 0 AND grep -c 'GAP-050, P2 \u2014\
+    \ open' SKILL.md == 0 AND grep -c 'GAP-052, P2 \u2014 open' SKILL.md == 0 AND\
+    \ grep -c 'fixed 2026-08-24' SKILL.md >= 3 AND cargo check --workspace exits 0"
+  status: complete
+  created_at: '2026-08-25T04:49:11.409852+00:00'
+  completed_at: '2026-08-25T05:03:38.308583+00:00'
