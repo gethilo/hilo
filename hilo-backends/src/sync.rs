@@ -269,7 +269,7 @@ pub struct SyncEngine {
 /// definition and must never sync. `.hiloignore`/`.hiloephemeral` are
 /// always local-only (spec: backend-backed-workspace-spec.md §13.13);
 /// `.vfsignore` is accepted as a legacy alias name.
-fn is_never_synced(rel_path: &str) -> bool {
+pub(crate) fn is_never_synced(rel_path: &str) -> bool {
     rel_path == ".vfs"
         || rel_path.starts_with(".vfs/")
         || rel_path == ".hiloignore"

@@ -431,7 +431,7 @@ impl Backend for ExternalToolDriver {
                     Command::new("rclone")
                         .arg("copyto")
                         .arg(local)
-                        .arg(&self.remote_arg(key)),
+                        .arg(self.remote_arg(key)),
                 )?;
             }
             SyncTool::S3Sync => {
@@ -439,7 +439,7 @@ impl Backend for ExternalToolDriver {
                     Command::new("s3sync")
                         .args(["push"])
                         .arg(local)
-                        .arg(&self.s3_arg(key)),
+                        .arg(self.s3_arg(key)),
                 )?;
             }
             SyncTool::GDriveCli => {

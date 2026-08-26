@@ -399,18 +399,14 @@ impl BackendRegistry {
                 })?;
                 Arc::new(LocalDriver::new(root, cfg.mode))
             }
-            (_, tool)
-                if matches!(
-                    tool,
-                    SyncTool::Rclone
-                        | SyncTool::S3Sync
-                        | SyncTool::GDriveCli
-                        | SyncTool::OneDriveCli
-                        | SyncTool::DropboxCli
-                ) =>
-            {
-                Arc::new(crate::external::ExternalToolDriver::new(cfg)?)
-            }
+            (
+                _,
+                SyncTool::Rclone
+                | SyncTool::S3Sync
+                | SyncTool::GDriveCli
+                | SyncTool::OneDriveCli
+                | SyncTool::DropboxCli,
+            ) => Arc::new(crate::external::ExternalToolDriver::new(cfg)?),
             (kind, tool) => {
                 return Err(BackendError::InvalidConfig(format!(
                     "no driver for kind {kind:?} + tool {tool:?}"

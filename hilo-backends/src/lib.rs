@@ -12,6 +12,7 @@ pub mod ephemeral;
 pub mod external;
 pub mod git;
 pub mod local;
+pub mod planner;
 pub mod s3;
 pub mod sync;
 
@@ -24,6 +25,12 @@ pub use external::ExternalToolDriver;
 pub use git::{GitBackend, GitBackendConfig, GitError, GitResult};
 pub use s3::{S3Client, S3Driver, S3Error, S3ObjectMeta, S3Result, WriteResult};
 pub use sync::{IgnoreDecision, IgnoreMatcher, LocalFile, RemoteObject, SyncEngine, SyncPlan};
+// Spec §7 planner (trait-based). Its SyncPlan is reachable as
+// planner::SyncPlan — the crate-root name is held by the legacy sync::SyncPlan.
+pub use planner::{
+    execute_sync, plan_sync, record_conflict, ConflictRecord, ResolvedBy, SyncDirection, SyncError,
+    SyncStats, TransferItem,
+};
 
 /// Resolve a virtual path to its real storage location.
 pub enum Backend {
