@@ -2292,6 +2292,7 @@ dependencies = [
  "criterion",
  "fuser",
  "glob",
+ "hilo_backends",
  "hilo_core",
  "hilo_metadata",
  "hilo_permissions",

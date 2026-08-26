@@ -17,6 +17,7 @@ libc = "0.2"
 hilo_metadata = { path = "../hilo-metadata" }
 hilo_core = { path = "../hilo-core" }
 hilo_permissions = { path = "../hilo-permissions" }
+hilo_backends = { path = "../hilo-backends" }
 
 [dev-dependencies]
 tempfile = "3"

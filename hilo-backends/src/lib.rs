@@ -19,7 +19,7 @@ pub mod sync;
 
 pub use backend::{
     BackendConfig, BackendEntry, BackendError, BackendKind, BackendRegistry, LocalDriver,
-    MountEntry, SyncMode, SyncTool,
+    MockBackend, MountEntry, SyncMode, SyncTool,
 };
 pub use ephemeral::{EphemeralClass, EphemeralEntry, EphemeralError, EphemeralMatcher};
 pub use external::ExternalToolDriver;

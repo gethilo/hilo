@@ -5,6 +5,10 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
+use hilo_backends::planner::SyncDirection;
+use hilo_backends::stream::StreamPlacer;
+use hilo_backends::{BackendRegistry, EphemeralMatcher, IgnoreMatcher};
+use hilo_fuse::stream::StreamState;
 use hilo_fuse::{daemon, FuseConfig, Hilo};
 use hilo_triggers::{SyncHook, SyncHookConfig, TriggerConfig, TriggerEngine};
 
@@ -56,11 +60,12 @@ pub fn run_mount(mount_point: &str, triggers: bool, allow_other: bool, daemon: b
         None
     };
 
-    let config = FuseConfig {
+    let mut config = FuseConfig {
         mount_point: PathBuf::from(mount_point),
         allow_other,
         direct_io: false,
         auto_unmount: true,
+        read_only: true,
         attr_timeout: 1.0,
         entry_timeout: 1.0,
         max_read: 131_072,
@@ -68,7 +73,29 @@ pub fn run_mount(mount_point: &str, triggers: bool, allow_other: bool, daemon: b
         sandbox: None,
     };
 
-    let fs = Hilo::new(current_dir, config.clone());
+    let fs = Hilo::new(current_dir.clone(), config.clone());
+
+    // §8: stream/mirror backend wiring — when the workspace has registered
+    // backends (mounts.yaml), a stream-mode entry drives lazy materialization
+    // via placeholders and a mirror-mode entry does a full pull on mount.
+    let fs = match build_stream_state(&current_dir) {
+        Ok(Some(state)) => {
+            // §8.4: write-through to materialized placeholders requires a
+            // non-read-only mount (the tree structure itself stays read-only
+            // — there are no create/mkdir/unlink handlers).
+            config.read_only = false;
+            println!(
+                "Hilo mounted at {} (stream mode: placeholders materialize on open)",
+                mount_point
+            );
+            fs.with_stream(state)
+        }
+        Ok(None) => fs,
+        Err(e) => {
+            eprintln!("[hilo mount] backend wiring skipped: {e:#}");
+            fs
+        }
+    };
 
     println!(
         "Hilo mounted at {}{}",
@@ -83,6 +110,83 @@ pub fn run_mount(mount_point: &str, triggers: bool, allow_other: bool, daemon: b
     }
 
     Ok(())
+}
+
+/// §8: build the stream-mode state for a workspace with registered backends.
+///
+/// Reads `.vfs/backends/mounts.yaml` under `root`. The first `stream` entry
+/// becomes the placeholder-backed lazy-fetch state (placeholders are created
+/// under the workspace root, never for ignored/ephemeral keys). `mirror`
+/// entries get a full ignore-aware pull on mount (spec §8: "Mirror mode: no
+/// placeholders; full pull on mount"). Returns `Ok(None)` when no backends
+/// are registered; a mirror-pull failure warns and lets the mount continue
+/// (a stream mount still works get-only, spec §13.8).
+fn build_stream_state(root: &Path) -> Result<Option<Arc<StreamState>>> {
+    let mounts_path = root.join(".vfs/backends/mounts.yaml");
+    if !mounts_path.exists() {
+        return Ok(None);
+    }
+    let registry = BackendRegistry::load_mounts(&mounts_path)
+        .map_err(|e| anyhow::anyhow!("cannot load backends: {e}"))?;
+    let text = std::fs::read_to_string(&mounts_path).context("failed to read mounts.yaml")?;
+    let entries: Vec<hilo_backends::MountEntry> =
+        serde_yaml::from_str(&text).context("bad mounts.yaml")?;
+
+    let mut stream_state = None;
+    for entry in &entries {
+        let backend = registry
+            .get(&entry.name)
+            .ok_or_else(|| anyhow::anyhow!("backend {} missing from registry", entry.name))?;
+        let ignore = IgnoreMatcher::load(
+            root,
+            entry.ignore_file.as_deref().map(Path::new),
+            entry.no_default_ignores.unwrap_or(false),
+        )
+        .map_err(|e| anyhow::anyhow!("ignore rules for {}: {e}", entry.name))?;
+        let ephemeral = EphemeralMatcher::load(root, None)
+            .map_err(|e| anyhow::anyhow!("ephemeral rules for {}: {e}", entry.name))?;
+        match entry.mode.as_deref() {
+            Some("stream") => {
+                let plan = StreamPlacer::plan_placeholders(backend.as_ref(), &ignore, &ephemeral)
+                    .map_err(|e| anyhow::anyhow!("stream plan for {}: {e}", entry.name))?;
+                let created = StreamPlacer::create_placeholders(root, &plan)
+                    .map_err(|e| anyhow::anyhow!("create placeholders for {}: {e}", entry.name))?;
+                eprintln!(
+                    "[hilo mount] stream backend {}: {created} placeholder(s)",
+                    entry.name
+                );
+                stream_state = Some(Arc::new(StreamState::new(backend, plan)));
+                // The first stream entry drives the mount; remaining entries
+                // keep their sync-hook behavior.
+                break;
+            }
+            Some("mirror") | None => {
+                // Mirror mode: no placeholders — full pull on mount.
+                let plan = hilo_backends::planner::plan_sync(
+                    backend.as_ref(),
+                    root,
+                    &ignore,
+                    &ephemeral,
+                    SyncDirection::Pull,
+                )
+                .map_err(|e| anyhow::anyhow!("mirror pull plan for {}: {e}", entry.name))?;
+                match hilo_backends::planner::execute_sync(&plan, backend.as_ref(), root) {
+                    Ok(stats) => eprintln!(
+                        "[hilo mount] mirror backend {}: pulled {} file(s), {} bytes",
+                        entry.name, stats.transferred, stats.bytes
+                    ),
+                    Err(e) => eprintln!(
+                        "[hilo mount] mirror pull for {} failed (mount continues): {e}",
+                        entry.name
+                    ),
+                }
+            }
+            Some(other) => {
+                anyhow::bail!("unknown mode {other:?} for mount {}", entry.name);
+            }
+        }
+    }
+    Ok(stream_state)
 }
 
 /// Build the detached child command for `hilo mount --daemon`.

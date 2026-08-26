@@ -93,6 +93,9 @@ pub struct SyncPlan {
     pub skipped_ignored: usize,
     /// Files counted but not transferred because they are ephemeral.
     pub skipped_ephemeral: usize,
+    /// Files skipped because they are unmaterialized stream placeholders
+    /// (`user.vfs.materialized = "false"`) — no local truth, never pushed (§8.5).
+    pub skipped_placeholders: usize,
 }
 
 /// Which side won a last-writer-wins resolution.
@@ -181,6 +184,13 @@ pub fn plan_sync(
             continue;
         }
         let full_path = workspace_root.join(&lf.rel_path);
+        // §8.5: unmaterialized stream placeholders have no local truth —
+        // never pushed (a zero-byte placeholder must not clobber the remote
+        // object it stands in for).
+        if is_unmaterialized_placeholder(&full_path) {
+            plan.skipped_placeholders += 1;
+            continue;
+        }
         let is_eph = ephemeral.classify(
             Path::new(&lf.rel_path),
             false,
@@ -488,6 +498,16 @@ fn vfs_xattr(path: &Path, name: &str) -> Option<String> {
 /// (spec §7: skipped_ephemeral "unless user.vfs.sync=upstream").
 pub fn is_upstream_override(path: &Path) -> bool {
     vfs_xattr(path, "sync").as_deref() == Some("upstream")
+}
+
+/// Whether `path` is an unmaterialized stream placeholder: it carries a
+/// `user.vfs.remote` marker and `user.vfs.materialized != "true"` (§8.5).
+/// Such files have no local truth and are local-only by definition — they
+/// are never pushed (a zero-byte placeholder must never clobber the remote
+/// object it stands in for).
+pub fn is_unmaterialized_placeholder(path: &Path) -> bool {
+    vfs_xattr(path, "remote").is_some()
+        && vfs_xattr(path, "materialized").as_deref() != Some("true")
 }
 
 /// The `user.vfs.ephemeral` xattr as an explicit classify override.
@@ -1016,6 +1036,53 @@ mod tests {
         .unwrap();
         assert_eq!(plan2.to_transfer.len(), 1);
         assert_eq!(plan2.skipped_ephemeral, 0);
+    }
+
+    #[test]
+    fn unmaterialized_placeholder_is_never_pushed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        // A real local file (should transfer) and a stream placeholder
+        // (zero-byte, user.vfs.remote + materialized=false — no local truth).
+        write_file(root, "src/main.rs", b"fn main() {}", 1000);
+        let ph = write_file(root, "assets/data.bin", b"", 1000);
+        xattr::set(&ph, "user.vfs.remote", b"assets/data.bin").unwrap();
+        xattr::set(&ph, "user.vfs.materialized", b"false").unwrap();
+
+        let backend = MockBackend::new();
+        let plan = plan_sync(
+            &backend,
+            root,
+            &empty_ignore(),
+            &empty_ephemeral(root),
+            SyncDirection::Push,
+        )
+        .unwrap();
+
+        // §8.5: the placeholder is counted as skipped_placeholders and never
+        // transferred — a zero-byte placeholder must not clobber the remote
+        // object it stands in for.
+        assert_eq!(plan.skipped_placeholders, 1);
+        assert!(
+            !plan.to_transfer.iter().any(|i| i.key == "assets/data.bin"),
+            "placeholder must not be in the transfer plan"
+        );
+        assert_eq!(plan.to_transfer.len(), 1);
+        assert_eq!(plan.to_transfer[0].key, "src/main.rs");
+
+        // A materialized placeholder (same markers, materialized=true) is a
+        // real local file again and transfers normally.
+        xattr::set(&ph, "user.vfs.materialized", b"true").unwrap();
+        let plan2 = plan_sync(
+            &backend,
+            root,
+            &empty_ignore(),
+            &empty_ephemeral(root),
+            SyncDirection::Push,
+        )
+        .unwrap();
+        assert_eq!(plan2.skipped_placeholders, 0);
+        assert_eq!(plan2.to_transfer.len(), 2);
     }
 
     #[test]

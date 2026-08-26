@@ -163,6 +163,17 @@ impl TriggerEngine {
                     if self.watches.is_empty() {
                         return Ok(());
                     }
+                    // The inotify fd is actually NON-blocking (the crate's
+                    // Inotify::init passes IN_NONBLOCK): an idle event queue
+                    // returns EAGAIN/WouldBlock. That is a poll signal, not
+                    // an error — sleep briefly and re-read (fixes the
+                    // event-loop-exits-on-idle bug that killed the §7.1
+                    // backend sync hook the moment a stream/mirror mount
+                    // went idle).
+                    if e.kind() == io::ErrorKind::WouldBlock {
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        continue;
+                    }
                     return Err(io::Error::other(e.to_string()));
                 }
             };
@@ -184,6 +195,23 @@ impl TriggerEngine {
                 };
 
                 let path = PathBuf::from(&name);
+
+                // Re-discover: a newly created DIRECTORY gets a watch so
+                // changes inside it are seen. Needed by stream mode — the
+                // placeholder tree is created after the initial recursive
+                // watch, so nested dirs (and their materialized files) would
+                // otherwise be invisible to the §7.1 sync hook.
+                if event_type == EventType::Create {
+                    let new_path = self
+                        .watches
+                        .iter()
+                        .find(|(_, wd)| **wd == event.wd)
+                        .map(|(dir, _)| dir.join(&name))
+                        .unwrap_or_else(|| path.clone());
+                    if new_path.is_dir() && !self.watches.contains_key(&new_path) {
+                        let _ = self.watch_dir(&new_path);
+                    }
+                }
 
                 // Build FileEvent.
                 let timestamp = std::time::SystemTime::now()

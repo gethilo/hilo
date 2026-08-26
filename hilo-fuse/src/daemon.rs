@@ -70,8 +70,11 @@ pub fn unmount(mount_point: &Path) -> anyhow::Result<()> {
 
 /// Build the mount option list from the config.
 fn mount_options(config: &FuseConfig) -> Vec<MountOption> {
-    let mut opts = vec![MountOption::RO, MountOption::FSName("hilo".into())];
+    let mut opts = vec![MountOption::FSName("hilo".into())];
 
+    if config.read_only {
+        opts.push(MountOption::RO);
+    }
     if config.allow_other {
         opts.push(MountOption::AllowOther);
     }

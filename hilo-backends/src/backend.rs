@@ -535,79 +535,80 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// In-memory backend test double (spec §15) — shared with downstream crates
+/// (hilo-fuse stream-mode tests use it as the materialization backend).
+#[derive(Debug, Default)]
+pub struct MockBackend {
+    pub objects: std::sync::RwLock<HashMap<String, Vec<u8>>>,
+}
 
-    /// In-memory backend (spec §15 test double).
-    #[derive(Debug, Default)]
-    pub(crate) struct MockBackend {
-        pub objects: std::sync::RwLock<HashMap<String, Vec<u8>>>,
+impl Backend for MockBackend {
+    fn kind(&self) -> BackendKind {
+        BackendKind::External
     }
-
-    impl Backend for MockBackend {
-        fn kind(&self) -> BackendKind {
-            BackendKind::External
-        }
-        fn name(&self) -> &str {
-            "mock"
-        }
-        fn list(&self, prefix: &str) -> Result<Vec<BackendEntry>, BackendError> {
-            let objects = self.objects.read().unwrap();
-            let mut out: Vec<BackendEntry> = objects
-                .keys()
-                .filter(|k| k.starts_with(prefix))
-                .map(|k| BackendEntry {
-                    key: k.clone(),
-                    size: objects[k].len() as i64,
-                    modified: None,
-                    etag: None,
-                    is_dir: false,
-                })
-                .collect();
-            out.sort_by(|a, b| a.key.cmp(&b.key));
-            Ok(out)
-        }
-        fn stat(&self, key: &str) -> Result<BackendEntry, BackendError> {
-            let objects = self.objects.read().unwrap();
-            let data = objects
-                .get(key)
-                .ok_or_else(|| BackendError::NotFound(key.to_string()))?;
-            Ok(BackendEntry {
-                key: key.to_string(),
-                size: data.len() as i64,
+    fn name(&self) -> &str {
+        "mock"
+    }
+    fn list(&self, prefix: &str) -> Result<Vec<BackendEntry>, BackendError> {
+        let objects = self.objects.read().unwrap();
+        let mut out: Vec<BackendEntry> = objects
+            .keys()
+            .filter(|k| k.starts_with(prefix))
+            .map(|k| BackendEntry {
+                key: k.clone(),
+                size: objects[k].len() as i64,
                 modified: None,
                 etag: None,
                 is_dir: false,
             })
-        }
-        fn get(&self, key: &str, dest: &Path) -> Result<(), BackendError> {
-            let objects = self.objects.read().unwrap();
-            let data = objects
-                .get(key)
-                .ok_or_else(|| BackendError::NotFound(key.to_string()))?;
-            std::fs::write(dest, data)?;
-            Ok(())
-        }
-        fn put(&self, local: &Path, key: &str) -> Result<WriteResult, BackendError> {
-            let data = std::fs::read(local)?;
-            self.objects.write().unwrap().insert(key.to_string(), data);
-            Ok(WriteResult {
-                cache_path: local.to_path_buf(),
-                sha256: String::new(),
-                etag: None,
-            })
-        }
-        fn delete(&self, key: &str) -> Result<(), BackendError> {
-            if self.objects.write().unwrap().remove(key).is_none() {
-                return Err(BackendError::NotFound(key.to_string()));
-            }
-            Ok(())
-        }
-        fn walk(&self, prefix: &str) -> Result<Vec<BackendEntry>, BackendError> {
-            self.list(prefix)
-        }
+            .collect();
+        out.sort_by(|a, b| a.key.cmp(&b.key));
+        Ok(out)
     }
+    fn stat(&self, key: &str) -> Result<BackendEntry, BackendError> {
+        let objects = self.objects.read().unwrap();
+        let data = objects
+            .get(key)
+            .ok_or_else(|| BackendError::NotFound(key.to_string()))?;
+        Ok(BackendEntry {
+            key: key.to_string(),
+            size: data.len() as i64,
+            modified: None,
+            etag: None,
+            is_dir: false,
+        })
+    }
+    fn get(&self, key: &str, dest: &Path) -> Result<(), BackendError> {
+        let objects = self.objects.read().unwrap();
+        let data = objects
+            .get(key)
+            .ok_or_else(|| BackendError::NotFound(key.to_string()))?;
+        std::fs::write(dest, data)?;
+        Ok(())
+    }
+    fn put(&self, local: &Path, key: &str) -> Result<WriteResult, BackendError> {
+        let data = std::fs::read(local)?;
+        self.objects.write().unwrap().insert(key.to_string(), data);
+        Ok(WriteResult {
+            cache_path: local.to_path_buf(),
+            sha256: String::new(),
+            etag: None,
+        })
+    }
+    fn delete(&self, key: &str) -> Result<(), BackendError> {
+        if self.objects.write().unwrap().remove(key).is_none() {
+            return Err(BackendError::NotFound(key.to_string()));
+        }
+        Ok(())
+    }
+    fn walk(&self, prefix: &str) -> Result<Vec<BackendEntry>, BackendError> {
+        self.list(prefix)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
 
     /// The identical contract suite both MockBackend and LocalDriver must pass.
     pub(crate) fn contract_suite(b: &dyn Backend, tmp: &tempfile::TempDir) {

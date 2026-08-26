@@ -382,11 +382,12 @@ pub fn run_sync(args: &SyncArgs) -> Result<()> {
         }
 
         println!(
-            "plan {name}: {} to transfer, {} to delete, {} skipped ignored, {} skipped ephemeral",
+            "plan {name}: {} to transfer, {} to delete, {} skipped ignored, {} skipped ephemeral, {} skipped placeholders",
             plan.to_transfer.len(),
             plan.to_delete.len(),
             plan.skipped_ignored,
             plan.skipped_ephemeral,
+            plan.skipped_placeholders,
         );
 
         let stats = match hilo_backends::planner::execute_sync(&plan, backend.as_ref(), &root) {

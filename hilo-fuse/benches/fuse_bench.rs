@@ -17,6 +17,7 @@ fn default_config(mount: &str, allow_other: bool) -> FuseConfig {
         allow_other,
         direct_io: false,
         auto_unmount: false,
+        read_only: true,
         attr_timeout: 1.0,
         entry_timeout: 1.0,
         max_read: 131_072,

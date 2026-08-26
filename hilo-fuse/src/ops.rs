@@ -14,12 +14,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use fuser::{
     FileAttr, FileType, Filesystem, KernelConfig, ReplyAttr, ReplyData, ReplyDirectory, ReplyEmpty,
-    ReplyEntry, ReplyOpen, ReplyXattr, Request,
+    ReplyEntry, ReplyOpen, ReplyWrite, ReplyXattr, Request,
 };
 
-use libc::{EACCES, ENODATA, ENOENT};
+use libc::{EACCES, EIO, ENODATA, ENOENT};
 
 use crate::permissions::PermissionEngine;
+use crate::stream::StreamState;
 use crate::FuseConfig;
 
 const ROOT_INO: u64 = 1;
@@ -53,6 +54,9 @@ pub struct Hilo {
     next_inode: AtomicU64,
     config: FuseConfig,
     permissions: PermissionEngine,
+    /// Stream-mode state (§8): placeholder plan + backend for lazy
+    /// materialization. `None` on plain read-only mounts.
+    stream: Option<Arc<StreamState>>,
 }
 
 impl Hilo {
@@ -77,7 +81,17 @@ impl Hilo {
             next_inode: AtomicU64::new(2),
             config,
             permissions,
+            stream: None,
         }
+    }
+
+    /// Attach stream-mode state (spec §8): the placeholder plan and backend
+    /// used to materialize lazily on open. The caller (the mount command)
+    /// creates the placeholder files on disk before the filesystem starts
+    /// serving.
+    pub fn with_stream(mut self, stream: Arc<StreamState>) -> Self {
+        self.stream = Some(stream);
+        self
     }
 
     /// Allocate the next inode number atomically.
@@ -162,11 +176,31 @@ impl Hilo {
             InodeKind::File => FileType::RegularFile,
             InodeKind::Directory => FileType::Directory,
         };
+        // §8.2: on stream mounts an unmaterialized placeholder reports the
+        // remote size from the walk listing; once materialized (or for any
+        // non-placeholder) the on-disk size is authoritative — read it
+        // fresh so writes through the mount are reflected.
+        let size = if let Some(stream) = &self.stream {
+            let full = if ino == ROOT_INO {
+                self.root.clone()
+            } else {
+                self.root.join(&entry.path)
+            };
+            match stream.remote_size(&entry.path, &full) {
+                Some(remote) => remote,
+                None if matches!(entry.kind, InodeKind::File) => std::fs::metadata(&full)
+                    .map(|m| m.len())
+                    .unwrap_or(entry.size),
+                None => entry.size,
+            }
+        } else {
+            entry.size
+        };
         let now = SystemTime::now();
         FileAttr {
             ino,
-            size: entry.size,
-            blocks: entry.size.div_ceil(512),
+            size,
+            blocks: size.div_ceil(512),
             atime: now,
             mtime: now,
             ctime: now,
@@ -439,11 +473,29 @@ impl Filesystem for Hilo {
     }
 
     fn open(&mut self, _req: &Request, ino: u64, _flags: i32, reply: ReplyOpen) {
+        use crate::permissions::PermissionOp;
+        // §8.3/§8.4: opening a stream placeholder materializes it before the
+        // kernel proceeds (read or write open). Metadata-only operations
+        // (getxattr/listxattr) never materialize (§13.14).
+        if let Some(stream) = self.stream.clone() {
+            let rel = self.files.read().unwrap().get(&ino).map(|e| e.path.clone());
+            if let Some(rel) = rel {
+                if let Some(full) = self.resolve_path(ino) {
+                    if let Err(e) = stream.materialize(&rel, &full) {
+                        eprintln!(
+                            "[hilo-fuse] stream materialize failed for {}: {e}",
+                            full.display()
+                        );
+                        reply.error(EIO);
+                        return;
+                    }
+                }
+            }
+        }
         // Enforce permission check — resolve the path for this inode
         // and verify the operation is allowed by the engine.
         let files = self.files.read().unwrap();
         if let Some(entry) = files.get(&ino) {
-            use crate::permissions::PermissionOp;
             let access_mode = _flags & libc::O_ACCMODE;
             let op = if access_mode == libc::O_WRONLY {
                 PermissionOp::Write
@@ -485,6 +537,47 @@ impl Filesystem for Hilo {
         reply: ReplyEmpty,
     ) {
         reply.ok();
+    }
+
+    fn write(
+        &mut self,
+        _req: &Request,
+        ino: u64,
+        _fh: u64,
+        offset: i64,
+        data: &[u8],
+        _write_flags: u32,
+        _flags: i32,
+        _lock_owner: Option<u64>,
+        reply: ReplyWrite,
+    ) {
+        // §8.4: write-through — a placeholder was materialized at open, so
+        // the write applies to the backing file and the inotify/sync-hook
+        // dirty→push flow picks it up. The mount exposes no create/mkdir/
+        // unlink, so the tree structure stays read-only.
+        let path = match self.resolve_path(ino) {
+            Some(p) => p,
+            None => {
+                reply.error(ENOENT);
+                return;
+            }
+        };
+        let file = match std::fs::OpenOptions::new().write(true).open(&path) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("[hilo-fuse] write open failed for {}: {e}", path.display());
+                reply.error(EIO);
+                return;
+            }
+        };
+        use std::os::unix::fs::FileExt;
+        match file.write_at(data, offset.max(0) as u64) {
+            Ok(n) => reply.written(n as u32),
+            Err(e) => {
+                eprintln!("[hilo-fuse] write_at failed for {}: {e}", path.display());
+                reply.error(EIO);
+            }
+        }
     }
 }
 

@@ -7,6 +7,7 @@
 pub mod daemon;
 pub mod ops;
 pub mod permissions;
+pub mod stream;
 pub mod triggers;
 pub mod workspace_mount;
 
@@ -22,6 +23,11 @@ pub struct FuseConfig {
     pub allow_other: bool,
     pub direct_io: bool,
     pub auto_unmount: bool,
+    /// Mount the filesystem read-only (default). Stream-mode mounts set
+    /// this to `false` so writes to materialized placeholders apply
+    /// through to the backing file (spec §8.4); the tree structure stays
+    /// read-only (no create/mkdir/unlink handlers).
+    pub read_only: bool,
     pub attr_timeout: f64,
     pub entry_timeout: f64,
     pub max_read: u32,
