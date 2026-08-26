@@ -641,3 +641,15 @@ tasks:
   status: complete
   created_at: '2026-08-26T20:51:42.168989+00:00'
   completed_at: '2026-08-26T21:07:12.180367+00:00'
+- id: gap-055-stream-placeholders
+  title: "GAP-055 slice 9: \xA78 stream placeholder engine"
+  criteria:
+  - hilo-backends/src/stream.rs exists and exports StreamPlacer with plan_placeholders/create_placeholders/materialize
+    (grep -c 'pub fn plan_placeholders' hilo-backends/src/stream.rs >= 1); lib.rs
+    re-exports stream (grep -c 'pub mod stream' hilo-backends/src/lib.rs >= 1); cargo
+    test -p hilo_backends --lib stream exits 0; placeholders skip ignored and ephemeral
+    keys and carry user.vfs.remote + user.vfs.materialized xattrs (grep -c 'XATTR_MATERIALIZED'
+    hilo-backends/src/stream.rs >= 1)
+  status: complete
+  created_at: '2026-08-26T21:26:20.098140+00:00'
+  completed_at: '2026-08-26T21:34:36.283089+00:00'
