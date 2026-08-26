@@ -659,3 +659,291 @@ mod tests {
         assert_eq!(result.etag, Some("\"etag-value\"".into()));
     }
 }
+
+/// Additional S3Client surface used by S3Driver (spec §6): raw delete and a
+/// HEAD that also returns the object size.
+impl S3Client {
+    /// Delete an object. Missing key → `S3Error::NotFound`.
+    pub async fn delete_object(&self, bucket: &str, key: &str) -> S3Result<()> {
+        self.client
+            .delete_object()
+            .bucket(bucket)
+            .key(key)
+            .send()
+            .await
+            .map_err(|e| {
+                if format!("{}", e).contains("NotFound") {
+                    S3Error::NotFound(key.to_string())
+                } else {
+                    S3Error::from(e)
+                }
+            })?;
+        Ok(())
+    }
+
+    /// HEAD object returning (size, last_modified_unix). `None` when missing.
+    pub async fn head_object_meta(&self, bucket: &str, key: &str) -> S3Result<Option<(i64, u64)>> {
+        let resp = self
+            .client
+            .head_object()
+            .bucket(bucket)
+            .key(key)
+            .send()
+            .await;
+        match resp {
+            Ok(r) => Ok(Some((
+                r.content_length().unwrap_or(0),
+                r.last_modified().map(|t| t.secs() as u64).unwrap_or(0),
+            ))),
+            Err(e) if format!("{}", e).contains("NotFound") => Ok(None),
+            Err(e) => Err(S3Error::from(e)),
+        }
+    }
+}
+
+use crate::backend::{BackendEntry, BackendError};
+
+/// S3Driver — [`Backend`](crate::backend::Backend) adapter over [`S3Client`]
+/// (spec §6). ListObjectsV2 (list/walk), GetObject→dest (get), PutObject
+/// (put, reuses WriteResult), DeleteObject (delete), HEAD (stat). Multipart is
+/// handled by aws_sdk_s3; no custom chunking.
+///
+/// The trait is synchronous, so the driver owns a current-thread tokio runtime
+/// and block_on's each call (same pattern as the CLI's sync engine wrapper).
+pub struct S3Driver {
+    runtime: tokio::runtime::Runtime,
+    client: S3Client,
+    bucket: String,
+    /// Key prefix; all trait keys are relative to it.
+    prefix: String,
+    mode: crate::backend::SyncMode,
+}
+
+impl std::fmt::Debug for S3Driver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("S3Driver")
+            .field("bucket", &self.bucket)
+            .field("prefix", &self.prefix)
+            .field("mode", &self.mode)
+            .finish_non_exhaustive()
+    }
+}
+
+impl S3Driver {
+    pub fn new(cfg: &crate::backend::BackendConfig) -> Result<Self, crate::backend::BackendError> {
+        let bucket = cfg.bucket.clone().ok_or_else(|| {
+            crate::backend::BackendError::InvalidConfig("S3Driver needs `bucket`".into())
+        })?;
+        let region = cfg.region.clone().unwrap_or_else(|| "us-east-1".into());
+        let prefix = cfg.prefix.clone().unwrap_or_default();
+        let cache_dir = std::env::temp_dir().join(format!("hilo-s3driver-{}", cfg.name));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| crate::backend::BackendError::BucketError(e.to_string()))?;
+        let client = runtime.block_on(S3Client::new(&region, &cache_dir, 0, true))?;
+        Ok(Self {
+            runtime,
+            client,
+            bucket,
+            prefix,
+            mode: cfg.mode,
+        })
+    }
+
+    fn full_key(&self, key: &str) -> String {
+        join_prefix(&self.prefix, key)
+    }
+
+    /// Strip the driver prefix from a full S3 key → trait-relative key.
+    fn relative_key(&self, full: &str) -> String {
+        strip_prefix_key(full, &self.prefix)
+    }
+}
+
+/// `base` + `/` + `sub`, tolerant of missing/duplicate slashes.
+fn join_prefix(base: &str, sub: &str) -> String {
+    let base = base.trim_end_matches('/');
+    if base.is_empty() {
+        sub.to_string()
+    } else if sub.is_empty() {
+        base.to_string()
+    } else {
+        format!("{}/{}", base, sub.trim_matches('/'))
+    }
+}
+
+/// Remove `base/` from the front of `full`; returns `full` unchanged when the
+/// prefix does not match (defensive — S3 always returns keys under the prefix).
+fn strip_prefix_key(full: &str, base: &str) -> String {
+    if base.is_empty() {
+        return full.to_string();
+    }
+    let prefix = format!("{}/", base.trim_end_matches('/'));
+    full.strip_prefix(&prefix).unwrap_or(full).to_string()
+}
+
+impl crate::backend::Backend for S3Driver {
+    fn kind(&self) -> crate::backend::BackendKind {
+        crate::backend::BackendKind::S3
+    }
+
+    fn name(&self) -> &str {
+        "s3"
+    }
+
+    fn list(&self, prefix: &str) -> Result<Vec<BackendEntry>, BackendError> {
+        let full = self.full_key(prefix);
+        let metas = self
+            .runtime
+            .block_on(self.client.list_objects_with_meta(&self.bucket, &full))?;
+        Ok(metas
+            .into_iter()
+            .map(|m| BackendEntry {
+                key: self.relative_key(&m.key),
+                size: m.size,
+                modified: Some(m.last_modified_unix as i64),
+                etag: None,
+                is_dir: false,
+            })
+            .collect())
+    }
+
+    fn stat(&self, key: &str) -> Result<BackendEntry, BackendError> {
+        let full = self.full_key(key);
+        match self
+            .runtime
+            .block_on(self.client.head_object_meta(&self.bucket, &full))?
+        {
+            Some((size, modified)) => Ok(BackendEntry {
+                key: key.to_string(),
+                size,
+                modified: Some(modified as i64),
+                etag: None,
+                is_dir: false,
+            }),
+            None => Err(BackendError::NotFound(key.to_string())),
+        }
+    }
+
+    fn get(&self, key: &str, dest: &std::path::Path) -> Result<(), BackendError> {
+        let full = self.full_key(key);
+        self.runtime
+            .block_on(self.client.download_to(&self.bucket, &full, dest))?;
+        Ok(())
+    }
+
+    fn put(&self, local: &std::path::Path, key: &str) -> Result<WriteResult, BackendError> {
+        use sha2::{Digest, Sha256};
+        let full = self.full_key(key);
+        let bytes = std::fs::read(local)?;
+        let etag = self
+            .runtime
+            .block_on(self.client.upload_bytes(&self.bucket, &full, &bytes))?;
+        let mut hasher = Sha256::new();
+        hasher.update(&bytes);
+        let sha256 = format!(
+            "sha256:{}",
+            hasher
+                .finalize()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        );
+        Ok(WriteResult {
+            cache_path: local.to_path_buf(),
+            sha256,
+            etag,
+        })
+    }
+
+    fn delete(&self, key: &str) -> Result<(), BackendError> {
+        let full = self.full_key(key);
+        self.runtime
+            .block_on(self.client.delete_object(&self.bucket, &full))?;
+        Ok(())
+    }
+
+    fn walk(&self, prefix: &str) -> Result<Vec<BackendEntry>, BackendError> {
+        // S3 listing is already recursive over the prefix — walk == list.
+        self.list(prefix)
+    }
+}
+
+#[cfg(test)]
+mod s3driver_tests {
+    use super::*;
+    use crate::backend::Backend;
+
+    #[test]
+    fn join_and_strip_prefix_roundtrip() {
+        for (base, sub) in [
+            ("workspace", "a/b.txt"),
+            ("workspace/", "a/b.txt"),
+            ("", "a/b.txt"),
+            ("workspace", ""),
+            ("workspace/", ""),
+        ] {
+            let joined = join_prefix(base, sub);
+            let stripped = strip_prefix_key(&joined, base);
+            let expect_sub = sub.trim_matches('/');
+            let expect = if base.is_empty() {
+                expect_sub.to_string()
+            } else if sub.is_empty() {
+                base.trim_end_matches('/').to_string()
+            } else {
+                format!("{}/{}", base.trim_end_matches('/'), expect_sub)
+            };
+            assert_eq!(joined, expect, "join {base:?} + {sub:?}");
+            let expect_stripped = if sub.is_empty() && !base.is_empty() {
+                // stripping "workspace" from "workspace" → no trailing slash match
+                "workspace".to_string()
+            } else {
+                expect_sub.to_string()
+            };
+            assert_eq!(stripped, expect_stripped, "strip {base:?} from {joined:?}");
+        }
+    }
+
+    #[test]
+    fn strip_prefix_leaves_unmatched_full_key_unchanged() {
+        assert_eq!(strip_prefix_key("other/x.txt", "workspace"), "other/x.txt");
+    }
+
+    /// Live round-trip, gated on AWS env (spec §15). Skips when
+    /// AWS_ACCESS_KEY_ID or AWS_TEST_BUCKET are absent.
+    #[test]
+    fn s3driver_live_roundtrip_gated_on_aws_env() {
+        if std::env::var("AWS_ACCESS_KEY_ID").is_err() {
+            eprintln!("skipping s3driver_live_roundtrip: AWS_ACCESS_KEY_ID not set");
+            return;
+        }
+        let Ok(bucket) = std::env::var("AWS_TEST_BUCKET") else {
+            eprintln!("skipping s3driver_live_roundtrip: AWS_TEST_BUCKET not set");
+            return;
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = crate::backend::BackendConfig {
+            kind: crate::backend::BackendKind::S3,
+            name: "live-test".into(),
+            bucket: Some(bucket),
+            prefix: Some(format!("warpfs-s3driver-test-{}", std::process::id())),
+            region: Some("us-east-1".into()),
+            ..Default::default()
+        };
+        let driver = S3Driver::new(&cfg).expect("driver builds from env chain");
+        let key = "roundtrip.txt";
+        let src = tmp.path().join("src.txt");
+        std::fs::write(&src, b"live").unwrap();
+        driver.put(&src, key).unwrap();
+        let st = driver.stat(key).unwrap();
+        assert_eq!(st.size, 4);
+        let dst = tmp.path().join("dst.txt");
+        driver.get(key, &dst).unwrap();
+        assert_eq!(std::fs::read(&dst).unwrap(), b"live");
+        let listed = driver.list("").unwrap();
+        assert!(listed.iter().any(|e| e.key == key), "listed: {listed:?}");
+        driver.delete(key).unwrap();
+        assert!(matches!(driver.stat(key), Err(BackendError::NotFound(_))));
+    }
+}
