@@ -24,7 +24,9 @@ pub use ephemeral::{EphemeralClass, EphemeralEntry, EphemeralError, EphemeralMat
 pub use external::ExternalToolDriver;
 pub use git::{GitBackend, GitBackendConfig, GitError, GitResult};
 pub use s3::{S3Client, S3Driver, S3Error, S3ObjectMeta, S3Result, WriteResult};
-pub use sync::{IgnoreDecision, IgnoreMatcher, LocalFile, RemoteObject, SyncEngine, SyncPlan};
+pub use sync::{
+    IgnoreDecision, IgnoreMatcher, IgnoreSource, LocalFile, RemoteObject, SyncEngine, SyncPlan,
+};
 // Spec §7 planner (trait-based). Its SyncPlan is reachable as
 // planner::SyncPlan — the crate-root name is held by the legacy sync::SyncPlan.
 pub use planner::{

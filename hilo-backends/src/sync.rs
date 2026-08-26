@@ -21,12 +21,29 @@ use tokio::fs;
 
 use crate::s3::{S3Client, S3Result};
 
+/// Where an ignore rule came from (backend-backed-workspace-spec §4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IgnoreSource {
+    /// Compile-time built-in defaults (spec §4.2).
+    Builtin,
+    /// The workspace root `.hiloignore` (or an explicit `--ignore-file`).
+    RootFile,
+    /// A `.hiloignore` discovered in a subdirectory (relative to the root).
+    NestedFile(PathBuf),
+}
+
 /// One parsed ignore pattern.
+#[derive(Debug)]
 struct IgnorePattern {
     regex: Regex,
     negated: bool,
+    /// trailing `/` — matches directories only (the dir itself, or a
+    /// subtree below it)
+    dir_only: bool,
     /// The raw line the pattern was parsed from (for reporting).
     source: String,
+    /// Which ignore file the pattern came from.
+    source_kind: IgnoreSource,
 }
 
 /// A git-ignore-style matcher ("upstream ignore").
@@ -44,9 +61,14 @@ struct IgnorePattern {
 /// A pattern that matches a directory also matches everything below it,
 /// mirroring gitignore's "cannot re-include a file if a parent directory
 /// is excluded" rule.
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct IgnoreMatcher {
+    /// Root-level patterns: built-in defaults, then the root `.hiloignore`,
+    /// then the optional extra file. Ordered; the last match wins.
     patterns: Vec<IgnorePattern>,
+    /// Nested `.hiloignore` files: (directory relative to root, patterns
+    /// scoped to that directory). Rules apply only to paths under the dir.
+    nested: Vec<(PathBuf, Vec<IgnorePattern>)>,
 }
 
 impl IgnoreMatcher {
@@ -59,11 +81,14 @@ impl IgnoreMatcher {
     pub fn parse(text: &str) -> Self {
         let mut patterns = Vec::new();
         for line in text.lines() {
-            if let Some(p) = parse_line(line) {
+            if let Some(p) = parse_line(line, IgnoreSource::RootFile) {
                 patterns.push(p);
             }
         }
-        Self { patterns }
+        Self {
+            patterns,
+            ..Self::default()
+        }
     }
 
     /// Load patterns from a file. A missing file yields an empty matcher.
@@ -73,6 +98,85 @@ impl IgnoreMatcher {
         }
         let text = std::fs::read_to_string(path)?;
         Ok(Self::parse(&text))
+    }
+
+    /// Compile-time built-in defaults (spec §4.2): prepended to every `load`
+    /// matcher unless `no_defaults`; any user rule overrides them (last
+    /// match wins).
+    const BUILTIN_DEFAULTS: &'static str = "target/\nnode_modules/\n.venv/\nvenv/\n__pycache__/\ndist/\nbuild/\n.next/\n.cargo/\n.vfs/\n.git/\n*.o\n*.pyc\n*.class\n.DS_Store\n*.log\n.hiloignore\n.hiloephemeral\n";
+
+    /// Loads rules: built-in defaults (unless `no_defaults`), the root
+    /// `.hiloignore`, an optional extra file (`--ignore-file`), then
+    /// discovers nested `.hiloignore` files under `root` (depth-first, never
+    /// descending into `.vfs`/`.git`). Rules from nested files apply relative
+    /// to their own directory; the nearest file wins.
+    pub fn load(
+        root: &Path,
+        extra_file: Option<&Path>,
+        no_defaults: bool,
+    ) -> std::io::Result<Self> {
+        let mut patterns = Vec::new();
+        if !no_defaults {
+            for line in Self::BUILTIN_DEFAULTS.lines() {
+                if let Some(p) = parse_line(line, IgnoreSource::Builtin) {
+                    patterns.push(p);
+                }
+            }
+        }
+        let root_file = root.join(".hiloignore");
+        if root_file.is_file() {
+            for line in std::fs::read_to_string(&root_file)?.lines() {
+                if let Some(p) = parse_line(line, IgnoreSource::RootFile) {
+                    patterns.push(p);
+                }
+            }
+        }
+        if let Some(extra) = extra_file {
+            if !extra.is_file() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("ignore file not found: {}", extra.display()),
+                ));
+            }
+            for line in std::fs::read_to_string(extra)?.lines() {
+                if let Some(p) = parse_line(line, IgnoreSource::RootFile) {
+                    patterns.push(p);
+                }
+            }
+        }
+        let mut nested: Vec<(PathBuf, Vec<IgnorePattern>)> = Vec::new();
+        for entry in walkdir::WalkDir::new(root)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|e| {
+                let name = e.file_name().to_string_lossy();
+                !(e.depth() > 0 && (name == ".vfs" || name == ".git"))
+            })
+            .filter_map(|e| e.ok())
+        {
+            if !entry.file_type().is_file() || entry.file_name() != ".hiloignore" {
+                continue;
+            }
+            let dir_rel = entry
+                .path()
+                .parent()
+                .and_then(|p| p.strip_prefix(root).ok())
+                .map(|p| p.to_path_buf())
+                .unwrap_or_default();
+            if dir_rel.as_os_str().is_empty() {
+                continue; // the root file is handled above
+            }
+            let mut pats = Vec::new();
+            for line in std::fs::read_to_string(entry.path())?.lines() {
+                if let Some(p) = parse_line(line, IgnoreSource::NestedFile(dir_rel.clone())) {
+                    pats.push(p);
+                }
+            }
+            nested.push((dir_rel, pats));
+        }
+        // Deeper files win on ties: evaluate shallower scopes first.
+        nested.sort_by_key(|(dir, _)| dir.components().count());
+        Ok(Self { patterns, nested })
     }
 
     /// Whether `rel_path` (POSIX-style, relative to the workspace root)
@@ -85,21 +189,108 @@ impl IgnoreMatcher {
         self.decision(rel_path).ignored
     }
 
-    /// Full ignore decision for `rel_path`: whether it is excluded, and the
-    /// raw ignore-file line responsible (the last matching pattern, or the
-    /// ancestor-directory pattern that excludes the subtree). `rule` is
-    /// `None` when no pattern matches.
+    /// Git-exact match: like `is_ignored`, but a directory-only pattern
+    /// (trailing `/`) matches a path that *is* the directory only when
+    /// `is_dir` is true; paths below the directory still match regardless.
+    pub fn matches(&self, rel_path: &str, is_dir: bool) -> bool {
+        let mut best = Self::decide_scope(&self.patterns, rel_path, Some(is_dir));
+        for (dir, pats) in &self.nested {
+            let prefix = format!("{}/", dir.to_string_lossy());
+            if let Some(sub) = rel_path.strip_prefix(&prefix) {
+                let scoped = Self::decide_scope(pats, sub, Some(is_dir));
+                if scoped.rule.is_some() {
+                    best = scoped;
+                }
+            }
+        }
+        // Any ignored ancestor directory excludes the whole subtree. The
+        // ancestors are directories by construction, so is_dir is true.
+        let mut idx = 0;
+        while let Some(slash) = rel_path[idx..].find('/') {
+            idx += slash + 1;
+            if self.matches(&rel_path[..idx - 1], true) {
+                return true;
+            }
+        }
+        best.ignored
+    }
+
+    /// Full ignore decision for `rel_path`: whether it is excluded, the raw
+    /// ignore-file line responsible (the last matching pattern, or the
+    /// ancestor-directory pattern that excludes the subtree), and the source
+    /// ignore file. `rule`/`source` are `None` when no pattern matches.
     ///
     /// A negated (`!`) pattern that is the last match reports as not ignored
     /// with its rule still shown; an excluded ancestor directory wins over
     /// any re-inclusion below it (gitignore rule).
     pub fn decision(&self, rel_path: &str) -> IgnoreDecision {
-        let direct = self.last_match_rule(rel_path);
+        // Root-level scope (builtins + root file + extra file).
+        let mut best = Self::decide_scope(&self.patterns, rel_path, None);
+        // Nested scopes: the deepest applicable .hiloignore wins (nearest
+        // file), and a nested negation can re-include what a root pattern
+        // excluded (unless an excluded ancestor directory blocks it below).
+        for (dir, pats) in &self.nested {
+            let prefix = format!("{}/", dir.to_string_lossy());
+            if let Some(sub) = rel_path.strip_prefix(&prefix) {
+                let scoped = Self::decide_scope(pats, sub, None);
+                if scoped.rule.is_some() {
+                    best = scoped;
+                }
+            }
+        }
+        // Any ignored ancestor directory excludes the whole subtree.
+        let mut idx = 0;
+        while let Some(slash) = rel_path[idx..].find('/') {
+            idx += slash + 1;
+            let ancestor = &rel_path[..idx - 1];
+            if self.is_ignored(ancestor) {
+                let d = self.decision(ancestor);
+                return IgnoreDecision {
+                    ignored: true,
+                    rule: d.rule.clone(),
+                    source: d.source.clone(),
+                };
+            }
+        }
+        best
+    }
+
+    /// The last pattern matching `rel_path` (with optional directory-only
+    /// enforcement), if any.
+    fn last_match_rule<'a>(
+        patterns: &'a [IgnorePattern],
+        rel_path: &str,
+        is_dir: Option<bool>,
+    ) -> Option<&'a IgnorePattern> {
+        let mut last: Option<&IgnorePattern> = None;
+        for p in patterns {
+            let matched = match is_dir {
+                Some(is_dir) => pattern_matches(p, rel_path, is_dir),
+                None => p.regex.is_match(rel_path),
+            };
+            if matched {
+                last = Some(p);
+            }
+        }
+        last
+    }
+
+    /// Decide against a single scope's pattern list (root-level or one
+    /// nested file). `rel_path` is relative to that scope's directory.
+    /// `is_dir: None` keeps the legacy behavior where directory-only
+    /// patterns also match a path that is exactly the directory name.
+    fn decide_scope(
+        patterns: &[IgnorePattern],
+        rel_path: &str,
+        is_dir: Option<bool>,
+    ) -> IgnoreDecision {
+        let direct = Self::last_match_rule(patterns, rel_path, is_dir);
         if let Some(p) = direct {
             if !p.negated {
                 return IgnoreDecision {
                     ignored: true,
                     rule: Some(p.source.clone()),
+                    source: Some(p.source_kind.clone()),
                 };
             }
         }
@@ -107,11 +298,12 @@ impl IgnoreMatcher {
         let mut idx = 0;
         while let Some(slash) = rel_path[idx..].find('/') {
             idx += slash + 1;
-            if let Some(p) = self.last_match_rule(&rel_path[..idx - 1]) {
+            if let Some(p) = Self::last_match_rule(patterns, &rel_path[..idx - 1], Some(true)) {
                 if !p.negated {
                     return IgnoreDecision {
                         ignored: true,
                         rule: Some(p.source.clone()),
+                        source: Some(p.source_kind.clone()),
                     };
                 }
             }
@@ -120,28 +312,42 @@ impl IgnoreMatcher {
         IgnoreDecision {
             ignored: false,
             rule: direct.map(|p| p.source.clone()),
+            source: direct.map(|p| p.source_kind.clone()),
         }
-    }
-
-    /// The last pattern matching `rel_path`, if any.
-    fn last_match_rule(&self, rel_path: &str) -> Option<&IgnorePattern> {
-        let mut last: Option<&IgnorePattern> = None;
-        for p in &self.patterns {
-            if p.regex.is_match(rel_path) {
-                last = Some(p);
-            }
-        }
-        last
     }
 }
 
+/// Whether `p` matches `rel_path` when directory-only patterns are enforced:
+/// a `dir_only` pattern matches a path that is exactly the directory only
+/// when `is_dir` is true; a path below the directory matches regardless.
+fn pattern_matches(p: &IgnorePattern, rel_path: &str, is_dir: bool) -> bool {
+    if !p.regex.is_match(rel_path) {
+        return false;
+    }
+    if !p.dir_only || is_dir {
+        return true;
+    }
+    // Directory-only pattern, path is a file: it matches only when the path
+    // sits below the directory (some ancestor prefix is the directory).
+    let mut idx = 0;
+    while let Some(slash) = rel_path[idx..].find('/') {
+        idx += slash + 1;
+        if p.regex.is_match(&rel_path[..idx - 1]) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Result of an ignore lookup: whether the path is excluded and which rule
-/// (raw ignore-file line) decided it.
+/// (raw ignore-file line) decided it, plus where that rule came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IgnoreDecision {
     pub ignored: bool,
     /// Raw source line of the deciding pattern; `None` when nothing matches.
     pub rule: Option<String>,
+    /// The ignore file the deciding pattern came from.
+    pub source: Option<IgnoreSource>,
 }
 
 /// Translate a gitignore glob body (no leading `/`, no trailing `/`) into a
@@ -181,7 +387,7 @@ fn translate_glob(pattern: &str) -> String {
 }
 
 /// Parse a single gitignore-style line into a pattern, if meaningful.
-fn parse_line(line: &str) -> Option<IgnorePattern> {
+fn parse_line(line: &str, source_kind: IgnoreSource) -> Option<IgnorePattern> {
     let trimmed = line.trim();
     if trimmed.is_empty() || trimmed.starts_with('#') {
         return None;
@@ -194,6 +400,7 @@ fn parse_line(line: &str) -> Option<IgnorePattern> {
     }
     // trailing `/` = directory-only (parity with gitignore; the regex below
     // matches dirs and everything below them either way)
+    let dir_only = body.ends_with('/');
     if let Some(rest) = body.strip_suffix('/') {
         body = rest;
     }
@@ -222,7 +429,9 @@ fn parse_line(line: &str) -> Option<IgnorePattern> {
     Some(IgnorePattern {
         regex: Regex::new(&re).expect("translated glob is a valid regex"),
         negated,
+        dir_only,
         source: trimmed.to_string(),
+        source_kind,
     })
 }
 
@@ -677,6 +886,122 @@ mod tests {
         ] {
             assert_eq!(m.is_ignored(p), m.decision(p).ignored, "parity for {p}");
         }
+    }
+
+    // ---------- load(): builtin defaults, nested files, sources ----------
+
+    fn write_fs(p: &Path, s: &str) {
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, s).unwrap();
+    }
+
+    #[test]
+    fn load_applies_builtin_defaults() {
+        let tmp = tempfile::tempdir().unwrap();
+        let m = IgnoreMatcher::load(tmp.path(), None, false).unwrap();
+        assert!(m.is_ignored("target/artifact.bin"));
+        assert!(m.is_ignored("node_modules/pkg/index.js"));
+        assert!(m.is_ignored("sub/venv/bin/python"));
+        assert!(m.is_ignored("build/out.o"));
+        assert!(m.is_ignored("src/debug.log"));
+        assert!(m.is_ignored(".vfs/graph/edges.jsonl"));
+        assert!(!m.is_ignored("src/main.rs"));
+        assert!(!m.is_ignored("README.md"));
+        let d = m.decision("target/artifact.bin");
+        assert_eq!(d.source, Some(IgnoreSource::Builtin));
+        assert_eq!(d.rule.as_deref(), Some("target/"));
+    }
+
+    #[test]
+    fn load_no_defaults_skips_builtins() {
+        let tmp = tempfile::tempdir().unwrap();
+        let m = IgnoreMatcher::load(tmp.path(), None, true).unwrap();
+        assert!(!m.is_ignored("target/artifact.bin"));
+        assert!(!m.is_ignored("src/debug.log"));
+    }
+
+    #[test]
+    fn load_user_rule_overrides_builtin() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_fs(&tmp.path().join(".hiloignore"), "!target/\n");
+        let m = IgnoreMatcher::load(tmp.path(), None, false).unwrap();
+        assert!(
+            !m.is_ignored("target/artifact.bin"),
+            "negation overrides builtin"
+        );
+        assert!(
+            m.is_ignored("node_modules/x/index.js"),
+            "other builtins stay"
+        );
+        let d = m.decision("target/artifact.bin");
+        assert_eq!(d.source, Some(IgnoreSource::RootFile));
+    }
+
+    #[test]
+    fn load_nested_ignore_scoped_to_its_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_fs(&tmp.path().join("sub/.hiloignore"), "cache.txt\n");
+        let m = IgnoreMatcher::load(tmp.path(), None, false).unwrap();
+        assert!(m.is_ignored("sub/cache.txt"));
+        assert!(!m.is_ignored("cache.txt"), "root path unaffected");
+        assert!(!m.is_ignored("other/cache.txt"), "other dirs unaffected");
+        let d = m.decision("sub/cache.txt");
+        assert_eq!(
+            d.source,
+            Some(IgnoreSource::NestedFile(PathBuf::from("sub")))
+        );
+        let d = m.decision("target/artifact.bin");
+        assert_eq!(d.source, Some(IgnoreSource::Builtin));
+    }
+
+    #[test]
+    fn load_nested_negation_reincludes_over_root_pattern() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_fs(&tmp.path().join(".hiloignore"), "*.tmp\n");
+        write_fs(&tmp.path().join("sub/.hiloignore"), "!keep.tmp\n");
+        let m = IgnoreMatcher::load(tmp.path(), None, false).unwrap();
+        assert!(m.is_ignored("sub/other.tmp"));
+        assert!(!m.is_ignored("sub/keep.tmp"), "nested negation wins");
+        assert!(m.is_ignored("keep.tmp"), "root path stays ignored");
+    }
+
+    #[test]
+    fn load_nested_negation_blocked_by_excluded_ancestor_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_fs(&tmp.path().join(".hiloignore"), "sub/\n");
+        write_fs(&tmp.path().join("sub/.hiloignore"), "!cache.txt\n");
+        let m = IgnoreMatcher::load(tmp.path(), None, false).unwrap();
+        assert!(
+            m.is_ignored("sub/cache.txt"),
+            "cannot re-include under excluded dir"
+        );
+        assert!(m.is_ignored("sub/anything.txt"));
+    }
+
+    #[test]
+    fn load_missing_extra_file_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let err =
+            IgnoreMatcher::load(tmp.path(), Some(&tmp.path().join("nope")), false).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn matches_honors_dir_only_with_is_dir() {
+        let m = IgnoreMatcher::parse("target/\n");
+        assert!(
+            !m.matches("target", false),
+            "file named target is not a dir"
+        );
+        assert!(m.matches("target", true), "the directory itself");
+        assert!(
+            m.matches("target/x.rs", false),
+            "below the dir matches files"
+        );
+        assert!(m.matches("a/b/target/x", false));
+        assert!(!m.matches("target.txt", false));
+        // Legacy is_ignored keeps its looser behavior (locked by tests above).
+        assert!(m.is_ignored("target"));
     }
 
     #[tokio::test]

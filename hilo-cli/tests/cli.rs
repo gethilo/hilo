@@ -467,6 +467,69 @@ fn ignore_check_reports_decision_and_rule() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+// ─────────────────────── ignore check: builtins + nested ───────────────────────
+
+#[test]
+fn ignore_check_reports_builtin_defaults_and_no_defaults_flag() {
+    let dir = unique_tempdir("ignore-check-builtins");
+    // No .hiloignore: built-in defaults apply (spec §4.2).
+    let out = Command::new(BIN)
+        .args(["ignore", "check", "target/artifact.bin"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo ignore check");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("ignored: true"),
+        "builtin target/ should apply: {stdout}"
+    );
+    assert!(
+        stdout.contains("source: builtin defaults"),
+        "expected builtin source, got: {stdout}"
+    );
+
+    // --no-default-ignores disables the builtins.
+    let out = Command::new(BIN)
+        .args([
+            "ignore",
+            "check",
+            "target/artifact.bin",
+            "--no-default-ignores",
+        ])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo ignore check");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("ignored: false"),
+        "no-default-ignores should disable builtins, got: {stdout}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn ignore_check_reports_nested_ignore_source() {
+    let dir = unique_tempdir("ignore-check-nested");
+    fs::create_dir(dir.join("sub")).expect("mkdir sub");
+    fs::write(dir.join("sub/.hiloignore"), "secret.txt\n").expect("write nested");
+    let out = Command::new(BIN)
+        .args(["ignore", "check", "sub/secret.txt"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo ignore check");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("ignored: true"),
+        "nested rule should apply, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("source: nested sub"),
+        "expected nested source, got: {stdout}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 // ─────────────────────── workspace ephemeral / wipe ───────────────────────
 
 /// Build a scratch workspace: src/main.rs (persistent), target/artifact.bin
