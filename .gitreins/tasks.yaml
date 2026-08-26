@@ -554,3 +554,17 @@ tasks:
   status: complete
   created_at: '2026-08-26T17:07:28.348253+00:00'
   completed_at: '2026-08-26T17:16:12.457489+00:00'
+- id: gap-056-ephemeral-engine
+  title: "Ephemeral engine + workspace ephemeral/wipe CLIs (spec \xA75/\xA79)"
+  criteria:
+  - 'hilo-backends/src/ephemeral.rs exists with EphemeralMatcher struct (grep -c ''pub
+    struct EphemeralMatcher'' >= 1) AND builtin catalog contains node_modules and
+    .vfs/graph (grep -c ''node_modules'' hilo-backends/src/ephemeral.rs >= 1 AND grep
+    -c ''.vfs/graph'' >= 1) AND cargo test -p hilo_backends --lib ephemeral exits
+    0 AND cargo test -p hilo_cli --test cli workspace_ephemeral exits 0 AND cargo
+    test -p hilo_cli --test cli workspace_wipe exits 0 AND live: hilo workspace ephemeral
+    lists target/ artifacts as TSV in a scratch dir AND hilo workspace wipe --apply
+    deletes only ephemeral files and prints freed bytes'
+  status: complete
+  created_at: '2026-08-26T17:25:32.726179+00:00'
+  completed_at: '2026-08-26T17:35:53.355180+00:00'
