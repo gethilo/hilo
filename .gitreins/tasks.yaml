@@ -531,3 +531,14 @@ tasks:
   status: complete
   created_at: '2026-08-25T04:49:11.409852+00:00'
   completed_at: '2026-08-25T05:03:38.308583+00:00'
+- id: gap-055-s3-workspace-sync
+  title: S3-backed workspace sync engine (GAP-055)
+  criteria:
+  - cargo check --workspace exits 0 AND cargo test -p hilo_backends sync passes AND
+    hilo workspace sync --help shows --bucket/--prefix/--at/--ignore AND docs/ignore-file.md
+    exists describing the git-ignore-style upstream ignore format shared by S3/GDrive/OneDrive/Dropbox
+    backends AND a live sync against an S3-compatible endpoint uploads non-ignored
+    files and skips ignored ones
+  status: complete
+  created_at: '2026-08-26T16:44:54.400927+00:00'
+  completed_at: '2026-08-26T16:59:48.366227+00:00'
