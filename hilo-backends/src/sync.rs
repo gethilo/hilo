@@ -25,6 +25,8 @@ use crate::s3::{S3Client, S3Result};
 struct IgnorePattern {
     regex: Regex,
     negated: bool,
+    /// The raw line the pattern was parsed from (for reporting).
+    source: String,
 }
 
 /// A git-ignore-style matcher ("upstream ignore").
@@ -80,30 +82,66 @@ impl IgnoreMatcher {
     /// if a parent directory of that file is excluded": a path whose any
     /// ancestor directory is ignored stays ignored.
     pub fn is_ignored(&self, rel_path: &str) -> bool {
-        if self.last_match(rel_path) {
-            return true;
+        self.decision(rel_path).ignored
+    }
+
+    /// Full ignore decision for `rel_path`: whether it is excluded, and the
+    /// raw ignore-file line responsible (the last matching pattern, or the
+    /// ancestor-directory pattern that excludes the subtree). `rule` is
+    /// `None` when no pattern matches.
+    ///
+    /// A negated (`!`) pattern that is the last match reports as not ignored
+    /// with its rule still shown; an excluded ancestor directory wins over
+    /// any re-inclusion below it (gitignore rule).
+    pub fn decision(&self, rel_path: &str) -> IgnoreDecision {
+        let direct = self.last_match_rule(rel_path);
+        if let Some(p) = direct {
+            if !p.negated {
+                return IgnoreDecision {
+                    ignored: true,
+                    rule: Some(p.source.clone()),
+                };
+            }
         }
         // Any ignored ancestor directory excludes the whole subtree.
         let mut idx = 0;
         while let Some(slash) = rel_path[idx..].find('/') {
             idx += slash + 1;
-            if self.last_match(&rel_path[..idx - 1]) {
-                return true;
+            if let Some(p) = self.last_match_rule(&rel_path[..idx - 1]) {
+                if !p.negated {
+                    return IgnoreDecision {
+                        ignored: true,
+                        rule: Some(p.source.clone()),
+                    };
+                }
             }
         }
-        false
+        // Not ignored: report the last matching rule (e.g. a negation) if any.
+        IgnoreDecision {
+            ignored: false,
+            rule: direct.map(|p| p.source.clone()),
+        }
     }
 
-    /// Result of the last pattern matching `rel_path` (false = not matched).
-    fn last_match(&self, rel_path: &str) -> bool {
-        let mut ignored = false;
+    /// The last pattern matching `rel_path`, if any.
+    fn last_match_rule(&self, rel_path: &str) -> Option<&IgnorePattern> {
+        let mut last: Option<&IgnorePattern> = None;
         for p in &self.patterns {
             if p.regex.is_match(rel_path) {
-                ignored = !p.negated;
+                last = Some(p);
             }
         }
-        ignored
+        last
     }
+}
+
+/// Result of an ignore lookup: whether the path is excluded and which rule
+/// (raw ignore-file line) decided it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IgnoreDecision {
+    pub ignored: bool,
+    /// Raw source line of the deciding pattern; `None` when nothing matches.
+    pub rule: Option<String>,
 }
 
 /// Translate a gitignore glob body (no leading `/`, no trailing `/`) into a
@@ -184,6 +222,7 @@ fn parse_line(line: &str) -> Option<IgnorePattern> {
     Some(IgnorePattern {
         regex: Regex::new(&re).expect("translated glob is a valid regex"),
         negated,
+        source: trimmed.to_string(),
     })
 }
 
@@ -590,6 +629,54 @@ mod tests {
             PathBuf::from("/tmp/ws"),
             IgnoreMatcher::parse(ignore_text),
         )
+    }
+
+    #[test]
+    fn decision_reports_matching_rule() {
+        let m = IgnoreMatcher::parse("*.bin\nbuild/\n");
+        let d = m.decision("a.bin");
+        assert!(d.ignored);
+        assert_eq!(d.rule.as_deref(), Some("*.bin"));
+        let d = m.decision("build/cache.o");
+        assert!(d.ignored);
+        assert_eq!(d.rule.as_deref(), Some("build/"));
+        let d = m.decision("keep.txt");
+        assert!(!d.ignored);
+        assert_eq!(d.rule, None);
+    }
+
+    #[test]
+    fn decision_negation_reports_rule_not_ignored() {
+        let m = IgnoreMatcher::parse("*.log\n!important.log\n");
+        let d = m.decision("important.log");
+        assert!(!d.ignored);
+        assert_eq!(d.rule.as_deref(), Some("!important.log"));
+        let d = m.decision("other.log");
+        assert!(d.ignored);
+        assert_eq!(d.rule.as_deref(), Some("*.log"));
+    }
+
+    #[test]
+    fn decision_ancestor_dir_exclusion_wins_over_reinclude() {
+        // gitignore: cannot re-include a file inside an excluded directory.
+        let m = IgnoreMatcher::parse("out/\n!out/keep.txt\n");
+        let d = m.decision("out/keep.txt");
+        assert!(d.ignored);
+        assert_eq!(d.rule.as_deref(), Some("out/"));
+    }
+
+    #[test]
+    fn decision_parity_with_is_ignored() {
+        let m = IgnoreMatcher::parse("*.tmp\ncache/\n!cache/keep.tmp\n");
+        for p in [
+            "a.tmp",
+            "cache/x.tmp",
+            "cache/keep.tmp",
+            "sub/cache/keep.tmp",
+            "plain.txt",
+        ] {
+            assert_eq!(m.is_ignored(p), m.decision(p).ignored, "parity for {p}");
+        }
     }
 
     #[tokio::test]

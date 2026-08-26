@@ -6,6 +6,14 @@ All notable changes to Hilo are documented in this file.
 
 ### Added
 
+- **`hilo ignore check <PATH>`** — diagnostic for ignore decisions: prints
+  whether a path is excluded by the workspace `.hiloignore` file, the exact
+  rule line that decided it, and the ignore file used. Backs `hilo workspace
+  sync`'s ignore-aware transfer; see docs/ignore-file.md and
+  docs/backend-compatibility-matrix.md.
+- **`docs/backend-compatibility-matrix.md`** — feature & compatibility
+  matrix for backend-backed workspaces (backend × sync tool × capabilities ×
+  modes), per specs/backend-backed-workspace-spec.md §14.
 - **`hilo workspace sync`** — two-way sync between a local directory and an
   S3 prefix (`--bucket`, `--prefix`, `--at`, `--ignore`, `--dry-run`).
   Non-ignored files are mirrored in both directions (newer side wins);

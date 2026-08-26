@@ -277,6 +277,34 @@ Unmount a workspace.
 hilo workspace unmount /mnt/hilo
 ```
 
+### `sync`
+
+Two-way sync a local directory against a remote backend prefix (S3 today).
+Non-ignored files are mirrored in both directions (newer side wins); files
+matched by the ignore file stay local-only and are never transferred.
+See docs/ignore-file.md for the ignore format.
+
+```bash
+hilo workspace sync --bucket my-bucket --prefix data --at ./ws --dry-run
+```
+
+## `hilo ignore`
+
+Inspect ignore decisions (the git-ignore-style `.hiloignore` file, with
+`.vfsignore` accepted as a legacy alias).
+
+### `check`
+
+Report whether a path would be ignored, and which rule decided it.
+
+```bash
+hilo ignore check build/out.o
+# path: build/out.o
+# ignored: true
+# rule: build/
+# source: /path/to/workspace/.hiloignore
+```
+
 ## `hilo plugin`
 
 Load and manage wasm plugins.

@@ -399,3 +399,70 @@ fn mcp_stdio_stdout_is_pure_jsonrpc() {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+// ─────────────────────── ignore check ───────────────────────
+
+#[test]
+fn ignore_check_reports_decision_and_rule() {
+    let dir = unique_tempdir("ignore-check");
+    fs::write(dir.join(".hiloignore"), "*.bin\nbuild/\n!keep.bin\n").expect("write .hiloignore");
+
+    // Ignored path: prints ignored:true with the matching rule.
+    let out = Command::new(BIN)
+        .args(["ignore", "check", "a.bin"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo ignore check");
+    assert!(
+        out.status.success(),
+        "ignore check exited non-zero: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("ignored: true"),
+        "expected ignored:true, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("rule: *.bin"),
+        "expected rule line, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("source: "),
+        "expected source line, got: {stdout}"
+    );
+
+    // Re-included path: not ignored, but the deciding rule is reported.
+    let out = Command::new(BIN)
+        .args(["ignore", "check", "keep.bin"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo ignore check");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("ignored: false"),
+        "expected ignored:false for re-included path, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("rule: !keep.bin"),
+        "expected negation rule reported, got: {stdout}"
+    );
+
+    // Unmatched path: not ignored, no rule.
+    let out = Command::new(BIN)
+        .args(["ignore", "check", "src/main.rs"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo ignore check");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("ignored: false"),
+        "expected ignored:false for unmatched path, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("rule: (none)"),
+        "expected rule: (none) for unmatched path, got: {stdout}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}

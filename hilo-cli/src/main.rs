@@ -3,7 +3,7 @@ mod commands;
 use clap::{Parser, Subcommand};
 
 use commands::plugin::PluginCommand;
-use commands::{backend, classify, graph, init, meta, mount, plugin, serve, workspace};
+use commands::{backend, classify, graph, ignore, init, meta, mount, plugin, serve, workspace};
 
 /// Hilo command-line interface.
 #[derive(Parser)]
@@ -34,6 +34,9 @@ enum Commands {
     Workspace(WorkspaceCommand),
     /// Auto-classify files with role/status metadata (entrypoint, test, library, etc.).
     Classify(ClassifyArgs),
+    /// Check whether a path is ignored by the workspace ignore file.
+    #[command(subcommand)]
+    Ignore(ignore::IgnoreCommand),
     /// Load and manage wasm plugins.
     #[command(subcommand)]
     Plugin(PluginCommand),
@@ -315,6 +318,7 @@ fn main() {
         Commands::Classify(args) => {
             classify::run_classify(args.dry_run, args.verbose, args.features)
         }
+        Commands::Ignore(ignore::IgnoreCommand::Check(args)) => ignore::run_ignore_check(args),
         Commands::Plugin(PluginCommand::Load(args)) => plugin::run_plugin_load(&args.wasm_path),
         Commands::Plugin(PluginCommand::List) => plugin::run_plugin_list(),
     };
