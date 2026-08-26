@@ -1,6 +1,6 @@
 # hilo-mcp — MCP Server
 
-A Model Context Protocol server implementing 15 tools over stdio JSON-RPC. Agents query the dependency graph, search semantically, read/write metadata, and manage backends through MCP without file reads.
+A Model Context Protocol server implementing 17 tools over stdio JSON-RPC. Agents query the dependency graph, search semantically, read/write metadata, and manage backends through MCP without file reads.
 
 **Crate:** `hilo-mcp`  
 **Transport:** stdio (JSON-RPC 2.0)  

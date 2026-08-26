@@ -1,6 +1,6 @@
 # MCP Tools
 
-Hilo exposes 15 tools via JSON-RPC over stdio. Agents query the
+Hilo exposes 17 tools via JSON-RPC over stdio. Agents query the
 dependency graph and metadata without reading files.
 
 ## Tool List
@@ -174,7 +174,7 @@ Returns: `{ "backend": "local", "cache_hit": true, "cache_path": "/home/user/pro
 
 ### `vfs_sync_backend`
 
-Sync the backend for a file. For local backends this is a no-op (always in sync). For S3/git backends, reports the current cache state.
+Sync the backend for a file. For local backends this is a no-op (always in sync). For S3/git backends, reports the current cache state. Ignore-aware: paths excluded by the workspace ignore rules, or classified ephemeral without an explicit `user.vfs.sync = upstream` override, are local-only — they report `skipped_ignored` instead of transferring.
 
 ```json
 {
@@ -185,7 +185,38 @@ Sync the backend for a file. For local backends this is a no-op (always in sync)
 
 - `path` (required): file path to sync the backend for
 
-Returns: `{ "synced_files": 1, "errors": [] }`
+Returns: `{ "synced_files": 1, "errors": [], "skipped_ignored": 0 }` — for an ignored/ephemeral path: `{ "synced_files": 0, "errors": [], "skipped_ignored": 1 }`
+
+### `vfs_workspace_ephemeral`
+
+List ephemeral (rebuildable/redownloadable) files in the workspace — path, size, and the deciding rule. Classification uses the built-in ephemeral catalog plus the workspace `.hiloephemeral` file when present. Defaults to the whole workspace root; an optional path limits the listing to that subtree.
+
+```json
+{
+  "name": "vfs_workspace_ephemeral",
+  "arguments": { "path": "target" }
+}
+```
+
+- `path` (optional): limit the listing to a subtree
+
+Returns: `{ "entries": [{ "path": "target/artifact.bin", "size": 1048576, "reason": "target/" }], "total_bytes": 1048576 }`
+
+### `vfs_workspace_wipe`
+
+Plan or apply a wipe of ephemeral files. `dry_run` defaults to `true` (planned only); pass `dry_run: false` to delete. Files with `user.vfs.ephemeral = false` are never removed (the only wipe protector).
+
+```json
+{
+  "name": "vfs_workspace_wipe",
+  "arguments": { "path": "target", "dry_run": true }
+}
+```
+
+- `path` (optional): limit the wipe to a subtree
+- `dry_run` (optional, default `true`): when `false`, deletes the ephemeral files
+
+Returns: `{ "removed": [{ "path": "target/artifact.bin", "bytes": 1048576 }], "freed_bytes": 1048576 }` (dry-run: planned only)
 
 ### `vfs_graph_understand`
 

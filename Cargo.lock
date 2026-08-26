@@ -2345,6 +2345,7 @@ dependencies = [
 name = "hilo_mcp"
 version = "0.3.0"
 dependencies = [
+ "hilo_backends",
  "hilo_core",
  "hilo_graph",
  "hilo_metadata",

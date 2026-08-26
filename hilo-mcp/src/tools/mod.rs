@@ -1,6 +1,6 @@
 //! Tool definitions and dispatch for the Hilo MCP server.
 //!
-//! Fifteen tools are exposed:
+//! Seventeen tools are exposed:
 //! - `vfs_get_metadata`     — read Hilo xattrs for a file
 //! - `vfs_set_metadata`     — write Hilo xattr for a file
 //! - `vfs_graph_related`    — find related files via the dependency graph
@@ -16,12 +16,15 @@
 //! - `vfs_resolve_path`     — resolve a virtual path to real storage
 //! - `vfs_backend_status`   — get backend information for a file
 //! - `vfs_sync_backend`     — sync the backend for a file
+//! - `vfs_workspace_ephemeral` — list ephemeral (rebuildable) files
+//! - `vfs_workspace_wipe`   — plan or apply a wipe of ephemeral files
 
 use std::path::Path;
 
 use serde::Serialize;
 
 use crate::error::{McpError, McpResult};
+use hilo_backends::{EphemeralClass, EphemeralMatcher, IgnoreMatcher};
 
 // ---------------------------------------------------------------------------
 // Tool descriptor
@@ -228,13 +231,34 @@ pub fn list_tools() -> Vec<Tool> {
         },
         Tool {
             name: "vfs_sync_backend".into(),
-            description: "Sync the backend for a file — returns count of synced files and any errors.".into(),
+            description: "Sync the backend for a file — returns count of synced files and any errors. Ignored/ephemeral paths are local-only and report skipped_ignored instead of transferring.".into(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "File path to sync the backend for"}
                 },
                 "required": ["path"]
+            }),
+        },
+        Tool {
+            name: "vfs_workspace_ephemeral".into(),
+            description: "List ephemeral (rebuildable/redownloadable) files in the workspace — path, size, and the deciding rule. Defaults to the workspace root; an optional path limits the listing to that subtree.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Optional path limiting the listing to a subtree"}
+                }
+            }),
+        },
+        Tool {
+            name: "vfs_workspace_wipe".into(),
+            description: "Plan or apply a wipe of ephemeral files. dry_run defaults to true (planned only); pass dry_run=false to delete. Files with user.vfs.ephemeral=false are never removed.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Optional path limiting the wipe to a subtree"},
+                    "dry_run": {"type": "boolean", "description": "When true (default) only plan; when false, delete"}
+                }
             }),
         },
     ]
@@ -265,6 +289,8 @@ pub fn call_tool(name: &str, arguments: &serde_json::Value) -> McpResult<serde_j
         "vfs_resolve_path" => resolve_path_mcp(arguments),
         "vfs_backend_status" => backend_status(arguments),
         "vfs_sync_backend" => sync_backend(arguments),
+        "vfs_workspace_ephemeral" => workspace_ephemeral(arguments),
+        "vfs_workspace_wipe" => workspace_wipe(arguments),
         other => Err(McpError::Protocol(format!("Unknown tool: {other}"))),
     }
 }
@@ -946,10 +972,22 @@ fn backend_status(arguments: &serde_json::Value) -> McpResult<serde_json::Value>
 ///
 /// For local backends, returns synced_files = 1 (always in sync).
 /// For S3/git backends, reports the current cache state.
+/// Ignore-aware (spec §10): paths excluded by the workspace ignore rules or
+/// classified ephemeral (without an explicit `user.vfs.sync = upstream`
+/// override) are local-only — they report `skipped_ignored` instead of a
+/// transfer result.
 fn sync_backend(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
     let path = arguments["path"]
         .as_str()
         .ok_or_else(|| McpError::Protocol("missing 'path' argument".into()))?;
+
+    if let Some(skipped) = skipped_ignore_count(path)? {
+        return Ok(serde_json::json!({
+            "synced_files": 0,
+            "errors": [],
+            "skipped_ignored": skipped,
+        }));
+    }
 
     let resolved = resolve_backend(path)?;
 
@@ -980,5 +1018,133 @@ fn sync_backend(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
     Ok(serde_json::json!({
         "synced_files": synced_files,
         "errors": errors,
+        "skipped_ignored": 0,
     }))
+}
+
+/// Returns `Some(n)` when `path` is excluded from sync (ignored by the
+/// workspace ignore rules, or ephemeral without `user.vfs.sync = upstream`),
+/// and `None` when it is a normal sync candidate or the check cannot be
+/// applied (path outside the workspace, no matcher loadable).
+fn skipped_ignore_count(path: &str) -> McpResult<Option<u32>> {
+    let cwd = std::env::current_dir().map_err(McpError::Io)?;
+    let p = Path::new(path);
+    let abs = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        cwd.join(p)
+    };
+    // Only paths inside the workspace have an ignore context.
+    let rel = match abs.strip_prefix(&cwd) {
+        Ok(r) => r.to_path_buf(),
+        Err(_) => return Ok(None),
+    };
+    let rel_str = rel.to_string_lossy().replace('\\', "/");
+
+    if let Ok(matcher) = IgnoreMatcher::load(&cwd, None, false) {
+        if matcher.is_ignored(&rel_str) {
+            return Ok(Some(1));
+        }
+    }
+    if let Ok(matcher) = EphemeralMatcher::load(&cwd, None) {
+        let xattr_ephemeral = hilo_metadata::xattr::get_vfs_xattr(&abs, "ephemeral")
+            .map_err(|e| McpError::Protocol(format!("failed to read user.vfs.ephemeral: {e}")))?
+            .map(|v| v == "true" || v == "1");
+        if matcher.classify(&rel, abs.is_dir(), xattr_ephemeral) == EphemeralClass::Ephemeral {
+            // Explicit `user.vfs.sync = upstream` re-includes an ephemeral
+            // file (spec §13.16); everything else is skipped.
+            let sync_upstream = hilo_metadata::xattr::get_vfs_xattr(&abs, "sync")
+                .map_err(|e| McpError::Protocol(format!("failed to read user.vfs.sync: {e}")))?
+                .map(|v| v == "upstream")
+                .unwrap_or(false);
+            if !sync_upstream {
+                return Ok(Some(1));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// `vfs_workspace_ephemeral` — list ephemeral (rebuildable/redownloadable)
+/// files in the workspace.
+///
+/// Mirrors `hilo workspace ephemeral`: classification uses the built-in
+/// ephemeral catalog (spec §5.1) plus the workspace `.hiloephemeral` file
+/// when present. Defaults to the whole workspace root; the optional `path`
+/// argument limits the listing to that subtree.
+fn workspace_ephemeral(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
+    let root = std::env::current_dir().map_err(McpError::Io)?;
+    let matcher = EphemeralMatcher::load(&root, None)
+        .map_err(|e| McpError::Protocol(format!("failed to load ephemeral catalog: {e}")))?;
+    let entries = matcher
+        .scan(&root)
+        .map_err(|e| McpError::Protocol(format!("failed to scan workspace: {e}")))?;
+
+    let filter = arguments["path"].as_str();
+    let mut out = Vec::new();
+    let mut total_bytes: u64 = 0;
+    for e in entries {
+        if let Some(f) = filter {
+            if !e.path.starts_with(f) {
+                continue;
+            }
+        }
+        total_bytes += e.size;
+        out.push(serde_json::json!({
+            "path": e.path,
+            "size": e.size,
+            "reason": e.reason,
+        }));
+    }
+
+    Ok(serde_json::json!({ "entries": out, "total_bytes": total_bytes }))
+}
+
+/// `vfs_workspace_wipe` — plan or apply a wipe of ephemeral files.
+///
+/// Mirrors `hilo workspace wipe --ephemeral`: the default is a dry-run plan;
+/// with `dry_run: false` the ephemeral files are deleted and the freed bytes
+/// reported. `user.vfs.ephemeral = false` is the only wipe protector (spec
+/// §5.2.2); the optional `path` argument limits the wipe to a subtree.
+fn workspace_wipe(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
+    let root = std::env::current_dir().map_err(McpError::Io)?;
+    let matcher = EphemeralMatcher::load(&root, None)
+        .map_err(|e| McpError::Protocol(format!("failed to load ephemeral catalog: {e}")))?;
+    let entries = matcher
+        .scan(&root)
+        .map_err(|e| McpError::Protocol(format!("failed to scan workspace: {e}")))?;
+
+    let filter = arguments["path"].as_str();
+    let dry_run = arguments["dry_run"].as_bool().unwrap_or(true);
+
+    let mut removed = Vec::new();
+    let mut freed_bytes: u64 = 0;
+    for e in entries {
+        if let Some(f) = filter {
+            if !e.path.starts_with(f) {
+                continue;
+            }
+        }
+        let full = root.join(&e.path);
+        // user.vfs.ephemeral = false is the ONLY wipe protector.
+        if let Some(v) = hilo_metadata::xattr::get_vfs_xattr(&full, "ephemeral").map_err(|err| {
+            McpError::Protocol(format!("failed to read user.vfs.ephemeral: {err}"))
+        })? {
+            if v == "false" || v == "0" {
+                continue;
+            }
+        }
+        if !dry_run {
+            std::fs::remove_file(&full).map_err(|err| {
+                McpError::Protocol(format!("failed to remove {}: {err}", full.display()))
+            })?;
+        }
+        freed_bytes += e.size;
+        removed.push(serde_json::json!({
+            "path": e.path,
+            "bytes": e.size,
+        }));
+    }
+
+    Ok(serde_json::json!({ "removed": removed, "freed_bytes": freed_bytes }))
 }

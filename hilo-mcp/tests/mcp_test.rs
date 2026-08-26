@@ -14,6 +14,14 @@ fn rpc(line: &str) -> serde_json::Value {
         .expect("response should be Some (not a notification)")
 }
 
+/// Serializes tests that create/remove files under the process CWD
+/// (hilo-mcp/target/): a parallel scan of the workspace root can otherwise
+/// observe a sibling test's mid-cleanup deletions and fail the walk.
+fn cwd_test_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+}
+
 // -------------------------------------------------------------------------
 // initialize
 // -------------------------------------------------------------------------
@@ -50,7 +58,12 @@ fn test_tools_list() {
     let tools = resp["result"]["tools"]
         .as_array()
         .expect("tools should be an array");
-    assert!(tools.len() >= 5, "expected at least 5 tools");
+    assert_eq!(
+        tools.len(),
+        17,
+        "expected exactly 17 tools, got {}",
+        tools.len()
+    );
 
     // Each tool must have name, description, and inputSchema.
     for t in tools {
@@ -59,7 +72,7 @@ fn test_tools_list() {
         assert!(t["inputSchema"].is_object());
     }
 
-    // Verify the three expected names.
+    // Verify the expected names.
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert!(names.contains(&"vfs_get_metadata"));
     assert!(names.contains(&"vfs_set_metadata"));
@@ -70,6 +83,8 @@ fn test_tools_list() {
     assert!(names.contains(&"vfs_graph_impact"));
     assert!(names.contains(&"vfs_graph_understand"));
     assert!(names.contains(&"vfs_graph_search"));
+    assert!(names.contains(&"vfs_workspace_ephemeral"));
+    assert!(names.contains(&"vfs_workspace_wipe"));
 }
 
 // -------------------------------------------------------------------------
@@ -655,4 +670,118 @@ fn test_sync_backend_nonexistent() {
         .expect("errors should be an array");
     assert!(!errors.is_empty());
     assert!(errors[0].as_str().unwrap().contains("file not found"));
+}
+
+// -------------------------------------------------------------------------
+// vfs_workspace_ephemeral — builtin catalog finds target/ files (spec §10)
+// -------------------------------------------------------------------------
+//
+// The tools resolve the workspace root from the process CWD (cargo test runs
+// with CWD = the hilo-mcp crate root). `target/` matches the built-in
+// ephemeral catalog, so a marker file under hilo-mcp/target/ is classified
+// ephemeral without touching any global state. Each test uses its own marker
+// file so parallel execution cannot interleave.
+
+#[test]
+fn test_workspace_ephemeral_lists_target_files() {
+    let _guard = cwd_test_lock().lock().unwrap();
+    use std::fs;
+
+    // Per-test subdirectory under target/ so parallel tests cannot delete
+    // each other's markers (target/ itself is the shared builtin-catalog hit).
+    let dir = std::path::Path::new("target").join("mcp-eph");
+    fs::create_dir_all(&dir).unwrap();
+    let marker = dir.join("mcp-ephemeral-test.bin");
+    fs::write(&marker, b"hello").unwrap();
+
+    let req = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"vfs_workspace_ephemeral","arguments":{"path":"target"}}}"#;
+    let resp = rpc(req);
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    let result: serde_json::Value = serde_json::from_str(text).unwrap();
+
+    let entries = result["entries"].as_array().unwrap();
+    let entry = entries
+        .iter()
+        .find(|e| {
+            e["path"]
+                .as_str()
+                .unwrap()
+                .ends_with("mcp-ephemeral-test.bin")
+        })
+        .expect("marker file should be listed as ephemeral");
+    assert_eq!(entry["size"], 5);
+    assert!(entry["reason"].is_string());
+    assert!(result["total_bytes"].as_u64().unwrap() >= 5);
+
+    fs::remove_dir_all(&dir).ok();
+}
+
+// -------------------------------------------------------------------------
+// vfs_workspace_wipe — dry_run default plans; dry_run=false deletes (spec §10)
+// -------------------------------------------------------------------------
+
+#[test]
+fn test_workspace_wipe_dry_run_then_apply() {
+    let _guard = cwd_test_lock().lock().unwrap();
+    use std::fs;
+
+    let dir = std::path::Path::new("target").join("mcp-wipe");
+    fs::create_dir_all(&dir).unwrap();
+    let marker = dir.join("mcp-wipe-test.bin");
+    fs::write(&marker, b"data").unwrap();
+
+    // Default dry_run=true: planned only, file must survive.
+    let req = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"vfs_workspace_wipe","arguments":{"path":"target"}}}"#;
+    let resp = rpc(req);
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    let result: serde_json::Value = serde_json::from_str(text).unwrap();
+    let planned = result["removed"].as_array().unwrap();
+    assert!(planned
+        .iter()
+        .any(|r| r["path"].as_str().unwrap().ends_with("mcp-wipe-test.bin")));
+    assert!(result["freed_bytes"].as_u64().unwrap() >= 4);
+    assert!(marker.exists(), "dry-run must not delete");
+
+    // dry_run=false: delete and report freed bytes.
+    let req = r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"vfs_workspace_wipe","arguments":{"path":"target","dry_run":false}}}"#;
+    let resp = rpc(req);
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    let result: serde_json::Value = serde_json::from_str(text).unwrap();
+    let removed = result["removed"].as_array().unwrap();
+    assert!(removed
+        .iter()
+        .any(|r| r["path"].as_str().unwrap().ends_with("mcp-wipe-test.bin")));
+    assert!(!marker.exists(), "apply must delete the ephemeral file");
+
+    fs::remove_dir_all(&dir).ok();
+}
+
+// -------------------------------------------------------------------------
+// vfs_sync_backend — ignore-aware (spec §10): ignored paths skip the sync
+// -------------------------------------------------------------------------
+
+#[test]
+fn test_sync_backend_ignored_path_reports_skipped() {
+    let _guard = cwd_test_lock().lock().unwrap();
+    // target/ is in the built-in ignore catalog: a path under it is
+    // local-only and reports skipped_ignored instead of transferring.
+    let req = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"vfs_sync_backend","arguments":{"path":"target/mcp-sync-ignored.bin"}}}"#;
+    let resp = rpc(req);
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    let result: serde_json::Value = serde_json::from_str(text).unwrap();
+    assert_eq!(result["synced_files"], 0);
+    assert_eq!(result["skipped_ignored"], 1);
+    assert_eq!(result["errors"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn test_sync_backend_normal_path_reports_synced() {
+    let _guard = cwd_test_lock().lock().unwrap();
+    // A source file is not ignored: normal local-backend result.
+    let req = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"vfs_sync_backend","arguments":{"path":"src/lib.rs"}}}"#;
+    let resp = rpc(req);
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    let result: serde_json::Value = serde_json::from_str(text).unwrap();
+    assert_eq!(result["synced_files"], 1);
+    assert_eq!(result["skipped_ignored"], 0);
 }

@@ -16,7 +16,7 @@ without reading files.
 ## Crate API Reference
 
 - **[hilo-graph](hilo-graph.md)** — graph engine: AST parsing, DuckDB queries, impact, signal, semantic search
-- **[hilo-mcp](hilo-mcp.md)** — MCP server: 15 tools over stdio JSON-RPC
+- **[hilo-mcp](hilo-mcp.md)** — MCP server: 17 tools over stdio JSON-RPC
 - **[hilo-core](hilo-core.md)** — manifest, config, workspace, sandbox
 - **[hilo-metadata](hilo-metadata.md)** — xattr I/O, JSONL inventory, shared `Edge` type
 - **[hilo-backends](hilo-backends.md)** — S3, Git, and local storage backends
