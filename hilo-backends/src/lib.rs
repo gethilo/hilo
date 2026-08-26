@@ -14,6 +14,7 @@ pub mod git;
 pub mod local;
 pub mod planner;
 pub mod s3;
+pub mod stream;
 pub mod sync;
 
 pub use backend::{

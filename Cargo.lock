@@ -2243,6 +2243,7 @@ dependencies = [
  "aws-sdk-s3",
  "filetime",
  "git2",
+ "hilo_metadata",
  "regex",
  "serde",
  "serde_json",
