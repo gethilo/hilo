@@ -56,9 +56,10 @@ artifacts and other transient files stay local-only.
 | `hilo workspace sync --bucket/--prefix/--at` CLI | ✅ landed (GAP-055 tick 149) |
 | External-tool drivers (rclone / gdrive / onedrive / dropbox) + `--tool` resolution | ✅ landed (GAP-055 tick 152: `ExternalToolDriver`, `BackendRegistry`) |
 | `hilo backend mount --type gdrive/onedrive/dropbox/external` (writes mounts.yaml), `backend sync` (planner-driven, ignore-aware), `backend setup` (detect/creds/next steps) | ✅ landed (GAP-055 tick 155) |
+| `hilo mount --triggers` backend sync hook (spec §7.1): inotify → debounce (HILO_DEBOUNCE_MS) → ignore/ephemeral check → dirty batch → settle push; poll pull every `poll_secs` | ✅ landed (GAP-055 tick 157: `hilo_triggers::sync_hook`) |
 | Stream mode placeholders (`hilo-fuse`) | ⏳ spec §8 — pending |
-| MCP tools 15 → 17 (`vfs_workspace_ephemeral`, `vfs_workspace_wipe`) | ⏳ spec §10 — pending |
-| Ephemeral classification + `workspace ephemeral` / `wipe --ephemeral` | ⏳ spec §5/§9 (GAP-056) — pending |
+| MCP tools 15 → 17 (`vfs_workspace_ephemeral`, `vfs_workspace_wipe`) | ✅ landed (GAP-055 tick 156) |
+| Ephemeral classification + `workspace ephemeral` / `wipe --ephemeral` | ✅ landed (GAP-055/056 tick 151: `hilo_backends::ephemeral` + CLIs) |
 
 Status legend: ✅ landed · ⏳ spec'd, not yet implemented. Cells above mark
 the v1 capability plan, not current runtime support for every tool — check

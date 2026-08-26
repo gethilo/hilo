@@ -486,12 +486,12 @@ fn vfs_xattr(path: &Path, name: &str) -> Option<String> {
 
 /// `user.vfs.sync == "upstream"` forces an ephemeral file into the plan
 /// (spec §7: skipped_ephemeral "unless user.vfs.sync=upstream").
-fn is_upstream_override(path: &Path) -> bool {
+pub fn is_upstream_override(path: &Path) -> bool {
     vfs_xattr(path, "sync").as_deref() == Some("upstream")
 }
 
 /// The `user.vfs.ephemeral` xattr as an explicit classify override.
-fn xattr_ephemeral_bool(path: &Path) -> Option<bool> {
+pub fn xattr_ephemeral_bool(path: &Path) -> Option<bool> {
     match vfs_xattr(path, "ephemeral").as_deref() {
         Some("true") => Some(true),
         Some("false") => Some(false),

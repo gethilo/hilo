@@ -9,9 +9,11 @@
 
 pub mod debounce;
 pub mod engine;
+pub mod sync_hook;
 
 pub use debounce::Debouncer;
 pub use engine::TriggerEngine;
+pub use sync_hook::{SyncHook, SyncHookConfig};
 
 pub use std::path::PathBuf;
 

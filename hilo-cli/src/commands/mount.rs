@@ -2,10 +2,11 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use hilo_fuse::{daemon, FuseConfig, Hilo};
-use hilo_triggers::{TriggerConfig, TriggerEngine};
+use hilo_triggers::{SyncHook, SyncHookConfig, TriggerConfig, TriggerEngine};
 
 /// Environment variable set on the re-executed child of a `--daemon` mount.
 /// Lets the child run the normal blocking mount path without re-daemonizing.
@@ -168,6 +169,36 @@ async fn run_trigger_engine(watch_dir: &Path, mount_desc: &str) {
 
     let trigger_count = triggers.len();
     let mut engine = TriggerEngine::new(triggers, 500, db_conn, project_root, None, None);
+
+    // Spec §7.1: when the workspace has mounted backends, enable the sync
+    // hook — inotify changes push to the backend (ignore-aware, batch-settled)
+    // and a poll timer pulls every poll_secs.
+    let mounts_yaml = watch_dir.join(".vfs/backends/mounts.yaml");
+    if mounts_yaml.exists() {
+        let debounce_ms = std::env::var("HILO_DEBOUNCE_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(hilo_triggers::sync_hook::DEFAULT_DEBOUNCE_MS);
+        match SyncHook::new(SyncHookConfig {
+            workspace_root: watch_dir.to_path_buf(),
+            mounts_yaml,
+            debounce_ms,
+            settle_ms: hilo_triggers::sync_hook::DEFAULT_SETTLE_MS,
+            poll_secs: hilo_triggers::sync_hook::DEFAULT_POLL_SECS,
+        }) {
+            Ok(hook) => {
+                let n = hook.mount_count();
+                engine.enable_sync_hook(Arc::new(Mutex::new(hook)));
+                eprintln!(
+                    "[trigger-engine] backend sync hook enabled ({} mount(s), debounce {debounce_ms}ms)",
+                    n
+                );
+            }
+            Err(e) => {
+                eprintln!("[trigger-engine] backend sync hook disabled: {e}");
+            }
+        }
+    }
 
     if let Err(e) = engine.watch_dir(&watch_dir) {
         eprintln!(

@@ -4,13 +4,14 @@
 // Event flow:
 //   inotify event -> mask_to_event_type -> pattern match -> debounce -> execute
 
+use crate::sync_hook::{spawn_flush_task, spawn_poll_tasks, SyncHook};
 use crate::{Debouncer, EventType, FileEvent, TriggerAction, TriggerConfig};
 use inotify::{EventMask, Inotify, WatchDescriptor, WatchMask};
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
@@ -45,6 +46,11 @@ pub struct TriggerEngine {
     s3_bucket: Option<String>,
     /// Flag to signal graceful shutdown. Set by `shutdown()`, checked by `run()`.
     shutdown_flag: Arc<AtomicBool>,
+    /// Spec §7.1 backend sync hook (shared with the flush/poll tasks).
+    sync_hook: Option<Arc<Mutex<SyncHook>>>,
+    /// Handles to the sync-hook background tasks (detached; kept for clarity).
+    #[allow(dead_code)]
+    sync_tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 
 impl TriggerEngine {
@@ -84,7 +90,19 @@ impl TriggerEngine {
             s3_client,
             s3_bucket,
             shutdown_flag: Arc::new(AtomicBool::new(false)),
+            sync_hook: None,
+            sync_tasks: Vec::new(),
         }
+    }
+
+    /// Enable the spec §7.1 backend sync hook: spawns the settle-flush loop
+    /// and one pull-poll task per mounted backend. The event loop then
+    /// records every change via [`TriggerEngine::record_sync_event`].
+    pub fn enable_sync_hook(&mut self, hook: Arc<Mutex<SyncHook>>) {
+        let mut tasks = spawn_poll_tasks(hook.clone());
+        tasks.push(spawn_flush_task(hook.clone()));
+        self.sync_tasks = tasks;
+        self.sync_hook = Some(hook);
     }
 
     /// Add a directory to watch recursively. Returns count of watches added.
@@ -178,6 +196,21 @@ impl TriggerEngine {
                     event_type: event_type.clone(),
                     timestamp,
                 };
+
+                // Spec §7.1: record the change for the backend sync hook.
+                // inotify names are relative to the WATCHED directory, so
+                // reverse-lookup the watch to build the full path first.
+                if let Some(hook) = &self.sync_hook {
+                    let full_path = self
+                        .watches
+                        .iter()
+                        .find(|(_, wd)| **wd == event.wd)
+                        .map(|(dir, _)| dir.join(&name))
+                        .unwrap_or_else(|| path.clone());
+                    if let Ok(mut h) = hook.lock() {
+                        h.record_event(&full_path);
+                    }
+                }
 
                 let event_str = event_type_string(&event_type);
 
