@@ -7,11 +7,13 @@
 // - Remote git: clone → worktree → auto-pull
 // - Local path: direct passthrough
 
+pub mod ephemeral;
 pub mod git;
 pub mod local;
 pub mod s3;
 pub mod sync;
 
+pub use ephemeral::{EphemeralClass, EphemeralEntry, EphemeralError, EphemeralMatcher};
 pub use git::{GitBackend, GitBackendConfig, GitError, GitResult};
 pub use s3::{S3Client, S3Error, S3ObjectMeta, S3Result, WriteResult};
 pub use sync::{IgnoreDecision, IgnoreMatcher, LocalFile, RemoteObject, SyncEngine, SyncPlan};

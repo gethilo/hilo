@@ -288,6 +288,37 @@ See docs/ignore-file.md for the ignore format.
 hilo workspace sync --bucket my-bucket --prefix data --at ./ws --dry-run
 ```
 
+### `ephemeral`
+
+List ephemeral (rebuildable/redownloadable) files in the workspace — the
+built-in catalog covers common build/artifact/cache paths (`target/`,
+`node_modules/`, `.venv/`, `*.o`, `.vfs/graph/`, ...); a `.hiloephemeral`
+file (same git-ignore-style syntax as `.hiloignore`) adds or (`!`) removes
+patterns. Output is TSV: `path<TAB>size<TAB>reason`. PATH arguments limit
+the listing to subtrees.
+
+```bash
+hilo workspace ephemeral
+# target/artifact.bin	64	target/
+# node_modules/pkg/index.js	32	node_modules/
+```
+
+### `wipe`
+
+Plan or apply a wipe of ephemeral files. Default is a dry-run plan; pass
+`--apply` to delete. Only ephemeral files are removed, `user.vfs.ephemeral
+= false` is the only wipe protector (set it with `hilo meta --set
+ephemeral --value false <file>`), and symlinks are never touched.
+
+```bash
+hilo workspace wipe --ephemeral
+# would remove	target/artifact.bin
+# would free 64 bytes across 1 file(s) (dry-run; pass --apply to delete)
+hilo workspace wipe --ephemeral --apply
+# removed	target/artifact.bin
+# freed 64 bytes across 1 file(s)
+```
+
 ## `hilo ignore`
 
 Inspect ignore decisions (the git-ignore-style `.hiloignore` file, with

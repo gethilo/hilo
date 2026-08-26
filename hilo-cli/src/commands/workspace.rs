@@ -1,9 +1,10 @@
-//! `hilo workspace mount/unmount/sync` — unified FUSE tree + S3 two-way sync.
+//! `hilo workspace mount/unmount/sync/ephemeral/wipe` — unified FUSE tree +
+//! S3 two-way sync + ephemeral classification.
 
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use hilo_backends::{IgnoreMatcher, S3Client, SyncEngine};
+use hilo_backends::{EphemeralMatcher, IgnoreMatcher, S3Client, SyncEngine};
 use hilo_core::workspace::WorkspaceManifest;
 use hilo_fuse::permissions::PermissionEngine;
 use hilo_fuse::{daemon, workspace_mount, workspace_mount::WorkspaceMount, FuseConfig};
@@ -156,4 +157,76 @@ pub fn run_workspace_sync(
         );
         Ok(())
     })
+}
+
+/// `hilo workspace ephemeral [PATH...]` — list ephemeral (rebuildable /
+/// redownloadable) files as TSV: `path<TAB>size<TAB>reason`.
+///
+/// Classification uses the built-in ephemeral catalog (spec §5.1) plus the
+/// workspace `.hiloephemeral` file when present. Defaults to the whole
+/// workspace root; PATH arguments limit the listing to those subtrees.
+pub fn run_workspace_ephemeral(paths: &[PathBuf]) -> Result<()> {
+    let root = std::env::current_dir().context("failed to get current directory")?;
+    let matcher =
+        EphemeralMatcher::load(&root, None).context("failed to load ephemeral catalog")?;
+    let entries = matcher.scan(&root).context("failed to scan workspace")?;
+    for e in entries
+        .iter()
+        .filter(|e| paths.is_empty() || paths.iter().any(|p| e.path.starts_with(p)))
+    {
+        println!("{}\t{}\t{}", e.path.display(), e.size, e.reason);
+    }
+    Ok(())
+}
+
+/// `hilo workspace wipe --ephemeral [--apply]` — plan or apply a wipe of
+/// ephemeral files.
+///
+/// Default is a dry-run plan (lists what would be removed and the bytes it
+/// would free). With `--apply`, only ephemeral files are deleted and the
+/// freed bytes are reported. `user.vfs.ephemeral = false` is the only wipe
+/// protector (spec §5.2.2); symlinks are never touched and the walk never
+/// crosses the workspace root.
+pub fn run_workspace_wipe(apply: bool) -> Result<()> {
+    let root = std::env::current_dir().context("failed to get current directory")?;
+    let matcher =
+        EphemeralMatcher::load(&root, None).context("failed to load ephemeral catalog")?;
+    let entries = matcher.scan(&root).context("failed to scan workspace")?;
+
+    let mut freed: u64 = 0;
+    let mut wiped = 0usize;
+    let mut protected = 0usize;
+    for e in &entries {
+        let full = root.join(&e.path);
+        // user.vfs.ephemeral = false is the ONLY wipe protector.
+        if let Some(v) = hilo_metadata::xattr::get_vfs_xattr(&full, "ephemeral")
+            .context("failed to read user.vfs.ephemeral")?
+        {
+            if v == "false" || v == "0" {
+                protected += 1;
+                continue;
+            }
+        }
+        if apply {
+            std::fs::remove_file(&full)
+                .with_context(|| format!("failed to remove {}", full.display()))?;
+            println!("removed\t{}", e.path.display());
+        } else {
+            println!("would remove\t{}", e.path.display());
+        }
+        wiped += 1;
+        freed += e.size;
+    }
+
+    if apply {
+        println!("freed {freed} bytes across {wiped} file(s)");
+    } else {
+        println!(
+            "would free {freed} bytes across {wiped} file(s) (dry-run; pass --apply to delete)"
+        );
+    }
+    if protected > 0 {
+        println!("skipped {protected} wipe-protected file(s) (user.vfs.ephemeral=false)");
+    }
+    Ok(())
 }

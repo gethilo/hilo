@@ -466,3 +466,164 @@ fn ignore_check_reports_decision_and_rule() {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+// ─────────────────────── workspace ephemeral / wipe ───────────────────────
+
+/// Build a scratch workspace: src/main.rs (persistent), target/artifact.bin
+/// and node_modules/pkg/index.js (ephemeral by the built-in catalog).
+fn ephemeral_fixture(label: &str) -> PathBuf {
+    let dir = unique_tempdir(label);
+    fs::create_dir_all(dir.join("src")).expect("mkdir src");
+    fs::create_dir_all(dir.join("target")).expect("mkdir target");
+    fs::create_dir_all(dir.join("node_modules/pkg")).expect("mkdir node_modules");
+    fs::write(dir.join("src/main.rs"), "fn main() {}\n").expect("write main.rs");
+    fs::write(dir.join("target/artifact.bin"), vec![0u8; 64]).expect("write artifact");
+    fs::write(dir.join("node_modules/pkg/index.js"), vec![0u8; 32]).expect("write index");
+    dir
+}
+
+#[test]
+fn workspace_ephemeral_lists_ephemeral_files_as_tsv() {
+    let dir = ephemeral_fixture("ephemeral-list");
+    let out = Command::new(BIN)
+        .args(["workspace", "ephemeral"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo workspace ephemeral");
+    assert!(
+        out.status.success(),
+        "workspace ephemeral exited non-zero: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("target/artifact.bin\t64\t"),
+        "expected ephemeral TSV row for target/artifact.bin, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("node_modules/pkg/index.js\t32\t"),
+        "expected ephemeral TSV row for node_modules/pkg/index.js, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("src/main.rs"),
+        "persistent src/main.rs must not be listed, got: {stdout}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn workspace_ephemeral_path_filter_limits_listing() {
+    let dir = ephemeral_fixture("ephemeral-filter");
+    let out = Command::new(BIN)
+        .args(["workspace", "ephemeral", "node_modules"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo workspace ephemeral");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("node_modules/pkg/index.js"),
+        "expected node_modules row, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("target/artifact.bin"),
+        "path filter must exclude target/, got: {stdout}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn workspace_wipe_dry_run_lists_plan_without_deleting() {
+    let dir = ephemeral_fixture("wipe-dry");
+    let out = Command::new(BIN)
+        .args(["workspace", "wipe", "--ephemeral"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo workspace wipe");
+    assert!(
+        out.status.success(),
+        "workspace wipe exited non-zero: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("would remove\ttarget/artifact.bin"),
+        "expected dry-run row, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("would free 96 bytes across 2 file(s)"),
+        "expected freed-bytes summary, got: {stdout}"
+    );
+    // Nothing deleted on a dry run.
+    assert!(
+        dir.join("target/artifact.bin").exists(),
+        "dry-run must not delete"
+    );
+    assert!(dir.join("src/main.rs").exists(), "src must survive");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn workspace_wipe_apply_deletes_only_ephemeral_and_reports_freed() {
+    let dir = ephemeral_fixture("wipe-apply");
+    let out = Command::new(BIN)
+        .args(["workspace", "wipe", "--ephemeral", "--apply"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo workspace wipe");
+    assert!(
+        out.status.success(),
+        "workspace wipe --apply exited non-zero: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("removed\ttarget/artifact.bin"),
+        "expected removed row, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("freed 96 bytes across 2 file(s)"),
+        "expected freed summary, got: {stdout}"
+    );
+    assert!(
+        !dir.join("target/artifact.bin").exists(),
+        "ephemeral file must be deleted"
+    );
+    assert!(
+        !dir.join("node_modules/pkg/index.js").exists(),
+        "ephemeral file must be deleted"
+    );
+    assert!(
+        dir.join("src/main.rs").exists(),
+        "persistent src/main.rs must survive the wipe"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn workspace_wipe_respects_hiloephemeral_negation() {
+    let dir = ephemeral_fixture("wipe-negation");
+    fs::write(dir.join(".hiloephemeral"), "!target/keep.bin\n").expect("write .hiloephemeral");
+    fs::write(dir.join("target/keep.bin"), vec![0u8; 8]).expect("write keep.bin");
+
+    let out = Command::new(BIN)
+        .args(["workspace", "wipe", "--ephemeral", "--apply"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo workspace wipe");
+    assert!(
+        out.status.success(),
+        "workspace wipe exited non-zero: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // target/keep.bin is re-included by the user rule: it survives; the
+    // other ephemeral files are still removed.
+    assert!(
+        dir.join("target/keep.bin").exists(),
+        "negated path must survive the wipe"
+    );
+    assert!(
+        !dir.join("target/artifact.bin").exists(),
+        "un-negated ephemeral file must be deleted"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}

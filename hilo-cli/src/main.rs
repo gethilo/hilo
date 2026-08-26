@@ -1,5 +1,7 @@
 mod commands;
 
+use std::path::PathBuf;
+
 use clap::{Parser, Subcommand};
 
 use commands::plugin::PluginCommand;
@@ -208,6 +210,10 @@ enum WorkspaceCommand {
     /// the ignore file (git-ignore style, ".vfsignore") stay local-only and
     /// are never transferred.
     Sync(WorkspaceSyncArgs),
+    /// List ephemeral (rebuildable/redownloadable) files in the workspace.
+    Ephemeral(WorkspaceEphemeralArgs),
+    /// Plan or apply a wipe of ephemeral files.
+    Wipe(WorkspaceWipeArgs),
 }
 
 #[derive(clap::Args)]
@@ -245,6 +251,23 @@ struct WorkspaceSyncArgs {
     /// Print the sync plan without transferring any files.
     #[arg(long)]
     dry_run: bool,
+}
+
+#[derive(clap::Args)]
+struct WorkspaceEphemeralArgs {
+    /// Subtrees to list (default: the whole workspace root).
+    #[arg(value_name = "PATH")]
+    paths: Vec<PathBuf>,
+}
+
+#[derive(clap::Args)]
+struct WorkspaceWipeArgs {
+    /// Wipe ephemeral files (required — the only wipe mode).
+    #[arg(long, required = true)]
+    ephemeral: bool,
+    /// Actually delete ephemeral files (default: dry-run plan only).
+    #[arg(long)]
+    apply: bool,
 }
 
 #[derive(clap::Args)]
@@ -315,6 +338,12 @@ fn main() {
             &args.region,
             args.dry_run,
         ),
+        Commands::Workspace(WorkspaceCommand::Ephemeral(args)) => {
+            workspace::run_workspace_ephemeral(&args.paths)
+        }
+        Commands::Workspace(WorkspaceCommand::Wipe(args)) => {
+            workspace::run_workspace_wipe(args.apply)
+        }
         Commands::Classify(args) => {
             classify::run_classify(args.dry_run, args.verbose, args.features)
         }
