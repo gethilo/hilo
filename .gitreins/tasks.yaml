@@ -596,3 +596,17 @@ tasks:
   status: complete
   created_at: '2026-08-26T18:12:05.853675+00:00'
   completed_at: '2026-08-26T18:23:49.536430+00:00'
+- id: gap-055-ignore-builtin-nested
+  title: "GAP-055 \xA74 ignore engine: builtin defaults + nested .hiloignore + no_defaults\
+    \ + source attribution"
+  criteria:
+  - "IgnoreMatcher::load(root, extra, no_defaults) applies builtin defaults (spec\
+    \ \xA74.2), root .hiloignore, optional extra file, and discovers nested .hiloignore\
+    \ files; decisions attribute IgnoreSource (Builtin/RootFile/NestedFile); hilo\
+    \ ignore check prints source and honors --no-default-ignores; new unit tests cover\
+    \ builtin override, nested scoping, nearest-file-wins, negation-under-excluded-dir,\
+    \ matches(rel,is_dir) dir-only semantics; cargo test -p hilo_backends and -p hilo-cli\
+    \ pass"
+  status: complete
+  created_at: '2026-08-26T19:20:53.906472+00:00'
+  completed_at: '2026-08-26T19:26:44.618733+00:00'
