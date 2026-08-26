@@ -653,3 +653,28 @@ tasks:
   status: complete
   created_at: '2026-08-26T21:26:20.098140+00:00'
   completed_at: '2026-08-26T21:34:36.283089+00:00'
+- id: gap-055-fuse-stream-wiring
+  title: "GAP-055 slice 10 \u2014 \xA78.2-8.5 stream FUSE wiring"
+  criteria:
+  - 'hilo-fuse Hilo gains optional StreamState: getattr reports remote size for unmaterialized
+    placeholders (remote_size in hilo-fuse/src/stream.rs, count>=1); open materializes
+    placeholders via backend.get + sets user.vfs.materialized=true; write handler
+    writes through (fn write in hilo-fuse/src/ops.rs, count>=1); with_stream constructor
+    exists (count>=1); planner skips unmaterialized placeholders (never push; skipped_placeholders
+    field count>=1); hilo mount wires stream/mirror from mounts.yaml; cargo check
+    --workspace exits 0; cargo test -p hilo_fuse --lib exits 0; cargo test -p hilo_backends
+    --lib exits 0'
+  status: complete
+  created_at: '2026-08-26T21:47:49.966202+00:00'
+  completed_at: '2026-08-26T22:10:30.609510+00:00'
+- id: gap-055-close
+  title: "GAP-055 board AC closure \u2014 backend-backed workspace feature complete"
+  criteria:
+  - docs/backend-compatibility-matrix.md exists (grep -c 'Stream mode' >= 5); hilo-backends
+    S3 + external-tool drivers landed (grep -c 'ExternalToolDriver' hilo-backends/src/lib.rs
+    >= 1); ignore-aware inotify sync hook landed (grep -c 'sync_hook' hilo-triggers/src/engine.rs
+    >= 1); stream FUSE wiring landed (grep -c 'with_stream' hilo-fuse/src/ops.rs >=
+    1); cargo check --workspace exits 0; cargo test -p hilo_fuse --lib exits 0
+  status: complete
+  created_at: '2026-08-26T22:13:16.879282+00:00'
+  completed_at: '2026-08-26T22:13:20.437853+00:00'
