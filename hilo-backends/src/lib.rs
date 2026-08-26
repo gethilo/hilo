@@ -17,8 +17,8 @@ pub mod s3;
 pub mod sync;
 
 pub use backend::{
-    BackendConfig, BackendEntry, BackendError, BackendKind, BackendRegistry, LocalDriver, SyncMode,
-    SyncTool,
+    BackendConfig, BackendEntry, BackendError, BackendKind, BackendRegistry, LocalDriver,
+    MountEntry, SyncMode, SyncTool,
 };
 pub use ephemeral::{EphemeralClass, EphemeralEntry, EphemeralError, EphemeralMatcher};
 pub use external::ExternalToolDriver;

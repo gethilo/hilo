@@ -318,6 +318,12 @@ fn main() {
             backend::run_mount(&args)
         }
         Commands::Backend(commands::backend::BackendCommand::List) => backend::run_list(),
+        Commands::Backend(commands::backend::BackendCommand::Sync(args)) => {
+            backend::run_sync(&args)
+        }
+        Commands::Backend(commands::backend::BackendCommand::Setup(args)) => {
+            backend::run_setup(&args)
+        }
         Commands::Mount(args) => mount::run_mount(
             &args.mount_point,
             args.triggers,

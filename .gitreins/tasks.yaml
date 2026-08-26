@@ -610,3 +610,14 @@ tasks:
   status: complete
   created_at: '2026-08-26T19:20:53.906472+00:00'
   completed_at: '2026-08-26T19:26:44.618733+00:00'
+- id: gap-055-backend-sync-setup-cli
+  title: "GAP-055 \xA79 CLI remainder: hilo backend mount extensions + backend sync\
+    \ + backend setup"
+  criteria:
+  - grep -c 'Sync(SyncArgs)' hilo-cli/src/commands/backend.rs >= 1 AND grep -c 'Setup(SetupArgs)'
+    hilo-cli/src/commands/backend.rs >= 1 AND grep -c 'BackendCommand::Sync' hilo-cli/src/main.rs
+    >= 1 AND grep -c 'BackendCommand::Setup' hilo-cli/src/main.rs >= 1 AND cargo check
+    --workspace exits 0 AND cargo test -p hilo_cli --test cli backend_sync_local exits
+    0
+  status: in_progress
+  created_at: '2026-08-26T19:54:23.311953+00:00'

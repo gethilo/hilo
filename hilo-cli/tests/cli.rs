@@ -690,3 +690,288 @@ fn workspace_wipe_respects_hiloephemeral_negation() {
     );
     let _ = fs::remove_dir_all(&dir);
 }
+
+// ─────────────────────── backend mount/sync/setup (§9) ───────────────────────
+
+fn write_mounts_yaml(workspace: &std::path::Path, yaml: &str) {
+    let dir = workspace.join(".vfs").join("backends");
+    fs::create_dir_all(&dir).expect("failed to create .vfs/backends");
+    fs::write(dir.join("mounts.yaml"), yaml).expect("failed to write mounts.yaml");
+}
+
+#[test]
+fn backend_mount_new_surface_writes_mounts_yaml() {
+    let dir = unique_tempdir("backend-mount");
+    let output = Command::new(BIN)
+        .args([
+            "backend",
+            "mount",
+            "--type",
+            "s3",
+            "--bucket",
+            "my-bucket",
+            "--prefix",
+            "workspace/",
+            "--at",
+            "/mnt/vfs/ws",
+            "--tool",
+            "native",
+            "--mode",
+            "mirror",
+        ])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo backend mount");
+
+    assert!(
+        output.status.success(),
+        "mount exited non-zero: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("mounted s3 s3://my-bucket/workspace/ at /mnt/vfs/ws"),
+        "unexpected stdout: {stdout}"
+    );
+
+    let mounts = dir.join(".vfs").join("backends").join("mounts.yaml");
+    assert!(mounts.exists(), "mounts.yaml was not written");
+    let yaml = fs::read_to_string(&mounts).expect("failed to read mounts.yaml");
+    assert!(yaml.contains("name: ws"), "mount name missing: {yaml}");
+    assert!(yaml.contains("type: s3"), "type missing: {yaml}");
+    assert!(yaml.contains("bucket: my-bucket"), "bucket missing: {yaml}");
+    assert!(yaml.contains("at: /mnt/vfs/ws"), "at missing: {yaml}");
+    assert!(yaml.contains("tool: native"), "tool missing: {yaml}");
+
+    // Second mount with the same name must be rejected (exit 2, InvalidConfig).
+    let dup = Command::new(BIN)
+        .args([
+            "backend",
+            "mount",
+            "--type",
+            "s3",
+            "--bucket",
+            "other",
+            "--at",
+            "/mnt/vfs/ws",
+            "--tool",
+            "native",
+        ])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn duplicate mount");
+    assert_eq!(dup.status.code(), Some(2), "duplicate mount must exit 2");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn backend_mount_missing_tool_exits_4() {
+    let dir = unique_tempdir("backend-mount-tool");
+    let output = Command::new(BIN)
+        .args([
+            "backend",
+            "mount",
+            "--type",
+            "gdrive",
+            "--remote",
+            "test:path",
+            "--at",
+            "/mnt/vfs/gd",
+            "--tool",
+            "gdrive",
+        ])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo backend mount");
+
+    // gdrive CLI is not installed in CI; ToolMissing must exit 4 (§12).
+    assert_eq!(
+        output.status.code(),
+        Some(4),
+        "expected exit 4, got {:?}; stderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("required tool not found"),
+        "expected ToolMissing message, got: {stderr}"
+    );
+    // Nothing may be written on failure.
+    assert!(
+        !dir.join(".vfs").exists(),
+        "mounts.yaml must not be written on failed mount"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn backend_sync_local_pushes_pulls_and_filters() {
+    let dir = unique_tempdir("backend-sync");
+    let workspace = dir.join("workspace");
+    let backend_root = dir.join("backend-root");
+    fs::create_dir_all(&workspace).expect("failed to create workspace");
+    fs::create_dir_all(&backend_root).expect("failed to create backend root");
+
+    // Ignore *.tmp locally; never synced.
+    fs::write(workspace.join(".hiloignore"), "*.tmp\n").expect("failed to write .hiloignore");
+    fs::write(workspace.join("a.txt"), "hello\n").expect("failed to write a.txt");
+    fs::write(workspace.join("x.tmp"), "local-only\n").expect("failed to write x.tmp");
+    fs::create_dir_all(workspace.join("sub")).expect("failed to create sub");
+    fs::write(workspace.join("sub/c.txt"), "nested\n").expect("failed to write sub/c.txt");
+
+    write_mounts_yaml(
+        &workspace,
+        &format!(
+            "- name: test\n  type: local\n  prefix: {}\n  mode: mirror\n",
+            backend_root.display()
+        ),
+    );
+
+    // Subtree filter: only sub/ is pushed.
+    let filtered = Command::new(BIN)
+        .args(["backend", "sync", "--push", "sub"])
+        .current_dir(&workspace)
+        .output()
+        .expect("failed to spawn hilo backend sync");
+    assert!(
+        filtered.status.success(),
+        "sync --push sub failed: {}",
+        String::from_utf8_lossy(&filtered.stderr)
+    );
+    assert!(
+        backend_root.join("sub/c.txt").exists(),
+        "sub/c.txt should be pushed"
+    );
+    assert!(
+        !backend_root.join("a.txt").exists(),
+        "a.txt must not be pushed by a subtree-limited sync"
+    );
+
+    // Full push: a.txt lands, x.tmp stays local-only (ignored).
+    let pushed = Command::new(BIN)
+        .args(["backend", "sync", "--push"])
+        .current_dir(&workspace)
+        .output()
+        .expect("failed to spawn hilo backend sync");
+    assert!(
+        pushed.status.success(),
+        "sync --push failed: {}",
+        String::from_utf8_lossy(&pushed.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&pushed.stdout);
+    assert!(
+        stdout.contains("skipped ignored"),
+        "expected skipped-ignored counter: {stdout}"
+    );
+    assert!(
+        fs::read_to_string(backend_root.join("a.txt")).expect("read a.txt") == "hello\n",
+        "a.txt content mismatch"
+    );
+    assert!(
+        !backend_root.join("x.tmp").exists(),
+        "ignored x.tmp must never be pushed"
+    );
+
+    // Idempotent: a second --both sync transfers nothing (equal mtimes after
+    // mtime alignment → the spec's no-ping-pong tie-break).
+    let again = Command::new(BIN)
+        .args(["backend", "sync"])
+        .current_dir(&workspace)
+        .output()
+        .expect("failed to spawn second sync");
+    assert!(
+        again.status.success(),
+        "second sync failed: {}",
+        String::from_utf8_lossy(&again.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&again.stdout).contains("0 to transfer"),
+        "expected no-op second sync: {}",
+        String::from_utf8_lossy(&again.stdout)
+    );
+
+    // Remote newer → pull updates the local copy.
+    fs::write(backend_root.join("a.txt"), "from-remote\n").expect("failed to update remote");
+    let pulled = Command::new(BIN)
+        .args(["backend", "sync", "--pull"])
+        .current_dir(&workspace)
+        .output()
+        .expect("failed to spawn pull sync");
+    assert!(
+        pulled.status.success(),
+        "sync --pull failed: {}",
+        String::from_utf8_lossy(&pulled.stderr)
+    );
+    assert!(
+        fs::read_to_string(workspace.join("a.txt")).expect("read a.txt") == "from-remote\n",
+        "pull did not update local copy"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn backend_sync_no_mounts_exits_2() {
+    let dir = unique_tempdir("backend-sync-nomount");
+    let output = Command::new(BIN)
+        .args(["backend", "sync"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo backend sync");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "expected exit 2 without mounts, got {:?}",
+        output.status.code()
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn backend_setup_reports_detection_and_next_steps() {
+    let dir = unique_tempdir("backend-setup");
+    let s3 = Command::new(BIN)
+        .args(["backend", "setup", "--type", "s3"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo backend setup");
+    assert!(
+        s3.status.success(),
+        "setup s3 failed: {}",
+        String::from_utf8_lossy(&s3.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&s3.stdout);
+    assert!(stdout.contains("== s3 =="), "s3 header missing: {stdout}");
+    assert!(
+        stdout.contains("credentials:"),
+        "credentials check missing: {stdout}"
+    );
+    assert!(
+        stdout.contains("next steps:"),
+        "next steps missing: {stdout}"
+    );
+
+    let gdrive = Command::new(BIN)
+        .args(["backend", "setup", "--type", "gdrive"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo backend setup");
+    assert!(
+        gdrive.status.success(),
+        "setup gdrive failed: {}",
+        String::from_utf8_lossy(&gdrive.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&gdrive.stdout);
+    assert!(stdout.contains("gdrive:"), "gdrive line missing: {stdout}");
+    assert!(stdout.contains("rclone:"), "rclone line missing: {stdout}");
+
+    // Unknown type is a usage error (exit 1).
+    let bad = Command::new(BIN)
+        .args(["backend", "setup", "--type", "ftp"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo backend setup");
+    assert!(!bad.status.success(), "unknown type must fail");
+    let _ = fs::remove_dir_all(&dir);
+}

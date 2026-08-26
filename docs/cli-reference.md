@@ -236,7 +236,9 @@ hilo serve --mcp
 
 ## `hilo backend`
 
-Manage virtual backends (S3, git, local).
+Manage virtual backends (S3, git, local) and backend-backed workspaces
+(S3/GDrive/OneDrive/Dropbox/external via sync tools, spec
+`specs/backend-backed-workspace-spec.md` §9).
 
 ### `mount`
 
@@ -249,12 +251,58 @@ hilo backend mount --type s3 --bucket my-bucket --prefix data --at /s3
 hilo backend mount --type s3 --bucket my-bucket --at /s3 --region eu-west-1
 ```
 
+Backend-backed workspace mounts (new surface; `--type` s3/gdrive/onedrive/
+dropbox/external):
+
+```bash
+# S3 with the native engine (default tool for s3)
+hilo backend mount --type s3 --bucket my-bucket --prefix workspace/ \
+  --at /mnt/vfs/ws --tool native --mode mirror
+
+# External tool remote (gdrive/onedrive/dropbox/external)
+hilo backend mount --type gdrive --remote "gdrive:workspace" --at /mnt/vfs/gd \
+  --tool auto --mode stream --poll-secs 120
+
+# Optional flags: --tool auto|native|rclone|s3sync|gdrive|onedrive|dropbox
+#                 --mode stream|mirror (default mirror)
+#                 --ignore-file <PATH> (extra ignore file, optional)
+#                 --poll-secs <N> (default 60)
+#                 --no-default-ignores
+```
+
+`--tool auto` resolution: s3 → native engine; gdrive/onedrive/dropbox →
+the matching official CLI if installed, else `rclone`, else the mount fails
+with a "required tool not found" error. A successful mount writes the entry
+to `.vfs/backends/mounts.yaml` (spec §11.3); the legacy s3/git/local surface
+is unchanged.
+
 ### `list`
 
 List all mounted backends.
 
 ```bash
 hilo backend list
+```
+
+### `sync`
+
+Sync a mounted backend against the current workspace (ignore-aware: matched
+files stay local-only, never transferred).
+
+```bash
+hilo backend sync              # two-way (default)
+hilo backend sync --push       # upload local changes only
+hilo backend sync --pull       # download remote changes only
+hilo backend sync --push sub/  # limit to a subtree
+```
+
+### `setup`
+
+Detect sync tools and credentials for a backend type. Writes nothing.
+
+```bash
+hilo backend setup                # all types
+hilo backend setup --type s3      # s3|gdrive|onedrive|dropbox|external
 ```
 
 ## `hilo workspace`

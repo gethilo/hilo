@@ -380,6 +380,13 @@ impl BackendRegistry {
         self.backends.get(name).cloned()
     }
 
+    /// All registered mount names, sorted for deterministic output.
+    pub fn names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.backends.keys().cloned().collect();
+        names.sort();
+        names
+    }
+
     /// Construct a backend from a config. `tool: auto` resolves to the native
     /// driver for S3 and to rclone for every external kind (spec §11.3).
     pub fn from_config(cfg: &BackendConfig) -> Result<Arc<dyn Backend>, BackendError> {
@@ -406,7 +413,14 @@ impl BackendRegistry {
                 | SyncTool::GDriveCli
                 | SyncTool::OneDriveCli
                 | SyncTool::DropboxCli,
-            ) => Arc::new(crate::external::ExternalToolDriver::new(cfg)?),
+            ) => {
+                // The resolved `tool` may differ from cfg.tool (Native on a
+                // non-S3 kind falls back to Rclone); the driver validates its
+                // own tool, so hand it the RESOLVED tool, not the raw config.
+                let mut resolved = cfg.clone();
+                resolved.tool = tool;
+                Arc::new(crate::external::ExternalToolDriver::new(&resolved)?)
+            }
             (kind, tool) => {
                 return Err(BackendError::InvalidConfig(format!(
                     "no driver for kind {kind:?} + tool {tool:?}"
@@ -473,20 +487,34 @@ impl BackendRegistry {
 }
 
 /// YAML shape of one `.vfs/backends/mounts.yaml` entry (spec §11.3).
-#[derive(Debug, Clone, Deserialize)]
-struct MountEntry {
-    name: String,
+///
+/// Public so the CLI (`hilo backend mount`) can append entries; `at` is the
+/// mount point (informational in v1 — the loader does not need it).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MountEntry {
+    pub name: String,
     #[serde(rename = "type")]
-    kind: String,
-    bucket: Option<String>,
-    prefix: Option<String>,
-    region: Option<String>,
-    remote: Option<String>,
-    tool: Option<String>,
-    mode: Option<String>,
-    ignore_file: Option<String>,
-    poll_secs: Option<u64>,
-    no_default_ignores: Option<bool>,
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bucket: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ignore_file: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub poll_secs: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub no_default_ignores: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub at: Option<String>,
 }
 
 impl BackendKind {
@@ -704,6 +732,75 @@ mod tests {
             ..Default::default()
         };
         assert!(BackendRegistry::from_config(&bad).is_err());
+    }
+
+    #[test]
+    fn from_config_resolves_native_to_rclone_for_external_kinds() {
+        // A gdrive/onedrive/dropbox/external kind with tool: auto (→ Native)
+        // must fall back to the rclone driver (spec §9 auto resolution), which
+        // surfaces ToolMissing when rclone is not installed — NOT the
+        // InvalidConfig "requires an external tool" error the raw config
+        // would produce in ExternalToolDriver.
+        let cfg = BackendConfig {
+            kind: BackendKind::GDrive,
+            name: "gdrive-auto".into(),
+            remote: Some("test:path".into()),
+            tool: SyncTool::Native,
+            ..Default::default()
+        };
+        let result = BackendRegistry::from_config(&cfg);
+        let err = match result {
+            Err(e) => e,
+            Ok(_) => panic!("expected ToolMissing, got Ok"),
+        };
+        assert!(
+            matches!(err, BackendError::ToolMissing(_)),
+            "expected ToolMissing, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn mount_entry_round_trips_with_at() {
+        let entry = MountEntry {
+            name: "prod-bucket".into(),
+            kind: "s3".into(),
+            bucket: Some("my-bucket".into()),
+            prefix: Some("workspace/".into()),
+            region: None,
+            remote: None,
+            tool: Some("native".into()),
+            mode: Some("mirror".into()),
+            ignore_file: Some(".hiloignore".into()),
+            poll_secs: Some(60),
+            no_default_ignores: Some(false),
+            at: Some("/mnt/vfs/ws".into()),
+        };
+        let yaml = serde_yaml::to_string(&entry).unwrap();
+        assert!(yaml.contains("type: s3"), "yaml: {yaml}");
+        assert!(yaml.contains("at: /mnt/vfs/ws"), "yaml: {yaml}");
+        let back: MountEntry = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(back.name, "prod-bucket");
+        assert_eq!(back.at.as_deref(), Some("/mnt/vfs/ws"));
+        assert_eq!(back.tool.as_deref(), Some("native"));
+    }
+
+    #[test]
+    fn registry_names_lists_registration_order() {
+        let mut reg = BackendRegistry::new();
+        assert!(reg.names().is_empty());
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("root");
+        std::fs::create_dir_all(&root).unwrap();
+        for n in ["a", "b", "c"] {
+            let cfg = BackendConfig {
+                kind: BackendKind::Local,
+                name: n.into(),
+                prefix: Some(root.display().to_string()),
+                ..Default::default()
+            };
+            reg.register(n.into(), BackendRegistry::from_config(&cfg).unwrap());
+        }
+        assert_eq!(reg.names(), vec!["a", "b", "c"]);
     }
 
     #[test]

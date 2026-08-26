@@ -24,6 +24,9 @@ The `hilo` binary — entrypoint for all Hilo operations. Built with clap.
 | `hilo graph clean` | Delete the cached dependency graph (edges.jsonl + DuckDB cache) so the next `graph warm` re-parses from scratch |
 | `hilo serve --mcp` | Start MCP server (stdio) — `--mcp` required (only implemented server mode); rate limit read from manifest `performance.rate_limit_rps` |
 | `hilo backend mount --type s3 --bucket <BUCKET> --at <PATH> [--prefix <PREFIX>] [--region <REGION>]` | Mount a virtual backend (S3, git, local) at a virtual path |
+| `hilo backend mount --type s3|gdrive|onedrive|dropbox|external ... --at <PATH> [--tool <T>] [--mode stream\|mirror] [--poll-secs <N>]` | Mount a backend-backed workspace (spec §9); writes `.vfs/backends/mounts.yaml` |
+| `hilo backend sync [--push\|--pull\|--both] [PATH...]` | Sync mounted backends against the workspace (default two-way, ignore-aware) |
+| `hilo backend setup [--type s3\|gdrive\|onedrive\|dropbox\|external]` | Detect sync tools/credentials, print next steps (writes nothing) |
 | `hilo backend list` | List all mounted backends |
 | `hilo mount <mount-point> [--triggers] [--allow-other] [--daemon]` | Mount FUSE filesystem (--daemon detaches into a background process) |
 | `hilo workspace mount <MOUNT_POINT> [--manifest <PATH>]` | Mount all repos and backends from the workspace manifest (default `.vfs/manifest.yaml`) |

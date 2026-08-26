@@ -54,8 +54,8 @@ artifacts and other transient files stay local-only.
 | Ignore engine (gitignore subset, `.hiloignore`) + `docs/ignore-file.md` | ✅ landed (GAP-055 tick 149) |
 | `hilo ignore check <PATH>` diagnostic CLI | ✅ landed (GAP-055 tick 150) |
 | `hilo workspace sync --bucket/--prefix/--at` CLI | ✅ landed (GAP-055 tick 149) |
-| External-tool drivers (rclone / gdrive / onedrive / dropbox) + `--tool` resolution | ⏳ spec §6 — pending |
-| `hilo backend mount --type gdrive/onedrive/dropbox/external`, `backend setup` | ⏳ spec §9 — pending |
+| External-tool drivers (rclone / gdrive / onedrive / dropbox) + `--tool` resolution | ✅ landed (GAP-055 tick 152: `ExternalToolDriver`, `BackendRegistry`) |
+| `hilo backend mount --type gdrive/onedrive/dropbox/external` (writes mounts.yaml), `backend sync` (planner-driven, ignore-aware), `backend setup` (detect/creds/next steps) | ✅ landed (GAP-055 tick 155) |
 | Stream mode placeholders (`hilo-fuse`) | ⏳ spec §8 — pending |
 | MCP tools 15 → 17 (`vfs_workspace_ephemeral`, `vfs_workspace_wipe`) | ⏳ spec §10 — pending |
 | Ephemeral classification + `workspace ephemeral` / `wipe --ephemeral` | ⏳ spec §5/§9 (GAP-056) — pending |
