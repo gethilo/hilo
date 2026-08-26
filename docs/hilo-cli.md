@@ -28,6 +28,7 @@ The `hilo` binary — entrypoint for all Hilo operations. Built with clap.
 | `hilo mount <mount-point> [--triggers] [--allow-other] [--daemon]` | Mount FUSE filesystem (--daemon detaches into a background process) |
 | `hilo workspace mount <MOUNT_POINT> [--manifest <PATH>]` | Mount all repos and backends from the workspace manifest (default `.vfs/manifest.yaml`) |
 | `hilo workspace unmount <MOUNT_POINT>` | Unmount a workspace |
+| `hilo workspace sync --bucket <BUCKET> --at <DIR> [--prefix <PREFIX>] [--ignore <FILE>] [--dry-run]` | Two-way sync a local directory against an S3 prefix — non-ignored files mirrored both ways, ignored files (`.hiloignore`, git-ignore style) stay local-only |
 | `hilo classify [--dry-run]` | Auto-classify all files (role/status/feature metadata) |
 | `hilo plugin list` | List loaded WASM plugins |
 | `hilo plugin load <path>` | Load a plugin |
@@ -60,6 +61,10 @@ hilo backend list
 # Workspaces
 hilo workspace mount /mnt/hilo
 hilo workspace unmount /mnt/hilo
+# S3-backed workspace: two-way sync, ignored files stay local-only
+# (see docs/ignore-file.md for the .hiloignore format)
+hilo workspace sync --bucket my-bucket --prefix my-project --at ./workspace
+hilo workspace sync --bucket my-bucket --prefix my-project --at ./workspace --dry-run
 
 # Mount
 hilo mount /mnt/hilo --triggers

@@ -61,6 +61,15 @@ pub struct WriteResult {
     pub etag: Option<String>,
 }
 
+/// Metadata for one object returned by [`S3Client::list_objects_with_meta`].
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct S3ObjectMeta {
+    pub key: String,
+    pub size: i64,
+    /// LastModified as UNIX epoch seconds (0 when unknown).
+    pub last_modified_unix: u64,
+}
+
 /// Entry in .vfs/blobs/index.jsonl tracking an uploaded blob.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct BlobEntry {
@@ -211,6 +220,112 @@ impl S3Client {
             .collect();
 
         Ok(keys)
+    }
+
+    /// List objects in S3 under the given prefix with size + LastModified.
+    pub async fn list_objects_with_meta(
+        &self,
+        bucket: &str,
+        prefix: &str,
+    ) -> S3Result<Vec<S3ObjectMeta>> {
+        let resp = self
+            .client
+            .list_objects_v2()
+            .bucket(bucket)
+            .prefix(prefix)
+            .send()
+            .await?;
+
+        let mut out = Vec::new();
+        for obj in resp.contents() {
+            let Some(key) = obj.key() else {
+                continue;
+            };
+            let last_modified_unix = obj.last_modified().map(|t| t.secs() as u64).unwrap_or(0);
+            out.push(S3ObjectMeta {
+                key: key.to_string(),
+                size: obj.size().unwrap_or(0),
+                last_modified_unix,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Download an object directly to an explicit destination path
+    /// (no cache, no blob index — used by the sync engine, where the
+    /// destination IS the workspace copy).
+    pub async fn download_to(&self, bucket: &str, key: &str, dest: &Path) -> S3Result<()> {
+        let resp = self
+            .client
+            .get_object()
+            .bucket(bucket)
+            .key(key)
+            .send()
+            .await
+            .map_err(|e| {
+                if format!("{}", e).contains("NoSuchKey") {
+                    S3Error::NotFound(key.to_string())
+                } else {
+                    S3Error::from(e)
+                }
+            })?;
+
+        let body = resp
+            .body
+            .collect()
+            .await
+            .map_err(|e| S3Error::Aws(e.to_string()))?;
+        let bytes = body.into_bytes();
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent).await?;
+        }
+        fs::write(dest, &bytes).await?;
+        Ok(())
+    }
+
+    /// Fetch an object's LastModified (UNIX epoch seconds) without
+    /// downloading it. Returns None when the object does not exist.
+    pub async fn head_object_last_modified(
+        &self,
+        bucket: &str,
+        key: &str,
+    ) -> S3Result<Option<u64>> {
+        let resp = self
+            .client
+            .head_object()
+            .bucket(bucket)
+            .key(key)
+            .send()
+            .await;
+        match resp {
+            Ok(r) => Ok(r.last_modified().map(|t| t.secs() as u64)),
+            Err(e) if format!("{}", e).contains("NotFound") => Ok(None),
+            Err(e) => Err(S3Error::from(e)),
+        }
+    }
+
+    /// Upload bytes to S3 without cache/xattr/blob-index bookkeeping
+    /// (used by the sync engine, where the source IS the workspace copy).
+    /// Returns the ETag when available.
+    pub async fn upload_bytes(
+        &self,
+        bucket: &str,
+        key: &str,
+        data: &[u8],
+    ) -> S3Result<Option<String>> {
+        if !self.writable {
+            return Err(S3Error::ReadOnly);
+        }
+        let body = s3::primitives::ByteStream::from(data.to_vec());
+        let resp = self
+            .client
+            .put_object()
+            .bucket(bucket)
+            .key(key)
+            .body(body)
+            .send()
+            .await?;
+        Ok(resp.e_tag)
     }
 
     /// Write an object to S3 with write-through semantics:

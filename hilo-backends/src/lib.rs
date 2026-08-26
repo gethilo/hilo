@@ -10,9 +10,11 @@
 pub mod git;
 pub mod local;
 pub mod s3;
+pub mod sync;
 
 pub use git::{GitBackend, GitBackendConfig, GitError, GitResult};
-pub use s3::{S3Client, S3Error, S3Result, WriteResult};
+pub use s3::{S3Client, S3Error, S3ObjectMeta, S3Result, WriteResult};
+pub use sync::{IgnoreMatcher, LocalFile, RemoteObject, SyncEngine, SyncPlan};
 
 /// Resolve a virtual path to its real storage location.
 pub enum Backend {

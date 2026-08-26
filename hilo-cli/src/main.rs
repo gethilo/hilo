@@ -199,6 +199,12 @@ enum WorkspaceCommand {
     Mount(WorkspaceMountArgs),
     /// Unmount a workspace.
     Unmount(WorkspaceUnmountArgs),
+    /// Two-way sync a local directory against an S3 prefix.
+    ///
+    /// Non-ignored files are mirrored in both directions; files matched by
+    /// the ignore file (git-ignore style, ".vfsignore") stay local-only and
+    /// are never transferred.
+    Sync(WorkspaceSyncArgs),
 }
 
 #[derive(clap::Args)]
@@ -214,6 +220,28 @@ struct WorkspaceMountArgs {
 struct WorkspaceUnmountArgs {
     /// Directory to unmount.
     mount_point: String,
+}
+
+#[derive(clap::Args)]
+struct WorkspaceSyncArgs {
+    /// S3 bucket name.
+    #[arg(long)]
+    bucket: String,
+    /// S3 key prefix within the bucket (default: bucket root).
+    #[arg(long, default_value = "")]
+    prefix: String,
+    /// Local directory to sync.
+    #[arg(long)]
+    at: String,
+    /// Ignore file (git-ignore style). Defaults to <at>/.hiloignore.
+    #[arg(long)]
+    ignore: Option<String>,
+    /// AWS region (default: us-east-1).
+    #[arg(long, default_value = "us-east-1")]
+    region: String,
+    /// Print the sync plan without transferring any files.
+    #[arg(long)]
+    dry_run: bool,
 }
 
 #[derive(clap::Args)]
@@ -276,6 +304,14 @@ fn main() {
         Commands::Workspace(WorkspaceCommand::Unmount(args)) => {
             workspace::run_workspace_unmount(&args.mount_point)
         }
+        Commands::Workspace(WorkspaceCommand::Sync(args)) => workspace::run_workspace_sync(
+            &args.bucket,
+            &args.prefix,
+            &args.at,
+            args.ignore.as_deref(),
+            &args.region,
+            args.dry_run,
+        ),
         Commands::Classify(args) => {
             classify::run_classify(args.dry_run, args.verbose, args.features)
         }

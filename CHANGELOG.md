@@ -2,6 +2,19 @@
 
 All notable changes to Hilo are documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **`hilo workspace sync`** — two-way sync between a local directory and an
+  S3 prefix (`--bucket`, `--prefix`, `--at`, `--ignore`, `--dry-run`).
+  Non-ignored files are mirrored in both directions (newer side wins);
+  files matched by the git-ignore-style `.hiloignore` file stay local-only
+  and are never transferred (the ignore file itself included). `.vfs/`
+  metadata is never transferred either way. See docs/ignore-file.md for
+  the shared ignore format (S3 today; Google Drive / OneDrive / Dropbox
+  backends reuse it).
+
 ## [0.3.0] — 2026-08-17
 
 ### Added
