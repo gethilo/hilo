@@ -542,3 +542,15 @@ tasks:
   status: complete
   created_at: '2026-08-26T16:44:54.400927+00:00'
   completed_at: '2026-08-26T16:59:48.366227+00:00'
+- id: gap-055-ignore-check-cli
+  title: 'GAP-055 slice: hilo ignore check CLI + backend compatibility matrix doc'
+  criteria:
+  - hilo ignore check <PATH> prints ignored:true and the matching rule for a path
+    matched by .hiloignore (and ignored:false with rule (none) for unmatched paths);
+    IgnoreMatcher exposes a decision API returning the last-matching rule source;
+    cargo test -p hilo_backends passes; cargo test -p hilo_cli passes; cargo check
+    --workspace exits 0; docs/backend-compatibility-matrix.md exists with the 9-column
+    backend x capability table
+  status: complete
+  created_at: '2026-08-26T17:07:28.348253+00:00'
+  completed_at: '2026-08-26T17:16:12.457489+00:00'
