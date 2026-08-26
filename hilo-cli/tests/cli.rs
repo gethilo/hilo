@@ -691,6 +691,214 @@ fn workspace_wipe_respects_hiloephemeral_negation() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn e2e_ephemeral_sync_wipe_and_regenerate_loop() {
+    // Spec §15 E2E (LocalDriver as backend): init → persistent + ephemeral
+    // files → `backend sync --push` transfers only persistent files → wipe
+    // dry-run lists only ephemeral → --apply frees bytes → rebuild
+    // regenerates the artifact (reclassified ephemeral) → `.vfs/graph/`
+    // (ephemeral catalog) wiped → `graph clean && graph warm` rebuild it.
+    let dir = unique_tempdir("e2e-eph");
+    let workspace = dir.join("workspace");
+    let backend_root = dir.join("backend-root");
+    fs::create_dir_all(&workspace).expect("failed to create workspace");
+    fs::create_dir_all(&backend_root).expect("failed to create backend root");
+
+    // init first so .vfs/manifest.yaml exists (never ephemeral).
+    let init_output = Command::new(BIN)
+        .arg("init")
+        .current_dir(&workspace)
+        .output()
+        .expect("failed to spawn hilo init");
+    assert!(
+        init_output.status.success(),
+        "init failed: {}",
+        String::from_utf8_lossy(&init_output.stderr)
+    );
+
+    // Persistent file (src/main.rs) + ephemeral file (target/artifact.bin).
+    // main.go/helper.go give `graph warm` real edges (proven pattern from
+    // graph_warm_creates_graph_directory).
+    fs::create_dir_all(workspace.join("src")).expect("failed to create src");
+    fs::create_dir_all(workspace.join("target")).expect("failed to create target");
+    fs::write(workspace.join("src/main.rs"), "fn main() {}\n").expect("failed to write main.rs");
+    fs::write(
+        workspace.join("src/main.go"),
+        "package main\nimport \"fmt\"\nfunc main() { fmt.Println(\"hi\") }\n",
+    )
+    .expect("failed to write main.go");
+    fs::write(
+        workspace.join("src/helper.go"),
+        "package main\nfunc Helper() string { return \"help\" }\n",
+    )
+    .expect("failed to write helper.go");
+    fs::write(workspace.join("target/artifact.bin"), vec![0u8; 64])
+        .expect("failed to write artifact.bin");
+
+    write_mounts_yaml(
+        &workspace,
+        &format!(
+            "- name: test\n  type: local\n  prefix: {}\n  mode: mirror\n",
+            backend_root.display()
+        ),
+    );
+
+    // (1) push: ephemeral target/artifact.bin must NOT go upstream.
+    let pushed = Command::new(BIN)
+        .args(["backend", "sync", "--push"])
+        .current_dir(&workspace)
+        .output()
+        .expect("failed to spawn hilo backend sync");
+    assert!(
+        pushed.status.success(),
+        "sync --push failed: {}",
+        String::from_utf8_lossy(&pushed.stderr)
+    );
+    let pushed_stdout = String::from_utf8_lossy(&pushed.stdout);
+    assert!(
+        pushed_stdout.contains("skipped ephemeral"),
+        "expected skipped-ephemeral counter: {pushed_stdout}"
+    );
+    assert!(
+        backend_root.join("src/main.rs").exists(),
+        "persistent src/main.rs must be upstream"
+    );
+    assert!(
+        !backend_root.join("target/artifact.bin").exists(),
+        "ephemeral target/artifact.bin must NOT be upstream"
+    );
+
+    // (2) wipe dry-run lists only ephemeral files.
+    let dry = Command::new(BIN)
+        .args(["workspace", "wipe", "--ephemeral"])
+        .current_dir(&workspace)
+        .output()
+        .expect("failed to spawn hilo workspace wipe");
+    assert!(
+        dry.status.success(),
+        "wipe dry-run failed: {}",
+        String::from_utf8_lossy(&dry.stderr)
+    );
+    let dry_stdout = String::from_utf8_lossy(&dry.stdout);
+    assert!(
+        dry_stdout.contains("would remove\ttarget/artifact.bin"),
+        "dry-run must list target/artifact.bin: {dry_stdout}"
+    );
+    assert!(
+        !dry_stdout.contains("would remove\tsrc/main.rs"),
+        "persistent src/main.rs must not be listed: {dry_stdout}"
+    );
+
+    // (3) wipe --apply removes only ephemeral, reports freed bytes, and
+    // never touches .vfs/manifest.yaml (workspace truth).
+    let applied = Command::new(BIN)
+        .args(["workspace", "wipe", "--ephemeral", "--apply"])
+        .current_dir(&workspace)
+        .output()
+        .expect("failed to spawn hilo workspace wipe --apply");
+    assert!(
+        applied.status.success(),
+        "wipe --apply failed: {}",
+        String::from_utf8_lossy(&applied.stderr)
+    );
+    let applied_stdout = String::from_utf8_lossy(&applied.stdout);
+    assert!(
+        applied_stdout.contains("removed\ttarget/artifact.bin"),
+        "expected removed row: {applied_stdout}"
+    );
+    assert!(
+        applied_stdout.contains("freed 64 bytes across 1 file(s)"),
+        "expected freed summary: {applied_stdout}"
+    );
+    assert!(
+        !workspace.join("target/artifact.bin").exists(),
+        "ephemeral file must be deleted"
+    );
+    assert!(
+        workspace.join("src/main.rs").exists(),
+        "persistent file must survive"
+    );
+    assert!(
+        workspace.join(".vfs/manifest.yaml").exists(),
+        ".vfs/manifest.yaml must never be ephemeral"
+    );
+
+    // (4) regenerable: a rebuilt artifact is classified ephemeral again.
+    fs::write(workspace.join("target/artifact.bin"), vec![0u8; 64])
+        .expect("failed to rebuild artifact.bin");
+    let relist = Command::new(BIN)
+        .args(["workspace", "ephemeral"])
+        .current_dir(&workspace)
+        .output()
+        .expect("failed to spawn hilo workspace ephemeral");
+    assert!(
+        relist.status.success(),
+        "workspace ephemeral failed: {}",
+        String::from_utf8_lossy(&relist.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&relist.stdout).contains("target/artifact.bin\t64\t"),
+        "regenerated artifact must be listed ephemeral again"
+    );
+
+    // (5) graph rebuild path: .vfs/graph/ is in the ephemeral catalog;
+    // wiping it and re-warming must still work.
+    let warm = Command::new(BIN)
+        .args(["graph", "warm"])
+        .current_dir(&workspace)
+        .output()
+        .expect("failed to spawn hilo graph warm");
+    assert!(
+        warm.status.success(),
+        "graph warm failed: {}",
+        String::from_utf8_lossy(&warm.stderr)
+    );
+    assert!(
+        workspace.join(".vfs/graph/edges.jsonl").exists(),
+        "graph warm must produce edges.jsonl"
+    );
+    let wipe_graph = Command::new(BIN)
+        .args(["workspace", "wipe", "--ephemeral", "--apply"])
+        .current_dir(&workspace)
+        .output()
+        .expect("failed to spawn wipe after warm");
+    assert!(
+        wipe_graph.status.success(),
+        "wipe after warm failed: {}",
+        String::from_utf8_lossy(&wipe_graph.stderr)
+    );
+    assert!(
+        !workspace.join(".vfs/graph/edges.jsonl").exists(),
+        "wiped .vfs/graph/edges.jsonl must be gone"
+    );
+    let clean = Command::new(BIN)
+        .args(["graph", "clean"])
+        .current_dir(&workspace)
+        .output()
+        .expect("failed to spawn hilo graph clean");
+    assert!(
+        clean.status.success(),
+        "graph clean failed: {}",
+        String::from_utf8_lossy(&clean.stderr)
+    );
+    let rewarm = Command::new(BIN)
+        .args(["graph", "warm"])
+        .current_dir(&workspace)
+        .output()
+        .expect("failed to spawn hilo graph warm after clean");
+    assert!(
+        rewarm.status.success(),
+        "graph warm after clean failed: {}",
+        String::from_utf8_lossy(&rewarm.stderr)
+    );
+    assert!(
+        workspace.join(".vfs/graph/edges.jsonl").exists(),
+        "graph must rebuild after wipe"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 // ─────────────────────── backend mount/sync/setup (§9) ───────────────────────
 
 fn write_mounts_yaml(workspace: &std::path::Path, yaml: &str) {

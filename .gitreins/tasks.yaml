@@ -678,3 +678,22 @@ tasks:
   status: complete
   created_at: '2026-08-26T22:13:16.879282+00:00'
   completed_at: '2026-08-26T22:13:20.437853+00:00'
+- id: gap-056-e2e-ephemeral-loop
+  title: 'GAP-056 E2E: ephemeral classification full-loop integration test'
+  criteria:
+  - "hilo-cli/tests/cli.rs gains an integration test running the spec \xA715 E2E scenario:\
+    \ (1) hilo init in a scratch workspace; (2) write src/main.rs (persistent) + target/artifact.bin\
+    \ (ephemeral by builtin catalog); (3) write .vfs/backends/mounts.yaml with a local\
+    \ backend; (4) hilo backend sync --push asserts main.rs is upstream and artifact.bin\
+    \ is NOT upstream, stdout contains 'skipped ephemeral'; (5) hilo workspace wipe\
+    \ --ephemeral dry-run lists 'would remove\\ttarget/artifact.bin' and not src/main.rs;\
+    \ (6) wipe --apply removes artifact.bin, keeps main.rs, prints 'removed\\ttarget/artifact.bin'\
+    \ and 'freed 64 bytes across 1 file(s)'; (7) rewrite artifact.bin then hilo workspace\
+    \ ephemeral lists it again (regenerable verified); (8) hilo graph warm creates\
+    \ .vfs/graph, wipe --apply removes .vfs/graph/edges.jsonl (ephemeral catalog),\
+    \ then 'hilo graph clean && hilo graph warm' both exit 0 and .vfs/graph is recreated\
+    \ (rebuild path verified). cargo test -p hilo_cli --test cli <new_test> passes;\
+    \ RUSTFLAGS='-D warnings' cargo test --workspace --no-run exits 0."
+  status: complete
+  created_at: '2026-08-26T23:20:11.158583+00:00'
+  completed_at: '2026-08-26T23:27:12.289043+00:00'
