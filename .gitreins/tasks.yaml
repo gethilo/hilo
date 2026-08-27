@@ -697,3 +697,12 @@ tasks:
   status: complete
   created_at: '2026-08-26T23:20:11.158583+00:00'
   completed_at: '2026-08-26T23:27:12.289043+00:00'
+- id: gitleaks-allowlist-narrow
+  title: Narrow .gitleaks.toml allowlist
+  criteria:
+  - "gitleaks detect --config .gitleaks.toml scans all 477 commits clean with allowlist\
+    \ paths limited to .git/, .gitreins/, .gitreins/history/, target/, and .*\\.log$\
+    \ \u2014 no specs/, docs/, or .*\\.md$ entries"
+  status: complete
+  created_at: '2026-08-27T11:53:34.850642+00:00'
+  completed_at: '2026-08-27T11:59:08.536869+00:00'
