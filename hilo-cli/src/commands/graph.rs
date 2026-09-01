@@ -390,6 +390,23 @@ fn raw_edges_jsonl_count(cwd: &std::path::Path) -> Option<usize> {
     Some(content.lines().filter(|l| !l.trim().is_empty()).count())
 }
 
+/// PERF-001 companion: a missing `graph.db` is no longer a hard error when a
+/// sibling `edges.jsonl` exists — `GraphDB::open` reconciles the full jsonl
+/// into a fresh DB (cheap since PERF-001: single prepared-statement
+/// transaction) and stamps it, so the next command opens instantly.
+/// Returns the DB path to open, or None when there is truly no data.
+fn resolve_graph_db_path(cwd: &std::path::Path) -> Option<std::path::PathBuf> {
+    let graph_db = cwd.join(".vfs").join("graph").join("graph.db");
+    if graph_db.exists() {
+        return Some(graph_db);
+    }
+    let jsonl = cwd.join(".vfs").join("graph").join("edges.jsonl");
+    if jsonl.exists() {
+        return Some(graph_db); // open() will rebuild from edges.jsonl
+    }
+    None
+}
+
 /// Print summary statistics from the dependency graph.
 ///
 /// An empty cache is a valid state (not an error) — the graph starts
@@ -397,12 +414,10 @@ fn raw_edges_jsonl_count(cwd: &std::path::Path) -> Option<usize> {
 /// or eagerly via `hilo graph warm`.
 pub fn run_stats() -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
-    let graph_db = cwd.join(".vfs").join("graph").join("graph.db");
-
-    if !graph_db.exists() {
+    let Some(graph_db) = resolve_graph_db_path(&cwd) else {
         println!("Graph cache is empty. Query a file or run `hilo graph warm` to populate.");
         return Ok(());
-    }
+    };
 
     let graph_db_str = graph_db.to_str().unwrap_or(".vfs/graph/graph.db");
     let graph = GraphDB::open(graph_db_str).context("failed to open DuckDB graph database")?;
@@ -430,7 +445,12 @@ pub fn run_stats() -> Result<()> {
         println!("Most connected: {mc}");
     }
     println!("Edge types:");
-    for (rel, count) in &stats.edge_types {
+    // BTree ordering: stats.edge_types is a HashMap, whose iteration order is
+    // randomized per process — unsorted print made `graph stats` output
+    // non-deterministic across identical runs (broke before/after diffing).
+    let mut edge_types_sorted: Vec<_> = stats.edge_types.iter().collect();
+    edge_types_sorted.sort();
+    for (rel, count) in edge_types_sorted {
         println!("  {rel}: {count}");
     }
     if !stats.orphans.is_empty() {
@@ -854,11 +874,9 @@ pub fn run_rule_list() -> Result<()> {
 /// output (MAP → SIGNATURES → DETAIL). See `hilo-graph/src/signal.rs`.
 pub fn run_understand(task: &str, budget: Option<usize>) -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
-    let graph_db = cwd.join(".vfs").join("graph").join("graph.db");
-
-    if !graph_db.exists() {
+    let Some(graph_db) = resolve_graph_db_path(&cwd) else {
         anyhow::bail!("No graph data. Run `hilo graph warm` first.");
-    }
+    };
 
     let graph_db_str = graph_db.to_str().unwrap_or(".vfs/graph/graph.db");
     let graph = GraphDB::open(graph_db_str).context("failed to open DuckDB graph database")?;
@@ -881,11 +899,9 @@ pub fn run_understand(task: &str, budget: Option<usize>) -> Result<()> {
 /// Zero external APIs, fully deterministic. See `hilo-graph/src/semantic.rs`.
 pub fn run_search(query: &str, limit: Option<usize>) -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
-    let graph_db = cwd.join(".vfs").join("graph").join("graph.db");
-
-    if !graph_db.exists() {
+    let Some(graph_db) = resolve_graph_db_path(&cwd) else {
         anyhow::bail!("No graph data. Run `hilo graph warm` first.");
-    }
+    };
 
     let graph_db_str = graph_db.to_str().unwrap_or(".vfs/graph/graph.db");
     let graph = GraphDB::open(graph_db_str).context("failed to open DuckDB graph database")?;
@@ -919,11 +935,9 @@ pub fn run_search(query: &str, limit: Option<usize>) -> Result<()> {
 /// directory prefix (e.g. "hilo-graph/src"). See `GraphDB::module_files`.
 pub fn run_module(module_name: &str) -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
-    let graph_db = cwd.join(".vfs").join("graph").join("graph.db");
-
-    if !graph_db.exists() {
+    let Some(graph_db) = resolve_graph_db_path(&cwd) else {
         anyhow::bail!("No graph data. Run `hilo graph warm` first.");
-    }
+    };
 
     let graph_db_str = graph_db.to_str().unwrap_or(".vfs/graph/graph.db");
     let graph = GraphDB::open(graph_db_str).context("failed to open DuckDB graph database")?;
@@ -953,11 +967,9 @@ pub fn run_module(module_name: &str) -> Result<()> {
 /// See `GraphDB::untested_files`.
 pub fn run_untested() -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
-    let graph_db = cwd.join(".vfs").join("graph").join("graph.db");
-
-    if !graph_db.exists() {
+    let Some(graph_db) = resolve_graph_db_path(&cwd) else {
         anyhow::bail!("No graph data. Run `hilo graph warm` first.");
-    }
+    };
 
     let graph_db_str = graph_db.to_str().unwrap_or(".vfs/graph/graph.db");
     let graph = GraphDB::open(graph_db_str).context("failed to open DuckDB graph database")?;
@@ -982,11 +994,9 @@ pub fn run_untested() -> Result<()> {
 /// `hilo graph rule-check <name>` — execute a named rule against the graph.
 pub fn run_rule_check(name: &str) -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
-    let graph_db = cwd.join(".vfs").join("graph").join("graph.db");
-
-    if !graph_db.exists() {
+    let Some(graph_db) = resolve_graph_db_path(&cwd) else {
         anyhow::bail!("No graph data. Run `hilo graph warm` first.");
-    }
+    };
 
     let manifest = load_manifest()?;
 

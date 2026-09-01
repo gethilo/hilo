@@ -4,7 +4,8 @@
 //! storage and querying.
 
 use std::io::{BufRead, BufReader};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use duckdb::{params, Connection};
 use hilo_metadata::inventory::Edge;
@@ -180,6 +181,47 @@ pub fn insert_edges_into(conn: &Connection, edges: &[Edge]) -> GraphResult<()> {
     Ok(())
 }
 
+/// Fingerprint of `edges.jsonl` used to decide whether the DuckDB cache is
+/// stale: `<mtime-nanos>:<size>`. Any real writer (JIT-001 write-through,
+/// parse-and-diff append, `graph clean` + re-warm, another process) changes
+/// the mtime or the length, so a matching stamp means the cache was built
+/// from exactly this file. (PERF-001: stamp-only, no row-count parity —
+/// verifying counts would require re-reading the file and defeat the gate.)
+fn jsonl_fingerprint(edges_jsonl: &Path) -> Option<String> {
+    let md = std::fs::metadata(edges_jsonl).ok()?;
+    let nanos = md
+        .modified()
+        .ok()?
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    Some(format!("{}:{}", nanos, md.len()))
+}
+
+/// Path of the reconcile stamp next to a graph DB / edges.jsonl pair.
+/// Both live in `.vfs/graph/`, so either path's parent is the stamp dir.
+fn reconcile_stamp_path(graph_dir_file: &Path) -> PathBuf {
+    graph_dir_file
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(".last_reconcile")
+}
+
+/// True when the DuckDB cache must be reconciled from `edges.jsonl`.
+///
+/// Skipped (cache trusted) only when a stamp from a previous *successful full
+/// replay* matches the current fingerprint. Missing/unreadable stamp ->
+/// reconcile (first run, legacy cache, post-`graph clean`).
+fn reconcile_needed(edges_jsonl: &Path) -> bool {
+    let Some(fp) = jsonl_fingerprint(edges_jsonl) else {
+        return false; // no edges.jsonl -> open()'s reconcile no-ops anyway
+    };
+    match std::fs::read_to_string(reconcile_stamp_path(edges_jsonl)) {
+        Ok(stamped) => stamped.trim() != fp,
+        Err(_) => true,
+    }
+}
+
 /// Reconcile the DuckDB cache from the canonical `edges.jsonl` file.
 ///
 /// Reads every non-empty line from `edges_jsonl`, deserialises each as an
@@ -202,38 +244,61 @@ pub fn reconcile_edges_from_jsonl(conn: &Connection, edges_jsonl: &Path) -> Grap
 
     let file = std::fs::File::open(edges_jsonl)?;
     let reader = BufReader::new(file);
-    let mut batch: Vec<Edge> = Vec::with_capacity(512);
-    let mut count: usize = 0;
 
-    for line in reader.lines() {
-        let line = match line {
-            Ok(l) => l,
-            Err(_) => continue, // skip unreadable lines
-        };
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        match serde_json::from_str::<Edge>(trimmed) {
-            Ok(edge) => {
-                batch.push(edge);
-                if batch.len() >= 512 {
-                    count += batch.len();
-                    insert_edges_into(conn, &batch)?;
-                    batch.clear();
-                }
+    // PERF-001: one prepared statement inside a single transaction. The old
+    // path re-ran ensure_schema and issued one un-prepared execute per row
+    // (~1.6 ms/row on DuckDB — ~12 s for tokio's 7.4k edges). Transaction +
+    // prepared execute is orders of magnitude cheaper, which keeps a full
+    // replay affordable whenever the stamp gate in `open()` does miss.
+    ensure_schema(conn)?;
+    conn.execute_batch("BEGIN TRANSACTION")?;
+
+    let replay = (|| -> GraphResult<usize> {
+        let mut stmt = conn.prepare(
+            "INSERT OR IGNORE INTO edges (\"from\", \"to\", rel, provenance, confidence) VALUES (?, ?, ?, ?, ?)",
+        )?;
+        let mut count: usize = 0;
+        for line in reader.lines() {
+            let line = match line {
+                Ok(l) => l,
+                Err(_) => continue, // skip unreadable lines
+            };
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
             }
-            Err(_) => continue, // skip malformed JSON lines
+            match serde_json::from_str::<Edge>(trimmed) {
+                Ok(edge) => {
+                    stmt.execute(params![
+                        edge.from,
+                        edge.to,
+                        edge.rel,
+                        edge.provenance,
+                        edge.confidence
+                    ])?;
+                    count += 1;
+                }
+                Err(_) => continue, // skip malformed JSON lines
+            }
+        }
+        Ok(count)
+    })();
+
+    match replay {
+        Ok(count) => {
+            conn.execute_batch("COMMIT")?;
+            // Stamp AFTER a successful full replay so the next open() can
+            // trust the cache without touching edges.jsonl.
+            if let Some(fp) = jsonl_fingerprint(edges_jsonl) {
+                let _ = std::fs::write(reconcile_stamp_path(edges_jsonl), fp);
+            }
+            Ok(count)
+        }
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(e)
         }
     }
-
-    // Flush remaining batch.
-    if !batch.is_empty() {
-        count += batch.len();
-        insert_edges_into(conn, &batch)?;
-    }
-
-    Ok(count)
 }
 
 impl GraphDB {
@@ -263,9 +328,16 @@ impl GraphDB {
         if path != ":memory:" {
             let jsonl_path = Path::new(path).parent().map(|dir| dir.join("edges.jsonl"));
             if let Some(jsonl) = jsonl_path {
+                // PERF-001: skip the full edges.jsonl replay when a previous
+                // successful replay stamped this exact file (fingerprint
+                // match). Any writer that appends/rewrites edges.jsonl (JIT-001
+                // write-through, parse-and-diff, graph warm, another process)
+                // changes the mtime/size -> mismatch -> full reconcile runs.
                 // reconcile_edges_from_jsonl returns Ok(0) if the file is
                 // missing — safe no-op for fresh projects.
-                reconcile_edges_from_jsonl(&conn, &jsonl)?;
+                if reconcile_needed(&jsonl) {
+                    reconcile_edges_from_jsonl(&conn, &jsonl)?;
+                }
             }
         }
 
@@ -549,7 +621,7 @@ impl GraphDB {
              FROM edges \
              WHERE \"to\" NOT LIKE 'pkg:{%' \
              GROUP BY \"to\" \
-             ORDER BY cnt DESC \
+             ORDER BY cnt DESC, \"to\" ASC \
              LIMIT 10",
         )?;
         let rows = stmt.query_map(params![], |row| {
@@ -947,6 +1019,68 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM edges", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 1, "second reconcile must not duplicate rows");
+    }
+
+    #[test]
+    fn reconcile_writes_stamp_and_open_skips_replay_when_fresh() {
+        // PERF-001: after a successful reconcile, a stamp file records the
+        // edges.jsonl fingerprint; the next open() must NOT re-replay
+        // (observable: the stamp exists, and reconcile_needed() flips false).
+        let dir = std::env::temp_dir().join(format!("hilo_perf001_a_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let jsonl = dir.join("edges.jsonl");
+        std::fs::write(
+            &jsonl,
+            "{\"from\":\"a.rs\",\"to\":\"pkg:x\",\"rel\":\"imports\"}\n",
+        )
+        .unwrap();
+
+        let db_path = dir.join("graph.db");
+        {
+            let db = GraphDB::open(db_path.to_str().unwrap()).unwrap();
+            assert_eq!(db.count_edges().unwrap(), 1);
+        }
+        // Stamp written on the successful replay.
+        let stamp = dir.join(".last_reconcile");
+        assert!(stamp.exists(), "stamp must be written after full replay");
+        // Fingerprint unchanged -> gate says no reconcile needed.
+        assert!(!super::reconcile_needed(&jsonl));
+
+        // Touching edges.jsonl (content change) flips the gate.
+        std::fs::write(
+            &jsonl,
+            "{\"from\":\"a.rs\",\"to\":\"pkg:x\",\"rel\":\"imports\"}\n{\"from\":\"b.rs\",\"to\":\"pkg:y\",\"rel\":\"imports\"}\n",
+        )
+        .unwrap();
+        assert!(
+            super::reconcile_needed(&jsonl),
+            "changed jsonl must invalidate stamp"
+        );
+
+        // Reopen: reconcile runs, new edge visible, stamp refreshed.
+        {
+            let db = GraphDB::open(db_path.to_str().unwrap()).unwrap();
+            assert_eq!(db.count_edges().unwrap(), 2);
+        }
+        assert!(!super::reconcile_needed(&jsonl));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn missing_stamp_triggers_reconcile_for_legacy_caches() {
+        // Legacy cache (pre-PERF-001) has no stamp -> must still reconcile.
+        let dir = std::env::temp_dir().join(format!("hilo_perf001_b_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let jsonl = dir.join("edges.jsonl");
+        std::fs::write(
+            &jsonl,
+            "{\"from\":\"a.rs\",\"to\":\"pkg:x\",\"rel\":\"imports\"}\n",
+        )
+        .unwrap();
+        assert!(super::reconcile_needed(&jsonl), "no stamp -> reconcile");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
