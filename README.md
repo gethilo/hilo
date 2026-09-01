@@ -55,6 +55,17 @@ $ hilo classify          # Auto-tag every file with role + stability
   1064 files: 423 library, 405 test, 39 entrypoint
 ```
 
+## Performance
+
+Graph queries are near-instant regardless of repo size — `graph stats`,
+`related`, `search`, and `untested` answer in **~0.02 s** on a 793-file
+corpus (up to 880× faster than the 0.2.x era, which paid a 12–15 s
+cache-revalidation tax on every command). `graph impact` runs in ~0.5 s,
+`understand` in ~1.5 s. Output is byte-deterministic across runs.
+
+Full numbers, methodology, and the cache-coherence design (JSONL truth +
+stamped query cache): [docs/performance.md](docs/performance.md).
+
 ## Architecture
 
 ```
