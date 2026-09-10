@@ -33,6 +33,42 @@ const SKIP_DIRS: &[&str] = &[
 ///
 /// When `language` is `Some`, only files of that language are parsed
 /// (e.g. `--language rust`).  Otherwise all supported languages are scanned.
+/// PERF-002: per-file parse cache — relpath -> {mtime_nanos, size, edges}.
+/// Lets a no-change `graph warm` skip ALL tree-sitter parsing.
+type ParseCache = std::collections::HashMap<String, serde_json::Value>;
+
+fn parse_cache_path(cwd: &Path) -> PathBuf {
+    cwd.join(".vfs").join("graph").join(".parse_cache.json")
+}
+
+fn load_parse_cache(cwd: &Path) -> ParseCache {
+    std::fs::read_to_string(parse_cache_path(cwd))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn save_parse_cache(cwd: &Path, cache: &ParseCache) -> Result<()> {
+    let p = parse_cache_path(cwd);
+    if let Some(parent) = p.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let json = serde_json::to_string(cache).context("failed to serialize parse cache")?;
+    std::fs::write(&p, json).context("failed to write parse cache")?;
+    Ok(())
+}
+
+fn file_fingerprint(p: &Path) -> Option<(u128, u64)> {
+    let m = std::fs::metadata(p).ok()?;
+    let nanos = m
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    Some((nanos, m.len()))
+}
+
 pub fn run_warm(workspace: bool, language: Option<String>, changed: bool) -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
 
@@ -120,6 +156,11 @@ pub fn run_warm(workspace: bool, language: Option<String>, changed: bool) -> Res
     let total_files = source_files.len();
     let progress = AtomicUsize::new(0);
 
+    // PERF-002: load per-file parse cache (mtime+size keyed).
+    let cache = load_parse_cache(&cwd);
+    let cached_files = AtomicUsize::new(0);
+    let new_entries: std::sync::Mutex<ParseCache> = std::sync::Mutex::new(ParseCache::new());
+
     // Parallel parse: create a fresh parser per file since tree_sitter::Parser
     // is not Send.  Each closure runs on a rayon thread, reads the file, and
     // returns the parsed edges (or an empty vec on skip/error).
@@ -132,30 +173,84 @@ pub fn run_warm(workspace: bool, language: Option<String>, changed: bool) -> Res
                 None => return Ok(Vec::new()),
             };
 
-            let source = match std::fs::read_to_string(file) {
-                Ok(s) => s,
-                Err(_) => return Ok(Vec::new()),
-            };
-
             let rel = file
                 .strip_prefix(&cwd)
                 .unwrap_or(file)
                 .to_string_lossy()
                 .into_owned();
 
-            let mut parser = Parser::for_language(lang)
-                .with_context(|| format!("failed to initialize {:?} parser", lang))?;
-
             let count = progress.fetch_add(1, Ordering::Relaxed) + 1;
             if count.is_multiple_of(100) || count == total_files {
                 eprintln!("  parsing {count}/{total_files} files...");
             }
 
-            parser
+            // PERF-002: cache hit (same mtime+size) -> reuse edges, skip parse.
+            if let Some((nanos, size)) = file_fingerprint(file) {
+                if let Some(entry) = cache.get(&rel) {
+                    if entry.get("m").and_then(|v| v.as_u64()) == Some(nanos as u64)
+                        && entry.get("s").and_then(|v| v.as_u64()) == Some(size)
+                    {
+                        if let Some(arr) = entry.get("edges").and_then(|v| v.as_array()) {
+                            let edges: Vec<Edge> = arr
+                                .iter()
+                                .filter_map(|e| serde_json::from_value(e.clone()).ok())
+                                .collect();
+                            cached_files.fetch_add(1, Ordering::Relaxed);
+                            return Ok(edges);
+                        }
+                    }
+                }
+            }
+
+            let source = match std::fs::read_to_string(file) {
+                Ok(s) => s,
+                Err(_) => return Ok(Vec::new()),
+            };
+
+            let mut parser = Parser::for_language(lang)
+                .with_context(|| format!("failed to initialize {:?} parser", lang))?;
+
+            let edges = parser
                 .parse_imports(&rel, &source)
-                .with_context(|| format!("failed to parse {rel}"))
+                .with_context(|| format!("failed to parse {rel}"))?;
+
+            // record fingerprint + serialized edges for next run
+            let entry = serde_json::json!({
+                "m": file_fingerprint(file).map(|(n, _)| n as u64).unwrap_or(0),
+                "s": file_fingerprint(file).map(|(_, s)| s).unwrap_or(0),
+                "edges": edges,
+            });
+            new_entries.lock().unwrap().insert(rel, entry);
+            Ok(edges)
         })
         .collect();
+
+    // PERF-002: persist updated cache entries (fresh parses only).
+    {
+        let mut new_entries = new_entries.lock().unwrap();
+        if !new_entries.is_empty() {
+            let mut merged = cache.clone();
+            for (k, v) in new_entries.drain() {
+                merged.insert(k, v);
+            }
+            // drop entries for files no longer present
+            let live: std::collections::HashSet<String> = source_files
+                .iter()
+                .map(|f| {
+                    f.strip_prefix(&cwd)
+                        .unwrap_or(f)
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .collect();
+            merged.retain(|k, _| live.contains(k));
+            save_parse_cache(&cwd, &merged)?;
+        }
+    }
+    let cached_n = cached_files.load(Ordering::Relaxed);
+    if cached_n > 0 {
+        eprintln!("  parse cache: {cached_n}/{total_files} files skipped (unchanged)");
+    }
 
     // Flatten results, propagating the first error.
     let mut all_edges: Vec<Edge> = Vec::new();
@@ -168,9 +263,13 @@ pub fn run_warm(workspace: bool, language: Option<String>, changed: bool) -> Res
         all_edges.extend(edges);
     }
 
+    let t_assoc = std::time::Instant::now();
     // Infer `tested_by` and `tests` edges from filename conventions.
     let test_edges = discover_test_associations(&source_files, &cwd);
     all_edges.extend(test_edges);
+    if std::env::var("HILO_WARM_TIMING").is_ok() {
+        eprintln!("  [timing] test associations: {:?}", t_assoc.elapsed());
+    }
 
     // Process graph extensions from manifest — manually declared edge patterns
     // like docs/**/*.md → src/**/*.go with relation "documented_by".
@@ -211,20 +310,76 @@ pub fn run_warm(workspace: bool, language: Option<String>, changed: bool) -> Res
         }
     }
 
+    let t_jsonl = std::time::Instant::now();
+    // PERF-002 fast path: full cache hit => edges identical => skip the
+    // jsonl rewrite AND the DuckDB insert entirely (row-point INSERTs are
+    // DuckDB's anti-pattern; the only zero-cost insert is no insert).
+    let full_cache_hit = cached_n == total_files && total_files > 0;
+    if full_cache_hit {
+        if std::env::var("HILO_WARM_TIMING").is_ok() {
+            eprintln!("  [timing] full cache hit — skipping jsonl+db write");
+        }
+        let n = all_edges.len();
+        let m = unique_sources.len();
+        let langs = langs_seen.len();
+        println!("Discovered {n} edges across {m} files ({langs} languages) [all cached, graph unchanged]");
+        let _ = t_jsonl; // timing span unused on this path
+        return Ok(());
+    }
     // Persist edges to the JSONL inventory file.
     let edges_jsonl = cwd.join(".vfs").join("graph").join("edges.jsonl");
     inventory::append_edges_deduped(&edges_jsonl, &all_edges)
         .context("failed to write edges.jsonl")?;
+    if std::env::var("HILO_WARM_TIMING").is_ok() {
+        eprintln!("  [timing] jsonl dedup write: {:?}", t_jsonl.elapsed());
+    }
 
     // Populate the DuckDB graph database.
+    let t_db = std::time::Instant::now();
     let graph_db = cwd.join(".vfs").join("graph").join("graph.db");
     let graph_db_str = graph_db.to_str().unwrap_or(".vfs/graph/graph.db");
     let graph = GraphDB::open(graph_db_str).context("failed to open DuckDB graph database")?;
-    graph
-        .insert_edges(&all_edges)
-        .context("failed to insert edges into DuckDB")?;
+    if std::env::var("HILO_WARM_TIMING").is_ok() {
+        eprintln!(
+            "  [timing] GraphDB::open (incl reconcile): {:?}",
+            t_db.elapsed()
+        );
+    }
+    let t_ins = std::time::Instant::now();
+    // PERF-002 delta insert: only edges from re-parsed files (+ assoc and
+    // manifest-extension edges, which are cheap to reinsert with OR IGNORE).
+    let reparsed: std::collections::HashSet<String> = {
+        let ne = new_entries.lock().unwrap();
+        ne.keys().cloned().collect()
+    };
+    let delta: Vec<Edge> = all_edges
+        .iter()
+        .filter(|e| reparsed.contains(&e.from) || e.provenance == "heuristic")
+        .cloned()
+        .collect();
+    let db_edges = if cached_n > 0 && delta.len() < all_edges.len() / 4 {
+        // small delta beats 7k+ row-point inserts
+        graph
+            .insert_edges(&delta)
+            .context("failed to insert edge delta into DuckDB")?;
+        eprintln!(
+            "  delta insert: {} new/changed-file edges (skipped {} unchanged)",
+            delta.len(),
+            all_edges.len() - delta.len()
+        );
+        delta.len()
+    } else {
+        graph
+            .insert_edges(&all_edges)
+            .context("failed to insert edges into DuckDB")?;
+        all_edges.len()
+    };
+    if std::env::var("HILO_WARM_TIMING").is_ok() {
+        eprintln!("  [timing] insert_edges: {:?}", t_ins.elapsed());
+    }
 
     let n = all_edges.len();
+    let _ = db_edges;
     let m = unique_sources.len();
     let langs = langs_seen.len();
     println!("Discovered {n} edges across {m} files ({langs} languages)");

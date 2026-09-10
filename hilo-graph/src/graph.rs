@@ -172,12 +172,22 @@ fn migrate_schema(conn: &Connection) -> GraphResult<()> {
 /// `GraphDB::open`).
 pub fn insert_edges_into(conn: &Connection, edges: &[Edge]) -> GraphResult<()> {
     ensure_schema(conn)?;
+    // PERF-002: single transaction + prepared statement — the row-by-row
+    // version made `graph warm` pay ~1ms per edge even on full cache hits.
+    let mut stmt = conn.prepare(
+        "INSERT OR IGNORE INTO edges (\"from\", \"to\", rel, provenance, confidence) VALUES (?, ?, ?, ?, ?)",
+    )?;
+    conn.execute_batch("BEGIN TRANSACTION")?;
     for edge in edges {
-        conn.execute(
-            "INSERT OR IGNORE INTO edges (\"from\", \"to\", rel, provenance, confidence) VALUES (?, ?, ?, ?, ?)",
-            params![edge.from, edge.to, edge.rel, edge.provenance, edge.confidence],
-        )?;
+        stmt.execute(params![
+            edge.from,
+            edge.to,
+            edge.rel,
+            edge.provenance,
+            edge.confidence
+        ])?;
     }
+    conn.execute_batch("COMMIT")?;
     Ok(())
 }
 
@@ -729,6 +739,20 @@ impl GraphDB {
         rel_filter: Option<&str>,
         direction: Direction,
     ) -> GraphResult<Vec<Edge>> {
+        // PERF-004: same short-circuit as impact_or_parse (see there).
+        if !path.starts_with("pkg:") && !path.starts_with("sys:") {
+            let not_indexable = Path::new(path)
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| crate::parser::Language::from_extension(e).is_none())
+                .unwrap_or(false);
+            if not_indexable {
+                return Err(GraphError::Other(format!(
+                    "'{path}' is not an indexable source file (26 AST languages) — impact/related cannot answer for it"
+                )));
+            }
+        }
+
         // Cache hit → query directly.
         if self.file_in_graph(path)? {
             return self.related(path, rel_filter, direction);
@@ -756,6 +780,22 @@ impl GraphDB {
         // Node-existence check at query time: unknown paths (not in graph,
         // not on disk) must fail loudly instead of looking like a node with
         // zero dependents. Symbol nodes (pkg:/sys:) pass when in the graph.
+        // PERF-004: non-indexable extensions (markdown, yaml, json, lock files,
+        // ...) can never appear in the AST graph — fail fast with the real
+        // reason instead of a misleading "No dependents found". Symbol nodes
+        // (pkg:/sys:) and files with no extension are exempt.
+        if !start_path.starts_with("pkg:") && !start_path.starts_with("sys:") {
+            let not_indexable = Path::new(start_path)
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| crate::parser::Language::from_extension(e).is_none())
+                .unwrap_or(false);
+            if not_indexable {
+                return Err(GraphError::Other(format!(
+                    "'{start_path}' is not an indexable source file (26 AST languages) — impact/related cannot answer for it"
+                )));
+            }
+        }
         if !self.file_in_graph(start_path)? && !Path::new(start_path).exists() {
             return Err(GraphError::Other(format!(
                 "'{start_path}' is not in the graph (no such file and no matching graph node)"
@@ -776,6 +816,53 @@ mod tests {
         let path = dir.join(name);
         std::fs::write(&path, content).unwrap();
         path.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn perf004_non_indexable_extension_rejected_in_impact() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("notes.md");
+        std::fs::write(&p, "# notes\n").unwrap();
+        let db = GraphDB::open(":memory:").unwrap();
+        let err = db
+            .impact_or_parse(p.to_str().unwrap(), 8)
+            .err()
+            .expect("must error on .md");
+        assert!(
+            err.to_string().contains("not an indexable source file"),
+            "wrong error: {err}"
+        );
+    }
+
+    #[test]
+    fn perf004_non_indexable_extension_rejected_in_related() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("cfg.yaml");
+        std::fs::write(&p, "a: 1\n").unwrap();
+        let db = GraphDB::open(":memory:").unwrap();
+        let err = db
+            .related_or_parse(p.to_str().unwrap(), None, Direction::Reverse)
+            .err()
+            .expect("must error on .yaml");
+        assert!(
+            err.to_string().contains("not an indexable source file"),
+            "wrong error: {err}"
+        );
+    }
+
+    #[test]
+    fn perf004_indexable_extension_not_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("lib.rs");
+        std::fs::write(&p, "fn a() {}\n").unwrap();
+        let db = GraphDB::open(":memory:").unwrap();
+        // must NOT fail with the indexability guard (other errors OK: empty graph etc.)
+        if let Err(e) = db.impact_or_parse(p.to_str().unwrap(), 8) {
+            assert!(
+                !e.to_string().contains("not an indexable source file"),
+                "indexable file must not be rejected: {e}"
+            );
+        }
     }
 
     #[test]
