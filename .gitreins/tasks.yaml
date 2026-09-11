@@ -733,3 +733,17 @@ tasks:
   status: complete
   created_at: '2026-09-11T10:59:29.206247+00:00'
   completed_at: '2026-09-11T12:18:10.074242+00:00'
+- id: INT-GITREINS-001
+  title: Make GitReins guard and Tier 2 judge complete reliably on WarpFS
+  criteria:
+  - .gitreins/config.yaml scopes the guard test command to the fast hilo_graph crate
+    and sets numeric test_timeout/hook_timeout values so the tests leg completes rather
+    than timing out.
+  - Evaluator and CLI pipeline tier2 caps are both configured, structurally scoped
+    to changed files, and max_output_tokens does not exceed the DeepSeek provider
+    limit of 393216.
+  - python3 ~/.hermes/scripts/check-gitreins-judge.py . exits 0 with PASS.
+  - gitreins guard exits 0 with its tests leg passing, not timing out.
+  status: complete
+  created_at: '2026-09-11T20:31:08.239465+00:00'
+  completed_at: '2026-09-11T20:31:13.465828+00:00'
