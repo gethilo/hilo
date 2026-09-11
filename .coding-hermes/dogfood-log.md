@@ -100,4 +100,7 @@ looks like data loss), GAP-059 (P2, related empty-vs-unknown inconsistency).
 
 **Left behind:** docs/dogfood/2026-09-11-integration.md,
 docs/dogfood/diagnostics.md updated, SKILL.md run-3 field notes,
-GAP-057..061 on the BOARD-V2 board. Foreman wake: cooldown 259200 → 900.
+GAP-057..061 on the BOARD-V2 board. Foreman wake: warpfs cooldown
+21600 → 900 (floor ridden in same PUT; verified tick fired — foreman
+events on GAP-060/061 within one interval). Dogfood picker row itself
+at 259200.
