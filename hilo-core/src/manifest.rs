@@ -446,6 +446,19 @@ pub struct Graph {
     pub deduplicate: bool,
     #[serde(default)]
     pub extensions: Vec<GraphExtension>,
+    /// Paths (relative to the project root, `/`-separated) that graph source
+    /// discovery re-includes even though they match the built-in exclusion
+    /// list (`target`, `node_modules`, `vendor`, `venv`, `.venv`,
+    /// `site-packages`, `__pycache__`, `.cache`, `.rustup`, `.npm`,
+    /// `go/pkg/mod`, hidden directories).
+    ///
+    /// PERF-005: this is the narrow, per-path escape hatch for vendored code
+    /// that genuinely belongs to the project (e.g. `vendor/critical`). It
+    /// never weakens the defaults globally: only the listed path — and its
+    /// subtree — becomes visible to discovery; every other excluded tree
+    /// stays pruned. Empty by default.
+    #[serde(default)]
+    pub include_paths: Vec<String>,
 }
 
 impl Default for Graph {
@@ -460,6 +473,7 @@ impl Default for Graph {
             max_edges_per_file: default_max_edges(),
             deduplicate: true,
             extensions: Vec::new(),
+            include_paths: Vec::new(),
         }
     }
 }
@@ -1066,6 +1080,42 @@ mod tests {
         fn string_or_int_integer() {
             let v: IntWrapper = serde_yaml::from_str("value: 444").unwrap();
             assert_eq!(v.value, "444");
+        }
+    }
+
+    mod graph_include_paths {
+        use super::*;
+
+        fn minimal_manifest_yaml() -> String {
+            // `project` is the only required top-level field.
+            "project:\n  name: test\n".to_string()
+        }
+
+        #[test]
+        fn include_paths_defaults_to_empty() {
+            let m = Manifest::parse(&minimal_manifest_yaml()).unwrap();
+            assert!(m.graph.include_paths.is_empty());
+        }
+
+        #[test]
+        fn include_paths_parses_list() {
+            let yaml = format!(
+                "{}graph:\n  include_paths:\n    - vendor/critical\n    - tools/golden\n",
+                minimal_manifest_yaml()
+            );
+            let m = Manifest::parse(&yaml).unwrap();
+            assert_eq!(
+                m.graph.include_paths,
+                vec!["vendor/critical", "tools/golden"]
+            );
+        }
+
+        #[test]
+        fn include_paths_backward_compatible_graph_without_field() {
+            let yaml = format!("{}graph:\n  cross_repo: false\n", minimal_manifest_yaml());
+            let m = Manifest::parse(&yaml).unwrap();
+            assert!(m.graph.include_paths.is_empty());
+            assert!(!m.graph.cross_repo);
         }
     }
 }

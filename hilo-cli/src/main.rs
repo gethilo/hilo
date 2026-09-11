@@ -60,7 +60,12 @@ struct MountArgs {
 }
 
 #[derive(clap::Args)]
-struct InitArgs {}
+struct InitArgs {
+    /// Allow HOME (or its canonical equivalent) as the project root.
+    /// Without this flag `hilo init` refuses to create `.vfs/` inside HOME.
+    #[arg(long)]
+    allow_home: bool,
+}
 
 #[derive(clap::Args)]
 struct MetaArgs {
@@ -125,6 +130,11 @@ struct WarmArgs {
     /// Used by the post-commit hook for incremental updates.
     #[arg(long)]
     changed: bool,
+
+    /// Allow HOME (or its canonical equivalent) as the project root.
+    /// Without this flag `graph warm` refuses to walk the home directory.
+    #[arg(long)]
+    allow_home: bool,
 }
 
 #[derive(clap::Args)]
@@ -287,10 +297,10 @@ fn main() {
     let cli = Cli::parse();
 
     let result = match cli.command {
-        Commands::Init(_) => init::run(),
+        Commands::Init(args) => init::run(args.allow_home),
         Commands::Meta(args) => meta::run(&args.path, args.set.as_deref(), args.value.as_deref()),
         Commands::Graph(GraphCommand::Warm(args)) => {
-            graph::run_warm(args.workspace, args.language, args.changed)
+            graph::run_warm(args.workspace, args.language, args.changed, args.allow_home)
         }
         Commands::Graph(GraphCommand::Stats) => graph::run_stats(),
         Commands::Graph(GraphCommand::Related(args)) => graph::run_related(

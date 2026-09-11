@@ -9,6 +9,14 @@ files and a default manifest.
 hilo init
 ```
 
+Refuses to run when the current directory is your HOME directory — an
+accidental `hilo init` there scatters `.vfs/` state across your home.
+Pass `--allow-home` to override explicitly:
+
+```bash
+hilo init --allow-home
+```
+
 ## `hilo meta`
 
 Read and write extended attributes on files.
@@ -43,13 +51,45 @@ hilo graph warm --language rust
 
 # Only parse files changed since the last warm (used by the post-commit hook)
 hilo graph warm --changed
+
+# Allow HOME (or its canonical equivalent) as the project root — without
+# this flag `graph warm` refuses to walk the home directory
+hilo graph warm --allow-home
 ```
 
 Supported languages (26): Go, Python, TypeScript, Rust, JavaScript,
 Java, C, C++, Ruby, C#, Kotlin, PHP, Swift, Elixir, Haskell, Erlang,
 Scala, Zig, Lua, Dart, Clojure, OCaml, R, Julia, Elm, Nim.
-Directories skipped: `target/`, `node_modules/`, `vendor/`,
-`__pycache__/`, `.venv/`.
+
+### Excluded directories
+
+Dependency and cache trees are pruned before descending, so their contents
+never reach the parser: `go/pkg/mod/`, `vendor/`, `node_modules/`, `venv/`,
+`__pycache__/`, `.venv/`, `site-packages/`, `target/`, `.cache/`, `.rustup/`,
+`.npm/`, and every hidden (dot) entry.
+
+To re-include one specific excluded path (e.g. a vendored crate that is part
+of your project), list it under `graph.include_paths` in
+`.vfs/manifest.yaml`. Only the listed path — and its subtree — becomes
+visible; every other excluded tree stays pruned:
+
+```yaml
+graph:
+  include_paths:
+    - vendor/critical
+```
+
+### HOME guard
+
+`hilo graph warm` (like `hilo init`) refuses to treat your HOME directory as
+the project root. Running it from `$HOME` would otherwise parse — and later
+JIT-parse on every query — every source file in your home directory,
+including dependency and cache trees. The error names `--allow-home`; pass
+it only when you really mean it:
+
+```bash
+hilo graph warm --allow-home
+```
 
 ### `stats`
 

@@ -13,14 +13,13 @@ use hilo_graph::{GraphDB, ImpactResult, Language, Parser};
 use hilo_metadata::inventory::{self, Edge};
 use rayon::prelude::*;
 
-/// Directory names to skip when walking for source files.
-const SKIP_DIRS: &[&str] = &[
-    "target",       // Rust build output
-    "node_modules", // JavaScript/TypeScript
-    "vendor",       // Go / PHP
-    "__pycache__",  // Python cache
-    ".venv",        // Python virtualenv
-];
+use crate::commands::guard;
+
+/// PERF-005: `go/pkg/mod` (the Go module cache) is pruned as a path suffix —
+/// its parents (`go`, `go/pkg`) are ordinary source directories that must
+/// remain walkable so an explicit `include_paths` entry can reopen a single
+/// vendored module.
+const GO_PKG_MOD: &str = "go/pkg/mod";
 
 /// Walk the current directory for source files in all supported languages,
 /// parse their imports, and write the resulting edges to both
@@ -69,12 +68,57 @@ fn file_fingerprint(p: &Path) -> Option<(u128, u64)> {
     Some((nanos, m.len()))
 }
 
-pub fn run_warm(workspace: bool, language: Option<String>, changed: bool) -> Result<()> {
+pub fn run_warm(
+    workspace: bool,
+    language: Option<String>,
+    changed: bool,
+    allow_home: bool,
+) -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
+    run_warm_in(
+        &cwd,
+        workspace,
+        language,
+        changed,
+        allow_home,
+        None,
+        &|_| load_manifest(),
+    )
+}
+
+/// Injectable core of [`run_warm`] (PERF-005): the walk root and HOME are
+/// parameters and manifest loading goes through `load_manifest_fn`, so
+/// command-level refusal/override and manifest-driven re-include behavior
+/// are testable in a temp dir without touching the real HOME or the process
+/// working directory. `load_manifest_fn` receives the walk root (production
+/// passes a closure that ignores it and reads from the process cwd).
+pub fn run_warm_in(
+    root: &Path,
+    workspace: bool,
+    language: Option<String>,
+    changed: bool,
+    allow_home: bool,
+    home: Option<PathBuf>,
+    load_manifest_fn: &dyn Fn(&Path) -> Result<hilo_core::manifest::Manifest>,
+) -> Result<()> {
+    let cwd = root;
+
+    // PERF-005: never treat HOME as a project root without an explicit
+    // opt-in — warm would otherwise parse (and later JIT-parse) the entire
+    // home directory including dependency and cache trees.
+    guard::ensure_not_home_with(cwd, allow_home, home)?;
+
+    // PERF-005: explicit per-path re-include overrides from the manifest
+    // (`graph.include_paths`). No manifest (or no field) = empty list, i.e.
+    // pure default behavior.
+    let include_paths: Vec<String> = match load_manifest_fn(cwd) {
+        Ok(m) => m.graph.include_paths,
+        Err(_) => Vec::new(),
+    };
 
     // Collect every source file under the current directory.
     let mut source_files = Vec::new();
-    collect_source_files(&cwd, &mut source_files)
+    collect_source_files(cwd, Path::new(""), false, &include_paths, &mut source_files)
         .context("failed to walk directory tree for source files")?;
 
     // When --changed is set, filter to files modified since the last warm.
@@ -157,7 +201,7 @@ pub fn run_warm(workspace: bool, language: Option<String>, changed: bool) -> Res
     let progress = AtomicUsize::new(0);
 
     // PERF-002: load per-file parse cache (mtime+size keyed).
-    let cache = load_parse_cache(&cwd);
+    let cache = load_parse_cache(cwd);
     let cached_files = AtomicUsize::new(0);
     let new_entries: std::sync::Mutex<ParseCache> = std::sync::Mutex::new(ParseCache::new());
 
@@ -174,7 +218,7 @@ pub fn run_warm(workspace: bool, language: Option<String>, changed: bool) -> Res
             };
 
             let rel = file
-                .strip_prefix(&cwd)
+                .strip_prefix(cwd)
                 .unwrap_or(file)
                 .to_string_lossy()
                 .into_owned();
@@ -237,14 +281,14 @@ pub fn run_warm(workspace: bool, language: Option<String>, changed: bool) -> Res
             let live: std::collections::HashSet<String> = source_files
                 .iter()
                 .map(|f| {
-                    f.strip_prefix(&cwd)
+                    f.strip_prefix(cwd)
                         .unwrap_or(f)
                         .to_string_lossy()
                         .into_owned()
                 })
                 .collect();
             merged.retain(|k, _| live.contains(k));
-            save_parse_cache(&cwd, &merged)?;
+            save_parse_cache(cwd, &merged)?;
         }
     }
     let cached_n = cached_files.load(Ordering::Relaxed);
@@ -265,7 +309,7 @@ pub fn run_warm(workspace: bool, language: Option<String>, changed: bool) -> Res
 
     let t_assoc = std::time::Instant::now();
     // Infer `tested_by` and `tests` edges from filename conventions.
-    let test_edges = discover_test_associations(&source_files, &cwd);
+    let test_edges = discover_test_associations(&source_files, cwd);
     all_edges.extend(test_edges);
     if std::env::var("HILO_WARM_TIMING").is_ok() {
         eprintln!("  [timing] test associations: {:?}", t_assoc.elapsed());
@@ -275,7 +319,7 @@ pub fn run_warm(workspace: bool, language: Option<String>, changed: bool) -> Res
     // like docs/**/*.md → src/**/*.go with relation "documented_by".
     if let Ok(manifest) = load_manifest() {
         let extension_edges =
-            generate_extension_edges(&manifest.graph.extensions, &source_files, &cwd);
+            generate_extension_edges(&manifest.graph.extensions, &source_files, cwd);
         if !extension_edges.is_empty() {
             println!(
                 "Generated {} edge(s) from {} manifest extension(s)",
@@ -858,24 +902,80 @@ fn source_to_test_patterns(name: &str) -> Vec<String> {
     patterns
 }
 
-fn collect_source_files(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+/// Default-exclusion test for a discovery entry (PERF-005).
+///
+/// `rel` is the entry's path relative to the walk root with `/` separators.
+/// An entry is default-excluded when it is hidden, its name matches the
+/// prune list, or it is (or lives under) a `go/pkg/mod` module cache.
+fn entry_excluded(rel: &str, file_name: &str) -> bool {
+    let hidden = file_name.starts_with('.');
+    let name_pruned = guard::DEFAULT_PRUNE_DIRS.contains(&file_name);
+    let go_mod = rel == GO_PKG_MOD || rel.ends_with(&format!("/{GO_PKG_MOD}"));
+    hidden || name_pruned || go_mod
+}
+
+/// True when `rel` IS a manifest `include_paths` entry or lives inside one —
+/// the entry and its whole subtree are open for discovery.
+fn is_included(rel: &str, include_paths: &[String]) -> bool {
+    include_paths.iter().any(|inc| {
+        let inc = inc.trim_end_matches('/');
+        rel == inc || rel.starts_with(&format!("{inc}/"))
+    })
+}
+
+/// True when `rel` is an ANCESTOR of some `include_paths` entry — the walk
+/// must pass through it, but its non-included siblings/children stay gated.
+fn is_include_ancestor(rel: &str, include_paths: &[String]) -> bool {
+    include_paths
+        .iter()
+        .any(|inc| inc.trim_end_matches('/').starts_with(&format!("{rel}/")))
+}
+
+fn collect_source_files(
+    dir: &Path,
+    rel: &Path,
+    in_excluded_tree: bool,
+    include_paths: &[String],
+    out: &mut Vec<PathBuf>,
+) -> std::io::Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
 
-        if name_str.starts_with('.') || SKIP_DIRS.contains(&name_str.as_ref()) {
-            continue;
-        }
+        let entry_rel = rel.join(&*name_str);
+        let rel_str = entry_rel.to_string_lossy().replace('\\', "/");
 
         let ft = entry.file_type()?;
         if ft.is_dir() {
-            collect_source_files(&path, out)?;
+            let excluded = entry_excluded(&rel_str, &name_str);
+            let included = is_included(&rel_str, include_paths);
+            // Descend when explicitly re-included, when on the path to a
+            // re-included subtree, or when the default rules never matched.
+            let descend = included
+                || is_include_ancestor(&rel_str, include_paths)
+                || (!excluded && !in_excluded_tree);
+            if !descend {
+                continue;
+            }
+            // Inside a re-included subtree everything is open; otherwise the
+            // exclusion state carries down (so `vendor/other` stays out when
+            // only `vendor/critical` was re-included).
+            let child_excluded = if included {
+                false
+            } else {
+                in_excluded_tree || excluded
+            };
+            collect_source_files(&path, &entry_rel, child_excluded, include_paths, out)?;
         } else if ft.is_file() {
-            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                if Language::from_extension(ext).is_some() {
-                    out.push(path);
+            let excluded = entry_excluded(&rel_str, &name_str);
+            let take = is_included(&rel_str, include_paths) || (!excluded && !in_excluded_tree);
+            if take {
+                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                    if Language::from_extension(ext).is_some() {
+                        out.push(path);
+                    }
                 }
             }
         }
@@ -1391,5 +1491,374 @@ mod tests {
         assert_eq!(edges.len(), 4);
         // All should have the documented_by relation
         assert!(edges.iter().all(|e| e.rel == "documented_by"));
+    }
+
+    // ======================================================================
+    // PERF-005: discovery exclusion contract
+    // ======================================================================
+
+    /// Every dependency/cache tree that must be pruned by default.
+    const PRUNE_FIXTURE_DIRS: &[&str] = &[
+        "go/pkg/mod",
+        "vendor",
+        "node_modules",
+        "venv",
+        ".venv",
+        "site-packages",
+        "target",
+        ".cache",
+        ".rustup",
+        ".npm",
+    ];
+
+    /// Build the full exclusion fixture: a source file inside every pruned
+    /// tree, plus control files in ordinary directories.
+    fn build_prune_fixture(root: &Path) -> Vec<PathBuf> {
+        use std::fs;
+        let excluded_sources = [
+            "go/pkg/mod/github.com/some/module@v1.0.0/lib.go",
+            "vendor/github.com/dep/dep.go",
+            "node_modules/pkg/index.js",
+            "venv/lib/mod.py",
+            ".venv/lib/mod.py",
+            "site-packages/pkg/mod.py",
+            "target/debug/build.rs",
+            ".cache/toolgen/out.rs",
+            ".rustup/toolchains/stable-x86_64/lib/rustlib.rs",
+            ".npm/_cacache/entry.js",
+        ];
+        for rel in excluded_sources {
+            let p = root.join(rel);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(&p, "fn placeholder() {}\n").unwrap();
+        }
+        let controls = ["src/main.rs", "src/lib.rs", "cmd/server/main.go"];
+        for rel in controls {
+            let p = root.join(rel);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(&p, "fn placeholder() {}\n").unwrap();
+        }
+        let mut all: Vec<PathBuf> = excluded_sources
+            .iter()
+            .chain(controls.iter())
+            .map(|r| root.join(r))
+            .collect();
+        all.sort();
+        all
+    }
+
+    fn rels_of(root: &Path, found: &[PathBuf]) -> Vec<String> {
+        let mut v: Vec<String> = found
+            .iter()
+            .map(|p| {
+                p.strip_prefix(root)
+                    .unwrap_or(p)
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect();
+        v.sort();
+        v
+    }
+
+    fn contains_component(rel: &str, name: &str) -> bool {
+        rel.split('/').any(|c| c == name)
+    }
+
+    #[test]
+    fn entry_excluded_covers_full_prune_contract() {
+        // Full default-prune list, by name.
+        for name in [
+            "target",
+            "node_modules",
+            "vendor",
+            "__pycache__",
+            "venv",
+            ".venv",
+            "site-packages",
+            ".cache",
+            ".rustup",
+            ".npm",
+        ] {
+            assert!(
+                entry_excluded(name, name),
+                "{name} must be excluded by default"
+            );
+        }
+        // Hidden entries (dot dirs/files) stay excluded.
+        assert!(entry_excluded(".hidden", ".hidden"));
+        assert!(entry_excluded(".config/app.rs", ".config"));
+        // Go module cache as a path suffix (directory level — children are
+        // never visited because the walk prunes the dir first).
+        assert!(entry_excluded("go/pkg/mod", GO_PKG_MOD));
+        assert!(entry_excluded("tools/go/pkg/mod", "mod"));
+        // Boundary: a sibling like `go/pkg/mod-alt` is NOT the module cache.
+        assert!(!entry_excluded("go/pkg/mod-alt/x.go", "x.go"));
+        // Ordinary entries stay included.
+        assert!(!entry_excluded("src", "src"));
+        assert!(!entry_excluded("src/main.rs", "main.rs"));
+        assert!(!entry_excluded("cmd/server/main.go", "main.go"));
+        // `go` and `go/pkg` themselves stay walkable (only `go/pkg/mod`).
+        assert!(!entry_excluded("go", "go"));
+        assert!(!entry_excluded("go/pkg", "pkg"));
+    }
+
+    #[test]
+    fn include_boundary_checks_do_not_leak_between_prefixes() {
+        let inc = vec!["vendor/critical".to_string()];
+        assert!(is_included("vendor/critical", &inc));
+        assert!(is_included("vendor/critical/a.rs", &inc));
+        assert!(
+            !is_included("vendor/critical2", &inc),
+            "prefix must respect path boundaries"
+        );
+        assert!(!is_included("vendor/other", &inc));
+        assert!(is_include_ancestor("vendor", &inc));
+        assert!(
+            !is_include_ancestor("vendor2", &inc),
+            "prefix must respect path boundaries"
+        );
+        // Sibling inside an excluded parent stays gated by in_excluded_tree.
+        let inc2 = vec!["go/pkg/mod/github.com/keep/keep@v1.0.0".to_string()];
+        assert!(is_included("go/pkg/mod/github.com/keep/keep@v1.0.0", &inc2));
+        assert!(!is_included("go/pkg/mod/github.com/other/x@v1.0.0", &inc2));
+    }
+
+    #[test]
+    fn discovery_prunes_all_dependency_trees_by_default() {
+        let dir = TempDir::new().unwrap();
+        build_prune_fixture(dir.path());
+
+        let mut found = Vec::new();
+        collect_source_files(dir.path(), Path::new(""), false, &[], &mut found).unwrap();
+        let found = rels_of(dir.path(), &found);
+
+        assert!(
+            found.contains(&"src/main.rs".to_string()),
+            "control file missing: {found:?}"
+        );
+        assert!(
+            found.contains(&"cmd/server/main.go".to_string()),
+            "ordinary go/ paths must stay walkable: {found:?}"
+        );
+        for name in PRUNE_FIXTURE_DIRS {
+            let leaked: Vec<&String> = found
+                .iter()
+                .filter(|r| contains_component(r, name.trim_start_matches("go/pkg/")))
+                .collect();
+            // `go/pkg/mod` is a suffix rule, checked separately below.
+            if *name == "go/pkg/mod" {
+                assert!(
+                    !found.iter().any(|r| r.contains("go/pkg/mod")),
+                    "go/pkg/mod leaked: {found:?}"
+                );
+                continue;
+            }
+            assert!(
+                leaked.is_empty(),
+                "{name} leaked into discovery: {leaked:?}"
+            );
+        }
+        assert_eq!(
+            found,
+            vec!["cmd/server/main.go", "src/lib.rs", "src/main.rs"]
+        );
+    }
+
+    #[test]
+    fn discovery_include_override_reopens_one_path_only() {
+        let dir = TempDir::new().unwrap();
+        build_prune_fixture(dir.path());
+
+        // Re-include exactly one vendored path; everything else stays out.
+        let include_paths = vec!["vendor/critical".to_string()];
+        let keep = dir.path().join("vendor/critical");
+        std::fs::create_dir_all(&keep).unwrap();
+        std::fs::write(keep.join("vendored.rs"), "fn vendored() {}\n").unwrap();
+        std::fs::write(dir.path().join("vendor/other.rs"), "fn other() {}\n").unwrap();
+
+        let mut found = Vec::new();
+        collect_source_files(dir.path(), Path::new(""), false, &include_paths, &mut found).unwrap();
+        let found = rels_of(dir.path(), &found);
+
+        assert!(
+            found.contains(&"vendor/critical/vendored.rs".to_string()),
+            "explicitly re-included path must be discovered: {found:?}"
+        );
+        assert!(
+            !found
+                .iter()
+                .any(|r| r.starts_with("vendor/") && r != "vendor/critical/vendored.rs"),
+            "no other vendored path may leak in: {found:?}"
+        );
+        assert!(
+            !found.iter().any(|r| contains_component(r, "node_modules")),
+            "unrelated excluded trees stay pruned: {found:?}"
+        );
+        assert!(found.contains(&"src/main.rs".to_string()));
+    }
+
+    #[test]
+    fn discovery_include_override_can_reopen_a_go_module() {
+        let dir = TempDir::new().unwrap();
+        build_prune_fixture(dir.path());
+
+        let include_paths = vec!["go/pkg/mod/github.com/keep/keep@v1.0.0".to_string()];
+        let keep = dir.path().join("go/pkg/mod/github.com/keep/keep@v1.0.0");
+        std::fs::create_dir_all(&keep).unwrap();
+        std::fs::write(keep.join("keep.go"), "package keep\n").unwrap();
+
+        let mut found = Vec::new();
+        collect_source_files(dir.path(), Path::new(""), false, &include_paths, &mut found).unwrap();
+        let found = rels_of(dir.path(), &found);
+
+        assert!(
+            found.contains(&"go/pkg/mod/github.com/keep/keep@v1.0.0/keep.go".to_string()),
+            "re-included module must be discovered: {found:?}"
+        );
+        assert!(
+            found
+                .iter()
+                .filter(|r| r.contains("go/pkg/mod"))
+                .all(|r| r.starts_with("go/pkg/mod/github.com/keep/keep@v1.0.0/")),
+            "only the re-included module may leak: {found:?}"
+        );
+    }
+
+    // ======================================================================
+    // PERF-005: command-level HOME guard (injectable root + HOME)
+    // ======================================================================
+
+    fn no_manifest(_root: &Path) -> Result<hilo_core::manifest::Manifest> {
+        anyhow::bail!("no manifest in fixture")
+    }
+
+    fn manifest_with_include(paths: &[&str]) -> hilo_core::manifest::Manifest {
+        let mut yaml = String::from("project:\n  name: fixture\ngraph:\n  include_paths:\n");
+        for p in paths {
+            yaml.push_str(&format!("    - {p}\n"));
+        }
+        hilo_core::manifest::Manifest::parse(&yaml).unwrap()
+    }
+
+    /// Parse-cache keys are exactly the rel paths warm discovered and
+    /// parsed — the most direct observable for "was this file seen?".
+    fn warm_cache_keys(root: &Path) -> Vec<String> {
+        let cache_path = root.join(".vfs").join("graph").join(".parse_cache.json");
+        let raw = std::fs::read_to_string(&cache_path)
+            .unwrap_or_else(|_| panic!("parse cache must exist at {}", cache_path.display()));
+        let cache: std::collections::HashMap<String, serde_json::Value> =
+            serde_json::from_str(&raw).unwrap();
+        let mut keys: Vec<String> = cache.into_keys().collect();
+        keys.sort();
+        keys
+    }
+
+    #[test]
+    fn warm_refuses_home_root() {
+        let home = TempDir::new().unwrap();
+        let err = run_warm_in(
+            home.path(),
+            false,
+            None,
+            false,
+            false,
+            Some(home.path().to_path_buf()),
+            &no_manifest,
+        )
+        .unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("--allow-home"),
+            "error must name the flag: {msg}"
+        );
+        assert!(
+            !home.path().join(".vfs").exists(),
+            "refused warm must not create state"
+        );
+    }
+
+    #[test]
+    fn warm_allow_home_overrides() {
+        let home = TempDir::new().unwrap();
+        std::fs::write(home.path().join("keep.rs"), "fn keep() {}\n").unwrap();
+
+        run_warm_in(
+            home.path(),
+            false,
+            None,
+            false,
+            true, // --allow-home
+            Some(home.path().to_path_buf()),
+            &no_manifest,
+        )
+        .unwrap();
+        assert_eq!(warm_cache_keys(home.path()), vec!["keep.rs".to_string()]);
+    }
+
+    #[test]
+    fn warm_normal_project_remains_green() {
+        let home = TempDir::new().unwrap();
+        let project = TempDir::new().unwrap();
+        std::fs::write(project.path().join("lib.rs"), "fn lib() {}\n").unwrap();
+
+        run_warm_in(
+            project.path(),
+            false,
+            None,
+            false,
+            false,
+            Some(home.path().to_path_buf()),
+            &no_manifest,
+        )
+        .unwrap();
+        assert_eq!(warm_cache_keys(project.path()), vec!["lib.rs".to_string()]);
+    }
+
+    #[test]
+    fn warm_manifest_include_paths_reach_discovery() {
+        let home = TempDir::new().unwrap();
+        let project = TempDir::new().unwrap();
+        std::fs::create_dir_all(project.path().join("vendor/critical")).unwrap();
+        std::fs::create_dir_all(project.path().join("node_modules")).unwrap();
+        std::fs::write(project.path().join("lib.rs"), "fn lib() {}\n").unwrap();
+        std::fs::write(
+            project.path().join("vendor/critical/vendored.rs"),
+            "fn vendored() {}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            project.path().join("node_modules/index.js"),
+            "const x = 1;\n",
+        )
+        .unwrap();
+
+        let manifest = manifest_with_include(&["vendor/critical"]);
+        let loader = move |_root: &Path| Ok(manifest.clone());
+
+        run_warm_in(
+            project.path(),
+            false,
+            None,
+            false,
+            false,
+            Some(home.path().to_path_buf()),
+            &loader,
+        )
+        .unwrap();
+
+        let keys = warm_cache_keys(project.path());
+        assert!(
+            keys.contains(&"vendor/critical/vendored.rs".to_string()),
+            "manifest re-include must reach discovery: {keys:?}"
+        );
+        assert!(
+            !keys.contains(&"node_modules/index.js".to_string()),
+            "non-included excluded trees stay out: {keys:?}"
+        );
+        assert!(
+            keys.contains(&"lib.rs".to_string()),
+            "control file: {keys:?}"
+        );
     }
 }
