@@ -706,3 +706,18 @@ tasks:
   status: complete
   created_at: '2026-08-27T11:53:34.850642+00:00'
   completed_at: '2026-08-27T11:59:08.536869+00:00'
+- id: PERF-005
+  title: Protect graph warm from unsafe roots and dependency trees
+  criteria:
+  - 'Default graph discovery prunes go/pkg/mod, vendor, node_modules, venv, .venv,
+    site-packages, target, .cache, .rustup, and .npm while an explicit manifest override
+    can re-include a default-excluded path; hilo init and hilo graph warm refuse to
+    run when the effective project root is HOME unless --allow-home is explicitly
+    supplied; focused regression tests plus cargo check --workspace, cargo fmt --all
+    --check, cargo clippy --workspace -- -D warnings, and cargo test -p hilo_graph
+    pass; operational acceptance is verified separately by the foreman: /home/kara/.vfs
+    safely removed, 9router-sync workdir is /home/kara/9router, and no scheduler project
+    uses / or /home/kara as workdir.'
+  status: complete
+  created_at: '2026-09-11T00:31:57.250568+00:00'
+  completed_at: '2026-09-11T04:50:24.431176+00:00'

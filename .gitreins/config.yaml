@@ -11,8 +11,11 @@ guards:
 evaluator:
   max_iterations: 100
   max_time: 30m
-  max_input_tokens: 1M
-  max_output_tokens: 131072
+  max_input_tokens: 2M
+  max_output_tokens: 500000
+  file_scope: changed
+  code_context_budget: 0.70
+  compaction_threshold: 0.90
   tool_call_weight: 0.1
   fast_track: auto
 
