@@ -71,3 +71,33 @@ stats). First real answer (impact file): ~4 min. **Friction count:** 8
 **Left behind:** docs/dogfood/2026-08-23-integration.md, diagnostics.md
 updated, SKILL.md field notes updated, tasks GAP-048..053, this log.
 Foreman wake: PUT CooldownS 21600→900 (board has real work).
+
+## 2026-09-11 — warpfs (Hilo) — ✅ SHIPPABLE (run 3, containerd corpus, 5489 Go files)
+
+**Promise:** agent-first VFS: pre-computed dependency graph + metadata so an
+agent gets blast radius / deps / coverage without reading files.
+
+**Reality:** first run with no structural data break. PERF-005 (landed the
+night before) verified in real use: vendor exclusion exact (1367/1367
+non-vendor files parsed, 0/14070 vendor edges), HOME refusal fires with
+--allow-home hint. Go blast radius via full-path pkg: form is EXACT —
+126/126 vs grep ground truth for core/mount. Rust file-form impact works.
+One real gap left: Go file→package resolution (GAP-057 P1) — file-form
+queries on Go files silently empty while the pkg-form is exact.
+
+**Time-to-first-success:** ~2 min warm (clone→init→warm 80s→first exact
+impact); ~20 min cold machine (bunker install leg, build 18m52s RC=0,
+smoke green). **Friction count:** 5 (GAP-057..061; zero blockers).
+
+**Bunker install leg (las-bunker-03, agent 595d2c78):** PASS — clone
+(public repo, no creds) → rustup → build 18m52s → init/warm/stats smoke
+RC=0 in 3s → destroyed. README 15-20 min claim accurate; clang/cmake not
+actually needed (benign docs drift, GAP-060).
+
+**Top findings:** GAP-057 (P1, Go file→pkg resolution — file-form queries
+empty though edge data is exact), GAP-058 (P2, warm exclusion silent —
+looks like data loss), GAP-059 (P2, related empty-vs-unknown inconsistency).
+
+**Left behind:** docs/dogfood/2026-09-11-integration.md,
+docs/dogfood/diagnostics.md updated, SKILL.md run-3 field notes,
+GAP-057..061 on the BOARD-V2 board. Foreman wake: cooldown 259200 → 900.

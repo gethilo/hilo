@@ -169,3 +169,57 @@ crashes on the first line. Log to stderr (GAP-050).
    ugly formatting (GAP-053).
 4. MCP: use a client that skips non-JSON lines until GAP-050 lands.
 5. Build with `-p hilo-cli` (hyphen) (GAP-051 — fixed 2026-08-24).
+
+---
+
+# 2026-09-11 Update — Third Real-Use Run (containerd, 5489 Go files — vendor-guard corpus)
+
+Why this corpus: the PERF-005 safety fix (refuse vendor/HOME graphs) landed
+the night before this run (fcebefe). containerd ships a committed `vendor/`
+tree (4122 Go files vs 1367 project files) — exactly the input that used to
+poison graphs and burn hours of CPU, so it is the honest test of the guard.
+
+## How the vendor guard behaves (and why it looks like data loss)
+
+`hilo graph warm` on containerd prints "parsing 1367/1367 files..." and
+"Discovered 14070 edges across 1287 files". The 4122 vendor files never
+appear. Verified three ways that this is policy, not loss: file counts
+match the non-vendor tree exactly; zero of 14070 edges reference `vendor/`;
+`stats` total files ≈ 1367. The graph is *cleaner* than pre-PERF-005 runs
+on the same shape — but nothing in the output says so (GAP-058). Until an
+exclusion report lands, the right way to confirm a guard is:
+`grep -c '"vendor/' .vfs/graph/edges.jsonl` → 0.
+
+## The Go resolution asymmetry (the one real gap left)
+
+The query-time resolution layer (the GAP-034/GAP-048 machinery) maps files
+to package nodes for **Rust crate roots** (lib.rs/mod.rs) but has no rule
+for **Go packages**: a Go file lives in a *directory package* whose node is
+`pkg:<module-path>/<dir>`. Consequences, all verified:
+
+- `impact <dir/file.go>` → empty; `related <file> --direction reverse` →
+  empty; MCP `vfs_graph_impact` file-form → `{"dependents":[],"total":0}`.
+- `impact 'pkg:github.com/containerd/containerd/v2/core/mount'` → exactly
+  the 126 grep-verified importers (depth 1). The EDGE DATA is complete and
+  precise — only the file→node lookup is missing (GAP-057).
+- Manual resolution works today: `<module>/<dir>` from go.mod + file path.
+  E.g. for `core/mount/lookup_unix.go` query
+  `pkg:github.com/containerd/containerd/v2/core/mount`.
+
+For agents: until GAP-057 lands, never report "no dependents" for a Go file
+without trying the directory's `pkg:` node first.
+
+## Empty vs unknown
+
+`related` on a path that is neither on disk nor in the graph answers
+"No incoming edges" with exit 0 — indistinguishable from a true answer.
+`impact` errors ("is not in the graph"). Same input, two philosophies
+(GAP-059). Trust impact's error; double-check related's empty.
+
+## Install truth (fresh box)
+
+Ran the README path on a bare Debian 13 bunker user: rustup (not present by
+default, standard install), then `cargo build --release` → RC=0 in 18m52s
+(499 crates; README says 15-20 min — accurate). clang/cmake, listed as
+requirements, were NOT needed. Smoke (init→warm→stats on hilo itself) green
+in 3s. A fresh user following the README succeeds.

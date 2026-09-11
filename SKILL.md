@@ -241,3 +241,37 @@ hyphenated crate, `-p hilo_graph` for graph tests is correct.
 instant + clean unmount; MCP 15 tools responding; meta/xattr round-trips;
 graph clean → rewarm determinism (598/749 twice); git hooks incremental
 warm; 6-language corpus parses; release impact query 0.84s.
+
+## Field Notes — Dogfood 2026-09-11 (containerd corpus, 5489 Go files)
+
+Third real-use run, master d734456 (one commit after PERF-005 landed).
+**Verdict: ✅ SHIPPABLE (with one language-specific caveat).** All run-1/2
+P0/P1 graph-data breaks are closed; every fix re-verified live:
+
+- **PERF-005 verified in real use.** On containerd (4122 vendor Go files),
+  warm parsed exactly the 1367 non-vendor files, 0/14070 edges reference
+  `vendor/`. `hilo init`/`warm` in `$HOME` refuses with a clear
+  `--allow-home` hint.
+- **Go blast radius via pkg: FULL import path is EXACT.** grep ground truth
+  for `core/mount` = 126 importing files; `hilo graph impact
+  'pkg:github.com/containerd/containerd/v2/core/mount' --max-depth 1` → 126.
+- **Go file→package resolution is the one remaining gap (GAP-057, P1).**
+  File-form `impact`/`related --direction reverse` on Go files → empty
+  (CLI) / `{dependents:[],total:0}` (MCP). Rust file-form works (17
+  dependents on hilo-graph/src/lib.rs). Until fixed: for Go repos, resolve
+  the file's directory to `pkg:<module path>/<dir>` and query that.
+- **Not-found consistency (GAP-059):** `related` says "No incoming edges"
+  (exit 0) for paths not in the graph; `impact` errors properly. Treat
+  related's empty as unknown until the row lands.
+- **Warm exclusion is silent (GAP-058):** on a guarded repo, warm prints
+  "1367/1367 files" with no mention of the 4122 excluded vendor files.
+  Don't misread it as data loss — check `stats` + edges.jsonl.
+- **Re-verified clean:** tested_by/untested real (3409 tested_by edges on
+  containerd); MCP stdout pure JSON-RPC (0 non-JSON lines, 17 tools);
+  FUSE xattr passthrough through the mount; meta round-trips; incremental
+  `warm --changed` (1 file → 1s); stats 26ms / impact 108ms at
+  containerd scale.
+- **Install-from-scratch (bunker las-bunker-03):** clone → rustup →
+  `cargo build --release` RC=0 in 18m52s → quickstart smoke green. README
+  15-20 min claim accurate; clang/cmake turn out to be unnecessary despite
+  the requirement line (GAP-060 docs drift, benign).
