@@ -300,6 +300,48 @@ fn graph_impact_nonexistent_file_errors() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+// ─────────────────────── graph related (absent path) ─────────────────────
+
+#[test]
+fn graph_related_nonexistent_file_errors() {
+    let dir = unique_tempdir("related");
+
+    let cases: [&[&str]; 2] = [
+        &["graph", "related", "nonexistent.rs"],
+        &[
+            "graph",
+            "related",
+            "nonexistent.rs",
+            "--direction",
+            "reverse",
+        ],
+    ];
+
+    for args in cases {
+        let output = Command::new(BIN)
+            .args(args)
+            .current_dir(&dir)
+            .output()
+            .expect("failed to spawn hilo graph related");
+
+        // Contract (GAP-059): `related` must fail loudly on a path absent
+        // from the graph AND from disk, exactly like `graph impact` does — a
+        // silent "No outgoing/incoming edges" line with exit 0 is
+        // indistinguishable from a real node with no edges.
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !output.status.success(),
+            "graph related {args:?} on nonexistent file should exit non-zero, stderr: {stderr}"
+        );
+        assert!(
+            stderr.contains("is not in the graph"),
+            "stderr should identify the path as not in the graph, got: {stderr}"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 // ─────────────────────── serve ───────────────────────
 
 #[test]

@@ -753,6 +753,22 @@ impl GraphDB {
             }
         }
 
+        // GAP-059: node-existence check at query time, same contract as
+        // `impact_or_parse` (GAP-039). Without it a path that is neither in
+        // the graph nor on disk silently produced an empty edge list, which
+        // the CLI rendered as "No incoming/outgoing edges" with exit 0 —
+        // indistinguishable from a real node with no edges. `impact` already
+        // errors on the same input, so `related` must too.
+        // Symbol nodes (pkg:/sys:) are legitimately never on disk: they are
+        // exempt from the file check and must still answer when in the graph.
+        if !path.starts_with("pkg:") && !path.starts_with("sys:") {
+            if !self.file_in_graph(path)? && !Path::new(path).exists() {
+                return Err(GraphError::Other(format!(
+                    "'{path}' is not in the graph (no such file and no matching graph node)"
+                )));
+            }
+        }
+
         // Cache hit → query directly.
         if self.file_in_graph(path)? {
             return self.related(path, rel_filter, direction);
@@ -965,6 +981,45 @@ mod tests {
         assert!(
             msg.contains("unknown.rs"),
             "error should name the path, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn related_or_parse_unknown_path_errors_not_empty_silence() {
+        // GAP-059: `related` carried no node-existence check, so a path
+        // absent from both disk and graph produced an empty edge list that
+        // the CLI printed as "No incoming/outgoing edges" with exit 0 —
+        // indistinguishable from a real node with no edges. It must error
+        // exactly like `impact_or_parse` (GAP-039).
+        let db = GraphDB::open(":memory:").unwrap();
+        let err = db
+            .related_or_parse("no/such/file_xyz.rs", None, Direction::Reverse)
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("not in the graph"),
+            "error should say 'not in the graph', got: {msg}"
+        );
+        assert!(
+            msg.contains("file_xyz.rs"),
+            "error should name the path, got: {msg}"
+        );
+
+        // Companion assertion: the guard must not break the happy path. A
+        // path that IS a graph node (here not on disk at all) still answers —
+        // the check is node-existence, not file-existence.
+        let edges = vec![
+            Edge::new("producer.go", "consumer.go", "imports"),
+            Edge::new("other.go", "pkg:fmt", "imports"),
+        ];
+        db.insert_edges(&edges).unwrap();
+        let ok = db
+            .related_or_parse("consumer.go", None, Direction::Reverse)
+            .expect("a graph-resident path must still return Ok");
+        assert_eq!(
+            ok.len(),
+            1,
+            "consumer.go should have exactly 1 incoming edge, got {ok:?}"
         );
     }
 
