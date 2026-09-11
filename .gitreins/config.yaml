@@ -35,7 +35,7 @@ pipeline:
   stages:
     - id: tier2
       type: ai_eval
-      on: [pre-eval]
+      "on": [pre-eval]
       condition: "true"
       max_iterations: 100
       max_time: 30m
