@@ -2,15 +2,24 @@
 
 Agent-first metadata filesystem. Written in Rust, 11 crates (incl. hilo-ffi UniFFI bindings), 26-language AST parsing.
 
-## Build & Test
+## Build & Test — WHERE TO BUILD (policy)
+
+**This box is a shared 16-core agent host. Heavy Rust builds belong on the CI/build box, not here.**
+
+- **Default: build/test on bunker-las-03.** It is the designated CI/build host (`ssh bunker3`, repo at `~/warpfs`, kept in sync with origin). Run all of: full `cargo build --workspace`, full `cargo test --workspace`, release builds, and any build expected to take >2 minutes there.
+- **Build locally ONLY if the task needs the local binary or local target/ artifacts**: running the compiled `hilo` against local corpora/repo state, FUSE mounts, or profiling on this machine. Even then prefer scoped builds (`cargo check -p hilo_graph`, `cargo test -p hilo_graph --lib`) over workspace-wide ones.
+- Keep the two checkouts in sync: `git push` your branch, then `ssh bunker3 'cd ~/warpfs && git fetch && git checkout <branch>'`. Never rsync the working tree — pull from origin so provenance stays clean.
+- First build on las-03 is slow (duckdb-sys from source, ~20m); incremental builds after that are fast. Leave the target/ cache in place — do not `cargo clean` there.
 
 ```bash
+# ON bunker-las-03 (default for heavy jobs):
+ssh bunker3 'cd ~/warpfs && git fetch origin && git checkout <branch> && ~/.cargo/bin/cargo build --workspace'
+# LOCALLY (only when you need the local binary/artifacts):
 cargo check --workspace          # Fast (0.5s)
-cargo build --workspace           # Slow (~20m, duckdb-sys from source)
-cargo test --workspace            # 31 suites
-cargo fmt --all                   # Apply formatting
-cargo clippy --workspace -- -D warnings
+cargo build -p hilo-cli --release  # scoped local build when required
+cargo test -p hilo_graph --lib   # scoped local tests
 ```
+
 
 ## Workspace Structure
 
