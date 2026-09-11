@@ -721,3 +721,15 @@ tasks:
   status: complete
   created_at: '2026-09-11T00:31:57.250568+00:00'
   completed_at: '2026-09-11T05:03:43.539684+00:00'
+- id: gap-057-go-file-pkg-resolution
+  title: 'GAP-057: Go file to package resolution in query-time layer'
+  criteria:
+  - 'hilo graph impact <go-file> on a Go module repo lists dependents via derived
+    pkg:<module>/<dir> node (non-empty for an imported package); hilo graph related
+    --direction reverse <go-file> resolves likewise; unit tests: tempdir go.mod fixture
+    resolves .go file to pkg:<module>/<dir>, file outside module resolves None, symbol
+    nodes (pkg:/std:) never resolve; cargo test -p hilo-graph green; cargo clippy
+    -D warnings green'
+  status: complete
+  created_at: '2026-09-11T10:59:29.206247+00:00'
+  completed_at: '2026-09-11T12:18:10.074242+00:00'
