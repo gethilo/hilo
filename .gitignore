@@ -40,3 +40,9 @@ scheduler/
 
 .coding-hermes/board/board.db.wal
 .coding-hermes/board/*.duckdb
+
+# Dagger MCP run store — bootstrapped into the session cwd by `hermes chat`
+# workers (HYG-001); tool state, never repo data.
+dagger.db
+dagger.db-shm
+dagger.db-wal

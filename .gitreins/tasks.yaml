@@ -783,3 +783,16 @@ tasks:
   status: complete
   created_at: '2026-09-12T16:51:15.171454+00:00'
   completed_at: '2026-09-12T17:18:57.289161+00:00'
+- id: GAP-066
+  title: graph untested/module ignore pkg-resolved tested_by edges (GAP-066)
+  criteria:
+  - 'Coverage consumers resolve file->pkg nodes. In a Python corpus where tests/test_routing.py
+    emits tested_by -> pkg:fastapi.routing: (a) `hilo graph untested` does NOT list
+    fastapi/routing.py while still listing the genuinely uncovered importer app/main.py
+    (its pkg node pkg:app.main is no tested_by target); (b) `hilo graph module fastapi`
+    reports test_coverage_pct 100.0 (was 0.0) with Files 1; (c) file-level tested_by
+    behavior for Rust/Go paths is unchanged and the hilo_graph + hilo_mcp test suites
+    pass; (d) no canonical edge format change (no new edge rel, parser emission untouched).'
+  status: complete
+  created_at: '2026-09-12T18:31:16.647757+00:00'
+  completed_at: '2026-09-12T19:23:24.958271+00:00'
