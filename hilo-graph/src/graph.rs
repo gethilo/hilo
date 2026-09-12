@@ -3,6 +3,7 @@
 //! Creates and manages the `.vfs/graph/graph.db` database for graph edge
 //! storage and querying.
 
+use std::collections::HashSet;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -13,6 +14,7 @@ use hilo_metadata::inventory::Edge;
 use crate::error::{GraphError, GraphResult};
 use crate::impact::{self, ImpactFile};
 use crate::parser::{Language, Parser};
+use crate::resolution::PkgResolver;
 
 /// Direction for edge queries: forward (`"from" = ?`) or reverse (`"to" = ?`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -520,7 +522,32 @@ impl GraphDB {
     ///
     /// Returns the list of *production* source files that import other files
     /// but are not covered by any test (sorted alphabetically).
+    ///
+    /// Delegates to [`GraphDB::untested_files_at`] with the process cwd as
+    /// the resolution root, so `pkg:`-resolved coverage (GAP-066) works for
+    /// callers that query a graph laid out relative to their own cwd.
     pub fn untested_files(&self) -> GraphResult<Vec<String>> {
+        self.untested_files_at(Path::new("."))
+    }
+
+    /// [`GraphDB::untested_files`] with an explicit resolution root.
+    ///
+    /// `root` is joined onto every candidate file path before the file is
+    /// resolved to its `pkg:` node, because the parser emits `tested_by`
+    /// edges to package nodes (`pkg:<crate>`, `pkg:<go import path>`,
+    /// `pkg:<dotted module>`) rather than to the covered file itself
+    /// (GAP-066). Edge paths are stored relative to the repo root, so
+    /// `root` must be that repo root — otherwise a covered file resolves to
+    /// `None` and is wrongly reported as untested.
+    ///
+    /// A production file counts as covered when EITHER it is the literal
+    /// `to` of some `tested_by` edge (the pre-GAP-066 behavior, kept for
+    /// file-level edges such as `tests/lib_test.rs -> src/lib.rs`) OR its
+    /// resolved `pkg:` node is the literal `to` of some `tested_by` edge.
+    /// Package-ancestor matching is deliberately out of scope: a test that
+    /// targets `pkg:fastapi.dependencies` does not cover
+    /// `fastapi/dependencies/utils.py`.
+    pub fn untested_files_at(&self, root: &Path) -> GraphResult<Vec<String>> {
         let mut stmt = self.conn.prepare(
             "SELECT DISTINCT \"from\" FROM edges \
              WHERE rel = 'imports' \
@@ -536,6 +563,13 @@ impl GraphDB {
         // Same predicate classify uses for role=test, so the two commands
         // can never disagree about a file (GAP-036).
         files.retain(|f| !crate::classify::is_test_file(f));
+
+        // GAP-066: the remaining files may still be covered through their
+        // package node. One resolver instance for the whole query so each
+        // path costs at most one filesystem walk.
+        let tested = self.tested_by_targets()?;
+        let mut resolver = PkgResolver::new();
+        files.retain(|f| !Self::file_is_covered(f, &tested, root, &mut resolver));
         Ok(files)
     }
 
@@ -543,8 +577,21 @@ impl GraphDB {
     ///
     /// Returns all distinct files (both `from` and `to`) whose path starts
     /// with `module_name`, along with the total edge count and test-coverage
-    /// percentage (files that have at least one `tested_by` edge ÷ total files).
+    /// percentage (covered files ÷ total files).
+    ///
+    /// Delegates to [`GraphDB::module_files_at`] with the process cwd as the
+    /// resolution root.
     pub fn module_files(&self, module_name: &str) -> GraphResult<ModuleStats> {
+        self.module_files_at(Path::new("."), module_name)
+    }
+
+    /// [`GraphDB::module_files`] with an explicit resolution root (GAP-066).
+    ///
+    /// `test_coverage_pct` counts a file under the prefix as covered under
+    /// the same two rules `untested_files_at` uses (literal `tested_by`
+    /// target, or the file's resolved `pkg:` node is one). `files` and
+    /// `edges_count` are the unmodified file-level views of the module.
+    pub fn module_files_at(&self, root: &Path, module_name: &str) -> GraphResult<ModuleStats> {
         let prefix = if module_name.ends_with('/') {
             module_name.to_string()
         } else {
@@ -582,14 +629,15 @@ impl GraphDB {
             |row| row.get::<_, i64>(0),
         )?;
 
-        // Files in the module that have at least one tested_by edge.
-        let tested_count: i64 = self.conn.query_row(
-            "SELECT COUNT(DISTINCT \"to\") FROM edges \
-             WHERE rel = 'tested_by' \
-             AND \"to\" LIKE ?1 ESCAPE '\\'",
-            params![format!("{like_prefix}%")],
-            |row| row.get::<_, i64>(0),
-        )?;
+        // GAP-066: files in the module that are covered by a test, whether
+        // the `tested_by` edge names the file itself or the `pkg:` node it
+        // belongs to.
+        let tested = self.tested_by_targets()?;
+        let mut resolver = PkgResolver::new();
+        let tested_count = files
+            .iter()
+            .filter(|f| Self::file_is_covered(f, &tested, root, &mut resolver))
+            .count() as i64;
 
         let test_coverage_pct = if total_files > 0 {
             ((tested_count as f64 / total_files as f64) * 100.0 * 10.0).round() / 10.0
@@ -603,6 +651,43 @@ impl GraphDB {
             edges_count,
             test_coverage_pct,
         })
+    }
+
+    /// The set of literal `to` nodes of every `tested_by` edge.
+    ///
+    /// GAP-066: shared by the coverage consumers so both agree on what the
+    /// target of a test is (either a file path or a `pkg:` node).
+    fn tested_by_targets(&self) -> GraphResult<HashSet<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT DISTINCT \"to\" FROM edges WHERE rel = 'tested_by'")?;
+        let rows = stmt.query_map(params![], |row| row.get::<_, String>(0))?;
+        let mut targets = HashSet::new();
+        for r in rows {
+            targets.insert(r?);
+        }
+        Ok(targets)
+    }
+
+    /// Whether `file` counts as covered by some test (GAP-066).
+    ///
+    /// Rule (i): `file` is the literal target of a `tested_by` edge. Rule
+    /// (ii): the `pkg:` node `file` resolves to (via `root`) is. A file that
+    /// resolves to no package node is never covered by rule (ii) — it must
+    /// not silently fall back to an enclosing crate or module.
+    fn file_is_covered(
+        file: &str,
+        tested: &HashSet<String>,
+        root: &Path,
+        resolver: &mut PkgResolver,
+    ) -> bool {
+        if tested.contains(file) {
+            return true;
+        }
+        match resolver.pkg_node(&root.join(file).to_string_lossy()) {
+            Some(node) => tested.contains(&node),
+            None => false,
+        }
     }
 
     /// Compute comprehensive [`GraphStats`] using DuckDB aggregate queries.
@@ -1355,6 +1440,223 @@ mod tests {
             untested.len(),
             1,
             "only src/util.rs should remain, got: {untested:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // GAP-066 — coverage consumers resolve `pkg:` nodes
+    // -----------------------------------------------------------------------
+
+    /// Create `dir/<rel>` (with parents) and return its path.
+    fn touch(dir: &Path, rel: &str) -> PathBuf {
+        let path = dir.join(rel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&path, "").unwrap();
+        path
+    }
+
+    /// A tempdir shaped like the GAP-064 reproduction corpus: a Python
+    /// package with a nested subpackage, a second package, a test file and a
+    /// standalone script (no `__init__.py`).
+    fn python_corpus() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        for rel in [
+            "fastapi/__init__.py",
+            "fastapi/routing.py",
+            "fastapi/dependencies/__init__.py",
+            "fastapi/dependencies/utils.py",
+            "app/__init__.py",
+            "app/main.py",
+            "tests/test_routing.py",
+            "standalone.py",
+        ] {
+            touch(dir.path(), rel);
+        }
+        dir
+    }
+
+    #[test]
+    fn untested_files_at_resolves_pkg_covered_files() {
+        // GAP-066: the parser emits `tested_by` edges to `pkg:` nodes, so a
+        // covered Python file is never the literal target of its test — the
+        // file-level query alone lists it as untested.
+        let dir = python_corpus();
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[
+            Edge::new(
+                "fastapi/routing.py",
+                "pkg:fastapi.dependencies.utils",
+                "imports",
+            ),
+            Edge::new("app/main.py", "pkg:fastapi.routing", "imports"),
+            Edge::new("fastapi/dependencies/utils.py", "pkg:os", "imports"),
+            Edge::new("standalone.py", "pkg:os", "imports"),
+            Edge::new("tests/test_routing.py", "pkg:fastapi.routing", "imports"),
+            Edge::new("tests/test_routing.py", "pkg:fastapi.routing", "tested_by"),
+            Edge::new(
+                "tests/test_routing.py",
+                "pkg:fastapi.dependencies",
+                "tested_by",
+            ),
+        ])
+        .unwrap();
+
+        let untested = db.untested_files_at(dir.path()).unwrap();
+
+        assert!(
+            !untested.contains(&"fastapi/routing.py".to_string()),
+            "file whose pkg node is a tested_by target must be covered, got: {untested:?}"
+        );
+        assert!(
+            untested.contains(&"app/main.py".to_string()),
+            "uncovered importer (non-matching pkg node) must stay listed, got: {untested:?}"
+        );
+        assert!(
+            untested.contains(&"standalone.py".to_string()),
+            "standalone script resolves to no package and must stay listed, got: {untested:?}"
+        );
+        // Package-ANCESTOR coverage is out of scope: the test targets
+        // `pkg:fastapi.dependencies`, not the nested module node.
+        assert!(
+            untested.contains(&"fastapi/dependencies/utils.py".to_string()),
+            "ancestor-only coverage must not mark a file covered, got: {untested:?}"
+        );
+        assert!(
+            !untested.contains(&"tests/test_routing.py".to_string()),
+            "test file must not be listed as untested production code, got: {untested:?}"
+        );
+        assert_eq!(
+            untested,
+            vec![
+                "app/main.py".to_string(),
+                "fastapi/dependencies/utils.py".to_string(),
+                "standalone.py".to_string(),
+            ],
+            "exactly the three uncovered production files should remain"
+        );
+    }
+
+    #[test]
+    fn module_files_at_counts_pkg_resolved_coverage() {
+        // GAP-066: `count(DISTINCT to) WHERE to LIKE 'fastapi/%'` can never
+        // match `pkg:fastapi.routing`, so module coverage read 0.0% for a
+        // fully covered module.
+        let dir = python_corpus();
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[
+            Edge::new(
+                "fastapi/routing.py",
+                "pkg:fastapi.dependencies.utils",
+                "imports",
+            ),
+            Edge::new("fastapi/dependencies/utils.py", "pkg:os", "imports"),
+            Edge::new("app/main.py", "pkg:fastapi.routing", "imports"),
+            Edge::new("tests/test_corpus.py", "pkg:fastapi.routing", "imports"),
+            Edge::new("tests/test_corpus.py", "pkg:fastapi.routing", "tested_by"),
+            Edge::new(
+                "tests/test_corpus.py",
+                "pkg:fastapi.dependencies.utils",
+                "tested_by",
+            ),
+        ])
+        .unwrap();
+
+        let stats = db.module_files_at(dir.path(), "fastapi").unwrap();
+        assert_eq!(
+            stats.files,
+            vec![
+                "fastapi/dependencies/utils.py".to_string(),
+                "fastapi/routing.py".to_string()
+            ],
+            "file list must stay the file-level view of the module"
+        );
+        assert_eq!(stats.edges_count, 2, "edge count must be unchanged");
+        assert_eq!(
+            stats.test_coverage_pct, 100.0,
+            "both fastapi files are covered through their pkg nodes"
+        );
+
+        // A module whose files have no test reads 0.0%.
+        let app = db.module_files_at(dir.path(), "app").unwrap();
+        assert_eq!(app.files, vec!["app/main.py".to_string()]);
+        assert_eq!(app.edges_count, 1);
+        assert_eq!(app.test_coverage_pct, 0.0);
+
+        // An uncovered sibling still drags the percentage down, rounded to
+        // one decimal.
+        touch(dir.path(), "fastapi/legacy.py");
+        db.insert_edges(&[Edge::new("fastapi/legacy.py", "pkg:os", "imports")])
+            .unwrap();
+        let stats = db.module_files_at(dir.path(), "fastapi").unwrap();
+        assert_eq!(stats.files.len(), 3);
+        assert_eq!(stats.test_coverage_pct, 66.7);
+    }
+
+    #[test]
+    fn untested_files_at_keeps_file_level_tested_by_coverage() {
+        // Rule (i) must survive GAP-066: a file-level `tested_by` target is
+        // still covered even though the resolver maps the file to its crate
+        // node (`pkg:demo`) rather than its own path.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"demo\"\n",
+        )
+        .unwrap();
+        touch(dir.path(), "src/lib.rs");
+        touch(dir.path(), "src/util.rs");
+        touch(dir.path(), "tests/lib_test.rs");
+
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[
+            Edge::new("src/lib.rs", "pkg:std", "imports"),
+            Edge::new("src/util.rs", "pkg:std", "imports"),
+            Edge::new("tests/lib_test.rs", "src/lib.rs", "imports"),
+            Edge::new("tests/lib_test.rs", "src/lib.rs", "tested_by"),
+        ])
+        .unwrap();
+
+        let untested = db.untested_files_at(dir.path()).unwrap();
+        assert!(
+            !untested.contains(&"src/lib.rs".to_string()),
+            "literal tested_by target must stay covered, got: {untested:?}"
+        );
+        assert!(
+            untested.contains(&"src/util.rs".to_string()),
+            "Rust sibling with no test must stay listed, got: {untested:?}"
+        );
+        assert_eq!(untested, vec!["src/util.rs".to_string()]);
+    }
+
+    #[test]
+    fn untested_files_at_does_not_fall_back_to_crate_for_standalone_python() {
+        // A standalone `.py` has no package node. If the Python branch fell
+        // through to the Cargo walk, `standalone.py` would resolve to
+        // `pkg:demo` and be swallowed by the crate-level `tested_by` edge.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"demo\"\n",
+        )
+        .unwrap();
+        touch(dir.path(), "standalone.py");
+        touch(dir.path(), "tests/demo_test.rs");
+
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[
+            Edge::new("standalone.py", "pkg:os", "imports"),
+            Edge::new("tests/demo_test.rs", "pkg:demo", "imports"),
+            Edge::new("tests/demo_test.rs", "pkg:demo", "tested_by"),
+        ])
+        .unwrap();
+
+        let untested = db.untested_files_at(dir.path()).unwrap();
+        assert_eq!(
+            untested,
+            vec!["standalone.py".to_string()],
+            "unresolvable Python file must stay uncovered, never fall back to the crate node"
         );
     }
 }

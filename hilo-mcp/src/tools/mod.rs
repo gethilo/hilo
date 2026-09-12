@@ -302,6 +302,16 @@ pub fn call_tool(name: &str, arguments: &serde_json::Value) -> McpResult<serde_j
 /// Default path to the DuckDB graph database (relative to CWD).
 const GRAPH_DB_PATH: &str = ".vfs/graph/graph.db";
 
+/// Resolution root for `pkg:`-node coverage lookups (GAP-066).
+///
+/// Graph edge paths and [`GRAPH_DB_PATH`] are both relative to the process
+/// working directory (the repo root when the MCP server is launched there),
+/// so coverage queries must join the file paths onto that same directory
+/// before resolving them to package nodes.
+fn graph_root() -> std::path::PathBuf {
+    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+}
+
 /// Default path to the manifest file (relative to CWD).
 const MANIFEST_PATH: &str = "manifest.yaml";
 
@@ -557,7 +567,9 @@ fn graph_untested(_arguments: &serde_json::Value) -> McpResult<serde_json::Value
     }
 
     let db = hilo_graph::GraphDB::open(GRAPH_DB_PATH)?;
-    let files = db.untested_files()?;
+    // GAP-066: resolve covered files through their `pkg:` nodes, relative to
+    // the same root the graph paths are stored against.
+    let files = db.untested_files_at(&graph_root())?;
     Ok(serde_json::json!({
         "files": files,
         "total": files.len()
@@ -590,7 +602,7 @@ fn graph_module(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
     }
 
     let db = hilo_graph::GraphDB::open(GRAPH_DB_PATH)?;
-    let stats = db.module_files(module_name)?;
+    let stats = db.module_files_at(&graph_root(), module_name)?;
     Ok(serde_json::to_value(stats)?)
 }
 

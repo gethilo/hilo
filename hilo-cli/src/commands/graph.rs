@@ -1187,7 +1187,7 @@ pub fn run_search(query: &str, limit: Option<usize>) -> Result<()> {
 /// `hilo graph module <prefix>` — per-module statistics.
 ///
 /// Returns file list, edge count, and test coverage for files under a
-/// directory prefix (e.g. "hilo-graph/src"). See `GraphDB::module_files`.
+/// directory prefix (e.g. "hilo-graph/src"). See `GraphDB::module_files_at`.
 pub fn run_module(module_name: &str) -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
     let Some(graph_db) = resolve_graph_db_path(&cwd) else {
@@ -1198,7 +1198,7 @@ pub fn run_module(module_name: &str) -> Result<()> {
     let graph = GraphDB::open(graph_db_str).context("failed to open DuckDB graph database")?;
 
     let stats = graph
-        .module_files(module_name)
+        .module_files_at(&cwd, module_name)
         .context("failed to query module stats")?;
 
     println!("Module: {}", stats.module);
@@ -1218,8 +1218,9 @@ pub fn run_module(module_name: &str) -> Result<()> {
 
 /// `hilo graph untested` — list source files with no test coverage.
 ///
-/// Queries all files that have `imports` edges but no `tested_by` edges.
-/// See `GraphDB::untested_files`.
+/// Queries all files that have `imports` edges but no `tested_by` edges —
+/// neither on the file itself nor on the `pkg:` node it resolves to.
+/// See `GraphDB::untested_files_at`.
 pub fn run_untested() -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
     let Some(graph_db) = resolve_graph_db_path(&cwd) else {
@@ -1230,7 +1231,7 @@ pub fn run_untested() -> Result<()> {
     let graph = GraphDB::open(graph_db_str).context("failed to open DuckDB graph database")?;
 
     let files = graph
-        .untested_files()
+        .untested_files_at(&cwd)
         .context("failed to query untested files")?;
 
     if files.is_empty() {
