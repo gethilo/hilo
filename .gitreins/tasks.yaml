@@ -762,3 +762,13 @@ tasks:
   status: complete
   created_at: '2026-09-11T21:15:39.593436+00:00'
   completed_at: '2026-09-11T21:41:58.395983+00:00'
+- id: CI-002
+  title: Fix Rust clippy collapsible_if failure on master
+  criteria:
+  - 'Collapse only the nested unknown-path guard in hilo-graph/src/graph.rs while
+    preserving pkg:/sys: exemptions and the exact error behavior; cargo fmt --all
+    --check, cargo clippy --workspace -- -D warnings, and existing hilo_graph tests
+    must pass'
+  status: complete
+  created_at: '2026-09-12T11:03:12.501538+00:00'
+  completed_at: '2026-09-12T11:28:58.832826+00:00'
