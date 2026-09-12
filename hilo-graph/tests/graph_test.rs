@@ -143,6 +143,64 @@ fn test_graph_provenance_stored_and_retrieved() {
 }
 
 #[test]
+fn test_graph_related_reverse_python_file_returns_package_importers() {
+    // GAP-064: a reverse (`related`) lookup on a Python file path must match
+    // the `pkg:<dotted module>` nodes the Python parser emits, because the
+    // parser never emits file→file edges for Python imports.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("fastapi")).unwrap();
+    std::fs::write(dir.path().join("fastapi/__init__.py"), "").unwrap();
+    std::fs::write(
+        dir.path().join("fastapi/routing.py"),
+        "class APIRouter: ...\n",
+    )
+    .unwrap();
+    let routing = dir
+        .path()
+        .join("fastapi/routing.py")
+        .to_string_lossy()
+        .into_owned();
+
+    let db = GraphDB::open(":memory:").unwrap();
+    db.insert_edges(&[
+        edge("app/main.py", "pkg:fastapi.routing", "imports"),
+        edge("tests/test_routing.py", "pkg:fastapi.routing", "imports"),
+        // Decoy: a sibling module node must not appear in this lookup.
+        edge("app/deps.py", "pkg:fastapi.dependencies", "imports"),
+    ])
+    .unwrap();
+
+    let reverse = db.related(&routing, None, Direction::Reverse).unwrap();
+    assert_eq!(
+        reverse.len(),
+        2,
+        "reverse query must find the pkg: importers of the file's module"
+    );
+    let mut froms: Vec<&str> = reverse.iter().map(|e| e.from.as_str()).collect();
+    froms.sort_unstable();
+    assert_eq!(froms, vec!["app/main.py", "tests/test_routing.py"]);
+    assert!(reverse.iter().all(|e| e.to == "pkg:fastapi.routing"));
+
+    // Direction handling is unchanged: the file path itself has no outgoing
+    // edges in this graph.
+    let forward = db.related(&routing, None, Direction::Forward).unwrap();
+    assert!(forward.is_empty());
+
+    // A standalone `.py` file outside any package keeps resolving to nothing.
+    std::fs::create_dir_all(dir.path().join("scripts")).unwrap();
+    std::fs::write(dir.path().join("scripts/run.py"), "print('hi')\n").unwrap();
+    let standalone = dir
+        .path()
+        .join("scripts/run.py")
+        .to_string_lossy()
+        .into_owned();
+    assert!(db
+        .related(&standalone, None, Direction::Reverse)
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
 fn test_graph_auto_migrates_old_schema() {
     // Simulate an old 3-column edges table (pre-v0.2) and verify that
     // GraphDB::open auto-migrates it by adding provenance + confidence.

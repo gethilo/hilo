@@ -138,3 +138,86 @@ fn test_impact_json_format() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+
+/// FastAPI-shaped fixture (GAP-064): a regular package tree with the file
+/// shape the real project has (`fastapi/routing.py` next to
+/// `fastapi/__init__.py`). The tempdir root is deliberately NOT a package —
+/// it has no `__init__.py` — so this also proves host path components never
+/// leak into the resolved module name.
+fn write_fastapi_fixture() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("fastapi")).unwrap();
+    std::fs::write(dir.path().join("fastapi/__init__.py"), "").unwrap();
+    std::fs::write(
+        dir.path().join("fastapi/routing.py"),
+        "from fastapi.dependencies.utils import Depends\n",
+    )
+    .unwrap();
+    dir
+}
+
+#[test]
+fn test_impact_python_file_query_returns_package_importers(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let dir = write_fastapi_fixture();
+    // The file-form query — exactly what `hilo graph impact fastapi/routing.py`
+    // issues. It must resolve to `pkg:fastapi.routing` (GAP-064).
+    let routing = dir
+        .path()
+        .join("fastapi/routing.py")
+        .to_string_lossy()
+        .into_owned();
+
+    let graph = GraphDB::open(":memory:")?;
+    let mut edges: Vec<Edge> = ["app/main.py", "app/api/routes.py", "tests/test_routing.py"]
+        .iter()
+        .map(|importer| edge(importer, "pkg:fastapi.routing", "imports"))
+        .collect();
+    // GAP-048 family semantics apply to Python nodes too: a `::` member node
+    // (`from fastapi.routing import APIRouter` style) is part of the family.
+    edges.push(edge(
+        "app/decorators.py",
+        "pkg:fastapi.routing::APIRouter",
+        "imports",
+    ));
+    // Decoys: neighbouring Python nodes that must NOT be pulled in.
+    edges.push(edge("app/deps.py", "pkg:fastapi.dependencies", "imports"));
+    edges.push(edge("app/init_consumer.py", "pkg:fastapi", "imports"));
+    edges.push(edge(
+        "other/starlette.py",
+        "pkg:starlette.routing",
+        "imports",
+    ));
+    graph.insert_edges(&edges)?;
+
+    let results = compute_impact(graph.conn(), &routing, 1)?;
+
+    let mut got: Vec<&str> = results.iter().map(|r| r.path.as_str()).collect();
+    got.sort_unstable();
+    let mut want = vec![
+        "app/api/routes.py",
+        "app/decorators.py",
+        "app/main.py",
+        "tests/test_routing.py",
+    ];
+    want.sort_unstable();
+    assert_eq!(got, want, "file-form impact must return every importer");
+    assert!(results.iter().all(|r| r.depth == 1));
+
+    // Control: without the package (same file name, no `__init__.py`) the
+    // query resolves to nothing and returns no importers.
+    let plain = tempfile::tempdir().unwrap();
+    std::fs::write(plain.path().join("standalone.py"), "").unwrap();
+    let plain_file = plain
+        .path()
+        .join("standalone.py")
+        .to_string_lossy()
+        .into_owned();
+    let empty = compute_impact(graph.conn(), &plain_file, 1)?;
+    assert!(
+        empty.is_empty(),
+        "standalone .py must not resolve to a pkg node"
+    );
+
+    Ok(())
+}

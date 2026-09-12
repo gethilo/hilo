@@ -13,6 +13,14 @@
 //! file resolves to `pkg:<module>/<dir relative to go.mod>` via a walk up to
 //! the nearest `go.mod` (see [`go_package_for_file`]).
 //!
+//! Python sources resolve to their dotted module path (GAP-064): the Python
+//! parser emits `pkg:<dotted module>` edges for `import`/`from ... import`
+//! statements (including stdlib modules, which are also `pkg:` nodes), so a
+//! `.py` file must resolve to the module it *is* — `fastapi/routing.py`
+//! under a regular package (`fastapi/__init__.py`) is `pkg:fastapi.routing`,
+//! and an `__init__.py` is the package itself (`pkg:fastapi`). See
+//! [`python_module_for_file`].
+//!
 //! Resolution is query-time only: the canonical `edges.jsonl` and the
 //! DuckDB cache are untouched. Files that belong to no package (or are not
 //! files at all — `pkg:`/`sys:`/`std:`/`external:` symbol nodes) resolve to
@@ -33,6 +41,10 @@ pub struct PkgResolver {
     /// crate-name cache because a `.go` path and a `.rs` path resolve
     /// through different walks.
     go_cache: HashMap<PathBuf, Option<String>>,
+    /// Python module nodes (`pkg:<dotted module>`), cached separately for
+    /// the same reason: a `.py` path resolves through the `__init__.py`
+    /// package walk, never through Cargo or Go.
+    py_cache: HashMap<PathBuf, Option<String>>,
 }
 
 impl PkgResolver {
@@ -42,24 +54,34 @@ impl PkgResolver {
     }
 
     /// Resolve `path` to its `pkg:` node, if the path is a file that belongs
-    /// to a Cargo package or a Go module.
+    /// to a Cargo package, a Go module, or a Python package.
     ///
     /// `.go` sources resolve through the `go.mod` walk only (GAP-057) — that
     /// is the node the Go parser emits edges to. The Rust crate walk is
     /// tried for every other path and its behavior is unchanged, so only Go
     /// files opt into the module walk. A `.go` file with no `go.mod` above
     /// it resolves to `None` rather than falling back to the enclosing Rust
-    /// crate: a Go source is never a Cargo package member. Symbol-node paths
-    /// (`pkg:...`, `sys:...`, `std:...`, `external:...`) are not files and
-    /// always resolve to `None` — they must never trigger a filesystem walk
-    /// (a path like `pkg:globset` would otherwise be interpreted relative to
-    /// the current directory).
+    /// crate: a Go source is never a Cargo package member.
+    ///
+    /// `.py` sources likewise resolve through the `__init__.py` package walk
+    /// only (GAP-064): the Python parser emits `pkg:<dotted module>` edges,
+    /// so a Python file must never fall back to the enclosing Cargo crate
+    /// (that would match crate-level edges the parser never emitted for it).
+    /// A standalone `.py` file outside any package resolves to `None`.
+    ///
+    /// Symbol-node paths (`pkg:...`, `sys:...`, `std:...`, `external:...`)
+    /// are not files and always resolve to `None` — they must never trigger
+    /// a filesystem walk (a path like `pkg:globset` would otherwise be
+    /// interpreted relative to the current directory).
     pub fn pkg_node(&mut self, path: &str) -> Option<String> {
         if is_symbol_node(path) {
             return None;
         }
         if path.ends_with(".go") {
             return self.go_pkg_node(path);
+        }
+        if path.ends_with(".py") {
+            return self.py_pkg_node(path);
         }
         self.crate_name(path).map(|name| format!("pkg:{name}"))
     }
@@ -78,6 +100,26 @@ impl PkgResolver {
         }
         let node = go_package_for_file(&p).map(|import_path| format!("pkg:{import_path}"));
         self.go_cache.insert(p, node.clone());
+        node
+    }
+
+    /// Resolve a `.py` path to its `pkg:<dotted module>` node, if the file
+    /// lives inside a regular Python package.
+    ///
+    /// Non-Python paths and symbol nodes return `None` without touching the
+    /// filesystem; a standalone `.py` file (no `__init__.py` beside it) also
+    /// returns `None`, because the Python parser only emits `pkg:` edges for
+    /// real module imports.
+    fn py_pkg_node(&mut self, path: &str) -> Option<String> {
+        if is_symbol_node(path) || !path.ends_with(".py") {
+            return None;
+        }
+        let p = PathBuf::from(path);
+        if let Some(hit) = self.py_cache.get(&p) {
+            return hit.clone();
+        }
+        let node = python_module_for_file(&p).map(|module| format!("pkg:{module}"));
+        self.py_cache.insert(p, node.clone());
         node
     }
 
@@ -219,6 +261,65 @@ fn import_path(module: &str, rel: &Path) -> String {
     } else {
         format!("{module}/{}", parts.join("/"))
     }
+}
+
+/// Derive the dotted Python module for `file` from the filesystem package
+/// boundaries around it (GAP-064).
+///
+/// A directory is a package component iff it holds an `__init__.py`; the walk
+/// climbs from the file's directory while every directory is a package and
+/// stops at the **first non-package directory**, so a path outside a package
+/// tree never contributes host path components (a tempdir file resolves to
+/// `fastapi.routing`, never to `tmp.<random>.fastapi.routing`).
+///
+/// - `fastapi/routing.py` with `fastapi/__init__.py` → `fastapi.routing`.
+/// - Nested packages include every component:
+///   `fastapi/dependencies/utils.py` with both `__init__.py` files →
+///   `fastapi.dependencies.utils`.
+/// - `__init__.py` **is** its package: `fastapi/__init__.py` → `fastapi`
+///   (never `fastapi.__init__`), `fastapi/dependencies/__init__.py` →
+///   `fastapi.dependencies`.
+/// - A `.py` file whose own directory is not a package (standalone script,
+///   or a plain directory nested under a package) → `None`.
+///
+/// Returns `None` for a path with no module name at all, and for an
+/// `__init__.py` that somehow sits in no package directory.
+pub fn python_module_for_file(file: &Path) -> Option<String> {
+    let stem = file.file_stem()?.to_str()?;
+    let is_init = stem == "__init__";
+
+    let mut parts: Vec<String> = Vec::new();
+    let mut current = file.parent()?;
+    loop {
+        if !current.join("__init__.py").is_file() {
+            // First non-package directory: stop. Anything above it is not
+            // part of the module path (tempdir roots, `python3/`, ...).
+            break;
+        }
+        let Some(name) = current.file_name().and_then(|n| n.to_str()) else {
+            // Relative path exhausted (`a/b.py` → parent `a` → parent ``):
+            // no further named component exists, so the walk ends here.
+            break;
+        };
+        parts.push(name.to_string());
+        match current.parent() {
+            Some(parent) => current = parent,
+            None => break,
+        }
+    }
+    parts.reverse();
+
+    if is_init {
+        // The package node itself; a lone `__init__.py` in no package is a
+        // bare file, not a module.
+        return (!parts.is_empty()).then(|| parts.join("."));
+    }
+    if parts.is_empty() || stem.is_empty() {
+        // Standalone file: not a member of any package.
+        return None;
+    }
+    parts.push(stem.to_string());
+    Some(parts.join("."))
 }
 
 #[cfg(test)]
@@ -425,6 +526,180 @@ mod tests {
         assert_eq!(
             go_package_for_file(Path::new(&main)).as_deref(),
             Some("example.com/demo")
+        );
+    }
+
+    // ── Python file → module resolution (GAP-064) ───────────────────
+
+    /// Build a FastAPI-shaped fixture: `fastapi/routing.py` and
+    /// `fastapi/dependencies/utils.py` inside regular packages. Returns the
+    /// tempdir so it outlives the assertions.
+    fn fastapi_fixture() -> (tempfile::TempDir, String, String) {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "fastapi/__init__.py", "__version__ = \"0.1\"\n");
+        write(
+            dir.path(),
+            "fastapi/dependencies/__init__.py",
+            "from .utils import Depends\n",
+        );
+        let routing = write(
+            dir.path(),
+            "fastapi/routing.py",
+            "from fastapi.dependencies.utils import Depends\n",
+        );
+        let utils = write(
+            dir.path(),
+            "fastapi/dependencies/utils.py",
+            "class Depends: ...\n",
+        );
+        (dir, routing, utils)
+    }
+
+    #[test]
+    fn resolves_python_file_in_regular_package() {
+        let (dir, routing, _) = fastapi_fixture();
+        assert_eq!(
+            python_module_for_file(Path::new(&routing)).as_deref(),
+            Some("fastapi.routing")
+        );
+        let mut resolver = PkgResolver::new();
+        assert_eq!(
+            resolver.pkg_node(&routing).as_deref(),
+            Some("pkg:fastapi.routing")
+        );
+
+        // The stop-at-first-non-package rule: the tempdir root (and every
+        // host directory above it) must not contribute module components.
+        let leaked = dir
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            !python_module_for_file(Path::new(&routing))
+                .unwrap()
+                .contains(&leaked),
+            "host path component leaked into the module name"
+        );
+    }
+
+    #[test]
+    fn resolves_nested_python_packages_with_every_component() {
+        let (_dir, _, utils) = fastapi_fixture();
+        assert_eq!(
+            python_module_for_file(Path::new(&utils)).as_deref(),
+            Some("fastapi.dependencies.utils")
+        );
+        let mut resolver = PkgResolver::new();
+        assert_eq!(
+            resolver.pkg_node(&utils).as_deref(),
+            Some("pkg:fastapi.dependencies.utils")
+        );
+        // Second lookup goes through the per-query cache and must agree.
+        assert_eq!(
+            resolver.pkg_node(&utils).as_deref(),
+            Some("pkg:fastapi.dependencies.utils")
+        );
+    }
+
+    #[test]
+    fn python_init_maps_to_package_node_not_dunder_init_module() {
+        let (dir, _, _) = fastapi_fixture();
+        let top = dir.path().join("fastapi/__init__.py");
+        let nested = dir.path().join("fastapi/dependencies/__init__.py");
+        assert_eq!(
+            python_module_for_file(&top).as_deref(),
+            Some("fastapi"),
+            "__init__.py is its package, never `fastapi.__init__`"
+        );
+        assert_eq!(
+            python_module_for_file(&nested).as_deref(),
+            Some("fastapi.dependencies")
+        );
+        let mut resolver = PkgResolver::new();
+        assert_eq!(
+            resolver.pkg_node(&top.to_string_lossy()).as_deref(),
+            Some("pkg:fastapi")
+        );
+        assert_eq!(
+            resolver.pkg_node(&nested.to_string_lossy()).as_deref(),
+            Some("pkg:fastapi.dependencies")
+        );
+    }
+
+    #[test]
+    fn standalone_python_files_resolve_none() {
+        let dir = tempfile::tempdir().unwrap();
+        // A script in a directory that is not a package.
+        let script = write(dir.path(), "scripts/run.py", "print('hi')\n");
+        assert_eq!(python_module_for_file(Path::new(&script)), None);
+        assert_eq!(PkgResolver::new().pkg_node(&script), None);
+
+        // A plain directory nested under a package is still not a package:
+        // the walk stops at the first directory without `__init__.py`.
+        write(dir.path(), "outer/__init__.py", "");
+        let nested_plain = write(dir.path(), "outer/plain/mod.py", "");
+        assert_eq!(python_module_for_file(Path::new(&nested_plain)), None);
+        assert_eq!(PkgResolver::new().pkg_node(&nested_plain), None);
+
+        // A bare relative filename has no package above it in this crate
+        // (and no name component at all once the walk reaches the empty
+        // parent path).
+        assert_eq!(python_module_for_file(Path::new("orphan.py")), None);
+        assert_eq!(PkgResolver::new().pkg_node("orphan.py"), None);
+    }
+
+    #[test]
+    fn python_symbol_nodes_never_resolve() {
+        let mut resolver = PkgResolver::new();
+        assert_eq!(resolver.pkg_node("pkg:fastapi.routing"), None);
+        assert_eq!(resolver.pkg_node("pkg:os.path"), None);
+        assert_eq!(resolver.pkg_node("sys:python"), None);
+        assert_eq!(resolver.pkg_node("std:python"), None);
+        assert_eq!(resolver.pkg_node("external:repo:app/main.py"), None);
+    }
+
+    #[test]
+    fn python_file_outside_a_package_does_not_fall_back_to_cargo() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "Cargo.toml",
+            "[package]\nname = \"rustdemo\"\nversion = \"0.1.0\"\n",
+        );
+        let script = write(dir.path(), "tools/script.py", "print('hi')\n");
+        let lib = write(dir.path(), "src/lib.rs", "pub fn f() {}\n");
+        let mut resolver = PkgResolver::new();
+        // Rust resolution is untouched ...
+        assert_eq!(resolver.pkg_node(&lib).as_deref(), Some("pkg:rustdemo"));
+        // ... but a Python file is never a Cargo package member, because the
+        // Python parser emits `pkg:<module>` edges, not crate edges.
+        assert_eq!(resolver.pkg_node(&script), None);
+    }
+
+    #[test]
+    fn python_rust_and_go_resolution_coexist_in_one_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "Cargo.toml",
+            "[package]\nname = \"rustdemo\"\nversion = \"0.1.0\"\n",
+        );
+        write(dir.path(), "go.mod", "module example.com/demo\n");
+        write(dir.path(), "fastapi/__init__.py", "");
+        let rs = write(dir.path(), "src/lib.rs", "pub fn f() {}\n");
+        let go = write(dir.path(), "cmd/tool/main.go", "package main\n");
+        let py = write(dir.path(), "fastapi/routing.py", "class APIRouter: ...\n");
+        let mut resolver = PkgResolver::new();
+        assert_eq!(resolver.pkg_node(&rs).as_deref(), Some("pkg:rustdemo"));
+        assert_eq!(
+            resolver.pkg_node(&go).as_deref(),
+            Some("pkg:example.com/demo/cmd/tool")
+        );
+        assert_eq!(
+            resolver.pkg_node(&py).as_deref(),
+            Some("pkg:fastapi.routing")
         );
     }
 }
