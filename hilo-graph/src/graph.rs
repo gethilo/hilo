@@ -761,12 +761,14 @@ impl GraphDB {
         // errors on the same input, so `related` must too.
         // Symbol nodes (pkg:/sys:) are legitimately never on disk: they are
         // exempt from the file check and must still answer when in the graph.
-        if !path.starts_with("pkg:") && !path.starts_with("sys:") {
-            if !self.file_in_graph(path)? && !Path::new(path).exists() {
-                return Err(GraphError::Other(format!(
-                    "'{path}' is not in the graph (no such file and no matching graph node)"
-                )));
-            }
+        if !path.starts_with("pkg:")
+            && !path.starts_with("sys:")
+            && !self.file_in_graph(path)?
+            && !Path::new(path).exists()
+        {
+            return Err(GraphError::Other(format!(
+                "'{path}' is not in the graph (no such file and no matching graph node)"
+            )));
         }
 
         // Cache hit → query directly.
