@@ -772,3 +772,14 @@ tasks:
   status: complete
   created_at: '2026-09-12T11:03:12.501538+00:00'
   completed_at: '2026-09-12T11:28:58.832826+00:00'
+- id: GAP-064
+  title: Add Python file-to-package graph resolution
+  criteria:
+  - PkgResolver maps Python files in regular package trees to matching pkg:module
+    nodes, and regression tests prove both impact and reverse related queries return
+    package importers for a FastAPI-shaped fixture while preserving Rust/Go behavior;
+    cargo fmt --all --check, cargo clippy --workspace -- -D warnings, and warning-strict
+    workspace tests pass.
+  status: complete
+  created_at: '2026-09-12T16:51:15.171454+00:00'
+  completed_at: '2026-09-12T17:18:57.289161+00:00'
