@@ -785,3 +785,195 @@ fn test_sync_backend_normal_path_reports_synced() {
     assert_eq!(result["synced_files"], 1);
     assert_eq!(result["skipped_ignored"], 0);
 }
+
+// -------------------------------------------------------------------------
+// vfs_graph_related — GAP-062
+// -------------------------------------------------------------------------
+//
+// The graph tools resolve `GRAPH_DB_PATH` (`.vfs/graph/graph.db`) relative to
+// the process CWD. These tests therefore run inside a throwaway CWD while
+// holding `cwd_test_lock`, which keeps the crate directory clean AND keeps a
+// populated fixture graph from leaking into the sibling "empty graph" tests
+// (`test_graph_stats_empty` / `test_graph_untested_empty` /
+// `test_graph_module_empty`), which assert exact zeroed results.
+
+/// Test CWD fixture: an isolated directory with an empty `.vfs/graph/`.
+struct CwdGraphFixture {
+    _guard: std::sync::MutexGuard<'static, ()>,
+    prev_cwd: std::path::PathBuf,
+    _dir: tempfile::TempDir,
+}
+
+impl CwdGraphFixture {
+    fn new() -> Self {
+        let guard = cwd_test_lock().lock().unwrap();
+        let prev_cwd = std::env::current_dir().unwrap();
+        let dir = tempfile::TempDir::new().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+        std::fs::create_dir_all(".vfs/graph").unwrap();
+        Self {
+            _guard: guard,
+            prev_cwd,
+            _dir: dir,
+        }
+    }
+
+    /// Open the fixture graph DB at the same relative path the tools use.
+    fn graph_db(&self) -> hilo_graph::GraphDB {
+        hilo_graph::GraphDB::open(".vfs/graph/graph.db").unwrap()
+    }
+}
+
+impl Drop for CwdGraphFixture {
+    fn drop(&mut self) {
+        std::env::set_current_dir(&self.prev_cwd).ok();
+    }
+}
+
+/// Call `vfs_graph_related` over JSON-RPC. `extra` appends raw JSON fields
+/// (e.g. `,"direction":"reverse"`).
+fn graph_related_rpc(path: &str, extra: &str) -> serde_json::Value {
+    let req = format!(
+        r#"{{"jsonrpc":"2.0","id":41,"method":"tools/call","params":{{"name":"vfs_graph_related","arguments":{{"path":"{path}"{extra}}}}}}}"#
+    );
+    rpc(&req)
+}
+
+/// Extract the edge array from a successful `vfs_graph_related` result.
+fn related_edges(resp: &serde_json::Value) -> Vec<serde_json::Value> {
+    assert!(
+        resp.get("error").is_none(),
+        "expected a result, got JSON-RPC error: {resp}"
+    );
+    let text = resp["result"]["content"][0]["text"]
+        .as_str()
+        .expect("content[0].text should be a string");
+    let parsed: serde_json::Value =
+        serde_json::from_str(text).expect("tool output should be valid JSON");
+    parsed
+        .as_array()
+        .expect("vfs_graph_related result should be an array")
+        .clone()
+}
+
+/// A path that is neither in the graph nor on disk must fail loudly
+/// (JSON-RPC -32603, "is not in the graph") — not return `[]`, which is
+/// indistinguishable from a real node with no matching edges.
+#[test]
+fn test_graph_related_unknown_path_is_loud_error() {
+    let _fx = CwdGraphFixture::new();
+
+    // Exact, ./-prefixed, and absolute spellings all miss both disk and graph.
+    for path in [
+        "no/such/file_gap062.rs",
+        "./no/such/file_gap062.rs",
+        "/no/such/file_gap062.rs",
+    ] {
+        let resp = graph_related_rpc(path, "");
+        assert!(
+            resp.get("result").is_none(),
+            "absent path {path} must not produce a result: {resp}"
+        );
+        assert_eq!(
+            resp["error"]["code"], -32603,
+            "absent path {path} must be a -32603 error: {resp}"
+        );
+        let msg = resp["error"]["message"].as_str().unwrap_or("");
+        assert!(
+            msg.contains("is not in the graph"),
+            "absent path {path} message should contain 'is not in the graph', got: {msg}"
+        );
+    }
+
+    // Reverse direction honours the same contract.
+    let resp = graph_related_rpc("no/such/file_gap062.rs", r#","direction":"reverse""#);
+    assert!(resp.get("result").is_none(), "unexpected result: {resp}");
+    assert_eq!(resp["error"]["code"], -32603);
+    assert!(resp["error"]["message"]
+        .as_str()
+        .unwrap_or("")
+        .contains("is not in the graph"));
+}
+
+/// Real graph nodes keep answering — including via the normalized spellings
+/// the candidate resolver has always supported — and a node with no matching
+/// edges stays a valid empty array rather than an error.
+#[test]
+fn test_graph_related_resolves_nodes_and_keeps_valid_empty_results() {
+    use hilo_metadata::inventory::Edge;
+
+    let fx = CwdGraphFixture::new();
+    let db = fx.graph_db();
+    db.insert_edges(&[
+        Edge {
+            from: "src/gap062_a.rs".into(),
+            to: "src/gap062_b.rs".into(),
+            rel: "imports".into(),
+            provenance: "ast_exact".into(),
+            confidence: 1.0,
+        },
+        Edge {
+            from: "src/gap062_test.rs".into(),
+            to: "src/gap062_a.rs".into(),
+            rel: "tested_by".into(),
+            provenance: "heuristic".into(),
+            confidence: 0.8,
+        },
+    ])
+    .unwrap();
+    drop(db);
+
+    // Exact, ./-prefixed, and leading-slash spellings all resolve to the
+    // cached node's outgoing edge (existing prefix-normalization behavior).
+    for path in ["src/gap062_a.rs", "./src/gap062_a.rs", "/src/gap062_a.rs"] {
+        let resp = graph_related_rpc(path, "");
+        let edges = related_edges(&resp);
+        assert_eq!(edges.len(), 1, "path {path} should resolve: {resp}");
+        assert_eq!(edges[0]["to"], "src/gap062_b.rs");
+        assert_eq!(edges[0]["relation"], "imports");
+    }
+
+    // Relation + direction filters still plumb through to the graph query.
+    let resp = graph_related_rpc(
+        "src/gap062_a.rs",
+        r#","direction":"reverse","relation":"tested_by""#,
+    );
+    let edges = related_edges(&resp);
+    assert_eq!(edges.len(), 1, "reverse tested_by should resolve: {resp}");
+    assert_eq!(edges[0]["from"], "src/gap062_test.rs");
+
+    // A node that IS in the graph with zero matching edges → empty array.
+    let resp = graph_related_rpc("src/gap062_b.rs", "");
+    assert!(
+        resp.get("error").is_none(),
+        "an in-graph node must never error: {resp}"
+    );
+    assert_eq!(related_edges(&resp).len(), 0);
+}
+
+/// JIT: a real source file not yet cached is parsed on the fly and answers.
+#[test]
+fn test_graph_related_jit_parses_uncached_source_file() {
+    use std::fs;
+
+    let _fx = CwdGraphFixture::new();
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let file = dir.path().join("gap062_jit.go");
+    fs::write(
+        &file,
+        "package main\n\nimport (\n\t\"fmt\"\n\t\"os\"\n)\n\nfunc main() {\n\tfmt.Println(os.Args)\n}\n",
+    )
+    .unwrap();
+    let path = file.to_str().unwrap();
+
+    let resp = graph_related_rpc(path, "");
+    let edges = related_edges(&resp);
+    assert_eq!(
+        edges.len(),
+        2,
+        "JIT parse of a Go file with two imports should yield two edges: {resp}"
+    );
+    assert!(edges.iter().all(|e| e["relation"] == "imports"));
+    assert!(edges.iter().all(|e| e["from"].as_str().unwrap() == path));
+}

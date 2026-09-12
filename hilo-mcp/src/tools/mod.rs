@@ -476,6 +476,10 @@ fn set_metadata(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
 ///
 /// JIT: on first access the file is parsed on-the-fly and cached — no
 /// `hilo graph warm` pre-requisite needed.
+///
+/// GAP-062: a path that is neither cached nor on disk fails loudly with the
+/// same error contract CLI `graph related` / `vfs_graph_impact` use — a silent
+/// empty list is indistinguishable from a real node with no edges.
 fn graph_related(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
     let target = arguments["path"]
         .as_str()
@@ -491,7 +495,9 @@ fn graph_related(arguments: &serde_json::Value) -> McpResult<serde_json::Value> 
     let db = hilo_graph::GraphDB::open(GRAPH_DB_PATH)?;
     let dir = hilo_graph::Direction::parse(direction);
 
-    // Try exact path first, then common prefixes.
+    // Try exact path first, then common prefixes. A candidate that IS in the
+    // graph is authoritative: its edge list is the answer, even when that list
+    // is empty (a real node with no matching edges is a valid empty result).
     let candidates = [
         target.to_string(),
         target.trim_start_matches("/home/").to_string(),
@@ -499,9 +505,11 @@ fn graph_related(arguments: &serde_json::Value) -> McpResult<serde_json::Value> 
         target.trim_start_matches('/').to_string(),
     ];
 
+    let mut resolved = false;
     let mut edges = Vec::new();
     for candidate in &candidates {
-        if (candidate != target || edges.is_empty()) && db.file_in_graph(candidate)? {
+        if db.file_in_graph(candidate)? {
+            resolved = true;
             edges = db.related(candidate, relation, dir)?;
             if !edges.is_empty() {
                 break;
@@ -509,11 +517,13 @@ fn graph_related(arguments: &serde_json::Value) -> McpResult<serde_json::Value> 
         }
     }
 
-    // Cache miss on all candidates — try lazy parse on the original target,
-    // then re-query from the freshly populated cache.
-    if edges.is_empty() {
-        db.ensure_parsed(target)?;
-        edges = db.related(target, relation, dir)?;
+    // No candidate is cached: fall through to the shared JIT contract
+    // (`GraphDB::related_or_parse`, the same call CLI `graph related` and
+    // `vfs_graph_impact` make). It parses an on-disk file on the fly and, for a
+    // path that is neither cached nor on disk, returns the loud
+    // "is not in the graph" GraphError instead of an empty list.
+    if !resolved {
+        edges = db.related_or_parse(target, relation, dir)?;
     }
 
     let result: Vec<serde_json::Value> = edges
