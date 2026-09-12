@@ -542,8 +542,13 @@ impl GraphDB {
     ///
     /// A production file counts as covered when EITHER it is the literal
     /// `to` of some `tested_by` edge (the pre-GAP-066 behavior, kept for
-    /// file-level edges such as `tests/lib_test.rs -> src/lib.rs`) OR its
-    /// resolved `pkg:` node is the literal `to` of some `tested_by` edge.
+    /// file-level edges such as `tests/lib_test.rs -> src/lib.rs`) OR —
+    /// for languages whose package node is finer than the file, i.e. Python
+    /// and Go — its resolved `pkg:` node is the literal `to` of some
+    /// `tested_by` edge. `.rs` files are deliberately excluded from the
+    /// second rule: their resolved node is the Cargo CRATE, and one
+    /// crate-root integration test would otherwise mark every member file
+    /// covered (GAP-057/064 lineage — see [`GraphDB::file_is_covered`]).
     /// Package-ancestor matching is deliberately out of scope: a test that
     /// targets `pkg:fastapi.dependencies` does not cover
     /// `fastapi/dependencies/utils.py`.
@@ -589,8 +594,14 @@ impl GraphDB {
     ///
     /// `test_coverage_pct` counts a file under the prefix as covered under
     /// the same two rules `untested_files_at` uses (literal `tested_by`
-    /// target, or the file's resolved `pkg:` node is one). `files` and
-    /// `edges_count` are the unmodified file-level views of the module.
+    /// target, or the file's resolved `pkg:` node is one, where the package
+    /// node is finer than the file — Python and Go). `.rs` files are
+    /// deliberately excluded from the node rule: `PkgResolver::pkg_node`
+    /// returns the enclosing Cargo CRATE for a `.rs` file, so a single
+    /// crate-root `tested_by` edge would report a crate's whole `src/`
+    /// module as covered (GAP-057/064 lineage — see
+    /// [`GraphDB::file_is_covered`]). `files` and `edges_count` are the
+    /// unmodified file-level views of the module.
     pub fn module_files_at(&self, root: &Path, module_name: &str) -> GraphResult<ModuleStats> {
         let prefix = if module_name.ends_with('/') {
             module_name.to_string()
@@ -675,6 +686,24 @@ impl GraphDB {
     /// (ii): the `pkg:` node `file` resolves to (via `root`) is. A file that
     /// resolves to no package node is never covered by rule (ii) — it must
     /// not silently fall back to an enclosing crate or module.
+    ///
+    /// Rule (ii) is a *package* rule and only applies where the resolved
+    /// package node is FINER than the file's directory — today that is `.py`
+    /// (`pkg:<dotted module>`, GAP-064) and `.go` (`pkg:<import path>`,
+    /// GAP-057). For `.rs` files `PkgResolver::pkg_node` returns the
+    /// enclosing Cargo CRATE, a node far COARSER than the file: the Rust
+    /// parser emits one crate-level `tested_by` edge per integration test
+    /// that imports the crate root (`tests/it.rs -> pkg:mylib`), so applying
+    /// rule (ii) to Rust would mark every member of the crate covered off a
+    /// single crate-root test — trading a false "untested" for a false
+    /// "covered", which is strictly worse for a coverage tool. Rust relies
+    /// on rule (i) alone: only a file-level `tested_by` edge (e.g.
+    /// `tests/lib_test.rs -> src/lib.rs`) covers a Rust file.
+    ///
+    /// This is GAP-057/064 lineage, not an oversight: the granularity
+    /// dispatch below mirrors `PkgResolver::pkg_node`'s own extension
+    /// dispatch, which routes `.go` and `.py` to their own walks and
+    /// everything else to the Cargo walk.
     fn file_is_covered(
         file: &str,
         tested: &HashSet<String>,
@@ -683,6 +712,13 @@ impl GraphDB {
     ) -> bool {
         if tested.contains(file) {
             return true;
+        }
+        // Rule (ii) applies only to package nodes finer than the file
+        // (Python, Go). The Cargo crate node is coarser than a `.rs` file,
+        // so a crate-level `tested_by` target must never cover crate
+        // members. See the doc comment above.
+        if file.ends_with(".rs") {
+            return false;
         }
         match resolver.pkg_node(&root.join(file).to_string_lossy()) {
             Some(node) => tested.contains(&node),
@@ -1657,6 +1693,107 @@ mod tests {
             untested,
             vec!["standalone.py".to_string()],
             "unresolvable Python file must stay uncovered, never fall back to the crate node"
+        );
+    }
+
+    /// A tempdir shaped like a minimal Rust crate with an integration test
+    /// that imports only the crate root (`mylib`), mirroring the GAP-066
+    /// rework reproduction: module `a` is reachable from the test, modules
+    /// `b` and `c` are not tested at all.
+    fn rust_crate_corpus() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"mylib\"\n",
+        )
+        .unwrap();
+        // `touch` creates parents; write `lib.rs` after so `src/` exists.
+        touch(dir.path(), "src/a.rs");
+        touch(dir.path(), "src/b.rs");
+        touch(dir.path(), "src/c.rs");
+        std::fs::write(
+            dir.path().join("src/lib.rs"),
+            "pub mod a;\npub mod b;\npub mod c;\n",
+        )
+        .unwrap();
+        touch(dir.path(), "tests/it.rs");
+        dir
+    }
+
+    #[test]
+    fn untested_files_at_ignores_crate_level_tested_by_for_rust_members() {
+        // GAP-066 rework: `PkgResolver::pkg_node` returns the Cargo CRATE for
+        // a `.rs` file, so rule (ii) would turn one crate-root integration
+        // test into coverage for every module in `src/`. A crate-level
+        // `tested_by` target must never cover a crate member file.
+        let dir = rust_crate_corpus();
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[
+            Edge::new("src/a.rs", "src/b.rs", "imports"),
+            Edge::new("src/b.rs", "src/c.rs", "imports"),
+            Edge::new("tests/it.rs", "pkg:mylib", "imports"),
+            Edge::new("tests/it.rs", "pkg:mylib", "tested_by"),
+        ])
+        .unwrap();
+
+        let untested = db.untested_files_at(dir.path()).unwrap();
+        assert_eq!(
+            untested,
+            vec!["src/a.rs".to_string(), "src/b.rs".to_string()],
+            "a crate-level tested_by edge must not cover crate member files"
+        );
+
+        let stats = db.module_files_at(dir.path(), "src").unwrap();
+        assert_eq!(
+            stats.files,
+            vec![
+                "src/a.rs".to_string(),
+                "src/b.rs".to_string(),
+                "src/c.rs".to_string()
+            ],
+            "file list must stay the file-level view of the module"
+        );
+        assert_eq!(stats.edges_count, 2, "edge count must be unchanged");
+        assert_eq!(
+            stats.test_coverage_pct, 0.0,
+            "the crate-root test covers no `src/` file by itself"
+        );
+    }
+
+    #[test]
+    fn untested_files_at_keeps_file_level_tested_by_for_rust_members() {
+        // Rule (i) stays intact for Rust: a FILE-level `tested_by` edge (an
+        // integration test naming one module) still covers that file, while
+        // its siblings stay uncovered.
+        let dir = rust_crate_corpus();
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[
+            Edge::new("src/a.rs", "src/b.rs", "imports"),
+            Edge::new("src/b.rs", "src/c.rs", "imports"),
+            Edge::new("src/lib.rs", "src/a.rs", "imports"),
+            Edge::new("tests/it.rs", "pkg:mylib", "imports"),
+            Edge::new("tests/it.rs", "pkg:mylib", "tested_by"),
+            Edge::new("tests/lib_test.rs", "src/lib.rs", "imports"),
+            Edge::new("tests/lib_test.rs", "src/lib.rs", "tested_by"),
+        ])
+        .unwrap();
+
+        let untested = db.untested_files_at(dir.path()).unwrap();
+        assert!(
+            !untested.contains(&"src/lib.rs".to_string()),
+            "literal file-level tested_by target must stay covered, got: {untested:?}"
+        );
+        assert_eq!(
+            untested,
+            vec!["src/a.rs".to_string(), "src/b.rs".to_string()],
+            "only the file-level edge counts; crate-root test covers nothing else"
+        );
+
+        let stats = db.module_files_at(dir.path(), "src").unwrap();
+        assert_eq!(stats.files.len(), 4);
+        assert_eq!(
+            stats.test_coverage_pct, 25.0,
+            "1 of 4 `src/` files covered by the file-level edge only"
         );
     }
 }
