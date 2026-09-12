@@ -796,3 +796,13 @@ tasks:
   status: complete
   created_at: '2026-09-12T18:31:16.647757+00:00'
   completed_at: '2026-09-12T19:23:24.958271+00:00'
+- id: GAP-062
+  title: MCP vfs_graph_related rejects unknown paths
+  criteria:
+  - vfs_graph_related returns JSON-RPC -32603 with an is-not-in-graph message for
+    a path absent from disk and graph, while exact and normalized-prefix paths for
+    existing graph nodes still return their related edges; cargo test -p hilo_mcp
+    passes
+  status: complete
+  created_at: '2026-09-12T19:52:59.476192+00:00'
+  completed_at: '2026-09-12T20:43:21.245273+00:00'
