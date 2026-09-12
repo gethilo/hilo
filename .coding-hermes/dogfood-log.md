@@ -104,3 +104,43 @@ GAP-057..061 on the BOARD-V2 board. Foreman wake: warpfs cooldown
 21600 → 900 (floor ridden in same PUT; verified tick fired — foreman
 events on GAP-060/061 within one interval). Dogfood picker row itself
 at 259200.
+
+## 2026-09-12 — warpfs (Hilo) — ✅ SHIPPABLE (Rust/Go) / 🟡 Python (run 4, fastapi corpus, 1138 .py)
+
+**Promise:** agent-first VFS: pre-computed dependency graph + metadata so an
+agent gets blast radius / deps / coverage without reading files.
+
+**Reality:** plumbing and Rust/Go paths re-verified clean; the one gap family
+left is Python file→package resolution (GAP-057's Go-only fix not generalized):
+file-form impact/related silently empty (0/10 vs grep truth) while pkg-form is
+exact (10/10 + 7 out-of-scope importers, ast_exact conf=1.0). Coverage edges
+(2225 tested_by) are emitted but untested/module don't consume them for
+pkg-import languages. Warm exclusion still silent (183 __init__ + 20 parse
+misses unreported). meta --set typo silently writes a garbage xattr key.
+
+**Time-to-first-success:** init 16ms → warm 15.3s → first exact blast-radius
+answer ~16s. **Friction count:** 6 (GAP-064..068 + GAP-062 re-confirmed via MCP).
+
+**Verified clean (re-confirmed this run):** loud unknown-path errors on impact
+AND related (GAP-059 live), PERF-004 instant .md guard, SIGPIPE quiet (GAP-063
+appears fixed: `| head -1` rc=0 no panic), MCP 17 tools NDJSON + pure stdout
+(GAP-050), FUSE mount/xattr/cat/unmount, classify roles, meta round-trips,
+byte-deterministic stats, stats 28ms/impact 20ms at this scale.
+
+**Top findings (task IDs):**
+1. GAP-064 (P1) — Python file→pkg resolution missing; file-form queries empty though edge data exact.
+2. GAP-065 (P2) — warm silent exclusions on Python: 183 __init__.py + 20 real parse misses, no report.
+3. GAP-066 (P2) — tested_by collected but untested/module ignore pkg-targeted coverage edges (Tests: 0.0%).
+
+**Left behind:** docs/dogfood/2026-09-12-integration.md, diagnostics.md run-4
+sections, SKILL.md run-4 field notes, GAP-064..068 on the board (events 297-301).
+Foreman wake: pending board check at run end (cooldown 43200 → 900 if rows land).
+
+**Bunker install leg (las-bunker-03, agent 5aec2a70):** PASS — clone OK
+(public repo) → rustup minimal → `cargo build --release` RC=0 (7m44s
+incremental after a first-attempt 590s ssh timeout mid duckdb-sys; clean
+build resumes from target/ and the first attempt's cargo kept running
+headless, so the retry waited on the lock and finished it) →
+`hilo 0.3.0` → init/warm/stats smoke on hilo itself: SMOKE_OK in 468s
+total. Agent destroyed, bunker clean. Second consecutive box confirming
+clang/CMake/libfuse3-dev unnecessary for the core path (GAP-068).

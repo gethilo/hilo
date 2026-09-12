@@ -223,3 +223,68 @@ default, standard install), then `cargo build --release` → RC=0 in 18m52s
 (499 crates; README says 15-20 min — accurate). clang/cmake, listed as
 requirements, were NOT needed. Smoke (init→warm→stats on hilo itself) green
 in 3s. A fresh user following the README succeeds.
+
+## The Python resolution asymmetry (run 4)
+
+GAP-057's fix (9431cac) taught the query-time resolution layer to map a Go
+file to its directory package (`pkg:<module>/<dir>`). Python got nothing:
+`fastapi/routing.py` should resolve to `pkg:fastapi.routing` (the exact
+node its importers already write edges to), but the resolver only handles
+Rust crate roots and Go dirs. Verified on fastapi @ 50113da: file-form
+impact/related → empty on CLI and MCP while pkg-form is 10/10 exact
+against grep ground truth. Same lesson as run 3, one language later:
+**when file-form answers "No dependents", resolve the package yourself
+and query `pkg:` before believing it.** For Python: `<file>.py` minus the
+`.py`, slashes → dots, stopping at the package root (where `__init__.py`
+chains start).
+
+## Coverage: collected, not consumed (run 4)
+
+tested_by edges ARE emitted for Python test files (2225 on fastapi; each
+test file emits both `imports` and `tested_by` to the same pkg nodes).
+But `graph untested` and `graph module` only match incoming tested_by
+edges against the file itself — they never resolve the file to its pkg
+node — so flagship files with 8+ real test edges still report "untested"
+and module coverage reads 0.0%. Until GAP-066 lands, derive Python
+coverage from edges.jsonl directly:
+`grep '"tested_by"' .vfs/graph/edges.jsonl | grep -c 'pkg:<pkg.name>'`.
+
+## Silent exclusions, three flavors (runs 3–4)
+
+Warm's output counts never mention what they skipped. Three distinct
+mechanisms hide behind the same silence, all filed under the GAP-058
+family: (1) vendor/dependency guard (run 3, policy, verified clean via
+edge grep); (2) `__init__.py` skip (run 4: 183/203 exclusions — policy
+or bug, undocumented either way); (3) AST parse failures (run 4: 20 real
+Python files, zero warnings). A user cannot distinguish "protected by
+policy" from "we dropped your file". The fix is one exclusion report at
+end of warm, per category.
+
+## MCP transport reality (run 4)
+
+`hilo serve --mcp` speaks NDJSON JSON-RPC 2.0 on stdin/stdout (one
+message per line, per the MCP stdio transport spec) — a client sending
+LSP-style `Content-Length` framing gets `-32700 Parse error`. The
+2026-08-13 run's client worked because it used line framing; this run's
+first client attempt used LSP framing and hung. Provenance from the edge
+parser (`ast_exact conf=1.0`) is exposed in both CLI and MCP impact
+output — useful for trusting the graph.
+
+## Silent malformed writes (run 4)
+
+`hilo meta <path> --set key=value` exits 0 and writes an xattr whose
+*name* contains `=` with an empty value (verified via getfattr and MCP
+vfs_get_metadata). Nothing validates the attr token. The documented form
+is `--set <attr> --value <val> <path>`; attribute-first, value flag,
+path last, no `=` in the attr.
+
+## Install truth, second clean box (run 4)
+
+Same recipe as run 3 on a fresh bunker agent: rustup minimal profile →
+`cargo build --release`. Confirms run 3's findings: rustup absent by
+default (expected), clang/CMake unnecessary (GAP-060/068 docs drift),
+libfuse3-dev not needed unless mounting. Operational note for anyone
+running the build over ssh: the full clean build exceeds a 590 s command
+window (dies mid duckdb-sys ~7.5 min in); the build resumes cleanly from
+target/, so re-run rather than restart — or run it under nohup/tmux on
+the box.

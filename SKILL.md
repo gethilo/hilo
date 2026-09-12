@@ -275,3 +275,36 @@ P0/P1 graph-data breaks are closed; every fix re-verified live:
   `cargo build --release` RC=0 in 18m52s → quickstart smoke green. README
   15-20 min claim accurate; clang/cmake turn out to be unnecessary despite
   the requirement line (GAP-060 docs drift, benign).
+
+## Field Notes — Dogfood 2026-09-12 (fastapi corpus, 1138 Python files)
+
+Fourth real-use run, master b780fb8 (0.3.0). **Verdict: ✅ SHIPPABLE for
+Rust/Go, 🟡 for Python** — one family of gaps, all resolution-layer:
+
+- **Python file-form impact/related silently empty (GAP-064, P1).**
+  `impact fastapi/routing.py` → "No dependents found" (rc 0); grep truth
+  = 10 importers; `impact 'pkg:fastapi.routing'` → exact (10/10 in-scope
+  + 7 docs_src importers, all ast_exact conf=1.0). The GAP-057 fix
+  (9431cac) covered Go only. Workaround until fixed: file → drop `.py`,
+  slashes → dots → query `pkg:<module>`.
+- **Warm exclusion is silent on Python too (GAP-065, P2).** 936 of 1138
+  `.py` parsed; 203 missing = 183 `__init__.py` (4/187 indexed —
+  undocumented policy) + 20 real parse failures, zero warnings.
+- **Coverage collected but not consumed (GAP-066, P2).** 2225 tested_by
+  edges; `tests/test_sse.py → tested_by → pkg:fastapi.routing` exists,
+  yet `untested` lists `fastapi/routing.py` and `graph module fastapi`
+  says `Tests: 0.0%`. untested/module don't resolve file→pkg.
+- **`meta --set attr=value <path>` silently writes a garbage xattr whose
+  KEY contains `=` (GAP-067, P2).** Docs form is
+  `--set <attr> --value <val> <path>`; nothing rejects the typo.
+- **MCP transport is NDJSON** (one JSON-RPC message per line) — LSP-style
+  Content-Length framing → `-32700 Parse error`. Client gotcha, not a
+  bug. 17 tools, stdout pure (GAP-050 still fixed), GAP-062 re-confirmed
+  over MCP (`related` ghost path → `[]`, isError=false).
+- **Re-verified clean on Python:** pkg-form impact exact; stats 28 ms /
+  impact 20 ms / search 23 ms / untested 19 ms; byte-deterministic
+  stats; loud unknown-path errors on impact AND related (GAP-059 fix
+  live, rc=1); PERF-004 instant `.md` guard; SIGPIPE quiet (GAP-063
+  appears fixed — `| head -1` → rc 0, no panic); FUSE mount/xattr/cat/
+  clean unmount; classify sane roles; meta round-trips with correct
+  syntax.
