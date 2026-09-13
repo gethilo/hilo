@@ -288,3 +288,47 @@ running the build over ssh: the full clean build exceeds a 590 s command
 window (dies mid duckdb-sys ~7.5 min in); the build resumes cleanly from
 target/, so re-run rather than restart — or run it under nohup/tmux on
 the box.
+
+## TS/JS edge dialect: `local:` targets, and what breaks without resolution (run 5)
+
+vite edges read `{"from":".../server/hmr.ts","to":"local:./pluginContainer"}`
+— TS/JS relative imports become `local:<relative-specifier>` pseudo-nodes,
+not `pkg:` nodes. The resolution layer learned Go dirs (GAP-057) and Python
+modules (GAP-064) but not this dialect, so (a) file-form impact/related are
+silently empty (GAP-069), (b) `local:`-targeted tested_by edges don't reach
+untested/module (GAP-071), (c) search prints `local:` node names a user
+cannot open (GAP-072). The edge data itself is exact (ast_exact conf=1.0);
+every gap lives in the query/resolution layer. The one-language-per-run
+pattern is now Rust → Go → Python → TS/JS: **after each fix, the next
+corpus finds the next dialect.** Expect the next languages (Java/Kotlin/C#)
+to need their own pass.
+
+## The clean→warm trap (run 5, GAP-070)
+
+`graph clean` deletes edges.jsonl + graph.db and tells the user to re-run
+warm; warm then short-circuits on `.parse_cache.json` ("all cached, graph
+unchanged") and stats reports an empty graph. Recovery requires deleting
+the parse cache by hand — an undocumented internal file — because warm has
+no `--force`. Lesson: **state owned by different layers must be
+invalidated together**, or the tool's own recovery instructions lie.
+Workaround that always works: `rm .vfs/graph/.parse_cache.json && hilo
+graph warm` (10.5s on vite; rebuild is byte-identical, so determinism is
+not the casualty).
+
+## Wrong-path UX paid off (run 5, small win)
+
+A query for a file at its pre-move path (`node/pluginContainer.ts`, the
+file actually lives under `node/server/`) produced: "not in the graph (no
+such file and no matching graph node)" — naming both failure modes. That
+message let me self-correct in one step instead of suspecting the graph.
+Contrast with the silent-empty result for a path that IS in the graph
+(GAP-069): the tool is loud exactly where it should be loud — it just
+isn't loud about the one case that matters most.
+
+## Install truth, third clean box (run 5)
+
+Same recipe, fresh agent (da91c36c), public-repo clone at exact HEAD:
+rustup absent by default (expected), clang/CMake absent and unneeded
+(third confirmation of GAP-068). See the 2026-09-13 integration report
+for timing.
+

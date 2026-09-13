@@ -144,3 +144,59 @@ headless, so the retry waited on the lock and finished it) →
 `hilo 0.3.0` → init/warm/stats smoke on hilo itself: SMOKE_OK in 468s
 total. Agent destroyed, bunker clean. Second consecutive box confirming
 clang/CMake/libfuse3-dev unnecessary for the core path (GAP-068).
+
+---
+
+## 2026-09-13 — warpfs (Hilo) — 🟡 PROMISING-BUT-ROUGH (TS/JS) / ✅ SHIPPABLE (Rust/Go/Python) — run 5, vite corpus
+
+**Promise statement:** "An agent can answer structural questions about any
+codebase (dependencies, entrypoints, test coverage, blast radius) by querying
+a pre-computed metadata graph via CLI / MCP / FUSE — in <1s, without reading
+files."
+
+**What was done (real use, run 5):** fresh release build at 6f0430b (21
+commits past the run-4 binary; includes GAP-064/066/067/068 fixes). Corpus:
+vitejs/vite @ main (tarball snapshot), first TS/JS language tested (prior:
+Rust ×2, Go, Python). init → warm (13.3s, 908 files / 4168 edges) →
+stats/impact/related/search/understand/classify → meta round-trips → FUSE
+mount/xattr/cat/unmount → MCP battery (17 tools) → determinism +
+incremental-warm checks → clean→warm recovery test. Plus the literal
+briefing target: ran the warpfs-sync lane tick end-to-end (RC=0, 6/6 keys
+verified, DuckBrain namespace event fresh).
+
+**Verdict reasoning:** every subsystem behaves (speed claims hold, FUSE/MCP/
+xattr round-trips clean, determinism byte-exact, the three run-4 fixes
+verified live in real use) — but on TS/JS the flagship blast-radius question
+returns a confident empty answer (GAP-069), a documented recovery path
+strands the user (GAP-070), and coverage still reads 0.0% where test edges
+exist (GAP-071). One language per run, continued: Rust → Go → Python → TS/JS.
+
+**Time-to-first-success:** init 7ms → warm 13.3s → first exact blast-radius
+answer (pkg: form) ≈14s. First *misleading* answer (file-form, looks like
+success, wrong): also ≈14s — that is the GAP-069 hazard.
+
+**Friction count:** 5 (GAP-069/070/071/072 + no `--force` for warm).
+
+**Verified clean (re-confirmed or newly fixed this run):** GAP-058 exclusion
+report live; GAP-067 rejection + canonical success line live; GAP-059 loud
+unknown-path errors on impact AND related (correct even for my wrong path);
+byte-deterministic stats across forced full rebuild (926-line output
+identical); incremental warm reparsed exactly 1 touched file; FUSE daemon
+mount/xattr/cat/unmount; MCP pure-JSON stdout, 17 tools; classify roles
+sane (390 test files); stats 25ms / impact 18ms / search 20ms; sync lane
+6/6 keys fresh.
+
+**Top findings (task IDs):**
+1. GAP-069 (P1) — TS/JS file→module resolution missing; file-form impact/related silently empty (24 incoming edges, 13 importers, grep truth 14).
+2. GAP-070 (P1) — `graph clean` → `graph warm` leaves the graph empty (parse-cache short-circuit); the tool's own recovery instruction strands the user.
+3. GAP-071 (P2) — `local:`-targeted tested_by edges unconsumed on TS/JS; module Tests: 0.0% with 8 spec files in-module (GAP-066 residual).
+
+**Left behind:** docs/dogfood/2026-09-13-integration.md, diagnostics.md run-5
+sections, skills/hilo-usage/SKILL.md (first in-repo usage skill), GAP-069..072
+on the board (events 322-325), this log entry.
+
+**Bunker install leg (las-bunker-03, agent da91c36c):** clone of public repo
+at exact HEAD 6f0430b → rustup minimal 1.98.1 → `cargo build --release` RC=0
+(1142s = 19m02s clean; README's 15-20 min claim accurate) → `hilo 0.3.0` +
+init/warm/stats smoke on hilo itself. Third box confirming clang/CMake
+unnecessary (GAP-068). Agent destroyed, bunker clean.
