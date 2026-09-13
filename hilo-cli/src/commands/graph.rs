@@ -3,7 +3,7 @@
 //! Queries (`related`, `impact`, `stats`) are JIT — they auto-parse files on
 //! first access. `warm` is an optional batch pre-parse for CI / power users.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -118,8 +118,16 @@ pub fn run_warm_in(
 
     // Collect every source file under the current directory.
     let mut source_files = Vec::new();
-    collect_source_files(cwd, Path::new(""), false, &include_paths, &mut source_files)
-        .context("failed to walk directory tree for source files")?;
+    let mut exclusions = ExclusionReport::default();
+    collect_source_files(
+        cwd,
+        Path::new(""),
+        None,
+        &include_paths,
+        &mut source_files,
+        &mut exclusions,
+    )
+    .context("failed to walk directory tree for source files")?;
 
     // When --changed is set, filter to files modified since the last warm.
     // The timestamp is stored in `.vfs/graph/.last_warm`.
@@ -184,6 +192,7 @@ pub fn run_warm_in(
             "No supported source files found. Supported extensions: {}",
             Language::all_extensions().join(", ")
         );
+        exclusions.print();
         return Ok(());
     }
 
@@ -367,6 +376,7 @@ pub fn run_warm_in(
         let m = unique_sources.len();
         let langs = langs_seen.len();
         println!("Discovered {n} edges across {m} files ({langs} languages) [all cached, graph unchanged]");
+        exclusions.print();
         let _ = t_jsonl; // timing span unused on this path
         return Ok(());
     }
@@ -427,6 +437,7 @@ pub fn run_warm_in(
     let m = unique_sources.len();
     let langs = langs_seen.len();
     println!("Discovered {n} edges across {m} files ({langs} languages)");
+    exclusions.print();
 
     // Update the last-warm marker so --changed knows the cutoff.
     let warm_marker = cwd.join(".vfs").join("graph").join(".last_warm");
@@ -902,16 +913,102 @@ fn source_to_test_patterns(name: &str) -> Vec<String> {
     patterns
 }
 
+/// Stable, user-facing labels for discovery exclusion categories.
+const EXCLUSION_CATEGORY_ORDER: &[&str] = &[
+    "vendor",
+    "go/pkg/mod",
+    "node_modules",
+    "virtualenv/cache",
+    "dependency/cache",
+    "hidden",
+];
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ExclusionReport {
+    counts: BTreeMap<&'static str, usize>,
+}
+
+impl ExclusionReport {
+    fn record_file(&mut self, path: &Path, category: &'static str) {
+        if path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| Language::from_extension(extension).is_some())
+        {
+            *self.counts.entry(category).or_default() += 1;
+        }
+    }
+
+    /// Count a pruned tree in one pass without following symlinks.
+    ///
+    /// A pruned tree was intentionally not part of the old walk's error
+    /// surface, so unreadable descendants are best-effort for reporting and
+    /// must not make an otherwise successful warm fail.
+    fn count_tree(&mut self, dir: &Path, category: &'static str) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                self.count_tree(&path, category);
+            } else if file_type.is_file() {
+                self.record_file(&path, category);
+            }
+        }
+    }
+
+    fn print(&self) {
+        let total: usize = self.counts.values().sum();
+        if total == 0 {
+            return;
+        }
+
+        let categories = EXCLUSION_CATEGORY_ORDER
+            .iter()
+            .filter_map(|category| {
+                self.counts
+                    .get(category)
+                    .filter(|count| **count > 0)
+                    .map(|count| format!("{category}: {count}"))
+            })
+            .collect::<Vec<_>>();
+        println!(
+            "Excluded {total} supported source files ({})",
+            categories.join(", ")
+        );
+    }
+}
+
+/// Return the stable report category for a default-excluded entry.
+fn exclusion_category(rel: &str, file_name: &str) -> Option<&'static str> {
+    // Hidden takes precedence so paths such as `.venv` are reported as hidden,
+    // rather than being silently folded into another pruning category.
+    if file_name.starts_with('.') {
+        return Some("hidden");
+    }
+    if rel == GO_PKG_MOD || rel.ends_with(&format!("/{GO_PKG_MOD}")) {
+        return Some("go/pkg/mod");
+    }
+    match file_name {
+        "vendor" => Some("vendor"),
+        "node_modules" => Some("node_modules"),
+        "venv" | "site-packages" => Some("virtualenv/cache"),
+        name if guard::DEFAULT_PRUNE_DIRS.contains(&name) => Some("dependency/cache"),
+        _ => None,
+    }
+}
+
 /// Default-exclusion test for a discovery entry (PERF-005).
 ///
 /// `rel` is the entry's path relative to the walk root with `/` separators.
 /// An entry is default-excluded when it is hidden, its name matches the
 /// prune list, or it is (or lives under) a `go/pkg/mod` module cache.
 fn entry_excluded(rel: &str, file_name: &str) -> bool {
-    let hidden = file_name.starts_with('.');
-    let name_pruned = guard::DEFAULT_PRUNE_DIRS.contains(&file_name);
-    let go_mod = rel == GO_PKG_MOD || rel.ends_with(&format!("/{GO_PKG_MOD}"));
-    hidden || name_pruned || go_mod
+    exclusion_category(rel, file_name).is_some()
 }
 
 /// True when `rel` IS a manifest `include_paths` entry or lives inside one —
@@ -934,9 +1031,10 @@ fn is_include_ancestor(rel: &str, include_paths: &[String]) -> bool {
 fn collect_source_files(
     dir: &Path,
     rel: &Path,
-    in_excluded_tree: bool,
+    excluded_category: Option<&'static str>,
     include_paths: &[String],
     out: &mut Vec<PathBuf>,
+    exclusions: &mut ExclusionReport,
 ) -> std::io::Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
@@ -949,34 +1047,50 @@ fn collect_source_files(
 
         let ft = entry.file_type()?;
         if ft.is_dir() {
-            let excluded = entry_excluded(&rel_str, &name_str);
+            let entry_category = exclusion_category(&rel_str, &name_str);
             let included = is_included(&rel_str, include_paths);
             // Descend when explicitly re-included, when on the path to a
             // re-included subtree, or when the default rules never matched.
             let descend = included
                 || is_include_ancestor(&rel_str, include_paths)
-                || (!excluded && !in_excluded_tree);
+                || (!entry_excluded(&rel_str, &name_str) && excluded_category.is_none());
             if !descend {
+                // The subtree is deliberately pruned. Count it here, rather
+                // than walking it once for discovery and again for reporting.
+                let category = excluded_category
+                    .or(entry_category)
+                    .unwrap_or("dependency/cache");
+                exclusions.count_tree(&path, category);
                 continue;
             }
             // Inside a re-included subtree everything is open; otherwise the
             // exclusion state carries down (so `vendor/other` stays out when
             // only `vendor/critical` was re-included).
-            let child_excluded = if included {
-                false
+            let child_category = if included {
+                None
             } else {
-                in_excluded_tree || excluded
+                excluded_category.or(entry_category)
             };
-            collect_source_files(&path, &entry_rel, child_excluded, include_paths, out)?;
+            collect_source_files(
+                &path,
+                &entry_rel,
+                child_category,
+                include_paths,
+                out,
+                exclusions,
+            )?;
         } else if ft.is_file() {
-            let excluded = entry_excluded(&rel_str, &name_str);
-            let take = is_included(&rel_str, include_paths) || (!excluded && !in_excluded_tree);
+            let entry_category = exclusion_category(&rel_str, &name_str);
+            let take = is_included(&rel_str, include_paths)
+                || (entry_category.is_none() && excluded_category.is_none());
             if take {
                 if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
                     if Language::from_extension(ext).is_some() {
                         out.push(path);
                     }
                 }
+            } else if let Some(category) = excluded_category.or(entry_category) {
+                exclusions.record_file(&path, category);
             }
         }
     }
@@ -1626,12 +1740,55 @@ mod tests {
     }
 
     #[test]
+    fn discovery_reports_supported_exclusions_by_category() {
+        let dir = TempDir::new().unwrap();
+        build_prune_fixture(dir.path());
+
+        // A hidden source is reportable, while ordinary files are not.
+        fs::create_dir_all(dir.path().join(".hidden")).unwrap();
+        fs::write(dir.path().join(".hidden/secret.rs"), "fn secret() {}\n").unwrap();
+        fs::write(dir.path().join("vendor/README.txt"), "documentation\n").unwrap();
+        fs::write(dir.path().join("vendor/asset.bin"), [0_u8, 1, 2]).unwrap();
+
+        let mut found = Vec::new();
+        let mut exclusions = ExclusionReport::default();
+        collect_source_files(
+            dir.path(),
+            Path::new(""),
+            None,
+            &[],
+            &mut found,
+            &mut exclusions,
+        )
+        .unwrap();
+
+        assert_eq!(exclusions.counts.get("go/pkg/mod"), Some(&1));
+        assert_eq!(exclusions.counts.get("vendor"), Some(&1));
+        assert_eq!(exclusions.counts.get("node_modules"), Some(&1));
+        assert_eq!(exclusions.counts.get("virtualenv/cache"), Some(&2));
+        assert_eq!(exclusions.counts.get("dependency/cache"), Some(&1));
+        assert_eq!(exclusions.counts.get("hidden"), Some(&5));
+        assert_eq!(exclusions.counts.values().sum::<usize>(), 11);
+        assert!(!exclusions.counts.contains_key("README.txt"));
+        assert!(!exclusions.counts.contains_key("asset.bin"));
+    }
+
+    #[test]
     fn discovery_prunes_all_dependency_trees_by_default() {
         let dir = TempDir::new().unwrap();
         build_prune_fixture(dir.path());
 
         let mut found = Vec::new();
-        collect_source_files(dir.path(), Path::new(""), false, &[], &mut found).unwrap();
+        let mut exclusions = ExclusionReport::default();
+        collect_source_files(
+            dir.path(),
+            Path::new(""),
+            None,
+            &[],
+            &mut found,
+            &mut exclusions,
+        )
+        .unwrap();
         let found = rels_of(dir.path(), &found);
 
         assert!(
@@ -1679,7 +1836,16 @@ mod tests {
         std::fs::write(dir.path().join("vendor/other.rs"), "fn other() {}\n").unwrap();
 
         let mut found = Vec::new();
-        collect_source_files(dir.path(), Path::new(""), false, &include_paths, &mut found).unwrap();
+        let mut exclusions = ExclusionReport::default();
+        collect_source_files(
+            dir.path(),
+            Path::new(""),
+            None,
+            &include_paths,
+            &mut found,
+            &mut exclusions,
+        )
+        .unwrap();
         let found = rels_of(dir.path(), &found);
 
         assert!(
@@ -1696,6 +1862,8 @@ mod tests {
             !found.iter().any(|r| contains_component(r, "node_modules")),
             "unrelated excluded trees stay pruned: {found:?}"
         );
+        assert_eq!(exclusions.counts.get("vendor"), Some(&2));
+        assert_eq!(exclusions.counts.values().sum::<usize>(), 11);
         assert!(found.contains(&"src/main.rs".to_string()));
     }
 
@@ -1710,7 +1878,16 @@ mod tests {
         std::fs::write(keep.join("keep.go"), "package keep\n").unwrap();
 
         let mut found = Vec::new();
-        collect_source_files(dir.path(), Path::new(""), false, &include_paths, &mut found).unwrap();
+        let mut exclusions = ExclusionReport::default();
+        collect_source_files(
+            dir.path(),
+            Path::new(""),
+            None,
+            &include_paths,
+            &mut found,
+            &mut exclusions,
+        )
+        .unwrap();
         let found = rels_of(dir.path(), &found);
 
         assert!(
@@ -1724,6 +1901,8 @@ mod tests {
                 .all(|r| r.starts_with("go/pkg/mod/github.com/keep/keep@v1.0.0/")),
             "only the re-included module may leak: {found:?}"
         );
+        assert_eq!(exclusions.counts.get("go/pkg/mod"), Some(&1));
+        assert_eq!(exclusions.counts.values().sum::<usize>(), 10);
     }
 
     // ======================================================================

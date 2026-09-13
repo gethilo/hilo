@@ -88,6 +88,11 @@ enum GraphCommand {
     /// Optional batch warmup for CI or power users. Queries (`related`,
     /// `impact`) are JIT — they auto-parse files on first access and do
     /// NOT require `warm` first.
+    ///
+    /// Discovery prunes dependency, cache, vendor, and hidden paths by
+    /// default. Override a pruning decision with `graph.include_paths` in
+    /// `.vfs/manifest.yaml` or `manifest.yaml`. `.hiloignore` controls backend
+    /// sync and does not override graph discovery.
     #[clap(alias = "discover")]
     Warm(WarmArgs),
     /// Print summary statistics from the dependency graph.
@@ -114,6 +119,12 @@ enum GraphCommand {
 }
 
 #[derive(clap::Args)]
+/// Pre-compute the dependency graph for all discovered source files.
+///
+/// Discovery prunes dependency, cache, vendor, and hidden paths by default.
+/// To override a pruning decision, set `graph.include_paths` in
+/// `.vfs/manifest.yaml` or `manifest.yaml`. `.hiloignore` controls backend
+/// sync and does not override graph discovery.
 struct WarmArgs {
     /// Detect cross-repo imports using the workspace manifest.
     /// When set, import paths that resolve to files in another workspace

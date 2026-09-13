@@ -213,6 +213,113 @@ fn classify_dry_run_with_source_file() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn graph_warm_reports_exclusions_on_normal_and_cached_runs() {
+    let dir = unique_tempdir("warm-exclusions");
+    fs::create_dir_all(dir.join("src")).expect("failed to create src");
+    fs::write(dir.join("src/main.rs"), "fn main() {}\n").expect("failed to write main.rs");
+
+    let excluded_sources = [
+        "vendor/dep.rs",
+        "go/pkg/mod/example/dep.go",
+        "node_modules/index.js",
+        ".hidden/secret.py",
+    ];
+    for rel in excluded_sources {
+        let path = dir.join(rel);
+        fs::create_dir_all(path.parent().expect("source parent")).expect("failed to create parent");
+        fs::write(path, "fn excluded() {}\n").expect("failed to write excluded source");
+    }
+    // These must not inflate the supported-source count.
+    fs::write(dir.join("vendor/README.txt"), "documentation\n").expect("failed to write README");
+    fs::write(dir.join("vendor/asset.bin"), [0_u8, 1, 2]).expect("failed to write asset");
+
+    let init = Command::new(BIN)
+        .arg("init")
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo init");
+    assert!(
+        init.status.success(),
+        "init failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+
+    let warm = Command::new(BIN)
+        .args(["graph", "warm"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn first graph warm");
+    assert!(
+        warm.status.success(),
+        "first graph warm failed: {}",
+        String::from_utf8_lossy(&warm.stderr)
+    );
+    let first_stdout = String::from_utf8_lossy(&warm.stdout);
+    let first_summary = first_stdout
+        .lines()
+        .find(|line| line.starts_with("Excluded "))
+        .expect("first warm should report exclusions");
+    assert_eq!(
+        first_summary,
+        "Excluded 4 supported source files (vendor: 1, go/pkg/mod: 1, node_modules: 1, hidden: 1)"
+    );
+
+    let cached = Command::new(BIN)
+        .args(["graph", "warm"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn cached graph warm");
+    assert!(
+        cached.status.success(),
+        "cached graph warm failed: {}",
+        String::from_utf8_lossy(&cached.stderr)
+    );
+    let cached_stdout = String::from_utf8_lossy(&cached.stdout);
+    assert!(
+        cached_stdout.contains("[all cached, graph unchanged]"),
+        "second warm should use the full cache-hit path: {cached_stdout}"
+    );
+    let cached_summary = cached_stdout
+        .lines()
+        .find(|line| line.starts_with("Excluded "))
+        .expect("cached warm should report exclusions");
+    assert_eq!(cached_summary, first_summary);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn graph_warm_help_documents_discovery_overrides() {
+    let output = Command::new(BIN)
+        .args(["graph", "warm", "--help"])
+        .output()
+        .expect("failed to spawn graph warm help");
+    assert!(
+        output.status.success(),
+        "graph warm --help failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let help = String::from_utf8_lossy(&output.stdout);
+    for term in [
+        "dependency",
+        "cache",
+        "vendor",
+        "hidden",
+        "graph.include_paths",
+        ".vfs/manifest.yaml",
+        "manifest.yaml",
+        ".hiloignore",
+        "backend sync",
+        "does not override graph discovery",
+    ] {
+        assert!(
+            help.contains(term),
+            "warm help should contain {term:?}: {help}"
+        );
+    }
+}
+
 // ─────────────────────── graph warm ───────────────────────
 
 #[test]
@@ -264,6 +371,11 @@ fn graph_warm_creates_graph_directory() {
     assert!(
         dir.join(".vfs").join("graph").exists(),
         ".vfs/graph/ was not created by graph warm"
+    );
+
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains("Excluded "),
+        "warm with no pruned sources must not print a zero-exclusion summary"
     );
 
     let _ = fs::remove_dir_all(&dir);
