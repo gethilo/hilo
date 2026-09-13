@@ -14,9 +14,9 @@ fn rpc(line: &str) -> serde_json::Value {
         .expect("response should be Some (not a notification)")
 }
 
-/// Serializes tests that create/remove files under the process CWD
-/// (hilo-mcp/target/): a parallel scan of the workspace root can otherwise
-/// observe a sibling test's mid-cleanup deletions and fail the walk.
+/// Serializes tests that depend on the process CWD. The graph tools resolve
+/// `.vfs/graph/graph.db` relative to that CWD, while workspace tests scan and
+/// mutate files there; both kinds of tests must hold this lock.
 fn cwd_test_lock() -> &'static std::sync::Mutex<()> {
     static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
     LOCK.get_or_init(|| std::sync::Mutex::new(()))
@@ -246,8 +246,9 @@ fn test_get_metadata_with_backend_and_hash() {
 
 #[test]
 fn test_graph_stats_empty() {
-    // The test working directory (hilo-mcp/) does not contain a
-    // .vfs/graph/graph.db, so the tool should return all-zero stats.
+    // Hold the process-CWD lock and run in an isolated directory so a
+    // concurrent populated graph fixture cannot leak into this request.
+    let _fx = CwdGraphFixture::new();
     let req = r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"vfs_graph_stats","arguments":{}}}"#;
     let resp = rpc(req);
 
@@ -395,7 +396,7 @@ fn test_set_metadata_empty_key_rejected() {
 
 #[test]
 fn test_graph_untested_empty() {
-    // No .vfs/graph/graph.db in the test CWD, so the tool returns empty.
+    let _fx = CwdGraphFixture::new();
     let req = r#"{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"vfs_graph_untested","arguments":{}}}"#;
     let resp = rpc(req);
 
@@ -465,6 +466,7 @@ fn test_graph_untested_populated() {
 
 #[test]
 fn test_graph_module_empty() {
+    let _fx = CwdGraphFixture::new();
     let req = r#"{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"vfs_graph_module","arguments":{"module_name":"src/auth/"}}}"#;
     let resp = rpc(req);
 
@@ -598,7 +600,7 @@ fn test_backend_status_local() {
 #[test]
 fn test_backend_status_nonexistent() {
     let req = r#"{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"vfs_backend_status","arguments":{"path":"/nonexistent/hilo-file-xyz"}}}"#;
-    let resp = rpc(&req);
+    let resp = rpc(req);
 
     assert_eq!(resp["jsonrpc"], "2.0");
     assert_eq!(resp["id"], 21);
@@ -653,7 +655,7 @@ fn test_sync_backend_local() {
 #[test]
 fn test_sync_backend_nonexistent() {
     let req = r#"{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"vfs_sync_backend","arguments":{"path":"/nonexistent/hilo-file-xyz"}}}"#;
-    let resp = rpc(&req);
+    let resp = rpc(req);
 
     assert_eq!(resp["jsonrpc"], "2.0");
     assert_eq!(resp["id"], 23);
