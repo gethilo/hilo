@@ -21,11 +21,24 @@ pub fn run(path: &str, set_name: Option<&str>, value: Option<&str>) -> Result<()
 
     if let Some(name) = set_name {
         // --set mode: write the extended attribute.
+        // Pre-validate the name so a `--set role=value` typo fails with the
+        // correct usage instead of silently creating a garbage xattr named
+        // `user.vfs.role=value` with an empty value.
+        let display_name = name.strip_prefix("user.vfs.").unwrap_or(name);
+        if name.is_empty()
+            || display_name.is_empty()
+            || display_name.contains('=')
+            || display_name
+                .chars()
+                .any(|c| c.is_whitespace() || c.is_control())
+        {
+            anyhow::bail!(
+                "invalid attribute name \"{name}\" — usage: hilo meta <path> --set <attr> --value <value>"
+            );
+        }
         let v = value.unwrap_or("");
         // Support literal `\n` in the value for multiline content.
         let v = v.replace("\\n", "\n");
-        // Display the canonical name (strip user.vfs. prefix if user passed it).
-        let display_name = name.strip_prefix("user.vfs.").unwrap_or(name);
         xattr::set_vfs_xattr(file_path, name, &v)
             .with_context(|| format!("failed to set xattr user.vfs.{display_name} on {path}"))?;
         println!("Set user.vfs.{display_name} = {v} on {path}");

@@ -19,6 +19,9 @@ pub enum MetadataError {
     #[error("xattr error: {0}")]
     Xattr(String),
 
+    #[error("invalid attribute name \"{0}\": must be non-empty and contain no '=', whitespace, or control characters (expected form: a plain or dotted name such as 'role' or 'auth.router')")]
+    InvalidName(String),
+
     #[error("serialization error: {0}")]
     Serde(#[from] serde_yaml::Error),
 

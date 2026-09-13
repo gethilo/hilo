@@ -101,6 +101,41 @@ fn meta_nonexistent_file_errors() {
     );
 }
 
+#[test]
+fn meta_set_with_equals_in_name_is_usage_error() {
+    let dir = unique_tempdir("meta-eq");
+    let file = dir.join("sample.txt");
+    fs::write(&file, b"data").expect("write file");
+
+    // GAP-067: `--set role=core` used to exit 0 and create a garbage xattr
+    // literally named user.vfs.role=core with an empty value.
+    let output = Command::new(BIN)
+        .args([
+            "meta",
+            file.to_str().expect("utf8 path"),
+            "--set",
+            "role=core",
+        ])
+        .output()
+        .expect("failed to spawn hilo meta");
+
+    assert!(
+        !output.status.success(),
+        "meta --set role=core must exit non-zero"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("invalid attribute name") && stderr.contains("role=core"),
+        "usage error must name the rejected attribute, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("--value"),
+        "usage error must show the correct --set/--value syntax, got: {stderr}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 // ─────────────────────── graph ───────────────────────
 
 #[test]

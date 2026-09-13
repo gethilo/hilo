@@ -88,7 +88,7 @@ mod tests {
     fn refusal_when_cwd_equals_injected_home() {
         let home = TempDir::new().unwrap();
         let err =
-            ensure_not_home_with(&home.path(), false, Some(home.path().to_path_buf())).unwrap_err();
+            ensure_not_home_with(home.path(), false, Some(home.path().to_path_buf())).unwrap_err();
         let msg = format!("{err:#}");
         assert!(
             msg.contains("--allow-home"),
@@ -100,14 +100,14 @@ mod tests {
     #[test]
     fn allow_home_overrides_refusal() {
         let home = TempDir::new().unwrap();
-        ensure_not_home_with(&home.path(), true, Some(home.path().to_path_buf())).unwrap();
+        ensure_not_home_with(home.path(), true, Some(home.path().to_path_buf())).unwrap();
     }
 
     #[test]
     fn normal_project_dir_is_not_refused() {
         let home = TempDir::new().unwrap();
         let project = TempDir::new().unwrap();
-        ensure_not_home_with(&project.path(), false, Some(home.path().to_path_buf())).unwrap();
+        ensure_not_home_with(project.path(), false, Some(home.path().to_path_buf())).unwrap();
     }
 
     #[test]

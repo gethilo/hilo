@@ -144,3 +144,85 @@ fn test_xattr_set_on_nonexistent_file_errors() {
         result
     );
 }
+
+// ─────────────────── attribute name validation (GAP-067) ───────────────────
+
+#[test]
+fn test_xattr_rejects_name_with_equals() {
+    let dir = tempdir().expect("create tempdir");
+    let file = dir.path().join("validate_eq.txt");
+    fs::write(&file, b"data").expect("write file");
+
+    let result = xattr::set_vfs_xattr(&file, "role=core-router", "unused");
+    let err = result.expect_err("name containing '=' must be rejected");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("role=core-router") && msg.contains("invalid attribute name"),
+        "error must name the rejected attr, got: {msg}"
+    );
+
+    // No garbage xattr may have been created.
+    let attrs = xattr::list_vfs_xattrs(&file).expect("list xattrs");
+    assert!(
+        !attrs.iter().any(|a| a.contains('=')),
+        "no '='-containing xattr should exist, got: {attrs:?}"
+    );
+}
+
+#[test]
+fn test_xattr_rejects_empty_name() {
+    let dir = tempdir().expect("create tempdir");
+    let file = dir.path().join("validate_empty.txt");
+    fs::write(&file, b"data").expect("write file");
+
+    let result = xattr::set_vfs_xattr(&file, "", "value");
+    let err = result.expect_err("empty name must be rejected");
+    assert!(
+        err.to_string().contains("invalid attribute name"),
+        "unexpected error: {err}"
+    );
+
+    let attrs = xattr::list_vfs_xattrs(&file).expect("list xattrs");
+    assert!(attrs.is_empty(), "no xattr should exist, got: {attrs:?}");
+}
+
+#[test]
+fn test_xattr_rejects_name_with_whitespace() {
+    let dir = tempdir().expect("create tempdir");
+    let file = dir.path().join("validate_space.txt");
+    fs::write(&file, b"data").expect("write file");
+
+    let result = xattr::set_vfs_xattr(&file, "role core", "value");
+    let err = result.expect_err("name containing a space must be rejected");
+    assert!(
+        err.to_string().contains("invalid attribute name"),
+        "unexpected error: {err}"
+    );
+
+    let attrs = xattr::list_vfs_xattrs(&file).expect("list xattrs");
+    assert!(attrs.is_empty(), "no xattr should exist, got: {attrs:?}");
+}
+
+#[test]
+fn test_xattr_accepts_normal_dotted_name() {
+    let dir = tempdir().expect("create tempdir");
+    let file = dir.path().join("validate_ok.txt");
+    fs::write(&file, b"data").expect("write file");
+
+    xattr::set_vfs_xattr(&file, "risk", "low").expect("plain name must still work");
+    assert_eq!(
+        xattr::get_vfs_xattr(&file, "risk").expect("get xattr"),
+        Some("low".to_string())
+    );
+
+    // Fully-qualified form stays accepted (idempotent prefix strip).
+    xattr::set_vfs_xattr(&file, "user.vfs.auth.router", "edge").expect("dotted name must work");
+    assert_eq!(
+        xattr::get_vfs_xattr(&file, "auth.router").expect("get xattr"),
+        Some("edge".to_string())
+    );
+
+    let attrs = xattr::list_vfs_xattrs(&file).expect("list xattrs");
+    assert!(attrs.contains(&"user.vfs.risk".to_string()));
+    assert!(attrs.contains(&"user.vfs.auth.router".to_string()));
+}

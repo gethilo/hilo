@@ -20,6 +20,85 @@ fn full_name(name: &str) -> String {
     format!("user.vfs.{}", stripped)
 }
 
+/// Validate a logical attribute name (after any `user.vfs.` prefix strip).
+///
+/// Rejects empty names, names containing `=` (the classic `--set role=value`
+/// CLI typo that would otherwise create a garbage xattr literally named
+/// `user.vfs.role=value`), and names containing whitespace or control
+/// characters. This is the single write-path chokepoint for the CLI, MCP,
+/// and FFI callers.
+fn validate_name(name: &str) -> Result<(), MetadataError> {
+    if name.is_empty()
+        || name.contains('=')
+        || name.chars().any(|c| c.is_whitespace() || c.is_control())
+    {
+        return Err(MetadataError::InvalidName(name.to_string()));
+    }
+    Ok(())
+}
+
+/// Set `user.vfs.<name>` on the file at `path` to `value`.
+pub fn set_vfs_xattr(path: &Path, name: &str, value: &str) -> Result<(), MetadataError> {
+    validate_name(name.strip_prefix("user.vfs.").unwrap_or(name))?;
+    let attr = full_name(name);
+    xattr::set(path, &attr, value.as_bytes()).map_err(|e| MetadataError::Xattr(e.to_string()))
+}
+
+/// Get `user.vfs.<name>` from the file at `path`.
+///
+/// Returns `Ok(None)` when the attribute does not exist (either the xattr
+/// crate reports `None`, or the underlying syscall returns `ENODATA`).
+pub fn get_vfs_xattr(path: &Path, name: &str) -> Result<Option<String>, MetadataError> {
+    let attr = full_name(name);
+    match xattr::get(path, &attr) {
+        Ok(Some(bytes)) => Ok(Some(String::from_utf8(bytes)?)),
+        Ok(None) => Ok(None),
+        Err(e) => {
+            // ENODATA / ENOATTR — attribute simply not set yet.
+            if e.raw_os_error() == Some(libc_enodata()) {
+                Ok(None)
+            } else {
+                Err(MetadataError::Xattr(e.to_string()))
+            }
+        }
+    }
+}
+
+/// List all `user.vfs.*` xattrs on the file at `path`.
+///
+/// Returns the full attribute names (including the `user.vfs.` prefix).
+pub fn list_vfs_xattrs(path: &Path) -> Result<Vec<String>, MetadataError> {
+    let prefix = "user.vfs.";
+    let mut result = Vec::new();
+    for entry in xattr::list(path).map_err(|e| MetadataError::Xattr(e.to_string()))? {
+        let name = entry.to_string_lossy().into_owned();
+        if name.starts_with(prefix) {
+            result.push(name);
+        }
+    }
+    Ok(result)
+}
+
+/// Remove `user.vfs.<name>` from the file at `path`.
+pub fn remove_vfs_xattr(path: &Path, name: &str) -> Result<(), MetadataError> {
+    let attr = full_name(name);
+    xattr::remove(path, &attr).map_err(|e| MetadataError::Xattr(e.to_string()))
+}
+
+/// Return the platform-specific errno value for "no data / attribute not found".
+///
+/// On Linux this is `ENODATA` (61). On macOS the xattr crate maps missing
+/// attributes to `None` directly, so the value here is irrelevant.
+#[cfg(target_os = "linux")]
+fn libc_enodata() -> i32 {
+    61 // ENODATA
+}
+
+#[cfg(not(target_os = "linux"))]
+fn libc_enodata() -> i32 {
+    -1 // sentinel — won't match any real errno
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,65 +229,4 @@ mod tests {
         remove_vfs_xattr(&path, "feature").unwrap();
         assert_eq!(get_vfs_xattr(&path, "feature").unwrap(), None);
     }
-}
-
-/// Set `user.vfs.<name>` on the file at `path` to `value`.
-pub fn set_vfs_xattr(path: &Path, name: &str, value: &str) -> Result<(), MetadataError> {
-    let attr = full_name(name);
-    xattr::set(path, &attr, value.as_bytes()).map_err(|e| MetadataError::Xattr(e.to_string()))
-}
-
-/// Get `user.vfs.<name>` from the file at `path`.
-///
-/// Returns `Ok(None)` when the attribute does not exist (either the xattr
-/// crate reports `None`, or the underlying syscall returns `ENODATA`).
-pub fn get_vfs_xattr(path: &Path, name: &str) -> Result<Option<String>, MetadataError> {
-    let attr = full_name(name);
-    match xattr::get(path, &attr) {
-        Ok(Some(bytes)) => Ok(Some(String::from_utf8(bytes)?)),
-        Ok(None) => Ok(None),
-        Err(e) => {
-            // ENODATA / ENOATTR — attribute simply not set yet.
-            if e.raw_os_error() == Some(libc_enodata()) {
-                Ok(None)
-            } else {
-                Err(MetadataError::Xattr(e.to_string()))
-            }
-        }
-    }
-}
-
-/// List all `user.vfs.*` xattrs on the file at `path`.
-///
-/// Returns the full attribute names (including the `user.vfs.` prefix).
-pub fn list_vfs_xattrs(path: &Path) -> Result<Vec<String>, MetadataError> {
-    let prefix = "user.vfs.";
-    let mut result = Vec::new();
-    for entry in xattr::list(path).map_err(|e| MetadataError::Xattr(e.to_string()))? {
-        let name = entry.to_string_lossy().into_owned();
-        if name.starts_with(prefix) {
-            result.push(name);
-        }
-    }
-    Ok(result)
-}
-
-/// Remove `user.vfs.<name>` from the file at `path`.
-pub fn remove_vfs_xattr(path: &Path, name: &str) -> Result<(), MetadataError> {
-    let attr = full_name(name);
-    xattr::remove(path, &attr).map_err(|e| MetadataError::Xattr(e.to_string()))
-}
-
-/// Return the platform-specific errno value for "no data / attribute not found".
-///
-/// On Linux this is `ENODATA` (61). On macOS the xattr crate maps missing
-/// attributes to `None` directly, so the value here is irrelevant.
-#[cfg(target_os = "linux")]
-fn libc_enodata() -> i32 {
-    61 // ENODATA
-}
-
-#[cfg(not(target_os = "linux"))]
-fn libc_enodata() -> i32 {
-    -1 // sentinel — won't match any real errno
 }
