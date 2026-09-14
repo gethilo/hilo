@@ -22,7 +22,7 @@ evaluator:
   fast_track: auto
 
 defaults:
-  model: deepseek-v4-flash
+  model: deepseek-v4-pro
   provider: deepseek-foreman
   api_key_env: GITREINS_LLM_API_KEY
 
