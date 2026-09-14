@@ -382,6 +382,114 @@ fn graph_warm_creates_graph_directory() {
 }
 
 #[test]
+fn graph_clean_rewarms_after_invalidating_parse_cache() {
+    // GAP-070: cleaning the graph must also invalidate the per-file parse
+    // cache, otherwise the immediate warm takes the all-cached fast path and
+    // never recreates edges.jsonl or graph.db.
+    let dir = unique_tempdir("graph-clean-rewarm");
+    let src = dir.join("src");
+    fs::create_dir_all(&src).expect("failed to create src");
+    fs::write(
+        src.join("main.go"),
+        "package main\nimport \"fmt\"\nfunc main() { fmt.Println(\"hi\") }\n",
+    )
+    .expect("failed to write main.go");
+
+    let init = Command::new(BIN)
+        .arg("init")
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo init");
+    assert!(
+        init.status.success(),
+        "init failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+
+    let warm = Command::new(BIN)
+        .args(["graph", "warm"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn first graph warm");
+    assert!(
+        warm.status.success(),
+        "first graph warm failed: {}",
+        String::from_utf8_lossy(&warm.stderr)
+    );
+    let parse_cache = dir.join(".vfs/graph/.parse_cache.json");
+    assert!(
+        parse_cache.exists(),
+        "first warm must populate the parse cache"
+    );
+
+    let clean = Command::new(BIN)
+        .args(["graph", "clean"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn graph clean");
+    assert!(
+        clean.status.success(),
+        "graph clean failed: {}",
+        String::from_utf8_lossy(&clean.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&clean.stdout).contains(".parse_cache.json"),
+        "graph clean must report removing the parse cache: {}",
+        String::from_utf8_lossy(&clean.stdout)
+    );
+    assert!(
+        !parse_cache.exists(),
+        "graph clean must remove the per-file parse cache"
+    );
+
+    // Do not touch the source between clean and warm: this is the stale-cache
+    // recovery path that previously hit the all-cached early return.
+    let rewarm = Command::new(BIN)
+        .args(["graph", "warm"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn graph warm after clean");
+    assert!(
+        rewarm.status.success(),
+        "graph warm after clean failed: {}",
+        String::from_utf8_lossy(&rewarm.stderr)
+    );
+    assert!(
+        !String::from_utf8_lossy(&rewarm.stdout).contains("[all cached, graph unchanged]"),
+        "rewarm must reparse files after clean: {}",
+        String::from_utf8_lossy(&rewarm.stdout)
+    );
+
+    let stats = Command::new(BIN)
+        .args(["graph", "stats"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn graph stats after rewarm");
+    assert!(
+        stats.status.success(),
+        "graph stats failed after rewarm: {}",
+        String::from_utf8_lossy(&stats.stderr)
+    );
+    let stats_stdout = String::from_utf8_lossy(&stats.stdout);
+    let total_edges = stats_stdout
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("Total edges: ")?
+                .split_whitespace()
+                .next()?
+                .parse::<usize>()
+                .ok()
+        })
+        .expect("graph stats must report total edges after rewarm");
+    assert!(
+        total_edges > 0,
+        "graph stats must prove the rebuilt graph is non-empty: {stats_stdout}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn graph_warm_language_filter_unknown_errors() {
     // `--language` with an unsupported language should exit non-zero.
     let dir = unique_tempdir("warm-lang");

@@ -1413,11 +1413,11 @@ pub fn run_rule_check(name: &str) -> Result<()> {
 
 /// `hilo graph clean` — delete the cached dependency graph.
 ///
-/// Removes `.vfs/graph/edges.jsonl`, `.vfs/graph/graph.db`, and the
-/// `.last_warm` marker so the next `warm` (or JIT parse) rebuilds the graph
-/// from scratch. Use this after crate renames or file moves leave stale
-/// edges in the cache (e.g. `warpfs-*` entries after the rename to
-/// `hilo-*`).
+/// Removes `.vfs/graph/edges.jsonl`, `.vfs/graph/graph.db`, the
+/// `.parse_cache.json` per-file parse cache, and the `.last_warm` marker so the
+/// next `warm` (or JIT parse) rebuilds the graph from scratch. Use this after
+/// crate renames or file moves leave stale edges in the cache (e.g.
+/// `warpfs-*` entries after the rename to `hilo-*`).
 pub fn run_clean() -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
     let removed = clean_graph_dir(&cwd)?;
@@ -1439,7 +1439,7 @@ pub fn run_clean() -> Result<()> {
 fn clean_graph_dir(cwd: &Path) -> Result<usize> {
     let graph_dir = cwd.join(".vfs").join("graph");
     let mut removed = 0;
-    for name in ["edges.jsonl", "graph.db", ".last_warm"] {
+    for name in ["edges.jsonl", "graph.db", ".parse_cache.json", ".last_warm"] {
         let path = graph_dir.join(name);
         match std::fs::remove_file(&path) {
             Ok(()) => {
@@ -1468,14 +1468,15 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let graph_dir = dir.path().join(".vfs").join("graph");
         fs::create_dir_all(&graph_dir).unwrap();
-        for name in ["edges.jsonl", "graph.db", ".last_warm"] {
+        for name in ["edges.jsonl", "graph.db", ".parse_cache.json", ".last_warm"] {
             fs::write(graph_dir.join(name), "stale").unwrap();
         }
 
         let removed = clean_graph_dir(dir.path()).unwrap();
-        assert_eq!(removed, 3);
+        assert_eq!(removed, 4);
         assert!(!graph_dir.join("edges.jsonl").exists());
         assert!(!graph_dir.join("graph.db").exists());
+        assert!(!graph_dir.join(".parse_cache.json").exists());
         assert!(!graph_dir.join(".last_warm").exists());
 
         // Second run: nothing to remove, not an error.
