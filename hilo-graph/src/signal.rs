@@ -1488,7 +1488,7 @@ mod tests {
 
     #[test]
     fn position_order_places_high_score_at_edges() {
-        let files = vec![
+        let files = [
             SignalFile {
                 path: "a".into(),
                 symbols: vec![],

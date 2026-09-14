@@ -13,6 +13,8 @@ fn edge_chain(n: usize) -> Vec<Edge> {
             from: format!("file_{i}.rs"),
             to: format!("file_{}.rs", i + 1),
             rel: "imports".into(),
+            provenance: "ast_exact".to_string(),
+            confidence: 1.0,
         })
         .collect()
 }
@@ -24,6 +26,8 @@ fn edge_star(n: usize) -> Vec<Edge> {
             from: "center.rs".into(),
             to: format!("leaf_{i}.rs"),
             rel: "imports".into(),
+            provenance: "ast_exact".to_string(),
+            confidence: 1.0,
         })
         .collect()
 }

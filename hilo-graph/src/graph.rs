@@ -1019,8 +1019,7 @@ mod tests {
         let db = GraphDB::open(":memory:").unwrap();
         let err = db
             .impact_or_parse(p.to_str().unwrap(), 8)
-            .err()
-            .expect("must error on .md");
+            .expect_err("must error on .md");
         assert!(
             err.to_string().contains("not an indexable source file"),
             "wrong error: {err}"
@@ -1035,8 +1034,7 @@ mod tests {
         let db = GraphDB::open(":memory:").unwrap();
         let err = db
             .related_or_parse(p.to_str().unwrap(), None, Direction::Reverse)
-            .err()
-            .expect("must error on .yaml");
+            .expect_err("must error on .yaml");
         assert!(
             err.to_string().contains("not an indexable source file"),
             "wrong error: {err}"
@@ -1298,7 +1296,7 @@ mod tests {
     fn reconcile_inserts_edges_from_jsonl_into_raw_connection() {
         let dir = tempfile::tempdir().unwrap();
         let jsonl = dir.path().join("edges.jsonl");
-        let edges = vec![
+        let edges = [
             Edge::new("main.go", "fmt", "imports"),
             Edge::new("main.go", "os", "imports"),
             Edge::new("util.go", "strings", "imports"),
@@ -1323,7 +1321,7 @@ mod tests {
     fn reconcile_is_idempotent() {
         let dir = tempfile::tempdir().unwrap();
         let jsonl = dir.path().join("edges.jsonl");
-        let edges = vec![Edge::new("a.go", "b.go", "imports")];
+        let edges = [Edge::new("a.go", "b.go", "imports")];
         let json_lines: Vec<String> = edges
             .iter()
             .map(|e| serde_json::to_string(e).unwrap())

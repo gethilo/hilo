@@ -919,7 +919,7 @@ mod tests {
 
         #[test]
         fn true_returns_true() {
-            assert_eq!(default_true(), true);
+            assert!(default_true());
         }
         #[test]
         fn version_is_2() {

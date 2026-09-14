@@ -616,10 +616,7 @@ mod tests {
 
         fn get(&self, key: &str, dest: &Path) -> Result<(), BackendError> {
             if self.fails(key) {
-                return Err(BackendError::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "mock failure",
-                )));
+                return Err(BackendError::Io(std::io::Error::other("mock failure")));
             }
             let objs = self.objects.lock().unwrap();
             let obj = objs
@@ -632,10 +629,7 @@ mod tests {
 
         fn put(&self, local: &Path, key: &str) -> Result<crate::WriteResult, BackendError> {
             if self.fails(key) {
-                return Err(BackendError::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "mock failure",
-                )));
+                return Err(BackendError::Io(std::io::Error::other("mock failure")));
             }
             let bytes = std::fs::read(local)?;
             let modified = local_mtime_unix(local).unwrap_or(0);
@@ -652,10 +646,7 @@ mod tests {
 
         fn delete(&self, key: &str) -> Result<(), BackendError> {
             if self.fails(key) {
-                return Err(BackendError::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "mock failure",
-                )));
+                return Err(BackendError::Io(std::io::Error::other("mock failure")));
             }
             let mut objs = self.objects.lock().unwrap();
             objs.remove(key)

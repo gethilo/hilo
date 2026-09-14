@@ -636,7 +636,7 @@ mod tests {
         assert_eq!(argv.lines().next().unwrap(), "lsl myremote:docs/sub/a.txt");
         assert_eq!(st.size, 123);
         // 2026-08-26 12:34:56 UTC
-        assert_eq!(st.modified, Some(1787_747_696));
+        assert_eq!(st.modified, Some(1_787_747_696));
     }
 
     #[test]
@@ -711,6 +711,6 @@ mod tests {
         // 1970-01-01 00:00:00 UTC
         assert_eq!(civil_to_unix(1970, 1, 1, 0, 0, 0), 0);
         // 2026-08-26 12:34:56 UTC = 1787747696
-        assert_eq!(civil_to_unix(2026, 8, 26, 12, 34, 56), 1787_747_696);
+        assert_eq!(civil_to_unix(2026, 8, 26, 12, 34, 56), 1_787_747_696);
     }
 }

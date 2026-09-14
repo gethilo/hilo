@@ -310,7 +310,7 @@ mod tests {
             .clone();
 
         let mount = tempfile::tempdir().unwrap();
-        StreamPlacer::create_placeholders(mount.path(), &[main.clone()]).unwrap();
+        StreamPlacer::create_placeholders(mount.path(), std::slice::from_ref(&main)).unwrap();
         let dest = mount.path().join("src/main.rs");
         assert!(!StreamPlacer::is_materialized(&dest));
 
