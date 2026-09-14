@@ -131,6 +131,10 @@ pub fn compute_impact(
     let mut family_stmt = conn.prepare(
         r#"SELECT "from", "to", rel, provenance, confidence FROM edges WHERE "to" LIKE ?"#,
     )?;
+    // GAP-069: TS/JS `local:` reverse index — built ONCE per query from a
+    // single scan of the `local:` edges, so per-BFS-node resolution is a
+    // hash lookup and the traversal stays linear.
+    let local_resolver = crate::resolution::LocalSpecResolver::from_edges(conn).ok();
     let mut resolver = PkgResolver::new();
 
     while let Some((path, depth)) = queue.pop_front() {
@@ -203,6 +207,42 @@ pub fn compute_impact(
                 depth,
             )?;
         }
+
+        // GAP-069: a file path may also be named by TS/JS `local:` nodes —
+        // raw specifiers the parser kept verbatim, one per (importer dir,
+        // specifier) pair. Seed every resolved node's incoming edges with
+        // the same collect helper (visited/depth semantics unchanged). An
+        // edge counts only when its importer is one of the directories
+        // whose specifier actually lands on this file: the SAME node string
+        // can be emitted from other directories naming a DIFFERENT target.
+        // Symbol/pseudo nodes never resolve to a local family.
+        if !path.starts_with("pkg:") {
+            if let Some(local) = local_resolver.as_ref() {
+                let mut families = local.nodes_for(&path);
+                families.sort();
+                families.dedup();
+                for (node, importers) in families {
+                    collect(
+                        stmt.query_map(params![node], |row| {
+                            Ok((
+                                row.get::<_, String>(0)?,
+                                row.get::<_, String>(1)?,
+                                row.get::<_, Option<String>>(2)?,
+                                row.get::<_, Option<f64>>(3)?,
+                            ))
+                        })?
+                        .filter(|row| {
+                            row.as_ref()
+                                .map_or(true, |(from, ..)| importers.contains(from))
+                        }),
+                        &mut results,
+                        &mut visited,
+                        &mut queue,
+                        depth,
+                    )?;
+                }
+            }
+        }
     }
 
     Ok(results)
@@ -240,6 +280,9 @@ pub fn compute_impact_with_external(
     )?;
     let mut ext_stmt: Option<duckdb::Statement> = None;
     let mut resolver = PkgResolver::new();
+    // GAP-069: TS/JS `local:` reverse index — one scan per query, shared
+    // across the whole BFS (see compute_impact).
+    let local_resolver = crate::resolution::LocalSpecResolver::from_edges(conn).ok();
 
     if include_external {
         // Match edges where `to` ends with `:path` (the external edge format
@@ -315,6 +358,37 @@ pub fn compute_impact_with_external(
                 &mut queue,
                 depth,
             )?;
+        }
+
+        // GAP-069: seed the resolved TS/JS `local:` node family of this
+        // BFS node (same importer-filtered semantics as compute_impact
+        // above).
+        if !path.starts_with("pkg:") {
+            if let Some(local) = local_resolver.as_ref() {
+                let mut families = local.nodes_for(&path);
+                families.sort();
+                families.dedup();
+                for (node, importers) in families {
+                    collect(
+                        stmt.query_map(params![node], |row| {
+                            Ok((
+                                row.get::<_, String>(0)?,
+                                row.get::<_, String>(1)?,
+                                row.get::<_, Option<String>>(2)?,
+                                row.get::<_, Option<f64>>(3)?,
+                            ))
+                        })?
+                        .filter(|row| {
+                            row.as_ref()
+                                .map_or(true, |(from, ..)| importers.contains(from))
+                        }),
+                        &mut results,
+                        &mut visited,
+                        &mut queue,
+                        depth,
+                    )?;
+                }
+            }
         }
 
         // External-edge match (cross-repo).

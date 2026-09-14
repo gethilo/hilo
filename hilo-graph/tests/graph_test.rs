@@ -201,6 +201,66 @@ fn test_graph_related_reverse_python_file_returns_package_importers() {
 }
 
 #[test]
+fn test_graph_related_reverse_ts_file_returns_local_specifier_importers() {
+    // GAP-069: a reverse (`related`) lookup on a TS file path must match the
+    // `local:<specifier>` nodes the JS/TS parser emits — one per (importer
+    // dir, specifier) pair — because the parser never emits file→file edges
+    // for relative TS/JS imports. Importer paths repo-relative, exactly as
+    // `graph warm` stores them.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("server")).unwrap();
+    std::fs::create_dir_all(dir.path().join("client")).unwrap();
+    std::fs::write(dir.path().join("server/pluginContainer.ts"), "").unwrap();
+    std::fs::write(dir.path().join("server/host.ts"), "").unwrap();
+    std::fs::write(dir.path().join("client/main.ts"), "").unwrap();
+    std::fs::write(dir.path().join("entry.ts"), "").unwrap();
+    let target = dir
+        .path()
+        .join("server/pluginContainer.ts")
+        .to_string_lossy()
+        .into_owned();
+
+    let db = GraphDB::open(":memory:").unwrap();
+    db.insert_edges(&[
+        edge("server/host.ts", "local:./pluginContainer", "imports"),
+        edge(
+            "client/main.ts",
+            "local:../server/pluginContainer",
+            "imports",
+        ),
+        edge("entry.ts", "local:./server/pluginContainer", "imports"),
+        // Decoy: SAME node string as server/host.ts's, but imported from a
+        // directory where it resolves to a DIFFERENT file — must not appear.
+        edge(
+            "elsewhere/consumer.ts",
+            "local:./pluginContainer",
+            "imports",
+        ),
+    ])
+    .unwrap();
+
+    let reverse = db.related(&target, None, Direction::Reverse).unwrap();
+    assert_eq!(
+        reverse.len(),
+        3,
+        "reverse query must find the local: importers of the file, got: {reverse:?}"
+    );
+    let mut froms: Vec<&str> = reverse.iter().map(|e| e.from.as_str()).collect();
+    froms.sort_unstable();
+    assert_eq!(froms, vec!["client/main.ts", "entry.ts", "server/host.ts"]);
+    // Direction handling is unchanged: the file path itself has no outgoing
+    // edges in this graph.
+    let forward = db.related(&target, None, Direction::Forward).unwrap();
+    assert!(forward.is_empty());
+
+    // Rel-filter still applies on the resolved local: targets.
+    let tested = db
+        .related(&target, Some("tested_by"), Direction::Reverse)
+        .unwrap();
+    assert!(tested.is_empty(), "no tested_by edges exist in this graph");
+}
+
+#[test]
 fn test_graph_auto_migrates_old_schema() {
     // Simulate an old 3-column edges table (pre-v0.2) and verify that
     // GraphDB::open auto-migrates it by adding provenance + confidence.

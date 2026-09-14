@@ -492,6 +492,60 @@ impl GraphDB {
                 edges.push(row?);
             }
         }
+
+        // GAP-069: TS/JS `local:` nodes — raw specifiers the JS/TS parser
+        // kept verbatim, one per (importer dir, specifier) pair, and the
+        // SAME node string can be emitted from different directories naming
+        // DIFFERENT targets. The reverse index resolves each node against
+        // its own importer's directory; a kept edge must name this file's
+        // node AND its importer must be one of the directories whose spec
+        // actually lands on this file (`from ∈ allowed importers`), so
+        // same-named nodes from other directories never cross-match.
+        if direction == Direction::Reverse {
+            if let Ok(resolver) = crate::resolution::LocalSpecResolver::from_edges(&self.conn) {
+                let mut keep = resolver.nodes_for(path);
+                keep.sort();
+                keep.dedup();
+                for (node, importers) in keep {
+                    // The rel filter applies to local:-resolved targets
+                    // exactly as it does to plain targets above.
+                    let (sql, params_vec): (String, Vec<Box<dyn duckdb::ToSql>>) =
+                        if let Some(rel) = rel_filter {
+                            (
+                                "SELECT \"from\", \"to\", rel, provenance, confidence \
+                                 FROM edges WHERE \"to\" = ? AND rel = ?"
+                                    .to_string(),
+                                vec![Box::new(node), Box::new(rel.to_string())],
+                            )
+                        } else {
+                            (
+                                "SELECT \"from\", \"to\", rel, provenance, confidence \
+                                 FROM edges WHERE \"to\" = ?"
+                                    .to_string(),
+                                vec![Box::new(node)],
+                            )
+                        };
+                    let param_refs: Vec<&dyn duckdb::ToSql> =
+                        params_vec.iter().map(|p| p.as_ref()).collect();
+                    let mut stmt = self.conn.prepare(&sql)?;
+                    let rows = stmt.query_map(param_refs.as_slice(), |row| {
+                        Ok(Edge {
+                            from: row.get::<_, String>(0)?,
+                            to: row.get::<_, String>(1)?,
+                            rel: row.get::<_, String>(2)?,
+                            provenance: row.get::<_, String>(3)?,
+                            confidence: row.get::<_, f64>(4)?,
+                        })
+                    })?;
+                    for row in rows {
+                        let edge = row?;
+                        if importers.contains(&edge.from) {
+                            edges.push(edge);
+                        }
+                    }
+                }
+            }
+        }
         Ok(edges)
     }
 
