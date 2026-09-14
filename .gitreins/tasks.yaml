@@ -841,3 +841,23 @@ tasks:
   status: complete
   created_at: '2026-09-14T04:05:29.118803+00:00'
   completed_at: '2026-09-14T04:22:00.585640+00:00'
+- id: GAP-069
+  title: 'TS/JS file-form impact and related resolve local: specifier nodes to the
+    real file'
+  criteria:
+  - '1) hilo-graph/src/resolution.rs gains a query-time local: reverse-resolution
+    layer: for edges with to=local:<spec>, the spec is resolved against the importing
+    file''s directory with TS/JS extension and index probing, indexed as target file
+    -> set of local: node names. 2) compute_impact (hilo-graph/src/impact.rs) seeds
+    the BFS with that family so ''hilo graph impact <file>.ts'' and MCP vfs_graph_impact
+    return the importers instead of an empty dependents list. 3) GraphDB::related
+    Reverse direction also matches the resolved local: family. 4) New unit tests in
+    resolution.rs plus an integration test in hilo-graph/tests/impact_test.rs modeled
+    on test_impact_python_file_query_returns_package_importers prove 3 importer directories
+    using ./x, ../dir/x and ./dir/x all resolve to one target file at depth 1 while
+    decoys do not, and the tests were proved RED before the fix. 5) parser.rs and
+    the canonical edges.jsonl format are untouched (git diff --stat -- hilo-graph/src/parser.rs
+    empty) and all previously passing hilo_graph tests still pass.'
+  status: complete
+  created_at: '2026-09-14T12:02:02.838574+00:00'
+  completed_at: '2026-09-14T14:21:34.819366+00:00'
