@@ -3,7 +3,7 @@
 //! Creates and manages the `.vfs/graph/graph.db` database for graph edge
 //! storage and querying.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -14,7 +14,24 @@ use hilo_metadata::inventory::Edge;
 use crate::error::{GraphError, GraphResult};
 use crate::impact::{self, ImpactFile};
 use crate::parser::{Language, Parser};
-use crate::resolution::PkgResolver;
+use crate::resolution::{LocalSpecResolver, PkgResolver};
+
+/// The TS/JS extensions rule (iii) applies to, derived from
+/// [`Language::from_extension`] (the parser's own TS/JS entries) plus `.mjs`
+/// and `.cjs`, which the extension-probing list in `resolution.rs` treats
+/// as first-class JS (`classify_js` emits `local:` nodes for them the same
+/// way; `Language::from_extension` folds them under JavaScript's `.js`/
+/// `.jsx` entries). Kept as one function so the predicate and the parser's
+/// language table cannot drift apart silently.
+fn is_js_like_file(path: &str) -> bool {
+    let Some(ext) = path.rsplit('.').next() else {
+        return false;
+    };
+    if ext == path {
+        return false;
+    }
+    matches!(ext, "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs")
+}
 
 /// Direction for edge queries: forward (`"from" = ?`) or reverse (`"to" = ?`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -596,10 +613,13 @@ impl GraphDB {
     ///
     /// A production file counts as covered when EITHER it is the literal
     /// `to` of some `tested_by` edge (the pre-GAP-066 behavior, kept for
-    /// file-level edges such as `tests/lib_test.rs -> src/lib.rs`) OR —
+    /// file-level edges such as `tests/lib_test.rs -> src/lib.rs`), OR —
     /// for languages whose package node is finer than the file, i.e. Python
     /// and Go — its resolved `pkg:` node is the literal `to` of some
-    /// `tested_by` edge. `.rs` files are deliberately excluded from the
+    /// `tested_by` edge, OR — for TypeScript/JavaScript — any `local:` node
+    /// the [`LocalSpecResolver`] resolves the file to is one, provided the
+    /// `tested_by` edge's own importer resolves to the same file (GAP-071;
+    /// see [`GraphDB::file_is_covered`]). `.rs` files are deliberately excluded from the
     /// second rule: their resolved node is the Cargo CRATE, and one
     /// crate-root integration test would otherwise mark every member file
     /// covered (GAP-057/064 lineage — see [`GraphDB::file_is_covered`]).
@@ -625,10 +645,23 @@ impl GraphDB {
 
         // GAP-066: the remaining files may still be covered through their
         // package node. One resolver instance for the whole query so each
-        // path costs at most one filesystem walk.
+        // path costs at most one filesystem walk. GAP-071: one
+        // `LocalSpecResolver` per query as well — the index is a single
+        // SQL scan over the `local:` edges.
         let tested = self.tested_by_targets()?;
+        let tested_importers = self.tested_by_importers()?;
         let mut resolver = PkgResolver::new();
-        files.retain(|f| !Self::file_is_covered(f, &tested, root, &mut resolver));
+        let local_resolver = LocalSpecResolver::from_edges(&self.conn).ok();
+        files.retain(|f| {
+            !Self::file_is_covered(
+                f,
+                &tested,
+                &tested_importers,
+                root,
+                &mut resolver,
+                local_resolver.as_ref(),
+            )
+        });
         Ok(files)
     }
 
@@ -647,10 +680,12 @@ impl GraphDB {
     /// [`GraphDB::module_files`] with an explicit resolution root (GAP-066).
     ///
     /// `test_coverage_pct` counts a file under the prefix as covered under
-    /// the same two rules `untested_files_at` uses (literal `tested_by`
-    /// target, or the file's resolved `pkg:` node is one, where the package
-    /// node is finer than the file — Python and Go). `.rs` files are
-    /// deliberately excluded from the node rule: `PkgResolver::pkg_node`
+    /// the same three rules `untested_files_at` uses (literal `tested_by`
+    /// target; the file's resolved `pkg:` node is one, where the package
+    /// node is finer than the file — Python and Go; or one of the file's
+    /// resolved `local:` nodes is one, with the edge importer resolving to
+    /// the same file — TypeScript/JavaScript, GAP-071). `.rs` files are
+    /// deliberately excluded from the node rules: `PkgResolver::pkg_node`
     /// returns the enclosing Cargo CRATE for a `.rs` file, so a single
     /// crate-root `tested_by` edge would report a crate's whole `src/`
     /// module as covered (GAP-057/064 lineage — see
@@ -695,13 +730,25 @@ impl GraphDB {
         )?;
 
         // GAP-066: files in the module that are covered by a test, whether
-        // the `tested_by` edge names the file itself or the `pkg:` node it
-        // belongs to.
+        // the `tested_by` edge names the file itself, the `pkg:` node it
+        // belongs to, or — TS/JS (GAP-071) — a `local:` node resolving to
+        // it.
         let tested = self.tested_by_targets()?;
+        let tested_importers = self.tested_by_importers()?;
         let mut resolver = PkgResolver::new();
+        let local_resolver = LocalSpecResolver::from_edges(&self.conn).ok();
         let tested_count = files
             .iter()
-            .filter(|f| Self::file_is_covered(f, &tested, root, &mut resolver))
+            .filter(|f| {
+                Self::file_is_covered(
+                    f,
+                    &tested,
+                    &tested_importers,
+                    root,
+                    &mut resolver,
+                    local_resolver.as_ref(),
+                )
+            })
             .count() as i64;
 
         let test_coverage_pct = if total_files > 0 {
@@ -734,12 +781,41 @@ impl GraphDB {
         Ok(targets)
     }
 
-    /// Whether `file` counts as covered by some test (GAP-066).
+    /// The `to` node of every `local:`-targeted `tested_by` edge, mapped to
+    /// the set of edge `from` importers (GAP-071).
+    ///
+    /// Rule (iii) needs the importer side of the edge, not just the target
+    /// set: the SAME `local:` node string can be emitted from different
+    /// directories naming DIFFERENT targets, so only an importer whose own
+    /// directory resolves the node to this file proves a test targets THIS
+    /// file (the mirror of [`LocalSpecResolver`]'s importer sets).
+    fn tested_by_importers(&self) -> GraphResult<HashMap<String, HashSet<String>>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT \"to\", \"from\" FROM edges \
+             WHERE rel = 'tested_by' AND \"to\" LIKE 'local:%'",
+        )?;
+        let rows = stmt.query_map(params![], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut map: HashMap<String, HashSet<String>> = HashMap::new();
+        for r in rows {
+            let (to, from) = r?;
+            map.entry(to).or_default().insert(from);
+        }
+        Ok(map)
+    }
+
+    /// Whether `file` counts as covered by some test (GAP-066, extended by
+    /// GAP-071).
     ///
     /// Rule (i): `file` is the literal target of a `tested_by` edge. Rule
-    /// (ii): the `pkg:` node `file` resolves to (via `root`) is. A file that
-    /// resolves to no package node is never covered by rule (ii) — it must
-    /// not silently fall back to an enclosing crate or module.
+    /// (ii): the `pkg:` node `file` resolves to (via `root`) is. Rule
+    /// (iii): a `local:` node `file` resolves to is a `tested_by` target
+    /// AND that edge's own importer (`from`) is among the importers the
+    /// [`LocalSpecResolver`] associates with the file for that node. A file
+    /// that resolves to no package or `local:` node is never covered by
+    /// rules (ii)/(iii) — it must not silently fall back to an enclosing
+    /// crate, module, or directory.
     ///
     /// Rule (ii) is a *package* rule and only applies where the resolved
     /// package node is FINER than the file's directory — today that is `.py`
@@ -754,30 +830,63 @@ impl GraphDB {
     /// on rule (i) alone: only a file-level `tested_by` edge (e.g.
     /// `tests/lib_test.rs -> src/lib.rs`) covers a Rust file.
     ///
-    /// This is GAP-057/064 lineage, not an oversight: the granularity
+    /// Rule (iii) is a *specifier* rule for the TS/JS family (`.ts`, `.tsx`,
+    /// `.js`, `.jsx`, `.mjs`, `.cjs`): the parser stores relative specifiers
+    /// verbatim (`local:../forwardConsole`), so one target file is named by
+    /// many node strings and the target itself never appears as an edge
+    /// target. The importer check is load-bearing, not hygiene — the same
+    /// node string can be emitted from different directories naming
+    /// DIFFERENT files, so membership of the node in the tested set alone
+    /// would cover a decoy file that merely shares the specifier from
+    /// another directory. A bare node-name match is deliberately
+    /// insufficient. (`.rs` is excluded here too: its node graph is
+    /// crate-level, and rule (i) already serves it.)
+    ///
+    /// This is GAP-057/064/071 lineage, not an oversight: the granularity
     /// dispatch below mirrors `PkgResolver::pkg_node`'s own extension
     /// dispatch, which routes `.go` and `.py` to their own walks and
     /// everything else to the Cargo walk.
     fn file_is_covered(
         file: &str,
         tested: &HashSet<String>,
+        tested_importers: &HashMap<String, HashSet<String>>,
         root: &Path,
         resolver: &mut PkgResolver,
+        local_resolver: Option<&LocalSpecResolver>,
     ) -> bool {
         if tested.contains(file) {
             return true;
+        }
+        // `.rs` stays out of every node-resolution rule: both the Cargo
+        // crate node (rule ii) and the `local:` index (rule iii) are
+        // coarser or orthogonal to the file, and the Rust parser already
+        // emits file-level `tested_by` edges, so rule (i) is the only rule
+        // a Rust file can safely be covered by.
+        if file.ends_with(".rs") {
+            return false;
         }
         // Rule (ii) applies only to package nodes finer than the file
         // (Python, Go). The Cargo crate node is coarser than a `.rs` file,
         // so a crate-level `tested_by` target must never cover crate
         // members. See the doc comment above.
-        if file.ends_with(".rs") {
+        if let Some(node) = resolver.pkg_node(&root.join(file).to_string_lossy()) {
+            return tested.contains(&node);
+        }
+        // Rule (iii): TS/JS `local:` resolution (GAP-071). Only files of
+        // the JS family are eligible; a file that resolves to no `local:`
+        // node stays uncovered (no directory fallback).
+        let Some(local) = local_resolver else {
+            return false;
+        };
+        if !is_js_like_file(file) {
             return false;
         }
-        match resolver.pkg_node(&root.join(file).to_string_lossy()) {
-            Some(node) => tested.contains(&node),
-            None => false,
-        }
+        local.nodes_for(file).into_iter().any(|(node, importers)| {
+            tested.contains(&node)
+                && tested_importers
+                    .get(&node)
+                    .is_some_and(|froms| froms.iter().any(|from| importers.contains(from)))
+        })
     }
 
     /// Compute comprehensive [`GraphStats`] using DuckDB aggregate queries.
@@ -1846,6 +1955,230 @@ mod tests {
         assert_eq!(
             stats.test_coverage_pct, 25.0,
             "1 of 4 `src/` files covered by the file-level edge only"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // GAP-071 — coverage consumers resolve `local:` tested_by edges (TS/JS)
+    // -----------------------------------------------------------------------
+
+    /// A tempdir shaped like the GAP-071 reproduction corpus: a TS
+    /// monorepo where two packages hold a same-named `forwardConsole.ts`
+    /// in different directories. The x-package spec covers its target the
+    /// way `classify_js` emits edges — the relative specifier stored
+    /// verbatim as `local:../forwardConsole`. The y package merely IMPORTS
+    /// its own same-named target through the identical node string from
+    /// another directory (`src/inner/app.ts`), with no `tested_by` edge of
+    /// its own — the decoy a naive node-string match would wrongly cover.
+    fn ts_corpus() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        for rel in [
+            "packages/x/src/shared/forwardConsole.ts",
+            "packages/x/src/shared/__tests__/forwardConsole.spec.ts",
+            "packages/y/src/forwardConsole.ts",
+            "packages/y/src/inner/app.ts",
+        ] {
+            touch(dir.path(), rel);
+        }
+        dir
+    }
+
+    fn ts_corpus_edges() -> Vec<Edge> {
+        vec![
+            // The x spec covers its subject: specifier verbatim, so the
+            // target file is named by a node string, never a file path.
+            Edge::new(
+                "packages/x/src/shared/__tests__/forwardConsole.spec.ts",
+                "local:../forwardConsole",
+                "imports",
+            ),
+            Edge::new(
+                "packages/x/src/shared/__tests__/forwardConsole.spec.ts",
+                "local:../forwardConsole",
+                "tested_by",
+            ),
+            // The y package imports its own same-named target through the
+            // IDENTICAL node string from a different directory — an
+            // imports edge only, no test.
+            Edge::new(
+                "packages/y/src/inner/app.ts",
+                "local:../forwardConsole",
+                "imports",
+            ),
+            // Targets participate as importers so they enter the untested
+            // query's candidate pool (and the module file list).
+            Edge::new(
+                "packages/x/src/shared/forwardConsole.ts",
+                "pkg:node:path",
+                "imports",
+            ),
+            Edge::new(
+                "packages/y/src/forwardConsole.ts",
+                "pkg:node:path",
+                "imports",
+            ),
+        ]
+    }
+
+    #[test]
+    fn untested_files_at_resolves_local_spec_coverage_for_typescript() {
+        // GAP-071: the JS/TS parser stores relative specifiers verbatim
+        // (`local:../forwardConsole`), so the target file is never the
+        // literal `to` of a `tested_by` edge and `pkg_node` returns `None`
+        // for `.ts` — both consumers read 0.0% while the edge data is real.
+        let dir = ts_corpus();
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&ts_corpus_edges()).unwrap();
+
+        let untested = db.untested_files_at(dir.path()).unwrap();
+        assert!(
+            !untested.contains(&"packages/x/src/shared/forwardConsole.ts".to_string()),
+            "the spec's local: tested_by edge must cover the resolved target, got: {untested:?}"
+        );
+
+        // Both consumers agree on the same verdict for the same file.
+        let stats = db.module_files_at(dir.path(), "packages/x").unwrap();
+        assert_eq!(
+            stats.files,
+            vec![
+                "packages/x/src/shared/__tests__/forwardConsole.spec.ts".to_string(),
+                "packages/x/src/shared/forwardConsole.ts".to_string(),
+            ],
+            "file list must stay the file-level view of the module"
+        );
+        assert_eq!(
+            stats.test_coverage_pct, 50.0,
+            "the covered target counts toward module coverage (1 of 2 files)"
+        );
+    }
+
+    #[test]
+    fn local_spec_coverage_does_not_leak_across_directories() {
+        // The precision trap: `local:../forwardConsole` is ONE node string
+        // naming TWO different files (one per importer directory). Only
+        // the x target has a covering `tested_by` edge — and its importer
+        // (the x spec) resolves to the x target only. A raw string match
+        // against the tested-target set would cover the y decoy too.
+        let dir = ts_corpus();
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&ts_corpus_edges()).unwrap();
+
+        let untested = db.untested_files_at(dir.path()).unwrap();
+        assert!(
+            untested.contains(&"packages/y/src/forwardConsole.ts".to_string()),
+            "a file sharing the node string but with no tested_by edge of \
+             its own must stay untested (importer context decides), got: {untested:?}"
+        );
+        assert_eq!(
+            untested,
+            vec![
+                "packages/y/src/forwardConsole.ts".to_string(),
+                "packages/y/src/inner/app.ts".to_string(),
+            ],
+            "exactly the two uncovered y files should remain, got: {untested:?}"
+        );
+
+        let y = db.module_files_at(dir.path(), "packages/y").unwrap();
+        assert_eq!(y.files.len(), 2);
+        assert_eq!(
+            y.test_coverage_pct, 0.0,
+            "the decoy package must read 0.0%: its files share a node \
+             string with a test, but no test resolves to them"
+        );
+    }
+
+    #[test]
+    fn local_spec_coverage_covers_all_specifier_forms() {
+        // `./x` (same dir), `../x` (parent dir), extension probing
+        // (`../foo` -> `foo.ts`) and `index.*` probing (`../depth` ->
+        // `depth/index.ts`) — the forms `LocalSpecResolver` documents.
+        // Specs live in `__tests__/` (or `.test.ts`) so `is_test_file`
+        // excludes them from the untested candidate pool, like production
+        // corpora do.
+        let dir = tempfile::tempdir().unwrap();
+        for rel in [
+            "src/widget.ts",
+            "src/widget.test.ts",
+            "src/util.ts",
+            "src/__tests__/util.spec.ts",
+            "src/foo.ts",
+            "src/__tests__/probe.spec.ts",
+            "src/depth/index.ts",
+            "src/__tests__/idx.spec.ts",
+        ] {
+            touch(dir.path(), rel);
+        }
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[
+            // ./x — same directory as the target.
+            Edge::new("src/widget.test.ts", "local:./widget", "imports"),
+            Edge::new("src/widget.test.ts", "local:./widget", "tested_by"),
+            // ../x — specifier crossing a directory boundary.
+            Edge::new("src/__tests__/util.spec.ts", "local:../util", "imports"),
+            Edge::new("src/__tests__/util.spec.ts", "local:../util", "tested_by"),
+            // Extension probing: `../foo` resolves to `foo.ts`.
+            Edge::new("src/__tests__/probe.spec.ts", "local:../foo", "imports"),
+            Edge::new("src/__tests__/probe.spec.ts", "local:../foo", "tested_by"),
+            // Index probing: `../depth` resolves to `depth/index.ts`.
+            Edge::new("src/__tests__/idx.spec.ts", "local:../depth", "imports"),
+            Edge::new("src/__tests__/idx.spec.ts", "local:../depth", "tested_by"),
+            // Targets enter the candidate pool via their own imports edges.
+            Edge::new("src/widget.ts", "pkg:node:path", "imports"),
+            Edge::new("src/util.ts", "pkg:node:path", "imports"),
+            Edge::new("src/foo.ts", "pkg:node:path", "imports"),
+            Edge::new("src/depth/index.ts", "pkg:node:path", "imports"),
+        ])
+        .unwrap();
+
+        let untested = db.untested_files_at(dir.path()).unwrap();
+        assert_eq!(
+            untested,
+            Vec::<String>::new(),
+            "every resolved target is covered and every spec is a test \
+             file; got: {untested:?}"
+        );
+
+        let stats = db.module_files_at(dir.path(), "src").unwrap();
+        // 8 files: the 4 targets plus the 4 specs (each spec is the `from`
+        // of its own imports edge). Only the 4 targets are covered.
+        assert_eq!(stats.files.len(), 8);
+        assert_eq!(
+            stats.test_coverage_pct, 50.0,
+            "4 covered targets of 8 module files"
+        );
+    }
+
+    #[test]
+    fn typescript_files_without_covering_edges_stay_untested() {
+        // A `.ts` file with no `local:` tested_by edge at all must stay
+        // listed — rule (iii) must not blanket-cover the JS family.
+        let dir = tempfile::tempdir().unwrap();
+        touch(dir.path(), "src/orphan.ts");
+        touch(dir.path(), "src/covered.ts");
+        touch(dir.path(), "src/__tests__/covered.spec.ts");
+
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[
+            Edge::new("src/orphan.ts", "pkg:node:path", "imports"),
+            Edge::new("src/covered.ts", "pkg:node:path", "imports"),
+            Edge::new(
+                "src/__tests__/covered.spec.ts",
+                "local:../covered",
+                "imports",
+            ),
+            Edge::new(
+                "src/__tests__/covered.spec.ts",
+                "local:../covered",
+                "tested_by",
+            ),
+        ])
+        .unwrap();
+
+        let untested = db.untested_files_at(dir.path()).unwrap();
+        assert_eq!(
+            untested,
+            vec!["src/orphan.ts".to_string()],
+            "only the file with no covering edge stays listed, got: {untested:?}"
         );
     }
 }
