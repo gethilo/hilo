@@ -901,5 +901,6 @@ tasks:
     and src/flask/config.py return their grep-verified importers, not ''No dependents
     found''. 4) cargo test -p hilo_graph --lib, cargo test -p hilo-graph, cargo test
     -p hilo-cli green; cargo clippy -p hilo-graph --all-targets -- -D warnings green.'
-  status: in_progress
+  status: complete
   created_at: '2026-09-15T19:55:55.379373+00:00'
+  completed_at: '2026-09-15T21:09:11.163402+00:00'
