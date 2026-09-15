@@ -873,3 +873,20 @@ tasks:
   status: complete
   created_at: '2026-09-15T04:04:13.707442+00:00'
   completed_at: '2026-09-15T06:35:42.563520+00:00'
+- id: GAP-072
+  title: graph search labels hits with resolved repo-relative file paths (GAP-072)
+  criteria:
+  - 'hilo graph search on a TS/JS graph returns repo-relative FILE paths for hits
+    that are currently raw local: pseudo-nodes (e.g. packages/vite/src/node/server/pluginContainer.ts,
+    never ''local:../pluginContainer'')'
+  - 'a local: node that resolves to exactly one file becomes that file path; a node
+    resolving to several files expands deterministically to one result per file; a
+    node that resolves to no file is excluded from results'
+  - the MCP tool vfs_graph_search returns the same resolved path form (shared library
+    seam, verified by test or live probe)
+  - cargo test -p hilo_graph --lib passes with new tests; cargo clippy --workspace
+    --all-targets -- -D warnings and cargo fmt --all are clean; search determinism
+    test still passes
+  status: complete
+  created_at: '2026-09-15T12:17:14.313244+00:00'
+  completed_at: '2026-09-15T13:32:11.650973+00:00'
