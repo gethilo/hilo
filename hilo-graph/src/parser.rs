@@ -152,7 +152,8 @@ impl Parser {
         match self.language {
             Language::Go => extract_go_imports(tree.root_node(), source.as_bytes(), &mut paths),
             Language::Python => {
-                extract_python_imports(tree.root_node(), source.as_bytes(), &mut paths)
+                let ctx = PythonImportCtx::build(file_path);
+                extract_python_imports(tree.root_node(), source.as_bytes(), &mut paths, &ctx)
             }
             Language::TypeScript | Language::JavaScript => {
                 extract_js_imports(tree.root_node(), source.as_bytes(), &mut paths);
@@ -268,7 +269,135 @@ fn classify_go(path: &str) -> String {
 
 // ── Python ──────────────────────────────────────────────────────────
 
-fn extract_python_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+/// Path-aware context for Python import extraction (GAP-076).
+///
+/// Importers are stored with repo-relative paths, so "where am I in the
+/// package tree" is not derivable from the source text alone: it needs the
+/// same filesystem walk [`crate::resolution::python_module_for_file`] does
+/// when a consumer resolves a *file* to a node.
+struct PythonImportCtx {
+    /// Dotted module of the importing file (`src/flask/config.py` →
+    /// `flask.config`), or `None` when the file is not a member of any
+    /// package (standalone script).
+    module: Option<String>,
+    /// Whether the importing file is a package `__init__.py`, whose module
+    /// name IS the package (`flask/__init__.py` → `flask`).
+    is_init: bool,
+}
+
+impl PythonImportCtx {
+    fn build(file_path: &str) -> Self {
+        let path = Path::new(file_path);
+        Self {
+            module: python_importing_module(path),
+            is_init: path.file_name().and_then(|n| n.to_str()) == Some("__init__.py"),
+        }
+    }
+}
+
+/// The dotted module of the file doing the importing.
+///
+/// [`crate::resolution::python_module_for_file`] is the authority, and it is
+/// used first. It stops at the first directory without an `__init__.py`,
+/// which is right for regular packages but returns `None` inside a **PEP 420
+/// namespace package** — a directory that is importable without `__init__.py`.
+/// Flask ships `src/flask/sansio/` exactly that way (upstream has never had a
+/// `sansio/__init__.py`), so `from ..config import Config` in
+/// `src/flask/sansio/app.py` really does mean `flask.config`, yet the file
+/// itself has no module name under the strict rule.
+///
+/// Fallback: walk up past the namespace directories to the nearest ancestor
+/// that IS a regular package, then prefix that package's module chain. A file
+/// with no package ancestor at all (standalone script) still yields `None`,
+/// so nothing extra is emitted for it.
+///
+/// Only the *importing file* side is loosened here; `resolution.rs` and its
+/// `python_module_for_file` semantics are untouched.
+fn python_importing_module(file: &Path) -> Option<String> {
+    if let Some(module) = crate::resolution::python_module_for_file(file) {
+        return Some(module);
+    }
+    let stem = file.file_stem()?.to_str()?;
+    if stem.is_empty() || stem == "__init__" {
+        return None;
+    }
+
+    let mut namespace: Vec<String> = Vec::new();
+    let mut current = file.parent()?;
+    loop {
+        if current.join("__init__.py").is_file() {
+            // `current` is a regular package: ask the shared resolver which
+            // module a file sitting directly in it would get, then drop that
+            // file's own component and add the namespace directories back.
+            let probe = current.join("__hilo_namespace_probe__.py");
+            let base = crate::resolution::python_module_for_file(&probe)?;
+            let base = base.rsplit_once('.').map(|(package, _)| package)?;
+            namespace.reverse();
+            let mut parts = vec![base.to_string()];
+            parts.append(&mut namespace);
+            parts.push(stem.to_string());
+            return Some(parts.join("."));
+        }
+        let name = current.file_name().and_then(|n| n.to_str())?;
+        namespace.push(name.to_string());
+        current = current.parent().filter(|p| !p.as_os_str().is_empty())?;
+    }
+}
+
+/// Resolve a relative Python import's raw module text to its absolute
+/// dotted module (GAP-076), e.g. `".sansio.app"` in `flask/config.py` →
+/// `"flask.sansio.app"`.
+///
+/// `raw` is the module as written (`.config`, `..json`, or `.` for
+/// `from . import x`), `importing_module` is the dotted module of the file
+/// doing the importing, and `is_init` marks a package `__init__.py` (whose
+/// module is already the package).
+///
+/// Returns `None` for absolute text and for a relative import that climbs
+/// above the top-level package — nothing extra to emit in either case.
+fn resolve_python_relative_module(
+    raw: &str,
+    importing_module: &str,
+    is_init: bool,
+) -> Option<String> {
+    let level = raw.chars().take_while(|c| *c == '.').count();
+    if level == 0 {
+        return None;
+    }
+    let rest = &raw[level..];
+
+    // The package containing the importing file: for a plain module the
+    // last component is the module itself; for `__init__.py` the module is
+    // the package.
+    let mut components: Vec<&str> = importing_module.split('.').collect();
+    if !is_init {
+        components.pop()?;
+    }
+
+    // `level - 1` further components are consumed by the leading dots.
+    let climb = level - 1;
+    if components.len() < climb {
+        return None;
+    }
+    components.truncate(components.len() - climb);
+    if components.is_empty() {
+        return None;
+    }
+
+    let base = components.join(".");
+    if rest.is_empty() {
+        Some(base)
+    } else {
+        Some(format!("{base}.{rest}"))
+    }
+}
+
+fn extract_python_imports(
+    node: Node,
+    source: &[u8],
+    paths: &mut Vec<String>,
+    ctx: &PythonImportCtx,
+) {
     match node.kind() {
         "import_statement" | "import_from_statement" => {
             let text = node.utf8_text(source).unwrap_or("");
@@ -281,7 +410,27 @@ fn extract_python_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
                 .unwrap_or("")
                 .trim_matches('"');
             if !module.is_empty() {
-                paths.push(format!("pkg:{module}"));
+                let raw_node = format!("pkg:{module}");
+                paths.push(raw_node.clone());
+                // GAP-076: keep the raw node (other consumers key on it) but
+                // ALSO emit the resolved absolute module node, so a relative
+                // import meets the node `PkgResolver::pkg_node` produces for
+                // the target file. Without this, `from .config import X` in
+                // `flask/__init__.py` writes `pkg:.config` while the file
+                // `flask/config.py` resolves to `pkg:flask.config` and the two
+                // never meet (0 edges → "No dependents found").
+                if module.starts_with('.') {
+                    if let Some(importing) = ctx.module.as_deref() {
+                        if let Some(resolved) =
+                            resolve_python_relative_module(module, importing, ctx.is_init)
+                        {
+                            let resolved_node = format!("pkg:{resolved}");
+                            if resolved_node != raw_node {
+                                paths.push(resolved_node);
+                            }
+                        }
+                    }
+                }
             }
             return;
         }
@@ -292,7 +441,7 @@ fn extract_python_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
         node.children(&mut c).collect()
     };
     for child in children {
-        extract_python_imports(child, source, paths);
+        extract_python_imports(child, source, paths, ctx);
     }
 }
 
