@@ -537,6 +537,17 @@ pub struct LocalSpecResolver {
     /// counts for a target only when the specifier resolved from that
     /// importer's own directory lands on it.
     by_target: HashMap<PathBuf, BTreeMap<String, BTreeSet<String>>>,
+    /// Node → the targets a probe actually CONFIRMED for it (GAP-072): the
+    /// repo-space keys recorded only from the resolved branch of the build
+    /// loop — a probed winner that exists, or an exact base that is a file.
+    /// This is the fact half of the index; `by_target` is deliberately
+    /// over-keyed (dangling specs register every lexical candidate) to make
+    /// the file→node direction work across invisible filesystems, and
+    /// inverting IT would surface speculative candidates as if they were
+    /// files. `targets_for_node` reads only this, so its answers are
+    /// filesystem facts. A `BTreeSet` keeps the node→targets order
+    /// lexicographic and duplicate-free by construction.
+    winners: HashMap<String, BTreeSet<String>>,
     /// Repository root in ABSOLUTE form (the common ancestor of the
     /// absolute importers' directories, canonicalized) — the bridge used to
     /// map absolute queries and absolute importers into repo space. `None`
@@ -586,6 +597,7 @@ impl LocalSpecResolver {
         let graph_root = abs_root.clone().or(rel_root);
 
         let mut by_target: HashMap<PathBuf, BTreeMap<String, BTreeSet<String>>> = HashMap::new();
+        let mut winners: HashMap<String, BTreeSet<String>> = HashMap::new();
         for (importer, node) in &pairs {
             let raw = node.strip_prefix("local:").unwrap_or(node);
             let raw = strip_query_hash(raw);
@@ -628,6 +640,12 @@ impl LocalSpecResolver {
             // applies in the invisible-filesystem case; with files visible
             // (the production warm path) the probed winner is exact.
             let winner = probe_existing(&base);
+            // GAP-072: whether the probe CONFIRMED a target for this
+            // (node, importer) pair — computed before `base` is moved into
+            // the key list. Confirmed = the probed winner exists (differs
+            // from the unprobed base), or the exact base is itself a file
+            // (plain-JS import of `./x.js`).
+            let confirmed = winner != base || base.is_file();
             let keys: Vec<PathBuf> = if winner == base && !base.is_file() {
                 candidate_paths(&base)
             } else {
@@ -642,9 +660,25 @@ impl LocalSpecResolver {
                     .or_default()
                     .insert(importer.clone());
             }
+            // GAP-072: record the FACT separately from the index keys. The
+            // probe confirms at most one target per (node, importer) pair —
+            // the probed winner when it exists on disk, or the exact base
+            // when the base itself is a file (plain-JS import of
+            // `./x.js`). Only winners enter `winners`, so the node→file
+            // direction answers with filesystem facts while `by_target`
+            // keeps its over-keyed, filesystem-independent shape for the
+            // file→node direction.
+            if confirmed {
+                let winner = repo_space(&winner, graph_root.as_deref());
+                winners
+                    .entry(node.clone())
+                    .or_default()
+                    .insert(winner.to_string_lossy().into_owned());
+            }
         }
         Ok(Self {
             by_target,
+            winners,
             graph_root,
             abs_root,
         })
@@ -707,6 +741,39 @@ impl LocalSpecResolver {
             return inner_to_vec(matches[0]);
         }
         Vec::new()
+    }
+
+    /// The node→file inverse of the index, restricted to CONFIRMED targets
+    /// (GAP-072): the distinct repo-relative files a `local:` node's
+    /// importers' probes actually found.
+    ///
+    /// `search` holds a hit whose path is a raw `local:` pseudo-node — a
+    /// specifier string (`local:../pluginContainer`), not an openable file —
+    /// and needs the real file(s) behind it. The answer is NOT an inversion
+    /// of `by_target`: that index is deliberately over-keyed for the
+    /// file→node direction (invisible filesystems, dangling specs, all
+    /// lexical candidates), and inverting it would hand back speculative
+    /// candidates as if they were files. `winners` holds only probe-confirmed
+    /// targets, so every returned path is a file the querying process can
+    /// open.
+    ///
+    /// The SAME node string emitted from different directories names
+    /// DIFFERENT files — the per-(node, importer) probing recorded during
+    /// the single build scan is exactly what separates them. Distinctness
+    /// and lexicographic order are properties of the `BTreeSet`, so callers
+    /// get one path per distinct file, in order that is deterministic
+    /// regardless of HashMap iteration order. An empty return means the node
+    /// resolves to nothing openable (dangling import, filesystem not
+    /// visible); a non-`local:` argument is rejected outright, mirroring
+    /// [`nodes_for`](Self::nodes_for)'s treatment of `local:` queries.
+    pub fn targets_for_node(&self, node: &str) -> Vec<String> {
+        if !is_local_node(node) {
+            return Vec::new();
+        }
+        self.winners
+            .get(node)
+            .map(|set| set.iter().cloned().collect())
+            .unwrap_or_default()
     }
 
     /// Map a query path into the repo-relative key space of the index:

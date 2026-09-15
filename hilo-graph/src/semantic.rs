@@ -26,6 +26,7 @@ use serde::Serialize;
 
 use crate::error::GraphResult;
 use crate::graph::GraphDB;
+use crate::resolution::LocalSpecResolver;
 
 /// Function type for extracting symbols from a file path.
 pub type SymbolExtractor<'a> = Option<&'a dyn Fn(&str) -> Vec<String>>;
@@ -413,6 +414,19 @@ pub fn search(db: &GraphDB, query: &str, opts: &SearchOpts) -> GraphResult<Vec<S
 ///
 /// When `symbol_extractor` is provided, symbols (function/type names) are
 /// added to each file's document text, enriching the search index.
+///
+/// Result paths are OPENABLE files. Malformed `pkg:{` pseudo-nodes are
+/// excluded (GAP-038), and TS/JS `local:` hits — raw import specifiers the
+/// parser stored verbatim (`local:../pluginContainer`), which name no file
+/// a user can open — are resolved to their repo-relative target files via
+/// [`LocalSpecResolver`] before results are returned (GAP-072). A specifier
+/// emitted from several directories may name several files; each distinct
+/// target becomes its own result at the node's fused score, in
+/// lexicographic order, and a target already reached as a plain file hit is
+/// not duplicated (the higher-ranked occurrence stands). A specifier that
+/// resolves to nothing (dangling import) is dropped. All of this runs
+/// BEFORE the final `opts.limit` truncation, so dropped hits never consume
+/// result budget and expansions are truncated, not silently lost.
 pub fn search_with_symbols(
     db: &GraphDB,
     query: &str,
@@ -432,33 +446,72 @@ pub fn search_with_symbols(
     // Fuse via RRF (k=60 is the standard constant).
     let fused = reciprocal_rank_fusion(&tfidf_results, &bm25_results, 60);
 
-    // Convert to SearchResult, limited to opts.limit. Malformed `pkg:{`
-    // pseudo-nodes (legacy garbage from unresolvable multi-name use
-    // statements, GAP-035) are excluded — they are not real search targets
-    // (GAP-038).
-    let results = fused
-        .into_iter()
-        .filter(|(path, _)| !path.starts_with("pkg:{"))
-        .take(opts.limit)
-        .map(|(path, score)| {
-            // Extract matching symbols from the query tokens.
-            let query_tokens = tokenize(query);
-            let path_tokens: HashSet<String> = tokenize(&path).into_iter().collect();
-            let matched: Vec<String> = query_tokens
-                .iter()
-                .filter(|t| path_tokens.contains(*t))
-                .cloned()
-                .collect();
-            SearchResult {
-                file_path: path,
-                symbols: matched,
-                score,
-                provenance: "lexical".to_string(),
+    // One resolver for the whole result pass (GAP-072): building it is a
+    // single SQL scan over the `local:` edges — the same budget
+    // `compute_impact` already pays per query — and it is consulted only
+    // when a fused hit actually is a `local:` node.
+    let local_resolver = LocalSpecResolver::from_edges(db.conn()).ok();
+
+    // The query's tokens, matched against each result path's own tokens —
+    // hoisted out of the per-hit loop (the previous code re-tokenized the
+    // query for every result).
+    let query_tokens = tokenize(query);
+
+    // Map fused hits to SearchResults. Resolution and exclusion happen
+    // during the mapping and the `opts.limit` truncation happens AFTER it:
+    // `.take(limit)` on the fused list (the pre-GAP-072 shape) would hand
+    // budget to hits that later resolve to nothing or expand to several
+    // files, and the contract is that neither may distort the result set.
+    let mut results: Vec<SearchResult> = Vec::new();
+    let mut emitted: HashSet<String> = HashSet::new();
+    for (path, score) in fused {
+        if path.starts_with("pkg:{") {
+            // Malformed `pkg:{` pseudo-nodes (legacy garbage from
+            // unresolvable multi-name use statements, GAP-035) are not real
+            // search targets (GAP-038).
+            continue;
+        }
+        if path.starts_with("local:") {
+            // A raw specifier string is not an openable file. Resolve it to
+            // its target file(s): one target → the file replaces the node;
+            // several targets (the same specifier emitted from different
+            // directories naming different files) → one result per file,
+            // lexicographic order from `targets_for_node` (determinism);
+            // zero targets (dangling import) → the hit is dropped.
+            if let Some(resolver) = local_resolver.as_ref() {
+                for target in resolver.targets_for_node(&path) {
+                    if emitted.insert(target.clone()) {
+                        results.push(lexical_result(target, &query_tokens, score));
+                    }
+                }
             }
-        })
-        .collect();
+            continue;
+        }
+        if emitted.insert(path.clone()) {
+            results.push(lexical_result(path, &query_tokens, score));
+        }
+    }
+    results.truncate(opts.limit);
 
     Ok(results)
+}
+
+/// Build one lexical SearchResult: the file path plus the query tokens that
+/// appear in the path's own tokens (the symbol match shared by plain and
+/// resolved hits).
+fn lexical_result(file_path: String, query_tokens: &[String], score: f64) -> SearchResult {
+    let path_tokens: HashSet<String> = tokenize(&file_path).into_iter().collect();
+    let symbols: Vec<String> = query_tokens
+        .iter()
+        .filter(|t| path_tokens.contains(*t))
+        .cloned()
+        .collect();
+    SearchResult {
+        file_path,
+        symbols,
+        score,
+        provenance: "lexical".to_string(),
+    }
 }
 
 // ──────────────────────────── Tests ────────────────────────────
@@ -810,6 +863,273 @@ mod tests {
                 .iter()
                 .any(|r| r.file_path.contains("AuthMiddleware")),
             "should find AuthMiddleware file"
+        );
+    }
+
+    // ── `local:` node resolution in results (GAP-072) ──
+
+    /// An edge whose importer is stored ABSOLUTE — the JIT-parse form
+    /// (`LocalSpecResolver`'s absolute-importer path). The resolution tests
+    /// need the importer's directory inside the tempdir so the resolver's
+    /// `probe_existing` hits the fixture files; repo-relative importers
+    /// (the `graph warm` form) would resolve against the test process's
+    /// cwd and confirm nothing. The DB itself is `:memory:`: probing reads
+    /// the FILES, not the database.
+    fn abs_edge(root: &std::path::Path, from_rel: &str, to: &str, rel: &str) -> Edge {
+        edge(root.join(from_rel).to_string_lossy().as_ref(), to, rel)
+    }
+
+    #[test]
+    fn search_resolves_local_node_to_file_path() {
+        let dir = tempfile::tempdir().unwrap();
+        // The vite-shaped case from the board: `server/index.ts` imports
+        // its sibling `./pluginContainer`, so the graph carries the raw
+        // specifier node `local:./pluginContainer` — the node, not the
+        // file, is what search hits look like before GAP-072. The
+        // root-level importer anchors the derived repo root so the
+        // resolved target is emitted repo-relative.
+        let target = "src/node/server/pluginContainer.ts";
+        std::fs::create_dir_all(dir.path().join("src/node/server")).unwrap();
+        std::fs::write(dir.path().join(target), "export {};\n").unwrap();
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[
+            abs_edge(
+                dir.path(),
+                "src/node/server/index.ts",
+                "local:./pluginContainer",
+                "imports",
+            ),
+            abs_edge(
+                dir.path(),
+                "vite.config.ts",
+                "local:./src/node/server/pluginContainer",
+                "imports",
+            ),
+        ])
+        .unwrap();
+
+        let results = search(&db, "plugin container", &SearchOpts::default()).unwrap();
+
+        // The raw nodes must never surface as result paths...
+        assert!(
+            !results.iter().any(|r| r.file_path.starts_with("local:")),
+            "raw local: nodes must not appear as results, got {:?}",
+            results.iter().map(|r| &r.file_path).collect::<Vec<_>>()
+        );
+        // ...and the resolved repo-relative file must — once, regardless of
+        // how many specifier forms point at it.
+        let hits: Vec<&str> = results
+            .iter()
+            .map(|r| r.file_path.as_str())
+            .filter(|p| *p == target)
+            .collect();
+        assert_eq!(
+            hits,
+            vec![target],
+            "resolved target must appear exactly once, got {:?}",
+            results.iter().map(|r| &r.file_path).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn search_expands_ambiguous_local_node_deterministically() {
+        let dir = tempfile::tempdir().unwrap();
+        // The SAME specifier emitted from two DIFFERENT directories names
+        // two DIFFERENT files — string equality alone would call this one
+        // node; only per-(node, importer) probing knows it is two targets.
+        std::fs::create_dir_all(dir.path().join("a")).unwrap();
+        std::fs::create_dir_all(dir.path().join("b")).unwrap();
+        std::fs::write(dir.path().join("a/helper.ts"), "export {};\n").unwrap();
+        std::fs::write(dir.path().join("b/helper.ts"), "export {};\n").unwrap();
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[
+            abs_edge(dir.path(), "a/consumer.ts", "local:./helper", "imports"),
+            abs_edge(dir.path(), "b/consumer.ts", "local:./helper", "imports"),
+            // The same file ALSO reachable as a plain absolute path hit —
+            // the expansion must not duplicate it (first occurrence wins).
+            abs_edge(
+                dir.path(),
+                "root.ts",
+                &dir.path().join("a/helper.ts").to_string_lossy(),
+                "imports",
+            ),
+        ])
+        .unwrap();
+
+        let opts = SearchOpts::default();
+        let results = search(&db, "helper consumer", &opts).unwrap();
+        let expanded: Vec<&str> = results
+            .iter()
+            .map(|r| r.file_path.as_str())
+            .filter(|p| *p == "a/helper.ts" || *p == "b/helper.ts")
+            .collect();
+
+        assert_eq!(
+            expanded,
+            vec!["a/helper.ts", "b/helper.ts"],
+            "both targets must appear, lexicographically ordered (determinism)"
+        );
+        // One result per distinct target: the plain-path occurrence of
+        // a/helper.ts must have been deduplicated, not duplicated.
+        assert_eq!(
+            results
+                .iter()
+                .filter(|r| r.file_path == "a/helper.ts")
+                .count(),
+            1,
+            "a file reached both as plain hit and via expansion appears once"
+        );
+
+        // Same query + same graph → byte-identical output, including the
+        // expansion order.
+        let again = search(&db, "helper consumer", &opts).unwrap();
+        assert_eq!(results, again, "expansion must be deterministic");
+    }
+
+    #[test]
+    fn search_excludes_unresolvable_local_node() {
+        let dir = tempfile::tempdir().unwrap();
+        // A dangling import: the probe confirms no target file, so the node
+        // resolves to nothing and the hit must be dropped rather than
+        // surfaced as a path no user can open.
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[abs_edge(
+            dir.path(),
+            "src/entry.ts",
+            "local:./missing",
+            "imports",
+        )])
+        .unwrap();
+
+        let results = search(&db, "missing", &SearchOpts::default()).unwrap();
+        assert!(
+            results.is_empty(),
+            "unresolvable local: hit must be dropped, got {:?}",
+            results.iter().map(|r| &r.file_path).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn search_excludes_unresolvable_local_node_without_consuming_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        // The dangling import ranks FIRST (its specifier tokenizes to the
+        // query terms exactly); a plain file ranks second. With limit 1 the
+        // dropped hit must NOT eat the budget — the truncation happens
+        // after resolution, so the real file survives. Deliberately NO
+        // fixture file on disk: the node is truly dangling (the index does
+        // not need the file to exist — only the probe does).
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[
+            abs_edge(
+                dir.path(),
+                "src/entry.ts",
+                "local:./missing_helper",
+                "imports",
+            ),
+            abs_edge(
+                dir.path(),
+                "src/other.go",
+                &dir.path().join("src/missing_helper.go").to_string_lossy(),
+                "imports",
+            ),
+        ])
+        .unwrap();
+
+        let results = search(&db, "missing helper", &SearchOpts { limit: 1 }).unwrap();
+        assert_eq!(results.len(), 1, "limit still applies");
+        assert!(
+            results[0].file_path.ends_with("missing_helper.go"),
+            "the plain file must survive budget-wise, got {:?}",
+            results[0].file_path
+        );
+    }
+
+    #[test]
+    fn search_leaves_plain_paths_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        // Plain absolute-path results are byte-identical whether or not the
+        // graph also carries `local:` edges: the resolution pass touches
+        // only `local:` hits.
+        std::fs::create_dir_all(dir.path().join("a")).unwrap();
+        std::fs::write(dir.path().join("a/helper.ts"), "export {};\n").unwrap();
+        let helper_abs = dir.path().join("a/helper.ts").to_string_lossy().to_string();
+
+        let db_plain = GraphDB::open(":memory:").unwrap();
+        db_plain
+            .insert_edges(&[abs_edge(
+                dir.path(),
+                "a/consumer.ts",
+                &helper_abs,
+                "imports",
+            )])
+            .unwrap();
+        let results_plain = search(&db_plain, "helper", &SearchOpts::default()).unwrap();
+
+        let db_mixed = GraphDB::open(":memory:").unwrap();
+        db_mixed
+            .insert_edges(&[
+                abs_edge(dir.path(), "a/consumer.ts", &helper_abs, "imports"),
+                abs_edge(dir.path(), "a/consumer.ts", "local:./helper", "imports"),
+            ])
+            .unwrap();
+        let results_mixed = search(&db_mixed, "helper", &SearchOpts::default()).unwrap();
+
+        assert!(!results_plain.is_empty());
+        // Every plain hit's PATH is present, unchanged, in the mixed graph
+        // (scores legitimately shift with the document count; the pass must
+        // not change WHICH paths a query returns).
+        let mixed_paths: std::collections::HashSet<&str> =
+            results_mixed.iter().map(|r| r.file_path.as_str()).collect();
+        for r in &results_plain {
+            assert!(
+                mixed_paths.contains(r.file_path.as_str()),
+                "plain result {} must be unchanged, mixed = {:?}",
+                r.file_path,
+                results_mixed
+                    .iter()
+                    .map(|r| &r.file_path)
+                    .collect::<Vec<_>>()
+            );
+        }
+        assert!(
+            results_mixed
+                .iter()
+                .all(|r| !r.file_path.starts_with("local:")),
+            "no raw local: nodes anywhere, got {:?}",
+            results_mixed
+                .iter()
+                .map(|r| &r.file_path)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn search_resolved_local_node_keeps_symbols() {
+        let dir = tempfile::tempdir().unwrap();
+        // The resolved target carries the query's tokens in its path, so
+        // the symbol match is computed for the TARGET — resolution
+        // enriches, it never blanks symbols.
+        std::fs::create_dir_all(dir.path().join("server")).unwrap();
+        std::fs::write(dir.path().join("server/pluginContainer.ts"), "export {};\n").unwrap();
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[abs_edge(
+            dir.path(),
+            "server/index.ts",
+            "local:./pluginContainer",
+            "imports",
+        )])
+        .unwrap();
+
+        let results = search(&db, "plugin container", &SearchOpts::default()).unwrap();
+        let resolved = results
+            .iter()
+            .find(|r| r.file_path == "pluginContainer.ts")
+            .expect("resolved target must appear");
+        assert!(
+            resolved.symbols.contains(&"plugin".to_string())
+                && resolved.symbols.contains(&"container".to_string()),
+            "resolved hit keeps its matched symbols, got {:?}",
+            resolved.symbols
         );
     }
 }
