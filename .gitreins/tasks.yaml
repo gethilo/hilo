@@ -861,3 +861,15 @@ tasks:
   status: complete
   created_at: '2026-09-14T12:02:02.838574+00:00'
   completed_at: '2026-09-14T14:21:34.819366+00:00'
+- id: GAP-071
+  title: Coverage consumers honour local:-targeted tested_by edges (TS/JS)
+  criteria:
+  - hilo graph untested and hilo graph module count a TS/JS file as covered when a
+    spec file emits tested_by -> local:<spec> resolving to that file; cross-directory
+    decoy isolation holds; Rust rule (i) only and Python/Go rule (ii) unchanged; new
+    tests proved RED before the fix; cargo fmt --check, RUSTFLAGS=-D warnings cargo
+    check --workspace, clippy --all-targets -- -D warnings, cargo test -p hilo_graph
+    and -p hilo_mcp all green.
+  status: complete
+  created_at: '2026-09-15T04:04:13.707442+00:00'
+  completed_at: '2026-09-15T05:52:54.806435+00:00'
