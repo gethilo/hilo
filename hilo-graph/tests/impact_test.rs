@@ -324,3 +324,72 @@ fn test_impact_ts_file_query_returns_local_specifier_importers(
 
     Ok(())
 }
+
+/// GAP-076 (criterion 2): relative imports parsed FROM DISK must survive the
+/// whole pipeline — Python parser → real `Edge` rows → `GraphDB` →
+/// `compute_impact` — and every importer of ONE module inside ONE package
+/// must come back at depth 1. The parser-level tests only assert what the
+/// parser emits; this one drives the public query surface the CLI/MCP use.
+#[test]
+fn relative_imports_parsed_from_disk_make_impact_list_every_importer_at_depth_one(
+) -> Result<(), Box<dyn std::error::Error>> {
+    use hilo_graph::parser::{Language, Parser};
+
+    let dir = tempfile::tempdir()?;
+    let root = dir.path().to_path_buf();
+    // Write (creating parents) and return the ABSOLUTE path: the parser walks
+    // the filesystem for the importing module, and the query-time resolver
+    // walks it again for the target file.
+    let write = |rel: &str, body: &str| -> Result<String, std::io::Error> {
+        let abs = root.join(rel);
+        if let Some(parent) = abs.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&abs, body)?;
+        Ok(abs.to_string_lossy().into_owned())
+    };
+
+    write("pkg/__init__.py", "")?;
+    let target = write("pkg/mod.py", "class Thing:\n    pass\n")?;
+    let a = write("pkg/a.py", "from .mod import Thing\n")?; // level 1
+    let b = write("pkg/b.py", "from .mod import Thing\n")?; // level 1
+    write("pkg/sub/__init__.py", "")?;
+    let c = write("pkg/sub/c.py", "from ..mod import Thing\n")?; // level 2
+
+    let mut parser = Parser::for_language(Language::Python)?;
+    let mut edges: Vec<Edge> = Vec::new();
+    for importer in [&a, &b, &c] {
+        let source = std::fs::read_to_string(importer)?;
+        edges.extend(parser.parse_imports(importer, &source)?);
+    }
+
+    let graph = GraphDB::open(":memory:")?;
+    graph.insert_edges(&edges)?;
+
+    // The end-to-end claim, asserted FIRST so this test fails on it (and not
+    // only on the parser premise below) if the fix is not in place.
+    let results = compute_impact(graph.conn(), &target, 1)?;
+    let mut got: Vec<String> = results.iter().map(|r| r.path.clone()).collect();
+    got.sort();
+    let mut want = vec![a, b, c];
+    want.sort();
+    assert_eq!(
+        got, want,
+        "every importer of pkg/mod.py must be listed at depth 1"
+    );
+    assert!(results.iter().all(|r| r.depth == 1), "{results:?}");
+
+    // Premise this depends on (exactly what the fix added): each importer
+    // emitted the RESOLVED absolute module node alongside its raw relative
+    // one — without it nothing ever targets `pkg:pkg.mod` and the query
+    // above answers "No dependents found".
+    let resolved = edges.iter().filter(|e| e.to == "pkg:pkg.mod").count();
+    assert_eq!(
+        resolved,
+        3,
+        "one resolved node per importer, got: {:?}",
+        edges.iter().map(|e| e.to.clone()).collect::<Vec<_>>()
+    );
+
+    Ok(())
+}

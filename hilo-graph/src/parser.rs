@@ -1703,6 +1703,61 @@ mod tests {
         assert!(imports.contains(&"pkg:collections".into()));
     }
 
+    /// GAP-076: the relative-import resolver is a PURE function — this unit
+    /// test needs no filesystem, no parser, and no graph. It pins the dot
+    /// walk (`level - 1` climbs above the importing file's own package) and
+    /// the two inputs that have no answer at all.
+    #[test]
+    fn resolve_python_relative_module_walks_dots_and_rejects_impossible_climbs() {
+        // Level 1 from a plain module inside package `flask`: the package of
+        // `flask/app.py` is `flask`, so `.config` means `flask.config`. The
+        // importing module must be the plain MODULE (a file), not the
+        // package: see the boundary case at the end for `"flask"` itself.
+        assert_eq!(
+            resolve_python_relative_module(".config", "flask.app", false).as_deref(),
+            Some("flask.config")
+        );
+        // Level 2 from a nested module: `..config` in `flask.sansio.app` →
+        // package `flask.sansio`, climb one → `flask`.
+        assert_eq!(
+            resolve_python_relative_module("..config", "flask.sansio.app", false).as_deref(),
+            Some("flask.config")
+        );
+        // Level 1 from an `__init__.py`: the module IS the package, so no
+        // component is consumed by the dot — `flask/__init__.py` doing
+        // `from .json.provider import X` means `flask.json.provider`.
+        assert_eq!(
+            resolve_python_relative_module(".json.provider", "flask", true).as_deref(),
+            Some("flask.json.provider")
+        );
+        // Same rule one level down: `flask/json/__init__.py` doing
+        // `from .provider import X` is `flask.json.provider` too.
+        assert_eq!(
+            resolve_python_relative_module(".provider", "flask.json", true).as_deref(),
+            Some("flask.json.provider")
+        );
+        // Empty rest: `from . import helpers` → the package itself.
+        assert_eq!(
+            resolve_python_relative_module(".", "flask.config", false).as_deref(),
+            Some("flask")
+        );
+        // Absolute text is not our business.
+        assert_eq!(
+            resolve_python_relative_module("os", "flask.config", false),
+            None
+        );
+        // Climbing above the top-level package has no answer.
+        assert_eq!(resolve_python_relative_module("...x", "flask", true), None);
+        // Boundary kept honest: with `is_init = false` the input `flask` is a
+        // TOP-LEVEL module (`flask.py`), whose enclosing package is the
+        // (empty) root — so `.config` must answer None rather than fabricate
+        // a `flask.config` that does not exist.
+        assert_eq!(
+            resolve_python_relative_module(".config", "flask", false),
+            None
+        );
+    }
+
     #[test]
     fn ts_imports() {
         let imports = parse(
