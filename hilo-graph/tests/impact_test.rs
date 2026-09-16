@@ -393,3 +393,83 @@ fn relative_imports_parsed_from_disk_make_impact_list_every_importer_at_depth_on
 
     Ok(())
 }
+
+/// GAP-082: a file inside a PEP 420 namespace package (a directory WITHOUT
+/// `__init__.py` under a regular package — upstream flask ships
+/// `src/flask/sansio/` exactly that way) must resolve to its full dotted
+/// module at query time, so `compute_impact` on the FILE path finds the
+/// importers the parser already wrote `pkg:<pkg>.<ns>.<mod>` edges for.
+/// A resolver-level unit test alone is not sufficient: this drives the
+/// public query surface end to end (parser → Edge rows → GraphDB →
+/// compute_impact), the same shape the GAP-076 integration test uses.
+#[test]
+fn namespace_package_file_resolves_so_impact_lists_its_importers(
+) -> Result<(), Box<dyn std::error::Error>> {
+    use hilo_graph::parser::{Language, Parser};
+
+    let dir = tempfile::tempdir()?;
+    let root = dir.path().to_path_buf();
+    let write = |rel: &str, body: &str| -> Result<String, std::io::Error> {
+        let abs = root.join(rel);
+        if let Some(parent) = abs.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&abs, body)?;
+        Ok(abs.to_string_lossy().into_owned())
+    };
+
+    // `flask` is a regular package; `flask/sansio/` is a PEP 420 namespace
+    // package (deliberately NO `__init__.py`).
+    write("src/flask/__init__.py", "")?;
+    let target = write("src/flask/sansio/app.py", "class App: ...\n")?;
+    // Importer inside the same namespace dir: relative import (level 1).
+    let a = write("src/flask/sansio/scaffold.py", "from .app import App\n")?;
+    // Importer in the enclosing regular package: relative import (level 2).
+    let b = write("src/flask/config.py", "from .sansio.app import App\n")?;
+    // Importer in a REGULAR subpackage of flask: absolute import.
+    write("src/flask/json/__init__.py", "")?;
+    let c = write(
+        "src/flask/json/provider.py",
+        "from flask.sansio.app import App\n",
+    )?;
+
+    let mut parser = Parser::for_language(Language::Python)?;
+    let mut edges: Vec<Edge> = Vec::new();
+    for importer in [&a, &b, &c] {
+        let source = std::fs::read_to_string(importer)?;
+        edges.extend(parser.parse_imports(importer, &source)?);
+    }
+
+    let graph = GraphDB::open(":memory:")?;
+    graph.insert_edges(&edges)?;
+
+    // The end-to-end claim FIRST: the query-time resolver must turn the
+    // namespace file's path into `pkg:flask.sansio.app` implicitly, so all
+    // three importers come back at depth 1.
+    let results = compute_impact(graph.conn(), &target, 1)?;
+    let mut got: Vec<String> = results.iter().map(|r| r.path.clone()).collect();
+    got.sort();
+    let mut want = vec![a, b, c];
+    want.sort();
+    assert_eq!(
+        got, want,
+        "every importer of the namespace-package module must be listed at depth 1"
+    );
+    assert!(results.iter().all(|r| r.depth == 1), "{results:?}");
+
+    // Premise: the parser emitted the RESOLVED namespace node — both from
+    // the relative import inside the namespace dir (`.app` →
+    // `flask.sansio.app`) and from the regular-package importers.
+    let resolved = edges
+        .iter()
+        .filter(|e| e.to == "pkg:flask.sansio.app")
+        .count();
+    assert_eq!(
+        resolved,
+        3,
+        "each importer must emit pkg:flask.sansio.app, got: {:?}",
+        edges.iter().map(|e| e.to.clone()).collect::<Vec<_>>()
+    );
+
+    Ok(())
+}

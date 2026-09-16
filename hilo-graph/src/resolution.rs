@@ -276,60 +276,82 @@ fn import_path(module: &str, rel: &Path) -> String {
 }
 
 /// Derive the dotted Python module for `file` from the filesystem package
-/// boundaries around it (GAP-064).
+/// boundaries around it (GAP-064; PEP 420 namespace packages since GAP-082).
 ///
-/// A directory is a package component iff it holds an `__init__.py`; the walk
-/// climbs from the file's directory while every directory is a package and
-/// stops at the **first non-package directory**, so a path outside a package
-/// tree never contributes host path components (a tempdir file resolves to
-/// `fastapi.routing`, never to `tmp.<random>.fastapi.routing`).
+/// A directory is a **regular** package component iff it holds an
+/// `__init__.py`. The walk climbs from the file's directory to the nearest
+/// regular-package ancestor:
 ///
-/// - `fastapi/routing.py` with `fastapi/__init__.py` → `fastapi.routing`.
-/// - Nested packages include every component:
+/// - Every directory passed on the way that lacks an `__init__.py` is a
+///   **PEP 420 namespace package** component (importable without
+///   `__init__.py` — flask ships `src/flask/sansio/` exactly that way) and
+///   is inserted between the package chain and the stem, outermost first:
+///   `flask/sansio/app.py` with `flask/__init__.py` but no
+///   `flask/sansio/__init__.py` → `flask.sansio.app`.
+/// - Regular package ancestors all contribute:
 ///   `fastapi/dependencies/utils.py` with both `__init__.py` files →
 ///   `fastapi.dependencies.utils`.
 /// - `__init__.py` **is** its package: `fastapi/__init__.py` → `fastapi`
 ///   (never `fastapi.__init__`), `fastapi/dependencies/__init__.py` →
-///   `fastapi.dependencies`.
-/// - A `.py` file whose own directory is not a package (standalone script,
-///   or a plain directory nested under a package) → `None`.
+///   `fastapi.dependencies`. An `__init__.py` never sits in a namespace
+///   directory — its presence is what makes a directory regular.
+/// - A file with **no regular-package ancestor at all** → `None`
+///   (standalone scripts: the tempdir root, `scripts/`, the host tree are
+///   not importable packages and never contribute path components — a
+///   tempdir file resolves to `fastapi.routing`, never to
+///   `tmp.<random>.fastapi.routing`).
 ///
-/// Returns `None` for a path with no module name at all, and for an
-/// `__init__.py` that somehow sits in no package directory.
+/// Returns `None` for a path with no module name at all.
 pub fn python_module_for_file(file: &Path) -> Option<String> {
     let stem = file.file_stem()?.to_str()?;
     let is_init = stem == "__init__";
 
-    let mut parts: Vec<String> = Vec::new();
+    // Climb to the nearest regular-package ancestor, remembering any PEP
+    // 420 namespace directories passed on the way (innermost first).
+    let mut namespace: Vec<String> = Vec::new();
     let mut current = file.parent()?;
     loop {
-        if !current.join("__init__.py").is_file() {
-            // First non-package directory: stop. Anything above it is not
-            // part of the module path (tempdir roots, `python3/`, ...).
+        if current.join("__init__.py").is_file() {
             break;
         }
         let Some(name) = current.file_name().and_then(|n| n.to_str()) else {
-            // Relative path exhausted (`a/b.py` → parent `a` → parent ``):
-            // no further named component exists, so the walk ends here.
-            break;
+            // Relative path exhausted (`a/b.py` → parent `a` → parent ``)
+            // or filesystem root: no regular package above, so this file is
+            // a standalone script — `None`, and no host path component ever
+            // leaks into a module name.
+            return None;
         };
+        // PEP 420 namespace candidate: importable without `__init__.py`.
+        namespace.push(name.to_string());
+        current = current.parent()?;
+    }
+
+    // `current` is a regular package: collect its chain of nested regular
+    // packages (stops at the first non-package directory above it, so the
+    // chain never extends past the package tree into host paths).
+    let mut parts: Vec<String> = Vec::new();
+    while let Some(name) = current.file_name().and_then(|n| n.to_str()) {
         parts.push(name.to_string());
         match current.parent() {
-            Some(parent) => current = parent,
-            None => break,
+            Some(parent) if parent.join("__init__.py").is_file() => current = parent,
+            _ => break,
         }
     }
     parts.reverse();
+    namespace.reverse(); // outermost namespace directory first
 
     if is_init {
         // The package node itself; a lone `__init__.py` in no package is a
-        // bare file, not a module.
+        // bare file, not a module. (`namespace` is always empty here by
+        // construction: an `__init__.py` cannot sit in a namespace
+        // directory — its presence is what makes a directory regular.)
         return (!parts.is_empty()).then(|| parts.join("."));
     }
     if parts.is_empty() || stem.is_empty() {
         // Standalone file: not a member of any package.
         return None;
     }
+    parts.extend(namespace);
     parts.push(stem.to_string());
     Some(parts.join("."))
 }
@@ -1140,12 +1162,23 @@ mod tests {
         assert_eq!(python_module_for_file(Path::new(&script)), None);
         assert_eq!(PkgResolver::new().pkg_node(&script), None);
 
-        // A plain directory nested under a package is still not a package:
-        // the walk stops at the first directory without `__init__.py`.
+        // GAP-082 semantic change: `outer/plain/` has no `__init__.py`, so
+        // under the old stop-at-first-non-package rule `outer/plain/mod.py`
+        // resolved to `None`. Under PEP 420 that directory IS an importable
+        // namespace package (importable without `__init__.py`), and `outer`
+        // is a regular package — so the file now resolves to its full dotted
+        // module. (True standalone scripts below still resolve to `None`.)
         write(dir.path(), "outer/__init__.py", "");
         let nested_plain = write(dir.path(), "outer/plain/mod.py", "");
-        assert_eq!(python_module_for_file(Path::new(&nested_plain)), None);
-        assert_eq!(PkgResolver::new().pkg_node(&nested_plain), None);
+        assert_eq!(
+            python_module_for_file(Path::new(&nested_plain)).as_deref(),
+            Some("outer.plain.mod"),
+            "a namespace dir under a regular package is importable (PEP 420)"
+        );
+        assert_eq!(
+            PkgResolver::new().pkg_node(&nested_plain).as_deref(),
+            Some("pkg:outer.plain.mod")
+        );
 
         // A bare relative filename has no package above it in this crate
         // (and no name component at all once the walk reaches the empty
@@ -1162,6 +1195,82 @@ mod tests {
         assert_eq!(resolver.pkg_node("sys:python"), None);
         assert_eq!(resolver.pkg_node("std:python"), None);
         assert_eq!(resolver.pkg_node("external:repo:app/main.py"), None);
+    }
+
+    // ── PEP 420 namespace packages (GAP-082) ────────────────────────
+
+    /// Flask-shaped namespace fixture: `src/flask/` is a regular package
+    /// (has `__init__.py`), `src/flask/sansio/` is a PEP 420 namespace
+    /// package (no `__init__.py`, exactly like upstream flask).
+    fn flask_sansio_fixture() -> (tempfile::TempDir, String, String, String) {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "src/flask/__init__.py", "");
+        let app = write(dir.path(), "src/flask/sansio/app.py", "class App: ...\n");
+        let blueprints = write(
+            dir.path(),
+            "src/flask/sansio/blueprints.py",
+            "class Blueprint: ...\n",
+        );
+        let config = write(dir.path(), "src/flask/config.py", "class Config: ...\n");
+        (dir, app, blueprints, config)
+    }
+
+    #[test]
+    fn namespace_dir_under_regular_package_resolves_to_dotted_module() {
+        let (_dir, app, _, config) = flask_sansio_fixture();
+        assert_eq!(
+            python_module_for_file(Path::new(&app)).as_deref(),
+            Some("flask.sansio.app"),
+            "sansio/ is a PEP 420 namespace package under the regular package flask"
+        );
+        // Control: a regular-package sibling is unchanged.
+        assert_eq!(
+            python_module_for_file(Path::new(&config)).as_deref(),
+            Some("flask.config")
+        );
+    }
+
+    #[test]
+    fn namespace_dirs_two_levels_deep_keep_their_order() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "src/flask/__init__.py", "");
+        // `a/` and `a/b/` are both namespace directories (no `__init__.py`);
+        // outermost first in the dotted name.
+        let deep = write(dir.path(), "src/flask/a/b/mod.py", "x = 1\n");
+        assert_eq!(
+            python_module_for_file(Path::new(&deep)).as_deref(),
+            Some("flask.a.b.mod"),
+            "nested namespace components join outermost-first after the package chain"
+        );
+        let mut resolver = PkgResolver::new();
+        assert_eq!(
+            resolver.pkg_node(&deep).as_deref(),
+            Some("pkg:flask.a.b.mod")
+        );
+    }
+
+    #[test]
+    fn plain_dir_without_any_package_ancestor_still_resolves_none() {
+        let dir = tempfile::tempdir().unwrap();
+        // Namespace directories all the way up to the filesystem root: no
+        // regular package anywhere, so this is a standalone script — the
+        // tempdir/host tree must never leak into a module name.
+        let orphan = write(dir.path(), "scripts/tools/run.py", "print('hi')\n");
+        assert_eq!(python_module_for_file(Path::new(&orphan)), None);
+        assert_eq!(PkgResolver::new().pkg_node(&orphan), None);
+    }
+
+    #[test]
+    fn namespace_package_resolver_node_meets_relative_import_emission() {
+        // The node a consumer derives for the namespace file must be exactly
+        // the node the parser emits for a relative import targeting it
+        // (the GAP-076 emission, now fed by the same shared resolver).
+        let (_dir, app, _, _) = flask_sansio_fixture();
+        let mut resolver = PkgResolver::new();
+        assert_eq!(
+            resolver.pkg_node(&app).as_deref(),
+            Some("pkg:flask.sansio.app")
+        );
     }
 
     #[test]

@@ -297,51 +297,16 @@ impl PythonImportCtx {
 
 /// The dotted module of the file doing the importing.
 ///
-/// [`crate::resolution::python_module_for_file`] is the authority, and it is
-/// used first. It stops at the first directory without an `__init__.py`,
-/// which is right for regular packages but returns `None` inside a **PEP 420
-/// namespace package** — a directory that is importable without `__init__.py`.
-/// Flask ships `src/flask/sansio/` exactly that way (upstream has never had a
-/// `sansio/__init__.py`), so `from ..config import Config` in
-/// `src/flask/sansio/app.py` really does mean `flask.config`, yet the file
-/// itself has no module name under the strict rule.
-///
-/// Fallback: walk up past the namespace directories to the nearest ancestor
-/// that IS a regular package, then prefix that package's module chain. A file
-/// with no package ancestor at all (standalone script) still yields `None`,
-/// so nothing extra is emitted for it.
-///
-/// Only the *importing file* side is loosened here; `resolution.rs` and its
-/// `python_module_for_file` semantics are untouched.
+/// [`crate::resolution::python_module_for_file`] is the single authority
+/// (GAP-082): since its PEP 420 support it already climbs past namespace
+/// directories to the nearest regular package, so `src/flask/sansio/app.py`
+/// resolves to `flask.sansio.app` exactly as a consumer resolving that file
+/// to a node will. Before GAP-082 this wrapper carried a private copy of
+/// that fallback walk; two divergent implementations of the same walk was
+/// the defect class this row closed, so the copy is gone — this is now only
+/// a named alias at the parser's call site.
 fn python_importing_module(file: &Path) -> Option<String> {
-    if let Some(module) = crate::resolution::python_module_for_file(file) {
-        return Some(module);
-    }
-    let stem = file.file_stem()?.to_str()?;
-    if stem.is_empty() || stem == "__init__" {
-        return None;
-    }
-
-    let mut namespace: Vec<String> = Vec::new();
-    let mut current = file.parent()?;
-    loop {
-        if current.join("__init__.py").is_file() {
-            // `current` is a regular package: ask the shared resolver which
-            // module a file sitting directly in it would get, then drop that
-            // file's own component and add the namespace directories back.
-            let probe = current.join("__hilo_namespace_probe__.py");
-            let base = crate::resolution::python_module_for_file(&probe)?;
-            let base = base.rsplit_once('.').map(|(package, _)| package)?;
-            namespace.reverse();
-            let mut parts = vec![base.to_string()];
-            parts.append(&mut namespace);
-            parts.push(stem.to_string());
-            return Some(parts.join("."));
-        }
-        let name = current.file_name().and_then(|n| n.to_str())?;
-        namespace.push(name.to_string());
-        current = current.parent().filter(|p| !p.as_os_str().is_empty())?;
-    }
+    crate::resolution::python_module_for_file(file)
 }
 
 /// Resolve a relative Python import's raw module text to its absolute
