@@ -904,3 +904,19 @@ tasks:
   status: complete
   created_at: '2026-09-15T19:55:55.379373+00:00'
   completed_at: '2026-09-15T21:09:11.163402+00:00'
+- id: GAP-082
+  title: Resolve files inside PEP 420 namespace packages to their dotted module (GAP-082)
+  criteria:
+  - 'On a freshly warmed copy of the flask corpus (/tmp/bakeoff/flask copied to /tmp/gap082-flask),
+    ''hilo graph impact src/flask/sansio/app.py'' lists at least one dependent at
+    depth 1 (baseline: ''No dependents found''; src/flask/app.py expected) while the
+    control ''hilo graph impact src/flask/config.py'' still lists dependents; ''cargo
+    test -p hilo_graph'' is green including new PEP 420 unit tests (namespace dir
+    under a regular package resolves to Some(dotted chain), a plain dir with no regular
+    package ancestor still resolves to None) and ''cargo clippy -p hilo_graph --all-targets
+    -- -D warnings'' plus ''cargo fmt --all --check'' are clean; re-warming the corpus
+    after the change removes zero edges versus the pre-change baseline (additivity)
+    and the added-edge count is reported.'
+  status: complete
+  created_at: '2026-09-16T02:30:14.545588+00:00'
+  completed_at: '2026-09-16T03:09:41.451972+00:00'
