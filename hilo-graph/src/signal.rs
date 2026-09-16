@@ -25,7 +25,7 @@
 //! The engine is fully deterministic: same task + same graph → byte-identical
 //! text output. No randomness, no model calls, no external API.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -165,15 +165,38 @@ where
     // 2. Traverse the graph from anchors to collect the file set.
     let file_scores = traverse_and_score(db, &anchors, opts.depth, opts.max_nodes);
 
-    // 3. Sort files by score descending (deterministic — BTreeMap breaks ties).
+    // 3. Sort files by score descending (deterministic — path breaks ties).
+    // Anchors all carry score 1.0; within that band the anchor grade
+    // (component > prefix > substring token match, GAP-078) orders files so
+    // the best anchor leads the result.
+    let task_tokens = tokenize_task(task);
+    let anchor_grades: HashMap<&str, u64> = anchors
+        .iter()
+        .map(|a| {
+            let grade = task_tokens
+                .iter()
+                .map(|t| token_match_grade(&a.to_lowercase(), t))
+                .sum();
+            (a.as_str(), grade)
+        })
+        .collect();
     let mut sorted_files: Vec<(String, f64, String)> = file_scores
         .into_iter()
         .map(|(path, (score, prov))| (path, score, prov))
         .collect();
     sorted_files.sort_by(|a, b| {
-        // Primary: score descending. Secondary: path ascending (deterministic).
+        // Primary: score descending. Secondary: anchor grade descending
+        // (distinguishes the otherwise-equal 1.0 anchors). Tertiary: path
+        // ascending (deterministic).
         b.1.partial_cmp(&a.1)
             .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                let (ga, gb) = (
+                    anchor_grades.get(a.0.as_str()).copied().unwrap_or(0),
+                    anchor_grades.get(b.0.as_str()).copied().unwrap_or(0),
+                );
+                gb.cmp(&ga)
+            })
             .then_with(|| a.0.cmp(&b.0))
     });
 
@@ -198,8 +221,11 @@ where
 /// Tokenize the task string and match against file paths in the graph.
 ///
 /// Tokenization: lowercase, split on non-alphanumeric, filter tokens ≥ 3 chars.
-/// Matching: a file path matches if any token appears as a substring of the
-/// path (case-insensitive). Files are ranked by match count, then alphabetically.
+/// Matching: per task token, a whole path-component match beats a
+/// component-prefix match beats an incidental in-component substring
+/// (GAP-078: "session" in `src/flask/sessions.py` is a better anchor than
+/// "bug" inside `debughelpers.py`). Files are ranked by graded score, then
+/// alphabetically; a file with zero token matches is never an anchor.
 fn discover_anchors(db: &GraphDB, task: &str, seed_limit: usize) -> Vec<String> {
     let tokens = tokenize_task(task);
     if tokens.is_empty() {
@@ -211,18 +237,20 @@ fn discover_anchors(db: &GraphDB, task: &str, seed_limit: usize) -> Vec<String> 
     let mut all_files: HashSet<String> = froms.into_iter().collect();
     all_files.extend(tos);
 
-    // Score each file by how many task tokens it matches.
-    let mut scored: Vec<(String, usize)> = all_files
+    // Score each file by graded task-token matches.
+    let mut scored: Vec<(String, u64)> = all_files
         .into_iter()
         .map(|path| {
-            let lower = path.to_lowercase();
-            let matches = tokens.iter().filter(|t| lower.contains(t.as_str())).count();
-            (path, matches)
+            let score = tokens
+                .iter()
+                .map(|t| token_match_grade(&path.to_lowercase(), t))
+                .sum();
+            (path, score)
         })
-        .filter(|(_, m)| *m > 0)
+        .filter(|(_, s)| *s > 0)
         .collect();
 
-    // Sort: most matches first, then alphabetically (deterministic).
+    // Sort: highest grade first, then alphabetically (deterministic).
     scored.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
     let literal_anchors: Vec<String> = scored
@@ -251,6 +279,37 @@ fn discover_anchors(db: &GraphDB, task: &str, seed_limit: usize) -> Vec<String> 
         Err(_) => return Vec::new(),
     };
     semantic_results.into_iter().map(|r| r.file_path).collect()
+}
+
+/// Graded match quality of one lowercased task token against one lowercased
+/// path (GAP-078). Whole component (4) > component prefix (2) > incidental
+/// in-component substring (1); graph pseudo-nodes (`pkg:`, `sys:`, `std:`,
+/// `external:`) score 0 so a real file matching the same task term can never
+/// rank below them. Returns 0 when the token is absent — zero matches are
+/// never anchors.
+fn token_match_grade(path: &str, token: &str) -> u64 {
+    if is_pseudo_node(path) || !path.contains(token) {
+        return 0;
+    }
+    if path.split(['/', '\\']).any(|component| component == token) {
+        return 4;
+    }
+    if path
+        .split(['/', '\\', '.'])
+        .any(|component| component.starts_with(token))
+    {
+        return 2;
+    }
+    1
+}
+
+/// Whether `path` is a graph pseudo-node rather than a filesystem path
+/// (same families as `resolution::is_symbol_node`).
+fn is_pseudo_node(path: &str) -> bool {
+    path.starts_with("pkg:")
+        || path.starts_with("sys:")
+        || path.starts_with("std:")
+        || path.starts_with("external:")
 }
 
 /// Tokenize a task string for anchor matching.
@@ -1352,10 +1411,12 @@ fn format_output(files: &[SignalFile], anchors: &[String], opts: &SignalOpts) ->
     output.push_str("## MAP\n");
     output.push_str("<file> →\n  - <key symbols, one per line>\n\n");
 
-    // Group by file, sorted by score then path (deterministic).
-    let map_files: BTreeMap<&str, &SignalFile> =
-        files.iter().map(|f| (f.path.as_str(), f)).collect();
-    for (path, sf) in &map_files {
+    // Render in the caller's relevance order (signal score descending,
+    // anchor grade then path ascending as tie-breaks) so anchors lead the
+    // tier — alphabetical rendering buried the on-task file at MAP position
+    // 54 of 61 behind demo apps (GAP-078).
+    for sf in files {
+        let path = &sf.path;
         if sf.symbols.is_empty() {
             output.push_str(&format!("{path} → (no symbols extracted)\n"));
             continue;
@@ -1585,6 +1646,98 @@ mod tests {
         assert!(
             result.anchors.iter().any(|a| a.contains("auth")),
             "anchors should include auth files"
+        );
+    }
+
+    #[test]
+    fn anchor_grade_ladder_component_beats_prefix_beats_substring() {
+        // GAP-078: per task token, a whole path-component match must beat a
+        // component-prefix match, which must beat an incidental in-component
+        // substring.
+        assert_eq!(token_match_grade("src/app/session/store.rs", "session"), 4);
+        assert_eq!(token_match_grade("src/app/sessions.rs", "session"), 2);
+        assert_eq!(token_match_grade("src/app/obsession.rs", "session"), 1);
+        assert_eq!(token_match_grade("src/app/util.rs", "session"), 0);
+    }
+
+    #[test]
+    fn anchor_grade_ignores_pseudo_nodes() {
+        // GAP-078: a `pkg:` pseudo-node must never outrank a real file that
+        // matches the same task term.
+        assert_eq!(token_match_grade("pkg:flask.sessions", "session"), 0);
+        assert!(
+            token_match_grade("src/flask/sessions.py", "session")
+                > token_match_grade("pkg:flask.sessions", "session"),
+            "a real file must outrank a matching pkg: pseudo-node"
+        );
+    }
+
+    #[test]
+    fn discover_anchors_ranks_component_match_first() {
+        // GAP-078 regression: "session" is a whole path component in
+        // src/app/session/store.rs but only an incidental substring inside
+        // the component "obsession" of src/app/obsession.rs. The old flat
+        // substring count scored both 1, and the alphabetical tie-break put
+        // obsession.rs first.
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[
+            edge("src/app/obsession.rs", "src/app/util.rs", "imports"),
+            edge("src/app/session/store.rs", "src/app/util.rs", "imports"),
+        ])
+        .unwrap();
+
+        let anchors = discover_anchors(&db, "session handling", 8);
+
+        assert_eq!(
+            anchors.first().map(String::as_str),
+            Some("src/app/session/store.rs"),
+            "the component-match file must be the first anchor, got {anchors:?}"
+        );
+        assert!(
+            anchors.iter().any(|a| a == "src/app/obsession.rs"),
+            "a substring-match file must still be an anchor, got {anchors:?}"
+        );
+    }
+
+    #[test]
+    fn understand_map_renders_anchor_before_alphabetical_decoy() {
+        // GAP-078 regression: the MAP tier was rendered from a BTreeMap keyed
+        // by path, so an `examples/...` decoy listed before the on-task
+        // anchor even though the anchor scores higher. MAP must follow the
+        // relevance order it is handed.
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[edge(
+            "src/app/session/store.rs",
+            "examples/aaa/util.rs",
+            "imports",
+        )])
+        .unwrap();
+
+        let result = understand(&db, "session handling", &SignalOpts::default()).unwrap();
+
+        let map = result
+            .text
+            .split("## MAP")
+            .nth(1)
+            .and_then(|rest| rest.split("## SIGNATURES").next())
+            .expect("MAP tier must exist");
+
+        let anchor_line = "src/app/session/store.rs →";
+        let decoy_line = "examples/aaa/util.rs →";
+        let anchor_pos = map.find(anchor_line).expect("anchor must be in MAP");
+        let decoy_pos = map.find(decoy_line).expect("decoy must be in MAP");
+        assert!(
+            anchor_pos < decoy_pos,
+            "anchor must render before the alphabetically-earlier decoy in MAP, got:\n{map}"
+        );
+
+        let first_entry = map
+            .lines()
+            .find(|l| !l.starts_with("<file>") && !l.starts_with("  - ") && !l.trim().is_empty())
+            .expect("MAP must have at least one entry");
+        assert!(
+            first_entry.starts_with(anchor_line),
+            "anchor must be the first MAP entry, got {first_entry:?}"
         );
     }
 
