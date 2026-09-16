@@ -64,7 +64,7 @@ const SOURCE_EXTS: &[(&str, Language)] = &[
 ];
 
 /// Run the classify command.
-pub fn run_classify(dry_run: bool, verbose: bool, features: bool) -> Result<()> {
+pub fn run_classify(dry_run: bool, verbose: bool, features: bool, limit: usize) -> Result<()> {
     let cwd = std::env::current_dir().context("failed to get current directory")?;
 
     // Load feature inference config if requested
@@ -80,6 +80,7 @@ pub fn run_classify(dry_run: bool, verbose: bool, features: bool) -> Result<()> 
     let mut classified = 0;
     let mut errors = 0;
     let mut feature_count = 0;
+    let mut printed_lines = 0usize;
 
     let mut by_role: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut by_feature: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
@@ -136,16 +137,22 @@ pub fn run_classify(dry_run: bool, verbose: bool, features: bool) -> Result<()> 
                 }
 
                 if dry_run {
-                    if let Some(ref feat) = feature {
-                        println!(
-                            "{:30} → role={:<12} status={:<10} feature={} ({})",
-                            rel_path, role, status, feat, reason
-                        );
-                    } else {
-                        println!(
-                            "{:30} → role={:<12} status={:<10} ({})",
-                            rel_path, role, status, reason
-                        );
+                    // GAP-080: per-file lines are the unbounded part of the
+                    // output; cap them (default 50, --limit 0 = unlimited).
+                    let may_print = limit == 0 || printed_lines < limit;
+                    if may_print {
+                        if let Some(ref feat) = feature {
+                            println!(
+                                "{:30} → role={:<12} status={:<10} feature={} ({})",
+                                rel_path, role, status, feat, reason
+                            );
+                        } else {
+                            println!(
+                                "{:30} → role={:<12} status={:<10} ({})",
+                                rel_path, role, status, reason
+                            );
+                        }
+                        printed_lines += 1;
                     }
                 } else {
                     // Write role and status as xattrs
@@ -173,7 +180,7 @@ pub fn run_classify(dry_run: bool, verbose: bool, features: bool) -> Result<()> 
                             return;
                         }
                     }
-                    if verbose {
+                    if verbose && (limit == 0 || printed_lines < limit) {
                         if let Some(ref feat) = feature {
                             println!(
                                 "  {:30} → role={:<12} status={:<10} feature={}",
@@ -185,6 +192,7 @@ pub fn run_classify(dry_run: bool, verbose: bool, features: bool) -> Result<()> 
                                 rel_path, role, status
                             );
                         }
+                        printed_lines += 1;
                     }
                 }
 
@@ -204,6 +212,14 @@ pub fn run_classify(dry_run: bool, verbose: bool, features: bool) -> Result<()> 
     });
 
     println!();
+    if limit > 0 && printed_lines > limit {
+        println!(
+            "  ... {} more per-file lines suppressed (--limit 0 to show all)",
+            printed_lines - limit
+        );
+    } else if limit > 0 && printed_lines == limit && file_count > limit {
+        println!("  ... further per-file lines suppressed (--limit 0 to show all)");
+    }
     println!("  Files scanned:  {file_count}");
     println!("  Classified:     {classified}");
     if feature_count > 0 {

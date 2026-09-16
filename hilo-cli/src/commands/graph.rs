@@ -622,7 +622,7 @@ fn resolve_graph_db_path(cwd: &std::path::Path) -> Option<std::path::PathBuf> {
 /// An empty cache is a valid state (not an error) — the graph starts
 /// empty after `hilo init` and is populated lazily as files are queried
 /// or eagerly via `hilo graph warm`.
-pub fn run_stats() -> Result<()> {
+pub fn run_stats(limit: usize) -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
     let Some(graph_db) = resolve_graph_db_path(&cwd) else {
         println!("Graph cache is empty. Query a file or run `hilo graph warm` to populate.");
@@ -665,8 +665,19 @@ pub fn run_stats() -> Result<()> {
     }
     if !stats.orphans.is_empty() {
         println!("Orphans (no incoming edges):");
-        for orphan in &stats.orphans {
+        // GAP-080: monorepos can have thousands of orphans — cap the list,
+        // summarize the remainder, honor --limit 0 as unlimited.
+        let shown = if limit == 0 {
+            stats.orphans.len()
+        } else {
+            limit.min(stats.orphans.len())
+        };
+        for orphan in &stats.orphans[..shown] {
             println!("  {orphan}");
+        }
+        let remaining = stats.orphans.len() - shown;
+        if remaining > 0 {
+            println!("  ... {remaining} more orphans (use --limit 0 to show all)");
         }
     }
     println!("Top dependencies:");

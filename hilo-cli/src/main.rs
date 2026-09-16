@@ -96,7 +96,7 @@ enum GraphCommand {
     #[clap(alias = "discover")]
     Warm(WarmArgs),
     /// Print summary statistics from the dependency graph.
-    Stats,
+    Stats(StatsArgs),
     /// Query graph edges for a specific file (auto-parses on first access).
     Related(RelatedArgs),
     /// Find all files that transitively depend on a given file (impact analysis).
@@ -292,6 +292,13 @@ struct WorkspaceWipeArgs {
 }
 
 #[derive(clap::Args)]
+struct StatsArgs {
+    /// Max list entries to print (orphans). 0 = unlimited. Default 25.
+    #[arg(long, default_value_t = 25)]
+    limit: usize,
+}
+
+#[derive(clap::Args)]
 struct ClassifyArgs {
     /// Dry run — print classifications without writing xattrs.
     #[arg(long)]
@@ -302,6 +309,9 @@ struct ClassifyArgs {
     /// Enable feature inference — set user.vfs.feature xattrs from directory structure.
     #[arg(long)]
     features: bool,
+    /// Max per-file lines to print in dry-run/verbose mode. 0 = unlimited. Default 50.
+    #[arg(long, default_value_t = 50)]
+    limit: usize,
 }
 
 fn main() {
@@ -313,7 +323,7 @@ fn main() {
         Commands::Graph(GraphCommand::Warm(args)) => {
             graph::run_warm(args.workspace, args.language, args.changed, args.allow_home)
         }
-        Commands::Graph(GraphCommand::Stats) => graph::run_stats(),
+        Commands::Graph(GraphCommand::Stats(args)) => graph::run_stats(args.limit),
         Commands::Graph(GraphCommand::Related(args)) => graph::run_related(
             &args.path,
             args.relation.as_deref(),
@@ -372,7 +382,7 @@ fn main() {
             workspace::run_workspace_wipe(args.apply)
         }
         Commands::Classify(args) => {
-            classify::run_classify(args.dry_run, args.verbose, args.features)
+            classify::run_classify(args.dry_run, args.verbose, args.features, args.limit)
         }
         Commands::Ignore(ignore::IgnoreCommand::Check(args)) => ignore::run_ignore_check(args),
         Commands::Plugin(PluginCommand::Load(args)) => plugin::run_plugin_load(&args.wasm_path),
