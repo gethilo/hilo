@@ -204,6 +204,10 @@ struct SearchArgs {
     /// Max results to return (default: 20).
     #[arg(long)]
     limit: Option<usize>,
+    /// Skip symbol indexing (faster, but exact symbol names may not match
+    /// their defining file). Default: symbols indexed (GAP-077).
+    #[arg(long)]
+    no_symbols: bool,
 }
 
 #[derive(clap::Args)]
@@ -338,7 +342,9 @@ fn main() {
         Commands::Graph(GraphCommand::Understand(args)) => {
             graph::run_understand(&args.task, args.budget)
         }
-        Commands::Graph(GraphCommand::Search(args)) => graph::run_search(&args.query, args.limit),
+        Commands::Graph(GraphCommand::Search(args)) => {
+            graph::run_search(&args.query, args.limit, args.no_symbols)
+        }
         Commands::Graph(GraphCommand::Module(args)) => graph::run_module(&args.prefix),
         Commands::Graph(GraphCommand::Untested) => graph::run_untested(),
         Commands::Graph(GraphCommand::RuleList) => graph::run_rule_list(),

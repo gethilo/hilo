@@ -725,7 +725,12 @@ fn graph_search(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
     }
 
     let db = hilo_graph::GraphDB::open(GRAPH_DB_PATH)?;
-    let opts = hilo_graph::SearchOpts { limit };
+    // GAP-077: MCP search indexes file-defined symbols so exact symbol
+    // names surface their defining file for agents.
+    let opts = hilo_graph::SearchOpts {
+        limit,
+        index_symbols: true,
+    };
     let results = hilo_graph::search(&db, query, &opts)?;
 
     Ok(serde_json::json!({

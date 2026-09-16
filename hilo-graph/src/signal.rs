@@ -239,7 +239,13 @@ fn discover_anchors(db: &GraphDB, task: &str, seed_limit: usize) -> Vec<String> 
     // when literal matching returns nothing. This finds files by meaning
     // (camelCase/snake_case tokenization + NLP ranking) rather than
     // literal substring matching.
-    let search_opts = crate::semantic::SearchOpts { limit: seed_limit };
+    // understand's semantic fallback: symbol indexing ON — the fallback
+    // runs precisely when literal path tokens missed, so definition names
+    // are the likeliest remaining match signal (GAP-077).
+    let search_opts = crate::semantic::SearchOpts {
+        limit: seed_limit,
+        index_symbols: true,
+    };
     let semantic_results = match crate::semantic::search(db, task, &search_opts) {
         Ok(results) => results,
         Err(_) => return Vec::new(),
@@ -361,6 +367,18 @@ struct Symbol {
     name: String,
     line: usize,
     signature: String,
+}
+
+/// Definition names of a source file, for search-index enrichment (GAP-077).
+///
+/// Thin public wrapper over [`extract_symbols`]: returns just the symbol
+/// names, empty on unreadable/unparseable input — the same failure shape
+/// the signal engine tolerates.
+pub fn extract_symbol_names_for_index(path: &str, source: &str) -> Vec<String> {
+    extract_symbols(path, source)
+        .into_iter()
+        .map(|s| s.name)
+        .collect()
 }
 
 /// Extract symbols (functions, types, classes) from a source file.

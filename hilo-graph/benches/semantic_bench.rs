@@ -232,7 +232,10 @@ fn bench_search_e2e(c: &mut Criterion) {
     let db = GraphDB::open(":memory:").unwrap();
     let edges = edge_chain_themed(500);
     db.insert_edges(&edges).unwrap();
-    let opts = SearchOpts { limit: 20 };
+    let opts = SearchOpts {
+        limit: 20,
+        ..Default::default()
+    };
 
     c.bench_function("semantic/search/e2e-500-files", |b| {
         b.iter(|| {

@@ -188,7 +188,15 @@ fn test_search_respects_limit() {
     ])
     .unwrap();
 
-    let results = search(&db, "auth", &SearchOpts { limit: 2 }).unwrap();
+    let results = search(
+        &db,
+        "auth",
+        &SearchOpts {
+            limit: 2,
+            ..Default::default()
+        },
+    )
+    .unwrap();
     assert!(results.len() <= 2, "should respect limit");
 }
 

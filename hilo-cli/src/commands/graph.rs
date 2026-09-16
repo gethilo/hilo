@@ -1277,7 +1277,7 @@ pub fn run_understand(task: &str, budget: Option<usize>) -> Result<()> {
 ///
 /// Uses TF-IDF + BM25 + Reciprocal Rank Fusion over all graph nodes.
 /// Zero external APIs, fully deterministic. See `hilo-graph/src/semantic.rs`.
-pub fn run_search(query: &str, limit: Option<usize>) -> Result<()> {
+pub fn run_search(query: &str, limit: Option<usize>, no_symbols: bool) -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
     let Some(graph_db) = resolve_graph_db_path(&cwd) else {
         anyhow::bail!("No graph data. Run `hilo graph warm` first.");
@@ -1290,6 +1290,10 @@ pub fn run_search(query: &str, limit: Option<usize>) -> Result<()> {
     if let Some(l) = limit {
         opts.limit = l;
     }
+    // GAP-077: CLI search opts into symbol indexing by default so exact
+    // symbol names ("url_for") find their defining file; --no-symbols
+    // restores the cheap path-only index.
+    opts.index_symbols = !no_symbols;
 
     let results = hilo_graph::semantic::search(&graph, query, &opts)
         .context("failed to run semantic search")?;

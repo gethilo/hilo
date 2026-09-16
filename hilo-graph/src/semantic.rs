@@ -31,6 +31,59 @@ use crate::resolution::LocalSpecResolver;
 /// Function type for extracting symbols from a file path.
 pub type SymbolExtractor<'a> = Option<&'a dyn Fn(&str) -> Vec<String>>;
 
+/// Default symbol source for index documents that look like repo files.
+///
+/// GAP-077: an exact symbol query (`url_for`) can never match when the
+/// document for its defining file holds only path tokens — the definition
+/// name is not in the index. For every document with a known source
+/// extension, read the file from disk (relative to `root`) and pull the
+/// top-level definition names via the shared tree-sitter walker. Anything
+/// unreadable/unparseable yields no symbols (previous behavior). Pseudo-
+/// nodes (`pkg:`/`local:`) get none — GAP-079 then ranks real files above
+/// import-specifier ghosts because the files now carry their definitions.
+pub fn default_symbol_extractor<'a>(
+    root: &'a std::path::Path,
+) -> impl Fn(&str) -> Vec<String> + 'a {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    // Memoize per index build: a single search parses each file at most once.
+    // (Tree-sitter parse of every doc is what `understand` already pays; the
+    // cache keeps search-then-search-again from paying it twice.)
+    let cache: RefCell<HashMap<String, Vec<String>>> = RefCell::new(HashMap::new());
+    move |doc_path: &str| {
+        if let Some(hit) = cache.borrow().get(doc_path) {
+            return hit.clone();
+        }
+        let out = (|| {
+            if doc_path.starts_with("pkg:") || doc_path.starts_with("local:") {
+                return Vec::new();
+            }
+            let ext = std::path::Path::new(doc_path)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("");
+            if crate::parser::Language::from_extension(ext).is_none() {
+                return Vec::new();
+            }
+            let full = root.join(doc_path);
+            let Ok(meta) = std::fs::metadata(&full) else {
+                return Vec::new();
+            };
+            // Skip generated/minified blobs (>1MB) — definition extraction
+            // on them is waste and they pollute the index.
+            if meta.len() > 1_000_000 {
+                return Vec::new();
+            }
+            let Ok(source) = std::fs::read_to_string(&full) else {
+                return Vec::new();
+            };
+            crate::signal::extract_symbol_names_for_index(doc_path, &source)
+        })();
+        cache.borrow_mut().insert(doc_path.to_string(), out.clone());
+        out
+    }
+}
+
 // ──────────────────────────── Types ────────────────────────────
 
 /// A single search result from semantic search.
@@ -51,11 +104,20 @@ pub struct SearchResult {
 pub struct SearchOpts {
     /// Maximum number of results to return.
     pub limit: usize,
+    /// Enrich the index with file-defined symbols before matching (GAP-077).
+    /// Default OFF: the first query with it ON pays one tree-sitter parse
+    /// per source file (memoized within the query; cached warms don't help
+    /// across processes). Callers that need exact-symbol recall — CLI
+    /// interactive use, MCP `vfs_graph_search` — opt in.
+    pub index_symbols: bool,
 }
 
 impl Default for SearchOpts {
     fn default() -> Self {
-        Self { limit: 20 }
+        Self {
+            limit: 20,
+            index_symbols: false,
+        }
     }
 }
 
@@ -397,6 +459,26 @@ pub fn reciprocal_rank_fusion(
     fused
 }
 
+/// Shared index→(tfidf, bm25, RRF) pipeline for `search_with_symbols`.
+///
+/// `early_exit` encodes the `index.is_empty()` short-circuit (an empty index
+/// means no results); kept as a parameter because the empty check must run
+/// INSIDE the borrowing scope where the index exists.
+fn build_fused(
+    db: &GraphDB,
+    query: &str,
+    index: &TfIdfIndex,
+    early_exit: bool,
+) -> GraphResult<Vec<(String, f64)>> {
+    let _ = db; // reserved for future edge-aware scoring
+    if early_exit {
+        return Ok(Vec::new());
+    }
+    let tfidf_results = index.tfidf_search(query);
+    let bm25_results = index.bm25_search(query);
+    Ok(reciprocal_rank_fusion(&tfidf_results, &bm25_results, 60))
+}
+
 // ──────────────────────────── Public search API ────────────────────────────
 
 /// Run semantic search against the graph.
@@ -433,18 +515,30 @@ pub fn search_with_symbols(
     opts: &SearchOpts,
     symbol_extractor: SymbolExtractor,
 ) -> GraphResult<Vec<SearchResult>> {
-    let index = TfIdfIndex::build_with_symbols(db, symbol_extractor)?;
-
-    if index.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    // Run both ranking functions.
-    let tfidf_results = index.tfidf_search(query);
-    let bm25_results = index.bm25_search(query);
-
-    // Fuse via RRF (k=60 is the standard constant).
-    let fused = reciprocal_rank_fusion(&tfidf_results, &bm25_results, 60);
+    // GAP-077: a bare `search()` call (CLI/MCP/understand-fallback pass None)
+    // must still index file-defined symbols, else exact-symbol queries find
+    // nothing. The default extractor reads from the cwd, matching how the
+    // rest of the CLI resolves repo files; callers with a real extractor
+    // (tests, MCP sandboxing) keep full control.
+    // Borrow-shape: when the default extractor is needed, EVERYTHING that
+    // borrows it (cwd, extractor closure, index) lives inside one scope and
+    // `fused` escapes as owned data. No cross-statement borrows.
+    let fused = match symbol_extractor {
+        Some(f) => {
+            let index = TfIdfIndex::build_with_symbols(db, Some(f))?;
+            build_fused(db, query, &index, index.is_empty())?
+        }
+        None if opts.index_symbols => {
+            let cwd_tmp = std::env::current_dir().unwrap_or_default();
+            let extracted = default_symbol_extractor(&cwd_tmp);
+            let index = TfIdfIndex::build_with_symbols(db, Some(&extracted))?;
+            build_fused(db, query, &index, index.is_empty())?
+        }
+        None => {
+            let index = TfIdfIndex::build_with_symbols(db, None)?;
+            build_fused(db, query, &index, index.is_empty())?
+        }
+    };
 
     // One resolver for the whole result pass (GAP-072): building it is a
     // single SQL scan over the `local:` edges — the same budget
@@ -527,6 +621,63 @@ mod tests {
     }
 
     // ── Tokenization tests ──
+
+    // ── GAP-077: file-defined symbols searchable ──
+
+    fn gap077_fixture() -> (tempfile::TempDir, GraphDB) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src/flask")).unwrap();
+        std::fs::write(
+            dir.path().join("src/flask/helpers.py"),
+            "def url_for(endpoint, **values):\n    return endpoint\n",
+        )
+        .unwrap();
+        let db_path = dir.path().join("graph.db");
+        let db = GraphDB::open(db_path.to_str().unwrap()).unwrap();
+        db.insert_edges(&[crate::Edge::new(
+            "src/flask/helpers.py",
+            "pkg:jinja2",
+            "imports",
+        )])
+        .unwrap();
+        (dir, db)
+    }
+
+    #[test]
+    fn search_with_symbols_finds_defining_file_by_exact_symbol() {
+        let (dir, db) = gap077_fixture();
+        let prev_cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+        let opts = SearchOpts {
+            limit: 10,
+            index_symbols: true,
+        };
+        let results = search(&db, "url_for", &opts).unwrap();
+        std::env::set_current_dir(prev_cwd).unwrap();
+        assert!(
+            results
+                .iter()
+                .any(|r| r.file_path == "src/flask/helpers.py"),
+            "exact symbol query must surface its defining file, got: {:?}",
+            results
+        );
+    }
+
+    #[test]
+    fn search_without_symbols_keeps_path_only_behavior() {
+        let (dir, db) = gap077_fixture();
+        let prev_cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+        // Default: index_symbols=false — the cheap pre-GAP-077 contract.
+        let results = search(&db, "url_for", &SearchOpts::default()).unwrap();
+        std::env::set_current_dir(prev_cwd).unwrap();
+        assert!(
+            !results
+                .iter()
+                .any(|r| r.file_path == "src/flask/helpers.py"),
+            "symbols-off search must not match by definition name"
+        );
+    }
 
     #[test]
     fn tokenize_basic() {
@@ -762,7 +913,15 @@ mod tests {
         ])
         .unwrap();
 
-        let results = search(&db, "auth", &SearchOpts { limit: 2 }).unwrap();
+        let results = search(
+            &db,
+            "auth",
+            &SearchOpts {
+                limit: 2,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert!(results.len() <= 2, "should respect limit");
     }
 
@@ -1035,7 +1194,15 @@ mod tests {
         ])
         .unwrap();
 
-        let results = search(&db, "missing helper", &SearchOpts { limit: 1 }).unwrap();
+        let results = search(
+            &db,
+            "missing helper",
+            &SearchOpts {
+                limit: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(results.len(), 1, "limit still applies");
         assert!(
             results[0].file_path.ends_with("missing_helper.go"),

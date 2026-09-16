@@ -30,13 +30,14 @@ pub use parser::{Language, Parser};
 pub use provenance::Provenance;
 pub use rules::{Rule, RuleCheckResult, RuleEngine, RuleError};
 pub use signal::{
-    understand, understand_with_source, Resolution, SignalFile, SignalOpts, SignalResult,
-    SymbolSignature, Tier,
+    extract_symbol_names_for_index, understand, understand_with_source, Resolution, SignalFile,
+    SignalOpts, SignalResult, SymbolSignature, Tier,
 };
 
 pub use semantic::tokenize as semantic_tokenize;
 pub use semantic::{
-    reciprocal_rank_fusion, search, search_with_symbols, SearchOpts, SearchResult, TfIdfIndex,
+    default_symbol_extractor, reciprocal_rank_fusion, search, search_with_symbols, SearchOpts,
+    SearchResult, TfIdfIndex,
 };
 
 /// Re-export of the shared [`Edge`] type from `hilo_metadata`.
