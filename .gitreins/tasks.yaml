@@ -920,3 +920,22 @@ tasks:
   status: complete
   created_at: '2026-09-16T02:30:14.545588+00:00'
   completed_at: '2026-09-16T03:39:48.220737+00:00'
+- id: GAP-078
+  title: Order understand MAP by relevance and grade anchor match quality
+  criteria:
+  - '''hilo graph understand "fix a bug in session handling"'' on a warm flask graph
+    renders src/flask/sessions.py within the first 3 MAP entries and above every examples/*
+    file'
+  - MAP tier is ordered by signal score descending then path (anchors lead), not alphabetically;
+    SIGNATURES/DETAIL keep their existing order
+  - 'anchor scoring grades match quality: whole path-component match outranks prefix
+    outranks incidental substring, so src/flask/sessions.py outranks src/flask/debughelpers.py
+    for the flask task'
+  - a new regression test in the repo fails on the pre-change code and passes after;
+    cargo test -p hilo_graph --lib passes in full
+  - cargo test -p hilo_graph --test determinism_test passes (byte-identical output
+    for identical input) and cargo clippy -p hilo_graph --all-targets -- -D warnings
+    is clean
+  status: complete
+  created_at: '2026-09-16T10:26:49.104131+00:00'
+  completed_at: '2026-09-16T11:04:07.529336+00:00'
