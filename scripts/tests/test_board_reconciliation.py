@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
 """Regression tests for the BOARD-HYGIENE-001 board reconciliation (warpfs tick 187).
 
-These tests exercise the REAL board data and the REAL pre-change snapshot
-(git commit 71b333f) rather than fixtures: the negative tests prove the
-verification logic detects the pre-change defects, and the positive tests prove
-the reconciled board fixes them without losing provenance.
+The tests exercise REAL board data on both sides of every comparison:
+
+  base state = git show 71b333f:...            (pre-change snapshot)
+  new state  = git show de9374c:...            (the reconciliation revision,
+               materialised into a temp dir — the working tree is NEVER read)
+
+That split is deliberate: ordinary board activity after the reconciliation
+(appending events, updating the board header, closing a task) must not turn this
+suite red, while a mutated reconciliation revision still must. The live-state
+code path is covered separately, in throwaway git repos, so it can be exercised
+without touching the real board.
 
 Run:  python3 -m unittest discover -s scripts/tests -t . -v
       (or) python3 scripts/tests/test_board_reconciliation.py
@@ -13,8 +20,10 @@ Run:  python3 -m unittest discover -s scripts/tests -t . -v
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -23,8 +32,10 @@ sys.path.insert(0, str(REPO / "scripts"))
 
 import verify_board_reconciliation as vbr  # noqa: E402
 
-BOARD = REPO / ".coding-hermes" / "board"
 BASE = vbr.BASE_COMMIT_DEFAULT
+REV = vbr.RECONCILED_REV_DEFAULT
+REV_DIR = vbr.materialize_board(REPO, REV)
+BOARD = REV_DIR / vbr.BOARD_REL
 ARTIFACT = json.loads((BOARD / vbr.ARTIFACT_NAME).read_text())
 
 
@@ -32,12 +43,97 @@ def rows_of(text: str) -> list[dict]:
     return vbr.parse_rows(text)[1]
 
 
+def seed_repo(root: Path, rev_content: bool = True) -> tuple[str, str]:
+    """Throwaway git repo: commit 1 = 71b333f board, commit 2 = de9374c board.
+
+    Returns (base_sha, rev_sha); with rev_content=False both are the snapshot.
+    """
+    board = root / vbr.BOARD_REL
+    board.mkdir(parents=True, exist_ok=True)
+    for name in vbr.BOARD_FILES:
+        (board / name).write_text(vbr.git_show(REPO, BASE, f"{vbr.BOARD_REL}/{name}"))
+    (board / vbr.ARTIFACT_NAME).write_text((BOARD / vbr.ARTIFACT_NAME).read_text())
+    git = ["git", "-c", "user.email=tick187@test", "-c", "user.name=tick187"]
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(git + ["add", "-A"], cwd=root, check=True)
+    subprocess.run(git + ["commit", "-qm", f"pre-change snapshot {BASE}"], cwd=root, check=True)
+    base_sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root,
+                              capture_output=True, text=True, check=True).stdout.strip()
+    if not rev_content:
+        return base_sha, base_sha
+    for name in vbr.BOARD_FILES:
+        (board / name).write_text(vbr.git_show(REPO, REV, f"{vbr.BOARD_REL}/{name}"))
+    subprocess.run(git + ["commit", "-qam", f"reconciliation {REV}"], cwd=root, check=True)
+    rev_sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root,
+                             capture_output=True, text=True, check=True).stdout.strip()
+    return base_sha, rev_sha
+
+
+def append_task(root: Path, row: dict) -> None:
+    with (root / vbr.BOARD_REL / "tasks.jsonl").open("a") as fh:
+        fh.write(json.dumps(row) + "\n")
+
+
+def edit_task_lines(root: Path, mutate) -> None:
+    """Rewrite ONLY the lines `mutate(row, line)` returns a replacement row for.
+
+    Untouched lines keep their exact bytes, so these edits model what a later
+    tick actually does to the board.
+    """
+    path = root / vbr.BOARD_REL / "tasks.jsonl"
+    out = []
+    for line in path.read_text().split("\n"):
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        replacement = mutate(row, line)
+        out.append(line if replacement is None else json.dumps(replacement))
+    path.write_text("".join(ln + "\n" for ln in out))
+
+
+def legit_post_reconciliation_activity(root: Path) -> None:
+    """What a legitimate later tick does: append events, close a task, new row."""
+    board = root / vbr.BOARD_REL
+    with (board / "events.jsonl").open("a") as fh:
+        fh.write(json.dumps({"id": "evt-tick188", "task": "GAP-060",
+                             "action": "task_completed", "ts": "2026-09-17T08:10:00-05:00",
+                             "note": "closed by the next tick"}) + "\n")
+    with (board / "board.jsonl").open("a") as fh:
+        fh.write(json.dumps({"type": "tick", "id": "tick-188",
+                             "ts": "2026-09-17T08:10:00-05:00"}) + "\n")
+
+    def close(row: dict, line: str):
+        if row["id"] != "BOARD-HYGIENE-001":
+            return None
+        return {**row, "status": "complete", "completed_at": "2026-09-17T08:10:00-05:00",
+                "completed_commit": "a1b2c3d", "foreman_note": "checked into master"}
+
+    edit_task_lines(root, close)
+    append_task(root, {"id": "QA-WARPFS-9", "status": "pending", "title": "new tick finding",
+                       "ts": "2026-09-17T08:11:00-05:00"})
+
+
+def close_task_silently(root: Path, task_id: str) -> None:
+    """Flip a pending row to complete with no evidence at all."""
+    def close(row: dict, line: str):
+        if row["id"] != task_id:
+            return None
+        row = {**row}
+        row.pop("completed_at", None)
+        row.pop("completed_commit", None)
+        row.pop("closure_evidence", None)
+        row["status"] = "complete"
+        return row
+
+    edit_task_lines(root, close)
+
+
 class PrechangeSnapshot(unittest.TestCase):
     """The snapshot the acceptance criteria name must really be the broken state."""
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.base_text = vbr.git_show(REPO, BASE, ".coding-hermes/board/tasks.jsonl")
+        cls.base_text = vbr.git_show(REPO, BASE, f"{vbr.BOARD_REL}/tasks.jsonl")
         cls.base_rows = rows_of(cls.base_text)
         cls.new_text = (BOARD / "tasks.jsonl").read_text()
         cls.new_rows = rows_of(cls.new_text)
@@ -73,7 +169,12 @@ class ReconciledBoard(unittest.TestCase):
         cls.new_text = (BOARD / "tasks.jsonl").read_text()
         cls.new_rows = rows_of(cls.new_text)
         cls.by_id = {r["id"]: r for r in cls.new_rows}
-        cls.base_rows = rows_of(vbr.git_show(REPO, BASE, ".coding-hermes/board/tasks.jsonl"))
+        cls.base_rows = rows_of(vbr.git_show(REPO, BASE, f"{vbr.BOARD_REL}/tasks.jsonl"))
+
+    def test_new_state_is_the_immutable_revision_not_the_working_tree(self) -> None:
+        """The suite must read de9374c, so later board activity cannot break it."""
+        self.assertEqual(self.new_text, vbr.git_show(REPO, REV, f"{vbr.BOARD_REL}/tasks.jsonl"))
+        self.assertNotEqual(str(BOARD), str(REPO / vbr.BOARD_REL))
 
     def test_unique_ids_valid_statuses_and_vocabularies(self) -> None:
         self.assertEqual(vbr.duplicate_ids(self.new_rows), {})
@@ -159,7 +260,7 @@ class ReconciledBoard(unittest.TestCase):
 class Preservation(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.base_text = vbr.git_show(REPO, BASE, ".coding-hermes/board/tasks.jsonl")
+        cls.base_text = vbr.git_show(REPO, BASE, f"{vbr.BOARD_REL}/tasks.jsonl")
         cls.base_raw = cls.base_text.split("\n")
         if cls.base_raw and cls.base_raw[-1] == "":
             cls.base_raw = cls.base_raw[:-1]
@@ -182,7 +283,7 @@ class Preservation(unittest.TestCase):
 
     def test_events_board_and_fixtures_are_untouched(self) -> None:
         for name in ("events.jsonl", "board.jsonl", "fixtures.jsonl"):
-            rel = f".coding-hermes/board/{name}"
+            rel = f"{vbr.BOARD_REL}/{name}"
             self.assertEqual((BOARD / name).read_text(), vbr.git_show(REPO, BASE, rel),
                              f"{name} differs from the {BASE} snapshot")
 
@@ -218,15 +319,99 @@ class Preservation(unittest.TestCase):
             self.assertIn(c["to"], (row[c["field"]],))
 
     def test_events_parse_behaviour_matches_snapshot(self) -> None:
-        base_events = vbr.git_show(REPO, BASE, ".coding-hermes/board/events.jsonl")
+        base_events = vbr.git_show(REPO, BASE, f"{vbr.BOARD_REL}/events.jsonl")
         self.assertEqual(vbr._bad_lines((BOARD / "events.jsonl").read_text()),
                          vbr._bad_lines(base_events))
 
 
+class ImmutableRevisionMode(unittest.TestCase):
+    """Default mode must be immune to legitimate board activity, not blind to mutation."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.mkdtemp(prefix="warpfs187-test-")
+        self.fake = Path(self.tmp)
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.base_sha, self.rev_sha = seed_repo(self.fake)
+
+    def test_legit_activity_after_reconciliation_does_not_break_verification(self) -> None:
+        """Appended events, a header update and a task closure: still OK."""
+        legit_post_reconciliation_activity(self.fake)
+        rep = vbr.check_board(self.fake, base=self.base_sha, rev=self.rev_sha, quiet=True)
+        self.assertEqual(rep.failures, [], "legitimate board activity broke the checks")
+
+    def test_legit_activity_is_seen_by_live_mode_without_false_alarms(self) -> None:
+        legit_post_reconciliation_activity(self.fake)
+        rep = vbr.check_board(self.fake, base=self.base_sha, rev=self.rev_sha,
+                              live=True, quiet=True)
+        self.assertEqual(rep.failures, [], "live mode rejected a legitimate closure/append")
+
+    def test_silent_closure_is_rejected_in_live_mode(self) -> None:
+        legit_post_reconciliation_activity(self.fake)
+        close_task_silently(self.fake, "GAP-060")
+        rep = vbr.check_board(self.fake, base=self.base_sha, rev=self.rev_sha,
+                              live=True, quiet=True)
+        joined = "\n".join(rep.failures)
+        self.assertIn("closed with completion evidence", joined)
+        self.assertIn("no undocumented pending->complete flip", joined)
+
+    def test_deleted_row_and_rewritten_events_are_rejected_in_live_mode(self) -> None:
+        board = self.fake / vbr.BOARD_REL
+        rows = [r for r in rows_of((board / "tasks.jsonl").read_text()) if r["id"] != "GAP-060"]
+        (board / "tasks.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+        events = (board / "events.jsonl").read_text().split("\n")
+        (board / "events.jsonl").write_text("\n".join(events[: len(events) // 2]))
+        rep = vbr.check_board(self.fake, base=self.base_sha, rev=self.rev_sha,
+                              live=True, quiet=True)
+        joined = "\n".join(rep.failures)
+        self.assertIn("no row deleted", joined)
+        self.assertIn("append-only prefix", joined)
+
+    def test_mutated_revision_is_still_rejected_in_default_mode(self) -> None:
+        """Strip a re-identified row's provenance, commit it as the 'revision'."""
+        new_id = ARTIFACT["reidentified_rows"][0]["new_id"]
+
+        def strip(row: dict, line: str):
+            if row["id"] != new_id:
+                return None
+            return {k: v for k, v in row.items() if k != "reconciliation"}
+
+        edit_task_lines(self.fake, strip)
+        subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                        "commit", "-qam", "mutated revision"], cwd=self.fake, check=True)
+        mutated = subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.fake,
+                                 capture_output=True, text=True, check=True).stdout.strip()
+        rep = vbr.check_board(self.fake, base=self.base_sha, rev=mutated, quiet=True)
+        self.assertTrue(rep.failures, "a mutated revision was reported as OK")
+        self.assertIn("provenance", "\n".join(rep.failures))
+
+    def test_revision_with_reintroduced_duplicate_id_is_rejected(self) -> None:
+        def duplicate(row: dict, line: str):
+            if row["id"] != "QA-WARPFS-1-2":
+                return None
+            return dict(row, id="QA-WARPFS-1")
+
+        edit_task_lines(self.fake, duplicate)
+        subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                        "commit", "-qam", "duplicate id reintroduced"], cwd=self.fake, check=True)
+        mutated = subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.fake,
+                                 capture_output=True, text=True, check=True).stdout.strip()
+        rep = vbr.check_board(self.fake, base=self.base_sha, rev=mutated, quiet=True)
+        self.assertIn("task ids unique", "\n".join(rep.failures))
+
+
 class EndToEndChecker(unittest.TestCase):
-    def test_verify_script_passes_on_the_reconciled_board(self) -> None:
+    def test_verify_script_passes_on_the_reconciled_revision(self) -> None:
         out = subprocess.run(
             [sys.executable, str(REPO / "scripts" / "verify_board_reconciliation.py"), "--quiet"],
+            capture_output=True, text=True, cwd=str(REPO),
+        )
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertIn("RESULT: OK", out.stdout)
+
+    def test_verify_script_live_mode_flag_runs(self) -> None:
+        out = subprocess.run(
+            [sys.executable, str(REPO / "scripts" / "verify_board_reconciliation.py"),
+             "--live", "--quiet"],
             capture_output=True, text=True, cwd=str(REPO),
         )
         self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
@@ -236,23 +421,12 @@ class EndToEndChecker(unittest.TestCase):
         """Point the checker at the pre-change snapshot: it must FAIL.
 
         A throwaway git repo is seeded with the exact 71b333f board content and
-        committed, so `git show <its HEAD>:...` supplies the base for the checks.
+        committed, so `git show <its HEAD>:...` supplies both sides.
         """
-        import tempfile
         with tempfile.TemporaryDirectory() as tmp:
             fake = Path(tmp)
-            bd = fake / ".coding-hermes" / "board"
-            bd.mkdir(parents=True)
-            for name in ("tasks.jsonl", "events.jsonl", "board.jsonl", "fixtures.jsonl"):
-                (bd / name).write_text(vbr.git_show(REPO, BASE, f".coding-hermes/board/{name}"))
-            (bd / vbr.ARTIFACT_NAME).write_text((BOARD / vbr.ARTIFACT_NAME).read_text())
-            git = ["git", "-c", "user.email=tick187@test", "-c", "user.name=tick187"]
-            subprocess.run(["git", "init", "-q"], cwd=tmp, check=True)
-            subprocess.run(git + ["add", "-A"], cwd=tmp, check=True)
-            subprocess.run(git + ["commit", "-qm", "pre-change snapshot"], cwd=tmp, check=True)
-            sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=tmp,
-                                 capture_output=True, text=True, check=True).stdout.strip()
-            rep = vbr.check_board(fake, sha, quiet=True)
+            sha, _ = seed_repo(fake, rev_content=False)
+            rep = vbr.check_board(fake, base=sha, rev=sha, quiet=True)
             self.assertTrue(rep.failures,
                             "the checker reported the pre-change snapshot as OK — it cannot fail")
             joined = "\n".join(rep.failures)
