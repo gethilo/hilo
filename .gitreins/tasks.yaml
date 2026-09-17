@@ -1007,3 +1007,20 @@ tasks:
   status: complete
   created_at: '2026-09-17T06:01:49.879971+00:00'
   completed_at: '2026-09-17T06:45:36.055471+00:00'
+- id: BOARD-HYGIENE-001
+  title: Reconcile duplicate WarpFS board tasks without losing provenance
+  criteria:
+  - boardctl validate exits 0 with no duplicate task IDs or invalid status errors;
+    legacy event warnings may remain.
+  - Completed GAP-067 GAP-077 GAP-079 GAP-080 retain verified completion evidence
+    and are not pending; distinct QA findings sharing an old ID remain individually
+    represented rather than blindly collapsed.
+  - Original duplicate rows and reconciliation mapping are preserved in an audit artifact;
+    existing events remain byte-identical as a prefix; unrelated task rows remain
+    unchanged except documented malformed field corrections.
+  - Character-array reasoning is restored to readable text; malformed guard/CI fields
+    and status done are normalized conservatively while original evidence is retained.
+  - A repeatable verification script checks uniqueness, allowed statuses, provenance
+    and preservation against the pre-change snapshot; snapshot is git commit 71b333f.
+  status: in_progress
+  created_at: '2026-09-17T07:36:08.106842+00:00'

@@ -1,0 +1,602 @@
+{
+  "artifact": "reconciliation-187.json",
+  "task": "BOARD-HYGIENE-001",
+  "tick": "warpfs-2026-09-17-07-32-51",
+  "base_commit": "71b333f630b8c42a0b885b6df923f46e2f718f4a",
+  "base_commit_short": "71b333f",
+  "board": ".coding-hermes/board",
+  "files": {
+    "tasks.jsonl": {
+      "sha256_before": "7dca793ae42bc59cbd6afa0919798bf72e5799d7b27276280ed3e6e42f6edfe7",
+      "lines_before": 134,
+      "line_count_before": 134,
+      "lines_after": 128,
+      "line_count_after": 128,
+      "sha256_after": "86f72b0d4ec0a5c9ebdf754b8437fadb1ac182c54ef333b5a42f9b04571a666b"
+    },
+    "events.jsonl": {
+      "modified": false
+    },
+    "board.jsonl": {
+      "modified": false
+    },
+    "fixtures.jsonl": {
+      "modified": false
+    }
+  },
+  "duplicate_ids_before": [
+    "GAP-067",
+    "GAP-074",
+    "GAP-077",
+    "GAP-079",
+    "GAP-080",
+    "QA-WARPFS-1",
+    "QA-WARPFS-2",
+    "QA-WARPFS-3",
+    "QA-WARPFS-4",
+    "QA-WARPFS-5"
+  ],
+  "rules": [
+    "A. repeated updates to one task collapse to a single authoritative row that keeps the strongest evidence; dropped rows are preserved verbatim in removed_rows.",
+    "B. a collided id whose later rows describe DIFFERENT historical findings keeps every finding: the earliest row of the id keeps the original id, each additional finding gets a fresh unique id recorded in reidentified_rows + reconciliation{original_id,original_line,original_ts}.",
+    "C. malformed fields normalised conservatively: status done->complete only with completion evidence; free-form guard_result/ci_result mapped to the board vocabulary with unknown or in-flight CI => SKIP (never a guessed green); the full original text is retained in <field>_note and in field_corrections.",
+    "D. character-array reasoning restored to a list of readable segments so the appended closure note survives as its own element (duplicated appended segments deduplicated).",
+    "E. rows that are not listed in this artifact are written back byte-identically; events.jsonl, board.jsonl and fixtures.jsonl are not modified at all."
+  ],
+  "removed_rows": [
+    {
+      "original_line": 106,
+      "original_id": "GAP-067",
+      "original_status": "pending",
+      "original_ts": null,
+      "original_created_at": "2026-09-12T16:30:00Z",
+      "canonical_line": 109,
+      "canonical_id": "GAP-067",
+      "reason": "stale pre-closure stub of the same finding (identical title + identical created_at 2026-09-12T16:30:00Z); the canonical row carries the full closure evidence (commit eb0d143, worker/foreman summaries)",
+      "raw": "{\"status\":\"pending\",\"id\":\"GAP-067\",\"title\":\"P2 \\u2014 `hilo meta --set` silently writes a malformed xattr instead of erroring on bad syntax. Live (fastapi): `hilo meta fastapi/routing.py --set role=core-router` (docs use `--set <attr> --value <val> <path>`) exits 0 and prints 'Set user.vfs.role=core-router =  on fastapi/routing.py' \\u2014 it created an xattr NAMED `user.vfs.role=core-router` (with '=' in the key) with an EMPTY value, leaving the real user.vfs.role untouched. Verified via getfattr and MCP vfs_get_metadata (\\\"user.vfs.role=core-router\\\":\\\"\\\"). A user who typos the syntax believes they set metadata when they wrote garbage. FIX: reject attr values containing '=' with the correct usage line; also print the final key=value pair on success.\",\"detail\":null,\"priority\":\"P2\",\"source\":\"dogfood-run4\",\"reasoning\":\"Discovered 2026-09-12 dogfood run 4 by natural typo. Cleanup of the stray xattr on the scratch corpus: attr -r user.vfs.role=core-router <file> (no product fix in dogfood).\",\"capability_tags\":[\"cli\",\"meta\",\"ux\"],\"complexity\":1,\"created_at\":\"2026-09-12T16:30:00Z\",\"updated_at\":\"2026-09-12T16:30:00Z\"}"
+    },
+    {
+      "original_line": 117,
+      "original_id": "GAP-074",
+      "original_status": "pending",
+      "original_ts": null,
+      "original_created_at": "2026-09-14T16:10:00Z",
+      "canonical_line": 128,
+      "canonical_id": "GAP-074",
+      "reason": "stale pre-closure stub of the same finding (identical title + identical created_at 2026-09-14T16:10:00Z); superseded by the task_completed row (events.jsonl id=340)",
+      "raw": "{\"id\":\"GAP-074\",\"title\":\"P1 \\u2014 Fleet-wide gitreins Tier-2 evaluator error path (RE-SCOPED tick 176): the 2026-09-14 'deepseek-v4-flash retired' premise is FALSE \\u2014 verified live 2026-09-15T12:16Z, the alias still serves (HTTP 200, content 'READY', canonicalised to deepseek-flash) and only the /models catalog omits it. DO NOT sweep the 71 fleet .gitreins/config.yaml judge models. Real defect: engine/llm.py:275 (gitreins 0.12.1) does `choice = data[\\\"choices\\\"][0]` unguarded, so any provider response without a choices key (error envelope, 401/400 body, or a 200 whose visible content is empty because max_tokens was consumed by reasoning_content) raises KeyError('choices') and surfaces as the generic 'LLM call failed: choices' \\u2014 the KeyError discards the provider's own error text and collapsed every distinct cause into one misleading symptom. FIX: (a) guard the provider client, check choices is present/non-empty, extract and surface the provider error message naming model + provider text; (b) classify empty content + finish_reason=='length' + reasoning_tokens>0 as a budget error, not a parse error; (c) any model-liveness probe must issue a real chat completion (200 + non-empty content) \\u2014 never GET /models, because this provider serves unlisted aliases.\",\"priority\":\"P1\",\"status\":\"pending\",\"source\":\"foreman-tick-175\",\"reasoning\":\"premise-false (tick 176) \\u2014 SWEEP REVOKED. deepseek-v4-flash is NOT retired: live 2026-09-15T12:16Z POST /v1/chat/completions model=deepseek-v4-flash -> HTTP 200, content 'READY', body.model='deepseek-flash'; only GET /models omits it (unlisted != retired). 71 fleet configs are fine. Real defect: engine/llm.py:275 unguarded data[\\\"choices\\\"][0] -> KeyError('choices') masks the provider's own error and makes every cause look identical; plus reasoning-token starvation (max_tokens=8 -> 200, content='', finish_reason='length'). Corroborated by off-by-one class 1648 / answer 1830. Full evidence: task_updated event, tick 176.\",\"capability_tags\":[\"gitreins\",\"infra\",\"fleet\"],\"complexity\":2,\"created_at\":\"2026-09-14T16:10:00Z\",\"updated_at\":\"2026-09-15T13:38:53Z\",\"worker_status\":\"pending\"}"
+    },
+    {
+      "original_line": 121,
+      "original_id": "GAP-077",
+      "original_status": "pending",
+      "original_ts": null,
+      "original_created_at": "2026-09-15T15:54:29Z",
+      "canonical_line": 130,
+      "canonical_id": "GAP-077",
+      "reason": "stale pre-closure stub of the same finding (identical title + identical created_at 2026-09-15T15:54:29Z); its reasoning text is retained as the first element of the canonical row's restored reasoning",
+      "raw": "{\"id\":\"GAP-077\",\"title\":\"P2 \\u2014 graph search returns zero results for exact symbol names in single-package repos (flask: \\\"url_for\\\" and \\\"jinja env\\\" both \\\"No results found\\\"; competitor query answered both instantly).\",\"priority\":\"P2\",\"status\":\"pending\",\"source\":null,\"reasoning\":\"hilo-vs-scc bake-off, flask @ HEAD (2026-09-15): hilo graph search \\\"url_for\\\" -> No results (truth: src/flask/helpers.py:200); \\\"jinja env\\\" -> No results (truth: templating.py:467 create_jinja_environment). Smoke test shows the corpus is package-keyed: search \\\"dispatch request\\\" hits tests/test_request.py and \\\"FlaskGroup click\\\" returns pkg:click/pkg:flask module nodes \\u2014 file-defined symbols (helpers.py url_for) are absent from the searchable corpus. D3 note: exact-symbol search worked on warpfs's own Rust multi-crate graph; this is the single-package collapse again (GAP-076 family, search half). NEXT: attach per-file symbol docs to the search corpus (or file nodes) so BM25 can rank file:symbol pairs; acceptance test = warm a flask-like single-package fixture and search \\\"url_for\\\" must return helpers.py.\",\"capability_tags\":[\"rust\",\"graph\",\"search\",\"python\"],\"complexity\":3,\"created_at\":\"2026-09-15T15:54:29Z\",\"updated_at\":\"2026-09-15T15:54:29Z\",\"foreman_note\":null}"
+    },
+    {
+      "original_line": 123,
+      "original_id": "GAP-079",
+      "original_status": "pending",
+      "original_ts": null,
+      "original_created_at": "2026-09-15T16:58:45Z",
+      "canonical_line": 131,
+      "canonical_id": "GAP-079",
+      "reason": "stale pre-closure stub of the same finding (identical title + identical created_at 2026-09-15T16:58:45Z); reasoning text retained on the canonical row",
+      "raw": "{\"id\":\"GAP-079\",\"title\":\"P2 \\u2014 TS/JS import-specifier pseudo-nodes (local:/pkg:) rank above real files in graph search and render EMPTY in understand \\u2014 the corpus keys on the import string, not the resolved file.\",\"priority\":\"P2\",\"status\":\"pending\",\"source\":null,\"reasoning\":\"hilo-vs-scc bake-off wave 3 (2026-09-15, /tmp/bakeoff/results_round3.json): duckbrain graph search \\\"namespace writer\\\" ranks local:../../serialization/namespaceWriter, local:./namespaceWriter ABOVE the real src/serialization/namespaceWriter.ts; \\\"merge squash\\\" correctly finds src/git/merge.ts but buries it under local:./merge and pkg:tailwind-merge. In graph understand on duckbrain and vitest, MAP bullets are dominated by local:/pkg: nodes with \\\"(no symbols extracted)\\\" \\u2014 the anchor list spends its budget on import-specifier strings instead of files. Related: GAP-075 (TS symbol extraction) is the empty-bullets half for REAL files; this row is the pseudo-node half \\u2014 local:/pkg: specifiers should be resolved to files before corpus indexing (they are edges, not documents). NEXT: resolve TS path aliases + relative specifiers to repo files at warm time; drop unresolved specifiers from the search corpus or rank them below real files; acceptance test = search must rank src/serialization/namespaceWriter.ts first on duckbrain, and understand MAP must contain zero local:/pkg: anchors.\",\"capability_tags\":[\"rust\",\"graph\",\"search\",\"ts\",\"understand\"],\"complexity\":3,\"created_at\":\"2026-09-15T16:58:45Z\",\"updated_at\":\"2026-09-15T16:58:45Z\",\"foreman_note\":null}"
+    },
+    {
+      "original_line": 124,
+      "original_id": "GAP-080",
+      "original_status": "pending",
+      "original_ts": null,
+      "original_created_at": "2026-09-15T16:58:45Z",
+      "canonical_line": 129,
+      "canonical_id": "GAP-080",
+      "reason": "stale pre-closure stub of the same finding (identical title + identical created_at 2026-09-15T16:58:45Z); reasoning text retained on the canonical row",
+      "raw": "{\"id\":\"GAP-080\",\"title\":\"P2 \\u2014 graph stats + classify have no output budget: on vitest the stats+classify one-liner dumped 392K chars (1914 files listed raw) \\u2014 unusable as an agent answer and a context-window hazard.\",\"priority\":\"P2\",\"status\":\"pending\",\"source\":null,\"reasoning\":\"hilo-vs-scc bake-off wave 3 (2026-09-15): bake-off A1 round used `hilo graph stats && hilo classify --dry-run` as the architecture answer; on vitest (1914 files) this produced a 392,372-char dump vs competitor's 6,964-char budgeted overview \\u2014 automatic loss on every monorepo-sized repo, and a real footgun for agents that pipe tool output into context. Understand already has --budget; stats/classify do not. NEXT: add --limit/--budget to stats and classify (truncate file lists with a count summary, e.g. '... 1904 more'), default a sane cap (2-5K chars) for agent-facing output; acceptance test = stats+classify on vitest outputs <10K chars by default with full detail available via flag.\",\"capability_tags\":[\"rust\",\"cli\",\"budget\",\"ux\"],\"complexity\":2,\"created_at\":\"2026-09-15T16:58:45Z\",\"updated_at\":\"2026-09-15T16:58:45Z\",\"foreman_note\":null}"
+    },
+    {
+      "original_line": 127,
+      "original_id": "GAP-074",
+      "original_status": "complete",
+      "original_ts": null,
+      "original_created_at": "2026-09-14T16:10:00Z",
+      "canonical_line": 128,
+      "canonical_id": "GAP-074",
+      "reason": "partial write of the same closure event, updated_at 2026-09-16T05:35:50Z - ten seconds before the authoritative row (05:36:00Z == events.jsonl task_completed id=340) and byte-identical to it except for the duplicated appended closure note",
+      "raw": "{\"id\": \"GAP-074\", \"title\": \"P1 \\u2014 Fleet-wide gitreins Tier-2 evaluator error path (RE-SCOPED tick 176): the 2026-09-14 'deepseek-v4-flash retired' premise is FALSE \\u2014 verified live 2026-09-15T12:16Z, the alias still serves (HTTP 200, content 'READY', canonicalised to deepseek-flash) and only the /models catalog omits it. DO NOT sweep the 71 fleet .gitreins/config.yaml judge models. Real defect: engine/llm.py:275 (gitreins 0.12.1) does `choice = data[\\\"choices\\\"][0]` unguarded, so any provider response without a choices key (error envelope, 401/400 body, or a 200 whose visible content is empty because max_tokens was consumed by reasoning_content) raises KeyError('choices') and surfaces as the generic 'LLM call failed: choices' \\u2014 the KeyError discards the provider's own error text and collapsed every distinct cause into one misleading symptom. FIX: (a) guard the provider client, check choices is present/non-empty, extract and surface the provider error message naming model + provider text; (b) classify empty content + finish_reason=='length' + reasoning_tokens>0 as a budget error, not a parse error; (c) any model-liveness probe must issue a real chat completion (200 + non-empty content) \\u2014 never GET /models, because this provider serves unlisted aliases.\", \"priority\": \"P1\", \"status\": \"complete\", \"source\": \"foreman-tick-175\", \"reasoning\": [\"p\", \"r\", \"e\", \"m\", \"i\", \"s\", \"e\", \"-\", \"f\", \"a\", \"l\", \"s\", \"e\", \" \", \"(\", \"t\", \"i\", \"c\", \"k\", \" \", \"1\", \"7\", \"6\", \")\", \" \", \"\\u2014\", \" \", \"S\", \"W\", \"E\", \"E\", \"P\", \" \", \"R\", \"E\", \"V\", \"O\", \"K\", \"E\", \"D\", \".\", \" \", \"d\", \"e\", \"e\", \"p\", \"s\", \"e\", \"e\", \"k\", \"-\", \"v\", \"4\", \"-\", \"f\", \"l\", \"a\", \"s\", \"h\", \" \", \"i\", \"s\", \" \", \"N\", \"O\", \"T\", \" \", \"r\", \"e\", \"t\", \"i\", \"r\", \"e\", \"d\", \":\", \" \", \"l\", \"i\", \"v\", \"e\", \" \", \"2\", \"0\", \"2\", \"6\", \"-\", \"0\", \"9\", \"-\", \"1\", \"5\", \"T\", \"1\", \"2\", \":\", \"1\", \"6\", \"Z\", \" \", \"P\", \"O\", \"S\", \"T\", \" \", \"/\", \"v\", \"1\", \"/\", \"c\", \"h\", \"a\", \"t\", \"/\", \"c\", \"o\", \"m\", \"p\", \"l\", \"e\", \"t\", \"i\", \"o\", \"n\", \"s\", \" \", \"m\", \"o\", \"d\", \"e\", \"l\", \"=\", \"d\", \"e\", \"e\", \"p\", \"s\", \"e\", \"e\", \"k\", \"-\", \"v\", \"4\", \"-\", \"f\", \"l\", \"a\", \"s\", \"h\", \" \", \"-\", \">\", \" \", \"H\", \"T\", \"T\", \"P\", \" \", \"2\", \"0\", \"0\", \",\", \" \", \"c\", \"o\", \"n\", \"t\", \"e\", \"n\", \"t\", \" \", \"'\", \"R\", \"E\", \"A\", \"D\", \"Y\", \"'\", \",\", \" \", \"b\", \"o\", \"d\", \"y\", \".\", \"m\", \"o\", \"d\", \"e\", \"l\", \"=\", \"'\", \"d\", \"e\", \"e\", \"p\", \"s\", \"e\", \"e\", \"k\", \"-\", \"f\", \"l\", \"a\", \"s\", \"h\", \"'\", \";\", \" \", \"o\", \"n\", \"l\", \"y\", \" \", \"G\", \"E\", \"T\", \" \", \"/\", \"m\", \"o\", \"d\", \"e\", \"l\", \"s\", \" \", \"o\", \"m\", \"i\", \"t\", \"s\", \" \", \"i\", \"t\", \" \", \"(\", \"u\", \"n\", \"l\", \"i\", \"s\", \"t\", \"e\", \"d\", \" \", \"!\", \"=\", \" \", \"r\", \"e\", \"t\", \"i\", \"r\", \"e\", \"d\", \")\", \".\", \" \", \"7\", \"1\", \" \", \"f\", \"l\", \"e\", \"e\", \"t\", \" \", \"c\", \"o\", \"n\", \"f\", \"i\", \"g\", \"s\", \" \", \"a\", \"r\", \"e\", \" \", \"f\", \"i\", \"n\", \"e\", \".\", \" \", \"R\", \"e\", \"a\", \"l\", \" \", \"d\", \"e\", \"f\", \"e\", \"c\", \"t\", \":\", \" \", \"e\", \"n\", \"g\", \"i\", \"n\", \"e\", \"/\", \"l\", \"l\", \"m\", \".\", \"p\", \"y\", \":\", \"2\", \"7\", \"5\", \" \", \"u\", \"n\", \"g\", \"u\", \"a\", \"r\", \"d\", \"e\", \"d\", \" \", \"d\", \"a\", \"t\", \"a\", \"[\", \"\\\"\", \"c\", \"h\", \"o\", \"i\", \"c\", \"e\", \"s\", \"\\\"\", \"]\", \"[\", \"0\", \"]\", \" \", \"-\", \">\", \" \", \"K\", \"e\", \"y\", \"E\", \"r\", \"r\", \"o\", \"r\", \"(\", \"'\", \"c\", \"h\", \"o\", \"i\", \"c\", \"e\", \"s\", \"'\", \")\", \" \", \"m\", \"a\", \"s\", \"k\", \"s\", \" \", \"t\", \"h\", \"e\", \" \", \"p\", \"r\", \"o\", \"v\", \"i\", \"d\", \"e\", \"r\", \"'\", \"s\", \" \", \"o\", \"w\", \"n\", \" \", \"e\", \"r\", \"r\", \"o\", \"r\", \" \", \"a\", \"n\", \"d\", \" \", \"m\", \"a\", \"k\", \"e\", \"s\", \" \", \"e\", \"v\", \"e\", \"r\", \"y\", \" \", \"c\", \"a\", \"u\", \"s\", \"e\", \" \", \"l\", \"o\", \"o\", \"k\", \" \", \"i\", \"d\", \"e\", \"n\", \"t\", \"i\", \"c\", \"a\", \"l\", \";\", \" \", \"p\", \"l\", \"u\", \"s\", \" \", \"r\", \"e\", \"a\", \"s\", \"o\", \"n\", \"i\", \"n\", \"g\", \"-\", \"t\", \"o\", \"k\", \"e\", \"n\", \" \", \"s\", \"t\", \"a\", \"r\", \"v\", \"a\", \"t\", \"i\", \"o\", \"n\", \" \", \"(\", \"m\", \"a\", \"x\", \"_\", \"t\", \"o\", \"k\", \"e\", \"n\", \"s\", \"=\", \"8\", \" \", \"-\", \">\", \" \", \"2\", \"0\", \"0\", \",\", \" \", \"c\", \"o\", \"n\", \"t\", \"e\", \"n\", \"t\", \"=\", \"'\", \"'\", \",\", \" \", \"f\", \"i\", \"n\", \"i\", \"s\", \"h\", \"_\", \"r\", \"e\", \"a\", \"s\", \"o\", \"n\", \"=\", \"'\", \"l\", \"e\", \"n\", \"g\", \"t\", \"h\", \"'\", \")\", \".\", \" \", \"C\", \"o\", \"r\", \"r\", \"o\", \"b\", \"o\", \"r\", \"a\", \"t\", \"e\", \"d\", \" \", \"b\", \"y\", \" \", \"o\", \"f\", \"f\", \"-\", \"b\", \"y\", \"-\", \"o\", \"n\", \"e\", \" \", \"c\", \"l\", \"a\", \"s\", \"s\", \" \", \"1\", \"6\", \"4\", \"8\", \" \", \"/\", \" \", \"a\", \"n\", \"s\", \"w\", \"e\", \"r\", \" \", \"1\", \"8\", \"3\", \"0\", \".\", \" \", \"F\", \"u\", \"l\", \"l\", \" \", \"e\", \"v\", \"i\", \"d\", \"e\", \"n\", \"c\", \"e\", \":\", \" \", \"t\", \"a\", \"s\", \"k\", \"_\", \"u\", \"p\", \"d\", \"a\", \"t\", \"e\", \"d\", \" \", \"e\", \"v\", \"e\", \"n\", \"t\", \",\", \" \", \"t\", \"i\", \"c\", \"k\", \" \", \"1\", \"7\", \"6\", \".\", \"CLOSED 2026-09-16 foreman-direct (bankai wave). Fix in gitreins repo (totalwindupflightsystems/gitreins, engine/llm.py): new LLMResponseError; the OpenAI-path extraction now reads data.get(\\\"choices\\\") and, on missing/empty, raises LLMResponseError carrying the provider's own payload (error/message; usage note appended when choices==[] with usage present = reasoning-token starvation) instead of a bare KeyError('choices') that erased every cause. +2 regression tests (tests/test_llm_gap074.py). Verified: pytest 2/2 new + 70/70 llm-keyword suite; ruff clean; gitreins guard Tier 1 PASS (secrets/lint/tests/lsp). Commit 35ab89a pushed to main. Deployed: pipx install ~/gitreins-poc --force -> installed site-packages engine/llm.py carries LLMResponseError (grep-verified). Fleet note: other boxes upgrade via pipx install from the repo at next convenience.\"], \"capability_tags\": [\"gitreins\", \"infra\", \"fleet\"], \"complexity\": 2, \"created_at\": \"2026-09-14T16:10:00Z\", \"updated_at\": \"2026-09-16T05:35:50.000000Z\", \"worker_status\": \"complete\"}"
+    }
+  ],
+  "reidentified_rows": [
+    {
+      "original_line": 73,
+      "original_id": "QA-WARPFS-1",
+      "new_id": "QA-WARPFS-1-2",
+      "original_status": "complete",
+      "original_ts": null,
+      "original_title": "[P1] QA battery still blocked: bunker spawn can't find server config under sandboxed HOME",
+      "note": "same finding as QA-WARPFS-1 (bunker spawn cannot find server config under a sandboxed HOME); dated re-report 2026-09-04, resolved 2026-09-07. Kept for provenance - NOT a separate work item.",
+      "raw": "{\"status\":\"complete\",\"id\":\"QA-WARPFS-1\",\"title\":\"[P1] QA battery still blocked: bunker spawn can't find server config under sandboxed HOME\",\"detail\":\"Cell UNVERIFIED with empty detail because the battery never runs. tasks.jsonl QA-WARPFS-1 (pending, committed 1f1c263): run_battery FAIL x6 (2026-09-03 12:31-12:58Z, evidence files 1788438640834/1788439182236/1788439368940/1788439791136/1788439901707/1788440322017), cell detail 'spawn failed on bunker-las-03 (see stderr)', stderr='bunker: server \\\"bunker-las-03\\\" not found in config' x3 \\u2014 bunker-qa.sh spawn_agent runs Creating agent...\\nAgent created: 47484d55\\n\\u2550\\u2550\\u2550\\u2550\\u2550\\u2550\\u2550\\u2550\\u2550\\u2550 Connection Bundle \\u2550\\u2550\\u2550\\u2550\\u2550\\u2550\\u2550\\u2550\\u2550\\u2550\\n  Docker SSH:   DOCKER_HOST=ssh://bunker-47484d55@100.69.3.13\\n  SSH Key:      (saved to ~/.bunker/keys/)\\n                /home/kara/.bunker/keys/47484d55\\n  Port Range:   30100-30199\\n  Expires:      2026-09-04T14:52:58-07:00\\n  SSHFS Mount:  sshfs -o IdentityFile=/home/kara/.bunker/keys/47484d55 -o idmap=user -o allow_other bunker-47484d55@100.69.3.13:/home/bunker-47484d55 /mnt/bunker/47484d55\\n  Docker Tunnel: ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o IdentitiesOnly=yes -i /home/kara/.bunker/keys/47484d55 -L 2376:/run/bunker/47484d55/docker.sock bunker-47484d55@100.69.3.13 -N\\n\\u2550 Use `bunker exec` to run commands in this agent \\u2550 under sandboxed HOME=/tmp/tj-repro/home3 with no ~/.bunker/config.yaml. Verified live: HOME=/home/kara bunker status shows bunker-las-03 ONLINE (1/8 agents) \\u2014 server fine, harness broken. No fix commit since filing (git log: only tick/doc commits).\\\",\\\"priority\\\":\\\"P1\\\",\\\"source\\\":\\\"qa-dagger\\\",\\\"reasoning\\\":{\\\"note\\\":\\\"QA foreman cycle 2026-09-04 \\u2014 fresh-system CI pass (bunker cell: run_battery (bunker))\\\"},\\\"review_notes\\\":\\\"Cell UNVERIFIED with empty detail because the battery never runs. tasks.jsonl QA-WARPFS-1 (pending, committed 1f1c263): run_battery FAIL x6 (2026-09-03 12:31-12:58Z, evidence files 1788438640834/1788439182236/1788439368940/1788439791136/1788439901707/1788440322017), cell detail 'spawn failed on bunker-las-03 (see stderr)', stderr='bunker: server \\\"bunker-las-03\\\" not found in config' x3 \\u2014 bunker-qa.\\\",\\\"ts\\\":\\\"2026-09-04T15:50:59.781Z\\\"}\\n{\\\"status\\\":\\\"pending\\\",\\\"id\\\":\\\"QA-WARPFS-2\\\",\\\"title\\\":\\\"[P2] Board tasks.jsonl lines 71-72 malformed (double-escaped + unescaped quotes) \\u2014 breaks strict board readers\\\",\\\"detail\\\":\\\"Verified: .coding-hermes/board/tasks.jsonl QA-WARPFS-1/2 rows (committed in 1f1c263, 2 bad of 72 lines) \\u2014 json.loads parses priority as 'P1\\\\\\\",\\\\\\\\\\\\\\\\source\\\\\\\":\\\\\\\\\\\\\\\\qa-dagger' (embedded \\\\\\\\\\\\\\\"sequence swallows the source key) and text-mode json.loads hard-fails at col 379 on line 71. Same corruption present in the committed blob (git show 1f1c263:.coding-hermes/board/tasks.jsonl). Any strict consumer (read_json_auto, jq) breaks; this double-escape write bug is the likely reason cell outcomes arrive UNVERIFIED/empty.\\\",\\\"priority\\\":\\\"P2\\\",\\\"source\\\":\\\"qa-dagger\\\",\\\"reasoning\\\":{\\\"note\\\":\\\"QA foreman cycle 2026-09-04 \\u2014 fresh-system CI pass (bunker cell: board/evidence write path)\\\"},\\\"review_notes\\\":\\\"Verified: .coding-hermes/board/tasks.jsonl QA-WARPFS-1/2 rows (committed in 1f1c263, 2 bad of 72 lines) \\u2014 json.loads parses priority as 'P1\\\\\\\",\\\\\\\\\\\\\\\\source\\\\\\\":\\\\\\\\\\\\\\\\qa-dagger' (embedded \\\\\\\\\\\\\\\"sequence swallows the source key) and text-mode json.loads hard-fails at col 379 on line 71. Same corruption present in the committed blob (git show 1f1c263:.coding-hermes/board/tasks.jsonl). Any strict consumer (read_json_aut\\\",\\\"ts\\\":\\\"2026-09-04T15:50:59.782Z\\\"}\",\"completed_at\":\"2026-09-07T13:23:16.000Z\",\"foreman_note\":\"RESOLVED 2026-09-07 (root cause found): QA cron sessions run with HOME=/tmp/bunker-judge-home \\u2014 a sandbox whose ~/.bunker/config.yaml lacked all las-* server entries AND carried an active_server value with casing mismatch vs its own key (karaHermes-... vs karahermes-...) -> 'server not found in config'. Split-brain: background shells get the real /home/kara HOME, so config fixes applied to one side were invisible to the other (this run hit both). Fixed BOTH configs: restored las-02 entry (token from /etc/bunkerd/config.yaml via passwordless ssh) + added local karahermes-mde-7840hs-2 (bunkerd on this box, 20-slot pool). Battery then ran to completion: warpfs 12/12 cells, act ran the REAL CI job to success (Build 13m17s + Clippy 9m48s + Test green), fresh cargo build 9m01s clean. Evidence: /tmp/qa-evidence-warpfs-0907.jsonl.\"}"
+    },
+    {
+      "original_line": 75,
+      "original_id": "QA-WARPFS-1",
+      "new_id": "QA-WARPFS-1-3",
+      "original_status": "complete",
+      "original_ts": "2026-09-05T04:48:37.894Z",
+      "original_title": "[P1] run_battery FAIL — bunker spawn cannot find server config under sandboxed HOME; battery blocked entirely",
+      "note": "same finding as QA-WARPFS-1 (sandboxed-HOME server-config lookup); dated re-report 2026-09-05, resolved 2026-09-07. Kept for provenance - NOT a separate work item.",
+      "raw": "{\"status\":\"complete\",\"id\":\"QA-WARPFS-1\",\"title\":\"[P1] run_battery FAIL \\u2014 bunker spawn cannot find server config under sandboxed HOME; battery blocked entirely\",\"detail\":\"cell: 'spawn failed on bunker-las-03: spawn attempt 1 failed: bunker: server \\\"bunker-las-03\\\" not found in config', retried twice, same error. Root cause (board QA-WARPFS-1, pending since 09-03): bunker-qa.sh spawn_agent runs `bunker spawn --server bunker-las-03` under sandboxed HOME=/tmp/tj-repro/home3 which has no ~/.bunker/config.yaml; real config /home/kara/.bunker/config.yaml registers bunker-las-03 and it is ONLINE (verified via HOME=/home/kara bunker status). Zero cells ran. No fix commit landed since filing \\u2014 git log shows only tick/doc/salvage commits; failure recurred x6 on 09-03 and again this cycle.\",\"priority\":\"P1\",\"source\":\"qa-dagger\",\"reasoning\":{\"note\":\"QA foreman cycle 2026-09-05 \\u2014 fresh-system CI pass (bunker cell: run_battery)\"},\"review_notes\":\"cell: 'spawn failed on bunker-las-03: spawn attempt 1 failed: bunker: server \\\"bunker-las-03\\\" not found in config', retried twice, same error. Root cause (board QA-WARPFS-1, pending since 09-03): bunker-qa.sh spawn_agent runs `bunker spawn --server bunker-las-03` under sandboxed HOME=/tmp/tj-repro/home3 which has no ~/.bunker/config.yaml; real config /home/kara/.bunker/config.yaml registers bunker-\",\"ts\":\"2026-09-05T04:48:37.894Z\",\"completed_at\":\"2026-09-07T13:23:16.000Z\",\"foreman_note\":\"RESOLVED 2026-09-07 (root cause found): QA cron sessions run with HOME=/tmp/bunker-judge-home \\u2014 a sandbox whose ~/.bunker/config.yaml lacked all las-* server entries AND carried an active_server value with casing mismatch vs its own key (karaHermes-... vs karahermes-...) -> 'server not found in config'. Split-brain: background shells get the real /home/kara HOME, so config fixes applied to one side were invisible to the other (this run hit both). Fixed BOTH configs: restored las-02 entry (token from /etc/bunkerd/config.yaml via passwordless ssh) + added local karahermes-mde-7840hs-2 (bunkerd on this box, 20-slot pool). Battery then ran to completion: warpfs 12/12 cells, act ran the REAL CI job to success (Build 13m17s + Clippy 9m48s + Test green), fresh cargo build 9m01s clean. Evidence: /tmp/qa-evidence-warpfs-0907.jsonl.\"}"
+    },
+    {
+      "original_line": 76,
+      "original_id": "QA-WARPFS-2",
+      "new_id": "QA-WARPFS-2-2",
+      "original_status": "pending",
+      "original_ts": "2026-09-05T04:48:37.894Z",
+      "original_title": "[P2] Board tasks.jsonl lines 71-72 malformed (double-escaped quotes) breaks strict readers — likely cause of UNVERIFIED/empty outcomes",
+      "note": "distinct finding: our own tasks.jsonl carried double-escaped (unparseable) rows. Row text records the instance as REPAIRED 2026-09-07; left PENDING because no writer/root-cause fix is evidenced here (a tick-187 live parse of every line succeeds, which confirms the instance is gone but is not a writer fix).",
+      "raw": "{\"status\":\"pending\",\"id\":\"QA-WARPFS-2\",\"title\":\"[P2] Board tasks.jsonl lines 71-72 malformed (double-escaped quotes) breaks strict readers \\u2014 likely cause of UNVERIFIED/empty outcomes\",\"detail\":\"Verified live in .coding-hermes/board/tasks.jsonl: QA-WARPFS-1 row priority parses as 'P1\\\",\\\"source\\\":\\\"qa-dagger' (embedded quote sequence swallows the source key; committed in 1f1c263, 2 bad of 72 lines) and text-mode json.loads hard-fails at col 379 on line 71. Any strict consumer (read_json_auto, jq) breaks; board row QA-WARPFS-2 documents the same write-path corruption. | REPAIRED 2026-09-07: this row itself was committed corrupt (broken escaping, commit a52a758) \\u2014 rebuilt as valid JSON preserving intended content; whole file now parses (consensus-board repair precedent 716eb91).\",\"priority\":\"P2\",\"source\":\"qa-dagger\",\"reasoning\":{\"note\":\"QA foreman cycle 2026-09-05 \\u2014 fresh-system CI pass (bunker cell: run_battery)\"},\"review_notes\":\"Verified live in .coding-hermes/board/tasks.jsonl: QA-WARPFS-1 row priority parses as 'P1\\\",\\\"source\\\":\\\"qa-dagger' (embedded quote sequence swallows the source key; committed in 1f1c263, 2 bad of 72 lines) and text-mode json.loads hard-fails at col 379 on line 71. Any strict consumer (read_json_auto, jq) breaks; board row QA-WARPFS-2 documents the same write-path corruption. | REPAIRED 2026-09-07: this row itself was committed corrupt (broken escaping, commit a52a758) \\u2014 rebuilt as valid JSON preserving intended content; whole file now parses (consensus-board repair precedent 716eb91).\",\"ts\":\"2026-09-05T04:48:37.894Z\"}"
+    },
+    {
+      "original_line": 77,
+      "original_id": "QA-WARPFS-3",
+      "new_id": "QA-WARPFS-3-2",
+      "original_status": "complete",
+      "original_ts": "2026-09-05T04:48:37.894Z",
+      "original_title": "[P3] Spawn failure stderr not captured in evidence file — evidence-only consumers see only a static string",
+      "note": "same finding as QA-WARPFS-2 (spawn stderr not captured in the evidence file); dated re-report 2026-09-05, resolved 2026-09-07. Kept for provenance - NOT a separate work item.",
+      "raw": "{\"status\":\"complete\",\"id\":\"QA-WARPFS-3\",\"title\":\"[P3] Spawn failure stderr not captured in evidence file \\u2014 evidence-only consumers see only a static string\",\"detail\":\"bunker-qa.sh spawn_agent prints the error only to stderr; evidence JSONL detail is the static 'spawn failed on bunker-las-03 (see stderr)' with no stderr content, so parse_cells / QA interpreter cannot see the real cause ('server not found in config') without the session transcript (board QA-WARPFS-2/QA-WARPFS-3, pending).\",\"priority\":\"P3\",\"source\":\"qa-dagger\",\"reasoning\":{\"note\":\"QA foreman cycle 2026-09-05 \\u2014 fresh-system CI pass (bunker cell: run_battery)\"},\"review_notes\":\"bunker-qa.sh spawn_agent prints the error only to stderr; evidence JSONL detail is the static 'spawn failed on bunker-las-03 (see stderr)' with no stderr content, so parse_cells / QA interpreter cannot see the real cause ('server not found in config') without the session transcript (board QA-WARPFS-2/QA-WARPFS-3, pending).\",\"ts\":\"2026-09-05T04:48:37.894Z\",\"completed_at\":\"2026-09-07T13:23:16.000Z\",\"foreman_note\":\"RESOLVED 2026-09-07: harness (bunker-qa.sh QA-2 change) now captures the spawn stderr tail into the run_battery FAIL cell \\u2014 live proof this cycle: the failed las-02 spawn recorded the real error verbatim ('port range allocation: no free port ranges available (pool exhausted: 1 ranges)') in the evidence cell; no manual re-probe needed.\"}"
+    },
+    {
+      "original_line": 78,
+      "original_id": "QA-WARPFS-1",
+      "new_id": "QA-WARPFS-1-4",
+      "original_status": "pending",
+      "original_ts": "2026-09-06T00:45:44.614Z",
+      "original_title": "[P1] run_battery FAIL — bunker-las-03 host DNS SERVFAIL blocks spawn; battery never ran (UNVERIFIED)",
+      "note": "distinct finding: bunker-las-03 host DNS SERVFAIL (get.docker.com) aborted agent spawn. Infra/bunker finding, unresolved at tick 187; not a warpfs repo defect.",
+      "raw": "{\"status\":\"pending\",\"id\":\"QA-WARPFS-1\",\"title\":\"[P1] run_battery FAIL \\u2014 bunker-las-03 host DNS SERVFAIL blocks spawn; battery never ran (UNVERIFIED)\",\"detail\":\"Cell: 'spawn failed on bunker-las-03: Creating agent... bunker: spawn agent: internal: install rootless docker for bunker-936dd85f: download rootless installer: exit status 6 (output: curl: (6) Could not resolve host: get.docker.com )'. Live probe confirmed real infra failure on 100.69.3.13: nslookup get.docker.com \\u2192 'Got SERVFAIL reply from 100.100.100.100' and 'fd7a:115c:a1e0::53' (Tailscale MagicDNS); getent rc=0 but empty. Spawn progressed past server-config lookup (agent creation started) but rootless-docker install's curl to get.docker.com failed on DNS \\u2192 spawn aborted \\u2192 0 cells, UNVERIFIED. Not a repo defect; do not file project rows against warpfs.\",\"priority\":\"P1\",\"source\":\"qa-dagger\",\"reasoning\":{\"note\":\"QA foreman cycle 2026-09-06 \\u2014 fresh-system CI pass (bunker cell: run_battery)\"},\"review_notes\":\"Cell: 'spawn failed on bunker-las-03: Creating agent... bunker: spawn agent: internal: install rootless docker for bunker-936dd85f: download rootless installer: exit status 6 (output: curl: (6) Could not resolve host: get.docker.com )'. Live probe confirmed real infra failure on 100.69.3.13: nslookup get.docker.com \\u2192 'Got SERVFAIL reply from 100.100.100.100' and 'fd7a:115c:a1e0::53' (Tailscale Mag\",\"ts\":\"2026-09-06T00:45:44.614Z\"}"
+    },
+    {
+      "original_line": 79,
+      "original_id": "QA-WARPFS-2",
+      "new_id": "QA-WARPFS-2-3",
+      "original_status": "pending",
+      "original_ts": "2026-09-06T00:45:44.614Z",
+      "original_title": "[P3] Harness brittleness: bunker spawn hard-depends on external get.docker.com with no vendored installer or DNS retry",
+      "note": "distinct finding: bunker spawn hard-depends on get.docker.com with no vendored installer or DNS fallback. Infra/harness finding, unresolved at tick 187 (re-reported 2026-09-09 as QA-WARPFS-5-2).",
+      "raw": "{\"status\":\"pending\",\"id\":\"QA-WARPFS-2\",\"title\":\"[P3] Harness brittleness: bunker spawn hard-depends on external get.docker.com with no vendored installer or DNS retry\",\"detail\":\"Same failure signature as hermes-canopy earlier 2026-09-05 (bunker-las-03, exit status 6, 'Could not resolve host: get.docker.com'). The rootless-installer download step has no mirror/vendor fallback and no alternate-DNS retry, so any external-DNS blip on a bunker host fails the whole battery regardless of repo state.\",\"priority\":\"P3\",\"source\":\"qa-dagger\",\"reasoning\":{\"note\":\"QA foreman cycle 2026-09-06 \\u2014 fresh-system CI pass (bunker cell: run_battery)\"},\"review_notes\":\"Same failure signature as hermes-canopy earlier 2026-09-05 (bunker-las-03, exit status 6, 'Could not resolve host: get.docker.com'). The rootless-installer download step has no mirror/vendor fallback and no alternate-DNS retry, so any external-DNS blip on a bunker host fails the whole battery regardless of repo state.\",\"ts\":\"2026-09-06T00:45:44.614Z\"}"
+    },
+    {
+      "original_line": 80,
+      "original_id": "QA-WARPFS-3",
+      "new_id": "QA-WARPFS-3-3",
+      "original_status": "pending",
+      "original_ts": "2026-09-06T00:45:44.614Z",
+      "original_title": "[P3] Board row QA-WARPFS-1 root cause is stale vs today's failure signature",
+      "note": "distinct finding: the filed QA-WARPFS-1 root cause was stale vs the current failure signature. Meta/board observation, unresolved at tick 187.",
+      "raw": "{\"status\":\"pending\",\"id\":\"QA-WARPFS-3\",\"title\":\"[P3] Board row QA-WARPFS-1 root cause is stale vs today's failure signature\",\"detail\":\"tasks.jsonl QA-WARPFS-1 (pending) documents the sandboxed-HOME class: stderr 'server \\\"bunker-las-03\\\" not found in config' x3 (2026-09-03, 6 FAILs). Today's failure is a different class \\u2014 spawn found the config and created agent bunker-936dd85f, then died at install rootless docker (curl exit 6). Acting on the filed root cause (HOME/config) will not address the current DNS blocker.\",\"priority\":\"P3\",\"source\":\"qa-dagger\",\"reasoning\":{\"note\":\"QA foreman cycle 2026-09-06 \\u2014 fresh-system CI pass (bunker cell: run_battery)\"},\"review_notes\":\"tasks.jsonl QA-WARPFS-1 (pending) documents the sandboxed-HOME class: stderr 'server \\\"bunker-las-03\\\" not found in config' x3 (2026-09-03, 6 FAILs). Today's failure is a different class \\u2014 spawn found the config and created agent bunker-936dd85f, then died at install rootless docker (curl exit 6). Acting on the filed root cause (HOME/config) will not address the current DNS blocker.\",\"ts\":\"2026-09-06T00:45:44.614Z\"}"
+    },
+    {
+      "original_line": 82,
+      "original_id": "QA-WARPFS-1",
+      "new_id": "QA-WARPFS-1-5",
+      "original_status": "pending",
+      "original_ts": "2026-09-07T04:15:32.705Z",
+      "original_title": "[P1] Bunker host disk exhaustion blocks battery spawn",
+      "note": "distinct finding: bunker host ENOSPC (disk 95%) broke agent image extraction. Infra/bunker finding, unresolved at tick 187 (re-reported 2026-09-09 as QA-WARPFS-2-4).",
+      "raw": "{\"status\":\"pending\",\"id\":\"QA-WARPFS-1\",\"title\":\"[P1] Bunker host disk exhaustion blocks battery spawn\",\"detail\":\"[run_battery] FAIL \\u2014 spawn failed on bunker-las-03: \\\"tar: dockerd: Cannot write: No space left on device tar: Exiting with failure status due to previous errors\\\". Verified bunker-las-03 ONLINE (not a sandboxed-HOME artifact) but Disk \\u26a0 95% (209.4 GB/220.6 GB) \\u2014 agent image extraction fails on the near-full host disk; battery never ran. Root cause is bunker host ENOSPC, not repo brittleness.\",\"priority\":\"P1\",\"source\":\"qa-dagger\",\"reasoning\":{\"note\":\"QA foreman cycle 2026-09-07 \\u2014 fresh-system CI pass (bunker cell: run_battery)\"},\"review_notes\":\"[run_battery] FAIL \\u2014 spawn failed on bunker-las-03: \\\"tar: dockerd: Cannot write: No space left on device tar: Exiting with failure status due to previous errors\\\". Verified bunker-las-03 ONLINE (not a sandboxed-HOME artifact) but Disk \\u26a0 95% (209.4 GB/220.6 GB) \\u2014 agent image extraction fails on the near-full host disk; battery never ran. Root cause is bunker host ENOSPC, not repo brittleness.\",\"ts\":\"2026-09-07T04:15:32.705Z\"}"
+    },
+    {
+      "original_line": 85,
+      "original_id": "QA-WARPFS-1",
+      "new_id": "QA-WARPFS-1-6",
+      "original_status": "pending",
+      "original_ts": "2026-09-09T23:32:25.596Z",
+      "original_title": "[P1] qa-foreman cron still targets bunker-las-03 which is no longer in ~/.bunker/config.yaml — battery spawn would fail 'server not found in config'",
+      "note": "distinct finding: the qa-foreman cron prompt hardcodes bunker-las-03 which is absent from ~/.bunker/config.yaml. Infra/tooling finding (not the warpfs repo), unresolved at tick 187.",
+      "raw": "{\"status\":\"pending\",\"id\":\"QA-WARPFS-1\",\"title\":\"[P1] qa-foreman cron still targets bunker-las-03 which is no longer in ~/.bunker/config.yaml \\u2014 battery spawn would fail 'server not found in config'\",\"detail\":\"Cron job 52d19561484a prompt hardcodes `bash /home/kara/.hermes/scripts/bunker-qa.sh run <workdir> --server bunker-las-03`; live config (read 2026-09-09) registers only bunker-las-02, bunker-las-04, judgebox, karahermes-mde-7840hs, karahermes-mde-7840hs-2 \\u2014 NO las-03, and `HOME=/home/kara bunker status` lists only karahermes-mde-7840hs-2. A literal prompt-following run reproduces the exact 'server not found in config' spawn FAIL class stamped complete 09-07; 09-07/09-08 successes only happened because the agent improvised to the local server. No cells recorded for warpfs this cycle.\",\"priority\":\"P1\",\"source\":\"qa-dagger\",\"reasoning\":{\"note\":\"QA foreman cycle 2026-09-09 \\u2014 fresh-system CI pass (bunker cell: run_battery)\"},\"review_notes\":\"Cron job 52d19561484a prompt hardcodes `bash /home/kara/.hermes/scripts/bunker-qa.sh run <workdir> --server bunker-las-03`; live config (read 2026-09-09) registers only bunker-las-02, bunker-las-04, judgebox, karahermes-mde-7840hs, karahermes-mde-7840hs-2 \\u2014 NO las-03, and `HOME=/home/kara bunker status` lists only karahermes-mde-7840hs-2. A literal prompt-following run reproduces the exact 'server\",\"ts\":\"2026-09-09T23:32:25.596Z\"}"
+    },
+    {
+      "original_line": 86,
+      "original_id": "QA-WARPFS-2",
+      "new_id": "QA-WARPFS-2-4",
+      "original_status": "pending",
+      "original_ts": "2026-09-09T23:32:25.596Z",
+      "original_title": "[P1] Pending QA-WARPFS-1: bunker-las-03 host disk exhaustion (95%) blocks agent image extraction — battery never ran",
+      "note": "dated re-report (2026-09-09) of the bunker host disk-exhaustion finding tracked by QA-WARPFS-1-5; kept for provenance - do not dispatch as separate work.",
+      "raw": "{\"status\":\"pending\",\"id\":\"QA-WARPFS-2\",\"title\":\"[P1] Pending QA-WARPFS-1: bunker-las-03 host disk exhaustion (95%) blocks agent image extraction \\u2014 battery never ran\",\"detail\":\"Board row (pending, dedupe-latest): '[run_battery] FAIL \\u2014 spawn failed on bunker-las-03: \\\"tar: dockerd: Cannot write: No space left on device tar: Exiting with failure status due to previous errors\\\". Verified bunker-las-03 ONLINE (not a sandboxed-HOME artifact) but Disk \\u26a0 95% (209.4 GB/220.6 GB) \\u2014 agent image extraction fails on the near-full host disk; battery never ran.' No fix commit since filing; row still pending.\",\"priority\":\"P1\",\"source\":\"qa-dagger\",\"reasoning\":{\"note\":\"QA foreman cycle 2026-09-09 \\u2014 fresh-system CI pass (bunker cell: run_battery)\"},\"review_notes\":\"Board row (pending, dedupe-latest): '[run_battery] FAIL \\u2014 spawn failed on bunker-las-03: \\\"tar: dockerd: Cannot write: No space left on device tar: Exiting with failure status due to previous errors\\\". Verified bunker-las-03 ONLINE (not a sandboxed-HOME artifact) but Disk \\u26a0 95% (209.4 GB/220.6 GB) \\u2014 agent image extraction fails on the near-full host disk; battery never ran.' No fix commit since fili\",\"ts\":\"2026-09-09T23:32:25.596Z\"}"
+    },
+    {
+      "original_line": 87,
+      "original_id": "QA-WARPFS-3",
+      "new_id": "QA-WARPFS-3-4",
+      "original_status": "pending",
+      "original_ts": "2026-09-09T23:32:25.597Z",
+      "original_title": "[P3] QA-WARPFS-3 (pending) self-documents stale root cause: board's P1 blocker rows are all environmental, only QA-WARPFS-4/5 are real project findings",
+      "note": "distinct finding: board audit note that the P1 blocker rows are environmental while only QA-WARPFS-4/5 were real project findings. Board observation, unresolved at tick 187.",
+      "raw": "{\"status\":\"pending\",\"id\":\"QA-WARPFS-3\",\"title\":\"[P3] QA-WARPFS-3 (pending) self-documents stale root cause: board's P1 blocker rows are all environmental, only QA-WARPFS-4/5 are real project findings\",\"detail\":\"Row detail: 'tasks.jsonl QA-WARPFS-1 (pending) documents the sandboxed-HOME class: stderr \\\"server \\\\\\\"bunker-las-03\\\\\\\" not found in config\\\" x3 (2026-09-03, 6 FAILs). Today's failure is a different class \\u2014 spawn found the config and created agent bunker-936dd85f, then died at install rootless docker (curl exit 6). Acting on the filed root cause (HOME/config) will not address the current DNS blocker.' Board carries 5 pending QA-WARPFS rows; 3 are harness/environment classes.\",\"priority\":\"P3\",\"source\":\"qa-dagger\",\"reasoning\":{\"note\":\"QA foreman cycle 2026-09-09 \\u2014 fresh-system CI pass (bunker cell: board)\"},\"review_notes\":\"Row detail: 'tasks.jsonl QA-WARPFS-1 (pending) documents the sandboxed-HOME class: stderr \\\"server \\\\\\\"bunker-las-03\\\\\\\" not found in config\\\" x3 (2026-09-03, 6 FAILs). Today's failure is a different class \\u2014 spawn found the config and created agent bunker-936dd85f, then died at install rootless docker (curl exit 6). Acting on the filed root cause (HOME/config) will not address the current DNS blocker.' \",\"ts\":\"2026-09-09T23:32:25.597Z\"}"
+    },
+    {
+      "original_line": 88,
+      "original_id": "QA-WARPFS-4",
+      "new_id": "QA-WARPFS-4-2",
+      "original_status": "pending",
+      "original_ts": "2026-09-09T23:32:25.597Z",
+      "original_title": "[P3] warpfs foreman tick 2026-09-09 18:13 failed at duckbrain_write — tick narration/report nodes skipped",
+      "note": "distinct finding: the warpfs foreman tick 2026-09-09 18:13 failed at the duckbrain_write node (tick narration/report nodes skipped). Tooling finding (hermes-dagger lane), not the warpfs repo; unresolved at tick 187.",
+      "raw": "{\"status\":\"pending\",\"id\":\"QA-WARPFS-4\",\"title\":\"[P3] warpfs foreman tick 2026-09-09 18:13 failed at duckbrain_write \\u2014 tick narration/report nodes skipped\",\"detail\":\"/tmp/foreman-warpfs-2038456-1788994529708936414/run.log: 'duckbrain_write agent \\u274c execute: node failed (failed): node \\\"422b3e4f75ee/duckbrain_write\\\": qjs: eval failed: Error: duckbrain tick write FAILED (key=/project/warpfs/event/warpfs-2026-09-09-22-55-29 ns=warpfs agent=agent returned non-JSON and no success markers'; signals + report nodes skipped (2 dependency failures); board commit itself passed.\",\"priority\":\"P3\",\"source\":\"qa-dagger\",\"reasoning\":{\"note\":\"QA foreman cycle 2026-09-09 \\u2014 fresh-system CI pass (bunker cell: foreman-tick)\"},\"review_notes\":\"/tmp/foreman-warpfs-2038456-1788994529708936414/run.log: 'duckbrain_write agent \\u274c execute: node failed (failed): node \\\"422b3e4f75ee/duckbrain_write\\\": qjs: eval failed: Error: duckbrain tick write FAILED (key=/project/warpfs/event/warpfs-2026-09-09-22-55-29 ns=warpfs agent=agent returned non-JSON and no success markers'; signals + report nodes skipped (2 dependency failures); board commit itself pa\",\"ts\":\"2026-09-09T23:32:25.597Z\"}"
+    },
+    {
+      "original_line": 89,
+      "original_id": "QA-WARPFS-5",
+      "new_id": "QA-WARPFS-5-2",
+      "original_status": "pending",
+      "original_ts": "2026-09-09T23:32:25.597Z",
+      "original_title": "[P3] QA-WARPFS-2 (pending): bunker spawn hard-depends on external get.docker.com with no vendored installer or DNS fallback",
+      "note": "dated re-report (2026-09-09) of the get.docker.com hard-dependency finding tracked by QA-WARPFS-2-3; kept for provenance - do not dispatch as separate work.",
+      "raw": "{\"status\":\"pending\",\"id\":\"QA-WARPFS-5\",\"title\":\"[P3] QA-WARPFS-2 (pending): bunker spawn hard-depends on external get.docker.com with no vendored installer or DNS fallback\",\"detail\":\"Row detail: 'Same failure signature as hermes-canopy earlier 2026-09-05 (bunker-las-03, exit status 6, \\\"Could not resolve host: get.docker.com\\\"). The rootless-installer download step has no mirror/vendor fallback and no alternate-DNS retry, so any external-DNS blip on a bunker host fails the whole battery regardless of repo state.'\",\"priority\":\"P3\",\"source\":\"qa-dagger\",\"reasoning\":{\"note\":\"QA foreman cycle 2026-09-09 \\u2014 fresh-system CI pass (bunker cell: run_battery)\"},\"review_notes\":\"Row detail: 'Same failure signature as hermes-canopy earlier 2026-09-05 (bunker-las-03, exit status 6, \\\"Could not resolve host: get.docker.com\\\"). The rootless-installer download step has no mirror/vendor fallback and no alternate-DNS retry, so any external-DNS blip on a bunker host fails the whole battery regardless of repo state.'\",\"ts\":\"2026-09-09T23:32:25.597Z\"}"
+    },
+    {
+      "original_line": 92,
+      "original_id": "QA-WARPFS-1",
+      "new_id": "QA-WARPFS-1-7",
+      "original_status": "pending",
+      "original_ts": "2026-09-11T03:01:08.438Z",
+      "original_title": "[P1] Bunker battery could not run because the one-range port pool is occupied",
+      "note": "distinct finding: bunker one-range port pool occupied, battery could not run. Same class as QA-WARPFS-6 (2026-09-10); infra finding, unresolved at tick 187.",
+      "raw": "{\"status\":\"pending\",\"id\":\"QA-WARPFS-1\",\"title\":\"[P1] Bunker battery could not run because the one-range port pool is occupied\",\"detail\":\"run_battery FAIL: \\\"spawn attempt 2 failed: bunker: spawn agent: internal: port range allocation: no free port ranges available (pool exhausted: 1 ranges)\\\". Read-only probe `env HOME=/home/kara bunker status --server bunker-las-02` confirmed the server is ONLINE with one existing agent, `kara-lair`; `(pool exhausted: 1 ranges)` identifies total port-pool capacity as one range, not a leaked multi-range pool.\",\"priority\":\"P1\",\"source\":\"qa-dagger\",\"reasoning\":{\"note\":\"QA foreman cycle 2026-09-11 \\u2014 fresh-system CI pass (bunker cell: run_battery)\"},\"review_notes\":\"run_battery FAIL: \\\"spawn attempt 2 failed: bunker: spawn agent: internal: port range allocation: no free port ranges available (pool exhausted: 1 ranges)\\\". Read-only probe `env HOME=/home/kara bunker status --server bunker-las-02` confirmed the server is ONLINE with one existing agent, `kara-lair`; `(pool exhausted: 1 ranges)` identifies total port-pool capacity as one range, not a leaked multi-ra\",\"ts\":\"2026-09-11T03:01:08.438Z\"}"
+    }
+  ],
+  "field_corrections": [
+    {
+      "original_line": 94,
+      "id": "GAP-057",
+      "field": "ci_result",
+      "from": "9431cac run in_progress at tick close; all prior runs green",
+      "to": "SKIP",
+      "why": "run was in_progress at tick close - in-flight CI is recorded as SKIP, never as a guessed green"
+    },
+    {
+      "original_line": 95,
+      "id": "GAP-058",
+      "field": "ci_result",
+      "from": "GitHub Actions run 34758404307 in progress at Build; two preceding master runs succeeded",
+      "to": "SKIP",
+      "why": "run 34758404307 was in progress at Build and prior runs only 'succeeded' - in-flight CI is recorded as SKIP"
+    },
+    {
+      "original_line": 96,
+      "id": "GAP-059",
+      "field": "guard_result",
+      "from": "PASS (gitreins commit pre-commit hook: secrets PASS, scoped tests leg PASS, static-analysis cppcheck 300s timeout warning = expected fail-open, INT-GITREINS-002 open)",
+      "to": "PASS",
+      "why": "explicitly states the gitreins commit guard Tier-1 legs passed ('secrets PASS, scoped tests leg PASS'); the non-blocking cppcheck timeout is not a guard failure"
+    },
+    {
+      "original_line": 96,
+      "id": "GAP-059",
+      "field": "ci_result",
+      "from": "gethilo/hilo: run for 488ee3d in_progress at closure; last 4 completed runs all success",
+      "to": "SKIP",
+      "why": "the run for 488ee3d was in_progress at closure - SKIP, not a guessed green"
+    },
+    {
+      "original_line": 105,
+      "id": "GAP-066",
+      "field": "guard_result",
+      "from": "fmt=0 workspace_check=0 hilo_graph_lib=190 passed/0 failed hilo_mcp=25+7 passed/0 failed strict -D warnings compile=0",
+      "to": "PASS",
+      "why": "all recorded gate counters are clean (fmt=0, workspace_check=0, 190+32 tests passed / 0 failed, -D warnings compile=0)"
+    },
+    {
+      "original_line": 105,
+      "id": "GAP-066",
+      "field": "ci_result",
+      "from": "pre-push gethilo/hilo 3/3 recent runs success (2026-09-12T19:15Z); post-push runs pending at closure time",
+      "to": "SKIP",
+      "why": "pre-push runs were green but the post-push runs were still pending at closure - SKIP"
+    },
+    {
+      "original_line": 112,
+      "id": "GAP-069",
+      "field": "ci_result",
+      "from": "GREEN (run 34855848946, all steps success: fmt, build, clippy, test)",
+      "to": "GREEN",
+      "why": "explicit 'GREEN (run 34855848946, all steps success)'"
+    },
+    {
+      "original_line": 114,
+      "id": "GAP-071",
+      "field": "guard_result",
+      "from": "tier1 PASS (gitreins commit guard: secrets clean / tests / static_analysis / lsp; the static_analysis leg is cppcheck, which times out at its 300s cap on this repo and is non-blocking). tier2 INCOMPLETE twice, both BUDGET artifacts and not code verdicts: run 1 verdict c2a1f942 = 'Cap exceeded: Iteration cap (100) reached (100.7 used)'; after bumping .gitreins/config.yaml evaluator.max_iterations 100 -> 200 (commit 00ac203, config-only) run 2 verdict b82568f5 = 'Cap exceeded: Time cap (30m) exceeded (30m13s elapsed)'. The judge's own live verification (it spawns cargo test/check + a from-source libduckdb-sys build) consumes both budgets on this repo. Gap owner: INT-GITREINS-001 (P2); code quality rests on the foreman's independent verification + CI.",
+      "to": "PASS",
+      "why": "explicit 'tier1 PASS'; the two tier-2 INCOMPLETE results were evaluator budget caps and are not guard-leg failures"
+    },
+    {
+      "original_line": 116,
+      "id": "GAP-073",
+      "field": "guard_result",
+      "from": "tier1 PASS; tier2 rerun after evaluator fix",
+      "to": "PASS",
+      "why": "explicit 'tier1 PASS' (tier-2 rerun was pending after the evaluator fix)"
+    },
+    {
+      "original_line": 122,
+      "id": "GAP-078",
+      "field": "ci_result",
+      "from": "CI: fix commit a4ab0f1 + board commit pushed together; per INT-CI-005 read CI per-step, not per-conclusion (README/status badge can read red off a post-cache runner kill). CI state at tick end recorded in the tick report.",
+      "to": "SKIP",
+      "why": "no completed run is asserted for the pushed commits - SKIP rather than a guessed state"
+    },
+    {
+      "original_line": 126,
+      "id": "GAP-082",
+      "field": "ci_result",
+      "from": "fix commit f206257 CI success (gethilo/hilo run for that sha completed green); board f663863 and config 09138bd runs were in_progress at tick end. INT-CI-005 caveat: this repo's CI can conclude failure in the post-cache step after green build/clippy/test - read per-step.",
+      "to": "SKIP",
+      "why": "the fix commit's run completed green but the board/config commits were still in_progress at tick end and INT-CI-005 warns the conclusion can misreport - SKIP"
+    },
+    {
+      "original_line": 116,
+      "id": "GAP-073",
+      "field": "status",
+      "from": "done",
+      "to": "complete",
+      "why": "status 'done' was not in the board vocabulary; completion evidence is present (commit 2310e902, worker_summary, completed_at 2026-09-14 16:05:00, task_completed event 435 recording 'tier1 gitreins guard PASS at commit')"
+    }
+  ],
+  "reasoning_restorations": [
+    {
+      "original_line": 128,
+      "id": "GAP-074",
+      "segments_restored": 2,
+      "segment_lengths": [
+        624,
+        856
+      ],
+      "original_char_count": 4846,
+      "restored": [
+        "premise-false (tick 176) — SWEEP REVOKED. deepseek-v4-flash is NOT retired: live 2026-09-15T12:16Z POST /v1/chat/completions model=deepseek-v4-flash -> HTTP 200, content 'READY', body.model='deepseek-flash'; only GET /models omits it (unlisted != retired). 71 fleet configs are fine. Real defect: engine/llm.py:275 unguarded data[\"choices\"][0] -> KeyError('choices') masks the provider's own error and makes every cause look identical; plus reasoning-token starvation (max_tokens=8 -> 200, content='', finish_reason='length'). Corroborated by off-by-one class 1648 / answer 1830. Full evidence: task_updated event, tick 176.",
+        "CLOSED 2026-09-16 foreman-direct (bankai wave). Fix in gitreins repo (totalwindupflightsystems/gitreins, engine/llm.py): new LLMResponseError; the OpenAI-path extraction now reads data.get(\"choices\") and, on missing/empty, raises LLMResponseError carrying the provider's own payload (error/message; usage note appended when choices==[] with usage present = reasoning-token starvation) instead of a bare KeyError('choices') that erased every cause. +2 regression tests (tests/test_llm_gap074.py). Verified: pytest 2/2 new + 70/70 llm-keyword suite; ruff clean; gitreins guard Tier 1 PASS (secrets/lint/tests/lsp). Commit 35ab89a pushed to main. Deployed: pipx install ~/gitreins-poc --force -> installed site-packages engine/llm.py carries LLMResponseError (grep-verified). Fleet note: other boxes upgrade via pipx install from the repo at next convenience."
+      ]
+    },
+    {
+      "original_line": 129,
+      "id": "GAP-080",
+      "segments_restored": 2,
+      "segment_lengths": [
+        691,
+        725
+      ],
+      "original_char_count": 4184,
+      "restored": [
+        "hilo-vs-scc bake-off wave 3 (2026-09-15): bake-off A1 round used `hilo graph stats && hilo classify --dry-run` as the architecture answer; on vitest (1914 files) this produced a 392,372-char dump vs competitor's 6,964-char budgeted overview — automatic loss on every monorepo-sized repo, and a real footgun for agents that pipe tool output into context. Understand already has --budget; stats/classify do not. NEXT: add --limit/--budget to stats and classify (truncate file lists with a count summary, e.g. '... 1904 more'), default a sane cap (2-5K chars) for agent-facing output; acceptance test = stats+classify on vitest outputs <10K chars by default with full detail available via flag.",
+        "CLOSED 2026-09-16 foreman-direct (bankai wave). Commit f2f1134: `graph stats --limit N` (default 25) caps the orphan list with '... N more orphans (use --limit 0 to show all)'; `classify --limit N` (default 50) caps per-file dry-run/verbose lines with a suppression summary; --limit 0 = unlimited on both; scalar stats + by-role/by-feature tables always print in full. Verified live on the warpfs graph (44 orphans): --limit 5 shows 5 + summary; --limit 0 shows all 44 and no summary; classify --dry-run --limit 5 prints 5 lines + 'further per-file lines suppressed' + full totals. Gates: cargo check -p hilo-cli clean, clippy --workspace --all-targets -D warnings PASS, fmt --check clean, hilo-cli 31/31, hilo_graph 214/214."
+      ]
+    },
+    {
+      "original_line": 130,
+      "id": "GAP-077",
+      "segments_restored": 2,
+      "segment_lengths": [
+        810,
+        972
+      ],
+      "original_char_count": 5040,
+      "restored": [
+        "hilo-vs-scc bake-off, flask @ HEAD (2026-09-15): hilo graph search \"url_for\" -> No results (truth: src/flask/helpers.py:200); \"jinja env\" -> No results (truth: templating.py:467 create_jinja_environment). Smoke test shows the corpus is package-keyed: search \"dispatch request\" hits tests/test_request.py and \"FlaskGroup click\" returns pkg:click/pkg:flask module nodes — file-defined symbols (helpers.py url_for) are absent from the searchable corpus. D3 note: exact-symbol search worked on warpfs's own Rust multi-crate graph; this is the single-package collapse again (GAP-076 family, search half). NEXT: attach per-file symbol docs to the search corpus (or file nodes) so BM25 can rank file:symbol pairs; acceptance test = warm a flask-like single-package fixture and search \"url_for\" must return helpers.py.",
+        "CLOSED 2026-09-16 foreman-direct (bankai wave) together with GAP-079, commit 0e3a004. Root cause: search documents were node names only; the defining file's document held just path tokens, so exact symbol queries had nothing to match and pkg:/local: pseudo-nodes outranked real files. Fix: SearchOpts.index_symbols gates a default_symbol_extractor that reads repo files (skips >1MB blobs) and adds tree-sitter definition names to each doc, memoized per index build; CLI search + MCP vfs_graph_search opt in, CLI --no-symbols = old cheap path, understand's semantic fallback opts in. Borrow shape rebuilt match-scoped so fused ranks escape owned. Verified on flask corpus: \"url_for\" now lists src/flask/helpers.py (was 'No results'); \"jinja env\" lists src/flask/templating.py; --no-symbols reproduces old behavior; +2 regression tests. Gates: hilo_graph 216/216 lib, semantic_test 22/22, hilo-cli 31/31, clippy --workspace --all-targets -D warnings PASS, fmt --check clean."
+      ]
+    },
+    {
+      "original_line": 131,
+      "id": "GAP-079",
+      "segments_restored": 2,
+      "segment_lengths": [
+        1088,
+        592
+      ],
+      "original_char_count": 6042,
+      "restored": [
+        "hilo-vs-scc bake-off wave 3 (2026-09-15, /tmp/bakeoff/results_round3.json): duckbrain graph search \"namespace writer\" ranks local:../../serialization/namespaceWriter, local:./namespaceWriter ABOVE the real src/serialization/namespaceWriter.ts; \"merge squash\" correctly finds src/git/merge.ts but buries it under local:./merge and pkg:tailwind-merge. In graph understand on duckbrain and vitest, MAP bullets are dominated by local:/pkg: nodes with \"(no symbols extracted)\" — the anchor list spends its budget on import-specifier strings instead of files. Related: GAP-075 (TS symbol extraction) is the empty-bullets half for REAL files; this row is the pseudo-node half — local:/pkg: specifiers should be resolved to files before corpus indexing (they are edges, not documents). NEXT: resolve TS path aliases + relative specifiers to repo files at warm time; drop unresolved specifiers from the search corpus or rank them below real files; acceptance test = search must rank src/serialization/namespaceWriter.ts first on duckbrain, and understand MAP must contain zero local:/pkg: anchors.",
+        "CLOSED 2026-09-16 foreman-direct (bankai wave) together with GAP-077, commit 0e3a004. Same fix: the ranking advantage of local:/pkg: nodes came from real files having no symbol content in the index; with symbols indexed, definition-bearing files out-score specifier strings, and pseudo-node docs get no symbols by construction. Live check on flask: file hits (helpers.py, templating.py) now present in top results for definition queries; GAP-072's local: resolution still runs before limit truncation, unchanged. Same gates as GAP-077 closure (216/216, 22/22, 31/31, clippy clean, fmt clean)."
+      ]
+    }
+  ],
+  "mapping": {
+    "GAP-067": [
+      {
+        "original_line": 106,
+        "canonical_id": "GAP-067",
+        "action": "collapsed"
+      }
+    ],
+    "GAP-074": [
+      {
+        "original_line": 117,
+        "canonical_id": "GAP-074",
+        "action": "collapsed"
+      },
+      {
+        "original_line": 127,
+        "canonical_id": "GAP-074",
+        "action": "collapsed"
+      }
+    ],
+    "GAP-077": [
+      {
+        "original_line": 121,
+        "canonical_id": "GAP-077",
+        "action": "collapsed"
+      }
+    ],
+    "GAP-079": [
+      {
+        "original_line": 123,
+        "canonical_id": "GAP-079",
+        "action": "collapsed"
+      }
+    ],
+    "GAP-080": [
+      {
+        "original_line": 124,
+        "canonical_id": "GAP-080",
+        "action": "collapsed"
+      }
+    ],
+    "QA-WARPFS-1": [
+      {
+        "original_line": 73,
+        "canonical_id": "QA-WARPFS-1-2"
+      },
+      {
+        "original_line": 75,
+        "canonical_id": "QA-WARPFS-1-3"
+      },
+      {
+        "original_line": 78,
+        "canonical_id": "QA-WARPFS-1-4"
+      },
+      {
+        "original_line": 82,
+        "canonical_id": "QA-WARPFS-1-5"
+      },
+      {
+        "original_line": 85,
+        "canonical_id": "QA-WARPFS-1-6"
+      },
+      {
+        "original_line": 92,
+        "canonical_id": "QA-WARPFS-1-7"
+      }
+    ],
+    "QA-WARPFS-2": [
+      {
+        "original_line": 76,
+        "canonical_id": "QA-WARPFS-2-2"
+      },
+      {
+        "original_line": 79,
+        "canonical_id": "QA-WARPFS-2-3"
+      },
+      {
+        "original_line": 86,
+        "canonical_id": "QA-WARPFS-2-4"
+      }
+    ],
+    "QA-WARPFS-3": [
+      {
+        "original_line": 77,
+        "canonical_id": "QA-WARPFS-3-2"
+      },
+      {
+        "original_line": 80,
+        "canonical_id": "QA-WARPFS-3-3"
+      },
+      {
+        "original_line": 87,
+        "canonical_id": "QA-WARPFS-3-4"
+      }
+    ],
+    "QA-WARPFS-4": [
+      {
+        "original_line": 88,
+        "canonical_id": "QA-WARPFS-4-2"
+      }
+    ],
+    "QA-WARPFS-5": [
+      {
+        "original_line": 89,
+        "canonical_id": "QA-WARPFS-5-2"
+      }
+    ]
+  },
+  "completion_evidence": [
+    {
+      "line": 109,
+      "id": "GAP-067",
+      "completed_at": "2026-09-13T05:32:00Z",
+      "commit_hash": "eb0d1437d175b51b2d97e536646e0004d0b2caa3",
+      "note": "completed by the closure row written 2026-09-13 00:32 (events.jsonl task_dispatched 313 / task_completed 314 / audit 315, code_commit eb0d1437d175)"
+    },
+    {
+      "line": 128,
+      "id": "GAP-074",
+      "completed_at": "2026-09-16T05:36:00Z",
+      "commit_hash": "35ab89a",
+      "note": "completed by the closure row written at 2026-09-16T05:36:00Z; events.jsonl task_completed id=340 records fix_commit 35ab89a in repo totalwindupflightsystems/gitreins (engine/llm.py LLMResponseError)"
+    },
+    {
+      "line": 129,
+      "id": "GAP-080",
+      "completed_at": "2026-09-16T05:45:36Z",
+      "commit_hash": "f2f1134",
+      "note": "completed by the closure row written at 2026-09-16T05:45:36Z; events.jsonl task_completed id=341 records commit f2f1134"
+    },
+    {
+      "line": 130,
+      "id": "GAP-077",
+      "completed_at": "2026-09-16T06:01:37Z",
+      "commit_hash": "0e3a004",
+      "note": "completed by the closure row written at 2026-09-16T06:01:37Z; events.jsonl task_completed id=342 records commit 0e3a004 (bankai wave)"
+    },
+    {
+      "line": 131,
+      "id": "GAP-079",
+      "completed_at": "2026-09-16T06:01:37Z",
+      "commit_hash": "0e3a004",
+      "note": "completed by the closure row written at 2026-09-16T06:01:37Z; events.jsonl task_completed id=343 records commit 0e3a004 (bankai wave)"
+    }
+  ],
+  "changed_lines": [
+    73,
+    75,
+    76,
+    77,
+    78,
+    79,
+    80,
+    82,
+    85,
+    86,
+    87,
+    88,
+    89,
+    92,
+    94,
+    95,
+    96,
+    105,
+    109,
+    112,
+    114,
+    116,
+    122,
+    126,
+    128,
+    129,
+    130,
+    131
+  ],
+  "dropped_lines": [
+    106,
+    117,
+    121,
+    123,
+    124,
+    127
+  ],
+  "summary": {
+    "duplicate_ids_before": 10,
+    "rows_removed": 6,
+    "rows_reidentified": 14,
+    "field_corrections": 12,
+    "reasoning_restorations": 4
+  }
+}
