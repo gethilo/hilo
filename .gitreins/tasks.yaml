@@ -984,3 +984,13 @@ tasks:
   status: complete
   created_at: '2026-09-17T01:42:03.663807+00:00'
   completed_at: '2026-09-17T02:45:30.504909+00:00'
+- id: INT-GITREINS-002
+  title: Enforce Rust Clippy in GitReins guards
+  criteria:
+  - Repository guard configuration must select and execute Rust Clippy with warnings
+    denied; no cppcheck timeout or silent static-analysis success. Preserve secrets
+    and existing test coverage. Add a regression check proving Rust lint failure propagates
+    to a nonzero guard result. Clean repository guard, scoped Rust check, fmt and
+    tests must pass.
+  status: in_progress
+  created_at: '2026-09-17T04:13:08.930597+00:00'

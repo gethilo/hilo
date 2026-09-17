@@ -2,13 +2,17 @@ guards:
   secrets: true
   lint: false
   tests: true
-  test_mode: diff
-  test_command: cargo test -p hilo_graph --lib
+  # Run Clippy through the fail-closed command guard: the native static
+  # analyzer prioritizes Makefile over Cargo.toml and swallows tool failures.
+  test_mode: full
+  test_on_clean: true
+  test_command: bash scripts/rust-lint.sh
   test_timeout: 300
   hook_timeout: 600
   lsp: true
   lsp_tools: ["rust-analyzer"]
-  static_analysis: true
+  # Clippy is enforced above; disable the misleading native cppcheck path.
+  static_analysis: false
   static_analysis_tools: {}
 evaluator:
   max_iterations: 200
