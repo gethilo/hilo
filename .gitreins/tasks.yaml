@@ -939,3 +939,26 @@ tasks:
   status: complete
   created_at: '2026-09-16T10:26:49.104131+00:00'
   completed_at: '2026-09-16T11:04:07.529336+00:00'
+- id: GAP-075
+  title: Fix empty TS/JS symbol names in graph understand MAP
+  criteria:
+  - '''hilo graph understand "fix router middleware stack"'' on a freshly-warmed copy
+    of the express corpus (/tmp/bakeoff/express copied to scratch, .vfs/graph cleared)
+    renders a real identifier for every MAP entry of every .js/.ts file - no empty
+    bullets and no stray brace/bracket tokens such as ''- }'''
+  - 'A new regression test in hilo-graph proves per-node-kind name extraction for
+    TS/JS: function_declaration, class_declaration, method_definition, interface_declaration,
+    type_alias_declaration, plus ''export const x = () => {}'' arrow/variable declarations,
+    all wrapped in export_statement; the test fails on the pre-change extractor and
+    passes after'
+  - cargo test -p hilo_graph --lib passes in full (no pre-existing test weakened or
+    deleted), cargo test -p hilo_graph --test determinism_test passes, cargo clippy
+    -p hilo_graph --all-targets -- -D warnings is clean and cargo fmt --all --check
+    is clean
+  - 'The emitted edge set is unchanged by the fix (query-time only): re-warming a
+    cleared express scratch copy yields ADDED 0 / REMOVED 0 against the pre-change
+    baseline, and ''hilo graph impact''/''related'' answers are identical before and
+    after'
+  status: complete
+  created_at: '2026-09-17T00:00:20.332798+00:00'
+  completed_at: '2026-09-17T00:45:25.150346+00:00'
