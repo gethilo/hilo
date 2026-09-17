@@ -290,6 +290,128 @@ fn graph_warm_reports_exclusions_on_normal_and_cached_runs() {
 }
 
 #[test]
+fn graph_warm_accounts_for_every_discovered_file() {
+    // GAP-065: warm must classify every discovered file — contributes /
+    // package facade / no imports / unreadable — and the summary arithmetic
+    // must close.  The unreadable case needs a chmod-000 file (unix, non-root).
+    let dir = unique_tempdir("warm-coverage");
+
+    fs::write(
+        dir.join("app.py"),
+        "import helper\n\n\ndef run():\n    helper.go()\n",
+    )
+    .expect("failed to write app.py");
+    fs::write(
+        dir.join("helper.py"),
+        "import os\n\n\ndef go():\n    os.path.join('x')\n",
+    )
+    .expect("failed to write helper.py");
+    // Package facade: an empty __init__.py has zero edges by design.
+    let pkg = dir.join("pkg");
+    fs::create_dir_all(&pkg).expect("failed to create pkg");
+    fs::write(pkg.join("__init__.py"), "").expect("failed to write __init__.py");
+    // No imports: a constant-only module has zero edges and no facade name.
+    fs::write(dir.join("constants.py"), "MAX = 1\n").expect("failed to write constants.py");
+    // Unreadable: chmod 000 — readable only to root, so the chmod is skipped
+    // (and the expectations adjusted) when the test runs as root.
+    fs::write(dir.join("locked.rs"), "fn locked() {}\n").expect("failed to write locked.rs");
+    #[cfg(unix)]
+    // SAFETY: `geteuid` is a trivially safe libc call (reads the real uid).
+    let is_root = unsafe { libc::geteuid() } == 0;
+    #[cfg(not(unix))]
+    let is_root = true;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if !is_root {
+            fs::set_permissions(dir.join("locked.rs"), fs::Permissions::from_mode(0o000))
+                .expect("failed to chmod locked.rs to 000");
+        }
+    }
+
+    let init = Command::new(BIN)
+        .arg("init")
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo init");
+    assert!(
+        init.status.success(),
+        "init failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+
+    let warm = Command::new(BIN)
+        .args(["graph", "warm"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn graph warm");
+    assert!(
+        warm.status.success(),
+        "graph warm failed: {}",
+        String::from_utf8_lossy(&warm.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&warm.stdout);
+    let (expected_no_imports, expected_unreadable) = if is_root { (2, 0) } else { (1, 1) };
+    let expected_summary = format!(
+        "Coverage: 5 files = 2 contribute edges + 1 package facades (__init__.py) \
+         + {expected_no_imports} no imports + {expected_unreadable} unreadable \
+         + 0 unsupported extension"
+    );
+    let summary = stdout
+        .lines()
+        .find(|line| line.starts_with("Coverage: "))
+        .expect("warm should print the coverage summary");
+    assert_eq!(summary, expected_summary, "stdout:\n{stdout}");
+    if !is_root {
+        assert!(
+            stdout.contains("  unreadable source: locked.rs"),
+            "unreadable file must be named in the summary:\n{stdout}"
+        );
+    }
+
+    // Restore the locked file and warm twice more: the re-parse fills its
+    // cache entry, then the final run takes the full-cache-hit return path —
+    // which must print the same arithmetic, with the (now readable) former
+    // locked file classified as a no-imports file straight from the cache.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(dir.join("locked.rs"), fs::Permissions::from_mode(0o644))
+            .expect("failed to restore locked.rs permissions");
+    }
+    for round in 2..=3 {
+        let rewarm = Command::new(BIN)
+            .args(["graph", "warm"])
+            .current_dir(&dir)
+            .output()
+            .expect("failed to spawn rewarm");
+        assert!(
+            rewarm.status.success(),
+            "rewarm {round} failed: {}",
+            String::from_utf8_lossy(&rewarm.stderr)
+        );
+        let rewarm_stdout = String::from_utf8_lossy(&rewarm.stdout);
+        let rewarm_summary = rewarm_stdout
+            .lines()
+            .find(|line| line.starts_with("Coverage: "))
+            .expect("rewarm should print the coverage summary");
+        assert_eq!(
+            rewarm_summary,
+            "Coverage: 5 files = 2 contribute edges + 1 package facades (__init__.py) \
+             + 2 no imports + 0 unreadable + 0 unsupported extension",
+            "rewarm {round} stdout:\n{rewarm_stdout}"
+        );
+        if round == 3 {
+            assert!(
+                rewarm_stdout.contains("[all cached, graph unchanged]"),
+                "third warm should take the full-cache-hit path:\n{rewarm_stdout}"
+            );
+        }
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn graph_warm_help_documents_discovery_overrides() {
     let output = Command::new(BIN)
         .args(["graph", "warm", "--help"])

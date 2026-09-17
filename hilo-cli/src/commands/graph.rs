@@ -68,6 +68,108 @@ fn file_fingerprint(p: &Path) -> Option<(u128, u64)> {
     Some((nanos, m.len()))
 }
 
+/// GAP-065: per-file warm outcome so every discovered source file is
+/// accounted for exactly once in the end-of-warm coverage summary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum FileOutcome {
+    /// Parsed fine and produced at least one edge.
+    Contributes,
+    /// Zero edges from an `__init__.py` — a package facade, expected.
+    PackageFacade,
+    /// Zero edges from any other file — no imports found.
+    NoImports,
+    /// `fs::read_to_string` failed (permissions, I/O, non-UTF8).
+    UnreadableSource { path: String },
+    /// The extension is not a supported source language.
+    UnsupportedExtension { path: String },
+}
+
+impl FileOutcome {
+    /// Classify a successfully parsed file by its edge count and file name.
+    /// Cache hits run through the same classifier, so an `__init__.py` served
+    /// from `.parse_cache.json` still counts as a facade.
+    fn from_edges(file: &Path, edges: &[Edge]) -> Self {
+        if !edges.is_empty() {
+            return Self::Contributes;
+        }
+        if file.file_name().and_then(|n| n.to_str()) == Some("__init__.py") {
+            return Self::PackageFacade;
+        }
+        Self::NoImports
+    }
+}
+
+/// Maximum number of unreadable/unsupported paths printed in full before the
+/// summary truncates to `... and N more`.
+const COVERAGE_PATH_LIST_CAP: usize = 20;
+
+/// End-of-warm accounting (GAP-065): classifies every discovered source file
+/// into exactly one outcome.  The printed verdict line closes the arithmetic
+/// `verdict files = contributes + facades + no_imports + unreadable +
+/// unsupported`, so a deliberate zero-edge file is distinguishable from a file
+/// we failed to read or parse.
+#[derive(Debug, Default)]
+struct CoverageReport {
+    contributes: usize,
+    facades: usize,
+    no_imports: usize,
+    unreadable: Vec<String>,
+    unsupported: Vec<String>,
+}
+
+impl CoverageReport {
+    fn record(&mut self, outcome: FileOutcome) {
+        match outcome {
+            FileOutcome::Contributes => self.contributes += 1,
+            FileOutcome::PackageFacade => self.facades += 1,
+            FileOutcome::NoImports => self.no_imports += 1,
+            FileOutcome::UnreadableSource { path } => self.unreadable.push(path),
+            FileOutcome::UnsupportedExtension { path } => self.unsupported.push(path),
+        }
+    }
+
+    /// Build the summary block: the verdict line (whose arithmetic closes
+    /// against the discovered-file count) plus the capped path lists.
+    fn render(&self) -> String {
+        let unreadable_n = self.unreadable.len();
+        let unsupported_n = self.unsupported.len();
+        let verdict =
+            self.contributes + self.facades + self.no_imports + unreadable_n + unsupported_n;
+        let mut lines = vec![format!(
+            "Coverage: {verdict} files = {} contribute edges + {} package facades (__init__.py) + {} no imports + {unreadable_n} unreadable + {unsupported_n} unsupported extension",
+            self.contributes, self.facades, self.no_imports
+        )];
+        for (label, paths) in [
+            ("unreadable source", &self.unreadable),
+            ("unsupported extension", &self.unsupported),
+        ] {
+            lines.extend(coverage_path_lines(label, paths));
+        }
+        lines.join("\n")
+    }
+
+    fn print(&self) {
+        println!("{}", self.render());
+    }
+}
+
+/// Render one failure category's path list: up to [`COVERAGE_PATH_LIST_CAP`]
+/// full paths, then an ellipsis line.
+fn coverage_path_lines(label: &str, paths: &[String]) -> Vec<String> {
+    let mut lines: Vec<String> = paths
+        .iter()
+        .take(COVERAGE_PATH_LIST_CAP)
+        .map(|path| format!("  {label}: {path}"))
+        .collect();
+    if paths.len() > COVERAGE_PATH_LIST_CAP {
+        lines.push(format!(
+            "  ... and {} more {label}",
+            paths.len() - COVERAGE_PATH_LIST_CAP
+        ));
+    }
+    lines
+}
+
 pub fn run_warm(
     workspace: bool,
     language: Option<String>,
@@ -193,6 +295,8 @@ pub fn run_warm_in(
             Language::all_extensions().join(", ")
         );
         exclusions.print();
+        // GAP-065: vacuously closes the arithmetic (0 files discovered).
+        CoverageReport::default().print();
         return Ok(());
     }
 
@@ -217,13 +321,22 @@ pub fn run_warm_in(
     // Parallel parse: create a fresh parser per file since tree_sitter::Parser
     // is not Send.  Each closure runs on a rayon thread, reads the file, and
     // returns the parsed edges (or an empty vec on skip/error).
-    let parse_results: Vec<Result<Vec<Edge>>> = source_files
+    // GAP-065: per-file outcomes, order-aligned with `source_files`
+    // (`par_iter().map().collect()` preserves input order).
+    let parse_results: Vec<Result<(Vec<Edge>, FileOutcome)>> = source_files
         .par_iter()
         .map(|file| {
             let ext = file.extension().and_then(|e| e.to_str());
             let lang = match ext.and_then(Language::from_extension) {
                 Some(l) => l,
-                None => return Ok(Vec::new()),
+                None => {
+                    let rel = file
+                        .strip_prefix(cwd)
+                        .unwrap_or(file)
+                        .to_string_lossy()
+                        .into_owned();
+                    return Ok((Vec::new(), FileOutcome::UnsupportedExtension { path: rel }));
+                }
             };
 
             let rel = file
@@ -249,7 +362,11 @@ pub fn run_warm_in(
                                 .filter_map(|e| serde_json::from_value(e.clone()).ok())
                                 .collect();
                             cached_files.fetch_add(1, Ordering::Relaxed);
-                            return Ok(edges);
+                            // GAP-065: classify cache hits with the same
+                            // rules as fresh parses (a cached __init__.py is
+                            // still a facade).
+                            let outcome = FileOutcome::from_edges(file, &edges);
+                            return Ok((edges, outcome));
                         }
                     }
                 }
@@ -257,7 +374,14 @@ pub fn run_warm_in(
 
             let source = match std::fs::read_to_string(file) {
                 Ok(s) => s,
-                Err(_) => return Ok(Vec::new()),
+                Err(err) => {
+                    // GAP-065: an unreadable file (permissions, I/O,
+                    // non-UTF8) is no longer silently scored as a zero-edge
+                    // file — it is named in the coverage summary.
+                    eprintln!("  unreadable source file, classifying as failed: {rel} ({err})");
+                    let outcome = FileOutcome::UnreadableSource { path: rel };
+                    return Ok((Vec::new(), outcome));
+                }
             };
 
             let mut parser = Parser::for_language(lang)
@@ -273,8 +397,9 @@ pub fn run_warm_in(
                 "s": file_fingerprint(file).map(|(_, s)| s).unwrap_or(0),
                 "edges": edges,
             });
-            new_entries.lock().unwrap().insert(rel, entry);
-            Ok(edges)
+            new_entries.lock().unwrap().insert(rel.clone(), entry);
+            let outcome = FileOutcome::from_edges(file, &edges);
+            Ok((edges, outcome))
         })
         .collect();
 
@@ -308,8 +433,12 @@ pub fn run_warm_in(
     // Flatten results, propagating the first error.
     let mut all_edges: Vec<Edge> = Vec::new();
     let mut unique_sources: HashSet<String> = HashSet::new();
+    // GAP-065: end-of-warm accounting — every discovered file lands in
+    // exactly one outcome bucket.
+    let mut coverage = CoverageReport::default();
     for result in parse_results {
-        let edges = result?;
+        let (edges, outcome) = result?;
+        coverage.record(outcome);
         for e in &edges {
             unique_sources.insert(e.from.clone());
         }
@@ -377,6 +506,7 @@ pub fn run_warm_in(
         let langs = langs_seen.len();
         println!("Discovered {n} edges across {m} files ({langs} languages) [all cached, graph unchanged]");
         exclusions.print();
+        coverage.print();
         let _ = t_jsonl; // timing span unused on this path
         return Ok(());
     }
@@ -438,6 +568,7 @@ pub fn run_warm_in(
     let langs = langs_seen.len();
     println!("Discovered {n} edges across {m} files ({langs} languages)");
     exclusions.print();
+    coverage.print();
 
     // Update the last-warm marker so --changed knows the cutoff.
     let warm_marker = cwd.join(".vfs").join("graph").join(".last_warm");
@@ -2055,6 +2186,88 @@ mod tests {
         assert!(
             keys.contains(&"lib.rs".to_string()),
             "control file: {keys:?}"
+        );
+    }
+
+    // ======================================================================
+    // GAP-065: warm coverage accounting
+    // ======================================================================
+
+    fn edge_of(from: &str) -> Edge {
+        Edge {
+            from: from.to_string(),
+            to: "sys:target".to_string(),
+            rel: "imports".to_string(),
+            provenance: "ast_exact".to_string(),
+            confidence: 1.0,
+        }
+    }
+
+    #[test]
+    fn coverage_classifier_distinguishes_contributes_facade_and_no_imports() {
+        let contributing = Path::new("pkg/app.py");
+        let facade = Path::new("pkg/__init__.py");
+        let plain = Path::new("pkg/constants.py");
+
+        assert_eq!(
+            FileOutcome::from_edges(contributing, &[edge_of("pkg/app.py")]),
+            FileOutcome::Contributes
+        );
+        // Zero edges + facade name => package facade (never "no imports").
+        assert_eq!(
+            FileOutcome::from_edges(facade, &[]),
+            FileOutcome::PackageFacade
+        );
+        // Zero edges + ordinary name => no imports found.
+        assert_eq!(FileOutcome::from_edges(plain, &[]), FileOutcome::NoImports);
+    }
+
+    #[test]
+    fn coverage_report_render_closes_arithmetic_and_caps_paths() {
+        // Zero report: the verdict line still closes (0 = 0+0+0+0+0).
+        let empty = CoverageReport::default();
+        assert_eq!(
+            empty.render(),
+            "Coverage: 0 files = 0 contribute edges + 0 package facades (__init__.py) \
+             + 0 no imports + 0 unreadable + 0 unsupported extension"
+        );
+
+        let mut report = CoverageReport::default();
+        report.record(FileOutcome::Contributes);
+        report.record(FileOutcome::PackageFacade);
+        report.record(FileOutcome::NoImports);
+        for i in 0..(COVERAGE_PATH_LIST_CAP + 3) {
+            report.record(FileOutcome::UnreadableSource {
+                path: format!("src/locked{i}.py"),
+            });
+        }
+        report.record(FileOutcome::UnsupportedExtension {
+            path: "Makefile".to_string(),
+        });
+
+        let rendered = report.render();
+        let verdict = rendered.lines().next().unwrap();
+        assert_eq!(
+            verdict,
+            "Coverage: 27 files = 1 contribute edges + 1 package facades (__init__.py) \
+             + 1 no imports + 23 unreadable + 1 unsupported extension"
+        );
+        let named: Vec<&str> = rendered
+            .lines()
+            .filter(|line| line.starts_with("  unreadable source: "))
+            .collect();
+        assert_eq!(
+            named.len(),
+            COVERAGE_PATH_LIST_CAP,
+            "path list must cap at the limit: {rendered}"
+        );
+        assert!(
+            rendered.contains("  ... and 3 more unreadable source"),
+            "cap overflow must be reported: {rendered}"
+        );
+        assert!(
+            rendered.contains("  unsupported extension: Makefile"),
+            "unsupported files must be named: {rendered}"
         );
     }
 }

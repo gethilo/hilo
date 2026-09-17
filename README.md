@@ -47,6 +47,7 @@ $ hilo graph warm        # Parse AST, build graph (26 languages)
   parsing 100/817 files...
   parsing 817/817 files...
   Discovered 2315 edges across 716 files (26 languages)
+  Coverage: 817 files = 716 contribute edges + 42 package facades (__init__.py) + 59 no imports + 0 unreadable + 0 unsupported extension
 
 $ hilo graph impact 'sys:gtest/gtest.h' --max-depth 5
   349 files impacted — 347 C++, 2 headers
