@@ -1602,3 +1602,162 @@ fn backend_setup_reports_detection_and_next_steps() {
     assert!(!bad.status.success(), "unknown type must fail");
     let _ = fs::remove_dir_all(&dir);
 }
+
+// ─────────────────────── closed stdout pipe (GAP-063) ───────────────────────
+
+/// GAP-063: `hilo` panicked with exit 101 when its stdout pipe closed early
+/// (`hilo graph stats | head`, `... | true`).
+///
+/// The Rust runtime installs `SIG_IGN` for `SIGPIPE` before `main` runs, so a
+/// write into a closed pipe surfaces as `EPIPE` / "Broken pipe (os error 32)"
+/// and the `std` print macros escalate that write error into a panic. The CLI
+/// now restores the default `SIGPIPE` disposition at startup, so it is killed
+/// silently by the kernel (signal 13) like every other Unix filter.
+///
+/// The fixture MUST produce more than one pipe buffer of stdout (64 KiB on
+/// Linux) and the test asserts that: a fixture whose output fits in the buffer
+/// finishes writing before the reader goes away, so it would pass against the
+/// unfixed binary too — a phantom test.
+#[cfg(unix)]
+#[test]
+fn graph_stats_does_not_panic_when_stdout_closes_early() {
+    use std::io::{BufRead, BufReader, Read};
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::Stdio;
+
+    /// Linux default pipe capacity (bytes). Output must exceed this for the
+    /// child to still be writing once the read end is gone.
+    const PIPE_BUFFER_BYTES: usize = 64 * 1024;
+    /// `SIGPIPE`, as reported by `ExitStatus::signal()`.
+    const SIGPIPE: i32 = 13;
+    /// Enough standalone modules, with long relative paths, that
+    /// `graph stats --limit 0` prints roughly 90 KiB of orphans.
+    const MODULE_COUNT: usize = 700;
+    const LONG_NAME: &str = "this_is_a_deliberately_long_generated_module_file_name_for_the_broken_pipe_regression_test";
+
+    let dir = unique_tempdir("closed-stdout-pipe");
+
+    // Each module imports only the stdlib, so it is an orphan (no incoming
+    // edges) and appears in the `--limit 0` orphan dump; the stdlib `fmt`
+    // import is what gives the graph its edges at all (an edge-less graph
+    // short-circuits to "Graph cache is empty" and prints nothing).
+    for i in 0..MODULE_COUNT {
+        let section = dir
+            .join("src")
+            .join("generated")
+            .join("pkgs")
+            .join(format!("section_{:02}", i % 10));
+        fs::create_dir_all(&section).expect("failed to create fixture section dir");
+        fs::write(
+            section.join(format!("{LONG_NAME}_{i:05}.go")),
+            format!("package orphan\n\nimport \"fmt\"\n\nfunc F{i}() {{ fmt.Println({i}) }}\n"),
+        )
+        .expect("failed to write fixture module");
+    }
+    fs::write(
+        dir.join("src").join("hub.go"),
+        "package main\n\nimport \"fmt\"\n\nfunc Hub() { fmt.Println(\"hub\") }\n",
+    )
+    .expect("failed to write hub.go");
+
+    let init = Command::new(BIN)
+        .arg("init")
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo init");
+    assert!(
+        init.status.success(),
+        "init failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+
+    let warm = Command::new(BIN)
+        .args(["graph", "warm"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo graph warm");
+    assert!(
+        warm.status.success(),
+        "graph warm failed: {}",
+        String::from_utf8_lossy(&warm.stderr)
+    );
+
+    // 1. Prove the fixture really emits more than one pipe buffer, so the
+    //    closed-pipe scenario below is genuine and not a phantom.
+    let full = Command::new(BIN)
+        .args(["graph", "stats", "--limit", "0"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo graph stats");
+    assert!(
+        full.status.success(),
+        "graph stats failed: {}",
+        String::from_utf8_lossy(&full.stderr)
+    );
+    let full_len = full.stdout.len();
+    eprintln!("graph stats --limit 0 produced {full_len} bytes of stdout");
+    assert!(
+        full_len > PIPE_BUFFER_BYTES,
+        "fixture must produce more than one {PIPE_BUFFER_BYTES}-byte pipe buffer of \
+         stdout (got {full_len} bytes) or the child finishes writing before the \
+         reader is dropped and this test cannot exercise a closed pipe"
+    );
+
+    // 2. Read one line, then drop the read end while the child is still
+    //    writing; the child must not panic.
+    let mut child = Command::new(BIN)
+        .args(["graph", "stats", "--limit", "0"])
+        .current_dir(&dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn graph stats with a piped stdout");
+
+    let stdout = child.stdout.take().expect("stdout was not piped");
+    {
+        let mut reader = BufReader::new(stdout);
+        let mut first_line = String::new();
+        reader
+            .read_line(&mut first_line)
+            .expect("failed to read the first line of graph stats");
+        assert!(
+            first_line.contains("Total edges:"),
+            "unexpected first line from graph stats: {first_line:?}"
+        );
+        // `reader` — and with it the only read end of the pipe — is dropped
+        // here, while the child is still writing.
+    }
+
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .expect("stderr was not piped")
+        .read_to_string(&mut stderr)
+        .expect("failed to read graph stats stderr");
+    let status = child.wait().expect("failed to wait for graph stats");
+
+    assert!(
+        !stderr.contains("panicked"),
+        "hilo must not panic when its stdout pipe closes early, stderr was:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("Broken pipe"),
+        "hilo must not report a broken-pipe error when its stdout pipe closes early, \
+         stderr was:\n{stderr}"
+    );
+    assert_ne!(
+        status.code(),
+        Some(101),
+        "hilo exited 101 (panic) when its stdout pipe closed early, stderr was:\n{stderr}"
+    );
+    assert!(
+        status.code() == Some(0) || status.signal() == Some(SIGPIPE),
+        "expected exit 0 or death by SIGPIPE ({SIGPIPE}), got code={:?} signal={:?}, \
+         stderr was:\n{stderr}",
+        status.code(),
+        status.signal()
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
