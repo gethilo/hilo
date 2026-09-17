@@ -995,3 +995,15 @@ tasks:
   status: complete
   created_at: '2026-09-17T04:13:08.930597+00:00'
   completed_at: '2026-09-17T04:39:12.023379+00:00'
+- id: GAP-063
+  title: hilo CLI must not panic with exit 101 when stdout closes early (SIGPIPE)
+  criteria:
+  - Restore default SIGPIPE disposition at CLI start (unix-gated, libc already a dep)
+    so early-closing consumers (head/true/supervisors) never produce a Rust panic;
+    live repro in a warmed corpus 5/5 runs of 'hilo graph stats | true' and '| head
+    -1' show no panicked/Broken pipe on stderr and rc in {0,141} (never 101); regression
+    test in hilo-cli/tests/cli.rs; cargo check --workspace, fmt, scripts/rust-lint.sh
+    green
+  status: complete
+  created_at: '2026-09-17T06:01:49.879971+00:00'
+  completed_at: '2026-09-17T06:45:36.055471+00:00'
