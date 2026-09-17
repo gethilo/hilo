@@ -32,6 +32,13 @@ sys.path.insert(0, str(REPO / "scripts"))
 
 import verify_board_reconciliation as vbr  # noqa: E402
 
+# the re-identified finding this fix is about: snapshot line 76 (pending stub
+# QA-WARPFS-2) is published as QA-WARPFS-2-2 by the reconciliation artifact.
+REIDENTIFIED_LINE = 76
+REIDENTIFIED_OLD_ID = "QA-WARPFS-2"
+REIDENTIFIED_NEW_ID = "QA-WARPFS-2-2"
+FLIP_FINDING = "no undocumented pending->complete flip"
+
 BASE = vbr.BASE_COMMIT_DEFAULT
 REV = vbr.RECONCILED_REV_DEFAULT
 REV_DIR = vbr.materialize_board(REPO, REV)
@@ -123,6 +130,32 @@ def close_task_silently(root: Path, task_id: str) -> None:
         row.pop("completed_commit", None)
         row.pop("closure_evidence", None)
         row["status"] = "complete"
+        return row
+
+    edit_task_lines(root, close)
+
+
+def close_row(root: Path, task_id: str, *, evidence: bool = True,
+              title: str | None = None) -> None:
+    """Close one working-tree row the way a foreman does.
+
+    evidence=True adds the completion markers the board actually carries
+    (completed_at + commit_hash); evidence=False closes it bare, and `title`
+    optionally rewrites the title so the "same finding" property is broken.
+    """
+    def close(row: dict, line: str):
+        if row["id"] != task_id:
+            return None
+        row = {**row, "status": "complete"}
+        if title is not None:
+            row["title"] = title
+        if evidence:
+            row["completed_at"] = "2026-09-17T08:33:20+00:00"
+            row["commit_hash"] = "f1ca3a1"
+        else:
+            for key in ("completed_at", "completed_commit", "completed_commit_hash",
+                        "closure_evidence"):
+                row.pop(key, None)
         return row
 
     edit_task_lines(root, close)
@@ -397,6 +430,106 @@ class ImmutableRevisionMode(unittest.TestCase):
                                  capture_output=True, text=True, check=True).stdout.strip()
         rep = vbr.check_board(self.fake, base=self.base_sha, rev=mutated, quiet=True)
         self.assertIn("task ids unique", "\n".join(rep.failures))
+
+
+class ReidentifiedClosure(unittest.TestCase):
+    """Check 9 accepts a flip whose id change the ARTIFACT documents.
+
+    The reconciliation renumbered duplicate families, so the pending stub at a
+    base line is published under a new id. Closing that row is a documented
+    closure of the SAME finding — but only when the artifact records that rename
+    and the live row keeps the same title plus real completion evidence.
+    BOARD-VERIFY-002 ("verifier --live rejects legitimate board writes") is the
+    wider complaint this case belongs to; every other live rejection must stay.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.mkdtemp(prefix="warpfs187-reid-")
+        self.fake = Path(self.tmp)
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.base_sha, self.rev_sha = seed_repo(self.fake)
+        self.base_row = rows_of(
+            vbr.git_show(REPO, BASE, f"{vbr.BOARD_REL}/tasks.jsonl"))[REIDENTIFIED_LINE - 1]
+        entries = [e for e in ARTIFACT["reidentified_rows"]
+                   if int(e["original_line"]) == REIDENTIFIED_LINE]
+        # fixture premises: the snapshot stub is pending under the old id, and the
+        # artifact records the rename to the id the reconciled board publishes.
+        self.assertEqual(len(entries), 1, "line 76 is not re-identified exactly once")
+        self.entry = entries[0]
+        self.assertEqual((self.base_row["id"], self.base_row["status"]),
+                         (REIDENTIFIED_OLD_ID, "pending"))
+        self.assertEqual(self.entry["original_id"], REIDENTIFIED_OLD_ID)
+        self.assertEqual(self.entry["new_id"], REIDENTIFIED_NEW_ID)
+        self.assertEqual(
+            rows_of(vbr.git_show(REPO, REV, f"{vbr.BOARD_REL}/tasks.jsonl"))
+            [REIDENTIFIED_LINE - 1]["id"], REIDENTIFIED_NEW_ID)
+
+    def _live_row(self, task_id: str) -> dict:
+        rows = rows_of((self.fake / vbr.BOARD_REL / "tasks.jsonl").read_text())
+        return next(r for r in rows if r["id"] == task_id)
+
+    def _check(self):
+        return vbr.check_board(self.fake, base=self.base_sha, rev=self.rev_sha,
+                               live=True, quiet=True)
+
+    def test_documented_reidentification_closure_is_not_a_finding(self) -> None:
+        close_row(self.fake, REIDENTIFIED_NEW_ID)
+        live_row = self._live_row(REIDENTIFIED_NEW_ID)
+        self.assertEqual(live_row["status"], "complete")
+        self.assertEqual(live_row["title"], self.base_row["title"])
+        # the mapping lookup itself: (original_line, original_id) -> new_id
+        self.assertTrue(vbr.documented_reidentification(
+            ARTIFACT, REIDENTIFIED_LINE, self.base_row, live_row))
+        self.assertTrue(vbr.is_documented_reidentified_closure(
+            ARTIFACT, REIDENTIFIED_LINE, self.base_row, live_row))
+        # it stays keyed: another live id, or another line, must not match
+        self.assertFalse(vbr.documented_reidentification(
+            ARTIFACT, REIDENTIFIED_LINE, self.base_row, {**live_row, "id": "QA-WARPFS-9"}))
+        self.assertFalse(vbr.documented_reidentification(
+            ARTIFACT, REIDENTIFIED_LINE + 1, self.base_row, live_row))
+        # and the id-preserving closure check is deliberately NOT relaxed
+        self.assertFalse(vbr.is_documented_closure(self.base_row, live_row),
+                         "is_documented_closure must keep refusing a renamed row")
+        rep = self._check()
+        self.assertEqual(rep.failures, [], "a documented re-identified closure was rejected")
+
+    def test_flip_without_the_artifact_rename_record_is_still_reported(self) -> None:
+        path = self.fake / vbr.BOARD_REL / vbr.ARTIFACT_NAME
+        artifact = json.loads(path.read_text())
+        kept = [e for e in artifact["reidentified_rows"]
+                if int(e["original_line"]) != REIDENTIFIED_LINE]
+        self.assertEqual(len(kept), len(artifact["reidentified_rows"]) - 1)
+        artifact["reidentified_rows"] = kept
+        path.write_text(json.dumps(artifact))
+        close_row(self.fake, REIDENTIFIED_NEW_ID)
+        live_row = self._live_row(REIDENTIFIED_NEW_ID)
+        self.assertFalse(vbr.documented_reidentification(
+            json.loads(path.read_text()), REIDENTIFIED_LINE, self.base_row, live_row))
+        joined = "\n".join(self._check().failures)
+        self.assertIn(FLIP_FINDING, joined)
+        self.assertIn(f"({REIDENTIFIED_LINE}, '{REIDENTIFIED_OLD_ID}', 'pending')", joined)
+
+    def test_reidentified_flip_without_completion_evidence_is_still_reported(self) -> None:
+        close_row(self.fake, REIDENTIFIED_NEW_ID, evidence=False)
+        live_row = self._live_row(REIDENTIFIED_NEW_ID)
+        self.assertFalse(any(str(live_row.get(k) or "").strip()
+                             for k in vbr.COMPLETION_MARKERS),
+                         "fixture premise: the closed row carries no completion marker")
+        self.assertFalse(vbr.is_documented_reidentified_closure(
+            ARTIFACT, REIDENTIFIED_LINE, self.base_row, live_row))
+        joined = "\n".join(self._check().failures)
+        self.assertIn(FLIP_FINDING, joined)
+        self.assertIn(f"({REIDENTIFIED_LINE}, '{REIDENTIFIED_OLD_ID}', 'pending')", joined)
+
+    def test_reidentified_flip_with_a_changed_title_is_still_reported(self) -> None:
+        close_row(self.fake, REIDENTIFIED_NEW_ID, title="[P2] a different finding entirely")
+        live_row = self._live_row(REIDENTIFIED_NEW_ID)
+        self.assertNotEqual(live_row["title"], self.base_row["title"])
+        self.assertFalse(vbr.is_documented_reidentified_closure(
+            ARTIFACT, REIDENTIFIED_LINE, self.base_row, live_row))
+        joined = "\n".join(self._check().failures)
+        self.assertIn(FLIP_FINDING, joined)
+        self.assertIn(f"({REIDENTIFIED_LINE}, '{REIDENTIFIED_OLD_ID}', 'pending')", joined)
 
 
 class EndToEndChecker(unittest.TestCase):

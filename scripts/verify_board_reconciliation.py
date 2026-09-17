@@ -21,7 +21,8 @@ default (immutable revision)
 --live (explicit opt-in)
     New state = the working tree. Immutable-content checks become
     append/presence checks, and a row may change only as a *documented closure*
-    (status -> complete with completed_at / completed_commit / closure_evidence).
+    (status -> complete with completed_at / completed_commit / closure_evidence);
+    for a row the artifact re-identified, the documented rename is accepted too.
     Tolerated in live mode: appended rows and events, a rewritten/appended board
     header, id-preserving closures with evidence. Reported as failures:
     deleted rows, reordered/rewritten history, mutation of a materialised
@@ -40,7 +41,8 @@ CHECKS (against the pre-change snapshot 71b333f)
      re-identified row, and the original-row -> canonical-id mapping;
   8. the completed rows keep completion evidence and are not pending;
   9. no row that was pending before the reconciliation became complete without
-     evidence (no finding was silently closed);
+     evidence (no finding was silently closed); a re-identified row may close
+     under its documented new id, but only with the same title and evidence;
  10. each normalised guard/ci field retains its original free-form text in
      <field>_note.
  11. LIVE-CONTENT HYGIENE — the board a reader loads TODAY carries no
@@ -301,6 +303,49 @@ def is_documented_closure(rev_row: dict, live_row: dict) -> bool:
     return any(str(live_row.get(k) or "").strip() for k in COMPLETION_MARKERS)
 
 
+def documented_reidentification(artifact: dict, base_line: int, base_row: dict,
+                                live_row: dict) -> bool:
+    """True when the artifact records THIS base row being renamed to the live id.
+
+    The reconciliation renumbered duplicate families (artifact key
+    `reidentified_rows`), so a pending stub at a given base line is published
+    under a NEW id. The rename is documented provenance — the live row is the
+    same finding, not a substitution — but it leaves the live row's id different
+    from the snapshot's, which is exactly what is_documented_closure refuses.
+    The lookup is keyed on (original_line, original_id) -> new_id, so no other
+    row of the family can satisfy it.
+    """
+    for entry in artifact.get("reidentified_rows", []):
+        if int(entry.get("original_line", -1)) != int(base_line):
+            continue
+        if entry.get("original_id") != base_row.get("id"):
+            continue
+        return entry.get("new_id") == live_row.get("id")
+    return False
+
+
+def is_documented_reidentified_closure(artifact: dict, base_line: int, base_row: dict,
+                                       live_row: dict) -> bool:
+    """A documented re-identification PLUS a real closure — nothing looser.
+
+    Used only by check 9 (the pending->complete flip check). is_documented_closure
+    stays unchanged for the in-place row comparison, which matches rows by id and
+    therefore can never see a rename. Every part of "documented closure" still has
+    to hold: pending before, complete now, the SAME title, and at least one
+    non-empty completion marker. Id equality — and only id equality — is replaced
+    by the artifact's own rename record.
+    """
+    if not live_row:
+        return False
+    if base_row.get("status") == "complete" or live_row.get("status") != "complete":
+        return False
+    if live_row.get("title") != base_row.get("title"):
+        return False
+    if not any(str(live_row.get(k) or "").strip() for k in COMPLETION_MARKERS):
+        return False
+    return documented_reidentification(artifact, base_line, base_row, live_row)
+
+
 def same_content_ignoring_escaping(rev_row: dict, live_row: dict) -> bool:
     """True when two rows decode to identical CONTENT.
 
@@ -521,7 +566,11 @@ def _check(repo: Path, base: str, rev: str, target: Path, live: bool,
                   if c["field"] == "status"}
     undeclared = [f[:3] for f in flipped
                   if f[0] not in documented
-                  and not (live and is_documented_closure(f[3], f[4]))]
+                  and not (live and is_documented_closure(f[3], f[4]))
+                  # a renamed row may flip only when the artifact documents the
+                  # rename (reidentified_rows) AND the closure carries evidence
+                  and not (live and is_documented_reidentified_closure(
+                      artifact, f[0], f[3], f[4]))]
     rep.check("no undocumented pending->complete flip", not undeclared, f"{undeclared}")
 
     # 10. normalised fields keep their original text
