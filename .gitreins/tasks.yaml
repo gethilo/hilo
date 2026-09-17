@@ -962,3 +962,25 @@ tasks:
   status: complete
   created_at: '2026-09-17T00:00:20.332798+00:00'
   completed_at: '2026-09-17T00:45:25.150346+00:00'
+- id: gap-065-warm-coverage-accounting
+  title: 'GAP-065: graph warm must account for every discovered file (no silent zero-edge/read-failure
+    losses)'
+  criteria:
+  - cargo fmt --all --check exits 0; cargo clippy --workspace -- -D warnings exits
+    0; cargo build -p hilo-cli exits 0
+  - hilo graph warm prints a coverage summary where the number of files that contributed
+    >=1 edge plus every named zero-edge category (package facade __init__.py, no imports
+    found, unreadable source, unsupported extension) sums exactly to the number of
+    parsed files; verified live on a fresh copy of the corpus
+  - a discovered source file that cannot be read (chmod 000) is named in the output
+    under an unreadable category instead of being silently treated as a zero-edge
+    file; covered by an automated test
+  - the GAP-058 pruned-tree exclusion categories still print in the same warm output
+    (regression preserved, test present)
+  - edges.jsonl for the corpus is edge-set identical before vs after the change (ADDED
+    0 / REMOVED 0) - reporting-only change with no graph-semantics delta
+  - cargo test -p hilo_cli and cargo test -p hilo_graph --lib exit 0 with new tests
+    covering the zero-edge classification
+  status: complete
+  created_at: '2026-09-17T01:42:03.663807+00:00'
+  completed_at: '2026-09-17T02:45:30.504909+00:00'
