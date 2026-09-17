@@ -545,9 +545,16 @@ fn extract_symbols_from_ast(node: tree_sitter::Node, source: &[u8], lang: Langua
                 &[
                     "function_declaration",
                     "class_declaration",
+                    "abstract_class_declaration",
                     "method_definition",
                     "interface_declaration",
                     "type_alias_declaration",
+                    "enum_declaration",
+                    "generator_function_declaration",
+                    // Arrow functions / function & class expressions bound to
+                    // a name (`export const x = () => {}`) — GAP-075.
+                    "lexical_declaration",
+                    "variable_declaration",
                 ],
                 extract_js_signature,
             );
@@ -1112,21 +1119,103 @@ fn extract_python_signature(node: tree_sitter::Node, source: &[u8]) -> Option<Sy
 fn extract_js_signature(node: tree_sitter::Node, source: &[u8]) -> Option<Symbol> {
     let text = node.utf8_text(source).ok()?;
     let line = node.start_position().row + 1;
+
+    // `const x = () => {}` / `var x = function() {}` / `module.exports = fn`:
+    // the declaration node has no `name` field — the name lives on the
+    // declarator, and only when the value is function/class-shaped (otherwise
+    // every `require` binding would flood the symbol list). The SIGNATURE
+    // is still the declaration's trimmed first line, as before.
+    let decl_kind = matches!(node.kind(), "lexical_declaration" | "variable_declaration");
+    if decl_kind {
+        let declarator = node
+            .child_by_field_name("declaration") // lexical_declaration
+            .or_else(|| {
+                // variable_declaration: first `variable_declarator` child
+                let mut cursor = node.walk();
+                let children: Vec<tree_sitter::Node> = node.children(&mut cursor).collect();
+                children
+                    .into_iter()
+                    .find(|c| c.kind() == "variable_declarator")
+            });
+        let declarator = declarator?;
+        if !js_declarator_value_is_callable(&declarator) {
+            return None;
+        }
+        let name_node = declarator.child_by_field_name("name")?;
+        let name = name_node.utf8_text(source).ok()?.trim().to_string();
+        if !usable_js_name(&name) {
+            return None;
+        }
+        let first_line = text.lines().next().unwrap_or(text);
+        return Some(Symbol {
+            name,
+            line,
+            signature: first_line.trim().to_string(),
+        });
+    }
+
     let first_line = text.lines().next().unwrap_or(text);
     let trimmed = first_line.trim();
 
-    let name = trimmed
-        .split_whitespace()
-        .next_back()
-        .unwrap_or(trimmed)
-        .trim_end_matches(['{', '('])
-        .to_string();
+    // Name comes from the AST `name` field, not from whitespace scanning:
+    // the last token of a TS/JS declaration line is `{`, `(` or nothing, so
+    // the old heuristic emitted "" / "}" / "{" and blanked the MAP symbol
+    // column for the whole JS/TS family (GAP-075). A node whose name cannot
+    // be resolved yields NO symbol — a nameless bullet is worse than none.
+    let name = extract_js_name(node, source)?;
 
     Some(Symbol {
         name,
         line,
         signature: trimmed.to_string(),
     })
+}
+
+/// Whether a `variable_declarator`'s value is function/class-shaped
+/// (arrow function, function expression, or class expression).
+fn js_declarator_value_is_callable(declarator: &tree_sitter::Node) -> bool {
+    declarator.child_by_field_name("value").is_some_and(|v| {
+        matches!(
+            v.kind(),
+            "arrow_function" | "function_expression" | "class" | "generator_function"
+        )
+    })
+}
+
+/// Derive a TS/JS declaration name from the AST `name` field.
+///
+/// Falls back to the pre-GAP-075 first-line heuristic only when the node
+/// kind has no `name` field; the fallback result is validated the same way,
+/// so this never returns an empty or punctuation-only name.
+fn extract_js_name(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    if let Some(name_node) = node.child_by_field_name("name") {
+        if let Ok(text) = name_node.utf8_text(source) {
+            let name = text.trim();
+            if usable_js_name(name) {
+                return Some(name.to_string());
+            }
+        }
+    }
+    // Fallback for node kinds without an AST `name` field: the pre-GAP-075
+    // first-line heuristic, still validated so it can never return an empty
+    // or punctuation-only name.
+    let text = node.utf8_text(source).ok()?;
+    let first_line = text.lines().next().unwrap_or(text);
+    let last = first_line
+        .split_whitespace()
+        .next_back()
+        .unwrap_or(first_line)
+        .trim_end_matches(['{', '(', ')']);
+    usable_js_name(last).then(|| last.to_string())
+}
+
+/// A usable TS/JS symbol name is a real identifier: non-empty and starting
+/// with a letter, `_` or `$` — never a brace/punctuation token.
+fn usable_js_name(name: &str) -> bool {
+    matches!(
+        name.chars().next(),
+        Some(c) if c.is_ascii_alphabetic() || c == '_' || c == '$'
+    )
 }
 
 fn extract_java_signature(node: tree_sitter::Node, source: &[u8]) -> Option<Symbol> {
@@ -2125,6 +2214,201 @@ use crate::private::Hidden;
             result.files.len() <= 10,
             "should cap at max_nodes=10, got {}",
             result.files.len()
+        );
+    }
+
+    // ── GAP-075: TS/JS symbol names must come from the AST, not from the ──
+    // ── last whitespace token of the first line ("" / "{" / "}").       ──
+
+    /// Every extracted name must be a real identifier: non-empty and never
+    /// a bare brace/punctuation token.
+    fn assert_names_usable(symbols: &[Symbol]) {
+        assert!(
+            !symbols.is_empty(),
+            "expected at least one symbol from the fixture"
+        );
+        for s in symbols {
+            assert!(
+                !s.name.is_empty(),
+                "symbol name must never be empty (signature: {:?})",
+                s.signature
+            );
+            assert!(
+                s.name != "{" && s.name != "}" && s.name != "(" && s.name != ")",
+                "symbol name must never be a brace/punctuation token, got {:?} (signature: {:?})",
+                s.name,
+                s.signature
+            );
+        }
+    }
+
+    #[test]
+    fn extract_symbols_js_function_declaration_has_real_name() {
+        let src = "function bootstrap(options) {\n  return options;\n}\n";
+        let symbols = extract_symbols("src/main.js", src);
+        assert_names_usable(&symbols);
+        assert!(
+            symbols.iter().any(|s| s.name == "bootstrap"),
+            "expected name `bootstrap`, got: {:?}",
+            symbols.iter().map(|s| &s.name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn extract_symbols_ts_function_declaration_has_real_name() {
+        let src = "export function bootstrap(): void {\n  return;\n}\n";
+        let symbols = extract_symbols("src/main.ts", src);
+        assert_names_usable(&symbols);
+        assert!(
+            symbols.iter().any(|s| s.name == "bootstrap"),
+            "expected name `bootstrap`, got: {:?}",
+            symbols.iter().map(|s| &s.name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn extract_symbols_ts_class_declaration_has_real_name() {
+        let src = "class MiddlewareStack {\n  use(fn: unknown): void {}\n}\n";
+        let symbols = extract_symbols("src/stack.ts", src);
+        assert_names_usable(&symbols);
+        assert!(
+            symbols.iter().any(|s| s.name == "MiddlewareStack"),
+            "expected name `MiddlewareStack`, got: {:?}",
+            symbols.iter().map(|s| &s.name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn extract_symbols_js_method_definition_has_real_name() {
+        // Method name resolves even when the `class` line and the method
+        // line are separate (the method is its own `method_definition` node).
+        let src = "class Router {\n  route(path, fn) {\n    return fn;\n  }\n}\n";
+        let symbols = extract_symbols("src/router.js", src);
+        assert_names_usable(&symbols);
+        assert!(
+            symbols.iter().any(|s| s.name == "route"),
+            "expected method name `route`, got: {:?}",
+            symbols.iter().map(|s| &s.name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn extract_symbols_ts_interface_declaration_has_real_name() {
+        let src = "interface Handler {\n  handle(req: string): void;\n}\n";
+        let symbols = extract_symbols("src/handler.ts", src);
+        assert_names_usable(&symbols);
+        assert!(
+            symbols.iter().any(|s| s.name == "Handler"),
+            "expected name `Handler`, got: {:?}",
+            symbols.iter().map(|s| &s.name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn extract_symbols_ts_type_alias_declaration_has_real_name() {
+        let src = "type Middleware = (req: string) => void;\n";
+        let symbols = extract_symbols("src/middleware.ts", src);
+        assert_names_usable(&symbols);
+        assert!(
+            symbols.iter().any(|s| s.name == "Middleware"),
+            "expected name `Middleware`, got: {:?}",
+            symbols.iter().map(|s| &s.name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn extract_symbols_js_export_const_arrow_has_real_name() {
+        let src = "export const mount = (app) => {\n  app.use(mount);\n};\n";
+        let symbols = extract_symbols("src/mount.js", src);
+        assert_names_usable(&symbols);
+        assert!(
+            symbols.iter().any(|s| s.name == "mount"),
+            "expected name `mount`, got: {:?}",
+            symbols.iter().map(|s| &s.name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn extract_symbols_js_signature_string_preserved() {
+        // The SIGNATURES tier contract: signature stays the trimmed first
+        // line of the DECLARATION node, independent of the name fix. The
+        // `export_statement` wrapper is only traversed, so the exported
+        // form's first line starts at the `function` keyword.
+        let src = "export function bootstrap(): void {\n  return;\n}\n";
+        let symbols = extract_symbols("src/main.ts", src);
+        assert_names_usable(&symbols);
+        let sym = symbols
+            .iter()
+            .find(|s| s.name == "bootstrap")
+            .expect("bootstrap symbol");
+        assert_eq!(sym.signature, "function bootstrap(): void {");
+
+        // Non-exported form carries the full first line verbatim.
+        let src = "function boot() {\n  return 1;\n}\n";
+        let symbols = extract_symbols("src/boot.js", src);
+        let sym = symbols
+            .iter()
+            .find(|s| s.name == "boot")
+            .expect("boot symbol");
+        assert_eq!(sym.signature, "function boot() {");
+    }
+
+    #[test]
+    fn extract_symbols_js_require_bindings_are_not_symbols() {
+        // GAP-075 hard requirement: declarators are only symbols when the
+        // value is function/class-shaped. `require(...)` imports, plain
+        // constants and strings must not flood the symbol list.
+        let src = concat!(
+            "'use strict'\n",
+            "var after = require('after');\n",
+            "var express = require('../');\n",
+            "const PORT = 3000;\n",
+            "var label = 'router';\n",
+        );
+        let symbols = extract_symbols("test/app.js", src);
+        assert!(
+            symbols.is_empty(),
+            "require/const bindings must not become symbols, got: {:?}",
+            symbols.iter().map(|s| &s.name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn extract_symbols_js_named_function_expression_has_real_name() {
+        // `var handler = function route() {}` — a NAMED function expression:
+        // the symbol is the DECLARATOR BINDING (`handler`), matching the
+        // brief's "read the declarator's name field" design; the expression's
+        // internal `route` name is not a kind-list node.
+        let src = concat!(
+            "var handler = function route(req, res) {\n",
+            "  res.end('ok');\n",
+            "};\n",
+        );
+        let symbols = extract_symbols("lib/route.js", src);
+        assert!(
+            symbols.iter().any(|s| s.name == "handler"),
+            "expected binding name `handler`, got: {:?}",
+            symbols.iter().map(|s| &s.name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn extract_symbols_ts_generator_and_enum_have_real_names() {
+        let src = concat!(
+            "function* counter(): Generator<number> {\n  yield 1;\n}\n",
+            "enum Color {\n  Red,\n  Green,\n}\n",
+        );
+        let symbols = extract_symbols("src/gen.ts", src);
+        assert_names_usable(&symbols);
+        assert!(
+            symbols.iter().any(|s| s.name == "counter"),
+            "expected generator name `counter`, got: {:?}",
+            symbols.iter().map(|s| &s.name).collect::<Vec<_>>()
+        );
+        assert!(
+            symbols.iter().any(|s| s.name == "Color"),
+            "expected enum name `Color`, got: {:?}",
+            symbols.iter().map(|s| &s.name).collect::<Vec<_>>()
         );
     }
 }
