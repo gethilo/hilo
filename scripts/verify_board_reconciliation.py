@@ -43,6 +43,31 @@ CHECKS (against the pre-change snapshot 71b333f)
      evidence (no finding was silently closed);
  10. each normalised guard/ci field retains its original free-form text in
      <field>_note.
+ 11. LIVE-CONTENT HYGIENE — the board a reader loads TODAY carries no
+     over-escaped text: no string value of the working-tree tasks.jsonl
+     contains a literal backslash immediately followed by a double quote
+     (the `\"` / `\\"` signature of a writer that escaped an already-escaped
+     payload, where the text means `"`). See the section below.
+
+LIVE-CONTENT HYGIENE IS NOT REVISION-PINNED (why)
+-------------------------------------------------
+Checks 1-10 compare the reconciled board against immutable revisions and are
+deliberately pinned, so ordinary board activity can never turn them red.
+Check 11 is the opposite kind of check: it is a property of the text a reader
+actually loads, and pinning it would make it blind BY CONSTRUCTION — the pinned
+revision de9374c is itself one of the revisions carrying the corruption (it
+flags exactly the four rows QA-WARPFS-1, QA-WARPFS-2, QA-WARPFS-1-2 and
+QA-WARPFS-3-4). So check 11 ALWAYS reads the WORKING TREE board of the
+repository under test (`<repo>/.coding-hermes/board/tasks.jsonl`) and its
+findings are recorded as live-content findings (`Report.live_failures`) rather
+than reconciliation failures (`Report.failures`): the two describe different
+subjects — the pinned reconciliation contract vs. the checked-out text — and
+both make the exit code non-zero.
+
+events.jsonl is append-only history: it is scanned and its over-escaped count
+is REPORTED (informational line, printed even under --quiet), never repaired
+and never a failure. `--repo` selects the repository being checked, so the
+hygiene scan follows it.
 
 Exit code 0 = all checks pass. Any failure prints FAIL lines and exits 1.
 
@@ -86,13 +111,19 @@ REQUIRED_COMPLETE = ("GAP-067", "GAP-077", "GAP-079", "GAP-080")
 class Report:
     def __init__(self, quiet: bool = False) -> None:
         self.failures: list[str] = []
+        # live-content findings (check 11): same weight for the exit code, kept
+        # in their own list because they describe the CHECKED-OUT text while
+        # `failures` describes the pinned reconciliation contract (see docstring)
+        self.live_failures: list[str] = []
         self.checks: list[tuple[str, str]] = []
         self.quiet = quiet
 
-    def check(self, name: str, ok: bool, detail: str = "") -> bool:
+    def check(self, name: str, ok: bool, detail: str = "",
+              live_content: bool = False) -> bool:
         self.checks.append((name, "PASS" if ok else "FAIL"))
         if not ok:
-            self.failures.append(f"{name}: {detail}")
+            bucket = self.live_failures if live_content else self.failures
+            bucket.append(f"{name}: {detail}")
         if not self.quiet:
             print(f"[{'PASS' if ok else 'FAIL'}] {name}" + (f" — {detail}" if detail and not ok else ""))
         return ok
@@ -100,6 +131,14 @@ class Report:
     def note(self, text: str) -> None:
         if not self.quiet:
             print(f"       {text}")
+
+    def note_loud(self, text: str) -> None:
+        """Informational line printed even under --quiet.
+
+        Used for the events.jsonl scan: that is a REPORT (count only, history is
+        never repaired), so --quiet must not hide it.
+        """
+        print(f"       {text}")
 
 
 def git_show(repo: Path, ref: str, relpath: str) -> str:
@@ -162,6 +201,97 @@ def looks_like_commit_sha(text: str) -> bool:
     return bool(re.search(r"\b[0-9a-f]{7,40}\b", text or ""))
 
 
+# --------------------------------------------------------------- check 11 seam
+# Inside a DECODED string value, a literal backslash immediately followed by a
+# double quote is the signature of a writer that escaped an already-escaped
+# payload: the reader sees `\"` (or `\\"`) where the text means `"`.
+OVERESCAPED_SEQ = "\\\""
+
+
+def iter_strings(obj, path: str = ""):
+    """Yield (dotted path, value) for every string value inside a decoded row."""
+    if isinstance(obj, str):
+        yield path, obj
+    elif isinstance(obj, dict):
+        for key, val in obj.items():
+            yield from iter_strings(val, f"{path}.{key}" if path else str(key))
+    elif isinstance(obj, list):
+        for i, val in enumerate(obj):
+            yield from iter_strings(val, f"{path}[{i}]")
+
+
+def over_escaped_fields(row: dict) -> list[str]:
+    """Dotted paths of this row's string values that carry over-escaped text."""
+    return [p for p, val in iter_strings(row) if OVERESCAPED_SEQ in val]
+
+
+def over_escaped_rows(rows: list[dict]) -> list[tuple[str, list[str]]]:
+    """[(row id, [field paths])] for every row whose text is over-escaped.
+
+    `id` is used when present (tasks.jsonl) and a positional `line-N` fallback
+    otherwise, so the same scan works on any JSONL board file.
+    """
+    found: list[tuple[str, list[str]]] = []
+    for n, row in enumerate(rows, 1):
+        fields = over_escaped_fields(row)
+        if fields:
+            found.append((str(row.get("id") or f"line-{n}"), fields))
+    return found
+
+
+def scan_over_escaped(text: str) -> tuple[list[tuple[str, list[str]]], str]:
+    """Scan JSONL text; return (findings, parse error).
+
+    A parse error is returned, never raised: the hygiene scan must not mask a
+    json.loads failure that belongs to a different check.
+    """
+    try:
+        _raw, rows = parse_rows(text)
+    except ValueError as exc:
+        return [], str(exc)
+    return over_escaped_rows(rows), ""
+
+
+def events_hygiene(text: str) -> tuple[int, int]:
+    """(rows, string values) carrying over-escaped text in events.jsonl."""
+    findings, _err = scan_over_escaped(text)
+    return len(findings), sum(len(fields) for _rid, fields in findings)
+
+
+def reduce_over_escaping(value):
+    """`value` with every spurious escaping level removed (fixpoint)."""
+    if isinstance(value, str):
+        out = value
+        while True:
+            nxt = out.replace("\\\\", "\\").replace('\\"', '"')
+            if nxt == out:
+                return out
+            out = nxt
+    if isinstance(value, dict):
+        return {k: reduce_over_escaping(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [reduce_over_escaping(v) for v in value]
+    return value
+
+
+def is_over_escaping_repair(rev_row: dict, live_row: dict) -> bool:
+    """True when live_row is rev_row with check 11's class repaired in place.
+
+    Repairing the over-escaping class necessarily CHANGES the rendered text
+    (that is the point: `\\"` becomes `"`), so the live-mode row comparison would
+    otherwise read the repair itself as a content mutation.  The allowance is
+    deliberately narrow: the pinned row must have been over-escaped, the live
+    row must keep the same keys in the same order, and every value must equal
+    the pinned value with the spurious escaping removed — nothing else may
+    differ.
+    """
+    if not over_escaped_fields(rev_row):
+        return False
+    if list(rev_row) != list(live_row):
+        return False
+    return reduce_over_escaping(rev_row) == live_row
+
+
 def is_documented_closure(rev_row: dict, live_row: dict) -> bool:
     """True when a live row changed only by closing with real evidence."""
     if rev_row.get("status") == "complete" or live_row.get("status") != "complete":
@@ -169,6 +299,20 @@ def is_documented_closure(rev_row: dict, live_row: dict) -> bool:
     if live_row.get("id") != rev_row.get("id") or live_row.get("title") != rev_row.get("title"):
         return False
     return any(str(live_row.get(k) or "").strip() for k in COMPLETION_MARKERS)
+
+
+def same_content_ignoring_escaping(rev_row: dict, live_row: dict) -> bool:
+    """True when two rows decode to identical CONTENT.
+
+    The raw line may still differ, which is exactly what an escaping-only edit
+    does: the same values re-encoded with a different number of escaping levels
+    (or with non-ASCII written literally instead of \\uXXXX).  Repairs of the
+    over-escaping class are those edits, so live mode must not read them as
+    content mutations — while any change to a value still differs here and is
+    still reported.
+    """
+    return (json.dumps(rev_row, sort_keys=True, ensure_ascii=False)
+            == json.dumps(live_row, sort_keys=True, ensure_ascii=False))
 
 
 def check_board(repo: Path, base: str = BASE_COMMIT_DEFAULT,
@@ -265,9 +409,18 @@ def _check(repo: Path, base: str, rev: str, target: Path, live: bool,
                 continue
             if live_raw_by_id.get(tid) == rev_raw_by_id.get(tid):
                 continue
-            if not is_documented_closure(rev_row, live_row):
-                unexplained.append(tid)
-        rep.check("task rows unchanged or closed with completion evidence",
+            if is_documented_closure(rev_row, live_row):
+                continue
+            # escaping-only repair of a pinned row: same decoded content, so the
+            # raw line legitimately differs (see same_content_ignoring_escaping)
+            if same_content_ignoring_escaping(rev_row, live_row):
+                continue
+            # the check-11 repair itself: the pinned text rendered without the
+            # spurious escaping is the only difference (see is_over_escaping_repair)
+            if is_over_escaping_repair(rev_row, live_row):
+                continue
+            unexplained.append(tid)
+        rep.check("task rows unchanged, re-escaped, repaired or closed with completion evidence",
                   not unexplained, f"unexplained in-place edits: {unexplained[:10]}")
     else:
         for name in APPEND_ONLY_FILES + PRESENCE_FILES:
@@ -385,6 +538,25 @@ def _check(repo: Path, base: str, rev: str, target: Path, live: bool,
     rep.check("original free-form guard/ci text retained in <field>_note", notes_ok,
               f"{notes_bad}")
 
+    # 11. LIVE-content hygiene — deliberately NOT revision-pinned (docstring):
+    #     the pinned revision de9374c carries the corruption itself, so a pinned
+    #     hygiene check would be blind to exactly the class it exists to catch.
+    #     Subject = the checked-out board of the repository under test.
+    live_tasks = repo / BOARD_REL / "tasks.jsonl"
+    if live_tasks.is_file():
+        findings, scan_err = scan_over_escaped(live_tasks.read_text(encoding="utf-8"))
+        named = "; ".join(f"{rid}: {','.join(fields)}" for rid, fields in findings)
+        rep.check("live tasks.jsonl carries no over-escaped string values",
+                  not findings and not scan_err,
+                  f"live board does not parse: {scan_err}" if scan_err
+                  else f"{len(findings)} row(s) with backslash+quote in the decoded text — {named}",
+                  live_content=True)
+    live_events = repo / BOARD_REL / "events.jsonl"
+    if live_events.is_file():
+        ev_rows, ev_fields = events_hygiene(live_events.read_text(encoding="utf-8"))
+        rep.note_loud(f"events.jsonl (append-only history, reported not repaired): "
+                      f"{ev_fields} over-escaped string value(s) in {ev_rows} row(s)")
+
     # informational
     pending = [r["id"] for r in new_rows if r.get("status") == "pending"]
     rep.note(f"rows: {len(base_rows)} -> {len(new_rows)}  "
@@ -427,7 +599,11 @@ def _parse_error(text: str) -> str:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(
+        epilog="Check 11 (live-content hygiene) is the one check that is NOT "
+               "revision-pinned: it always reads the working-tree board of --repo "
+               "(default: this checkout), because the pinned revision de9374c "
+               "carries the over-escaping itself.")
     ap.add_argument("--repo", default=None)
     ap.add_argument("--base", default=BASE_COMMIT_DEFAULT)
     ap.add_argument("--rev", default=RECONCILED_REV_DEFAULT)
@@ -444,9 +620,12 @@ def main() -> int:
     except FileNotFoundError as exc:
         print(f"RESULT: FAIL ({exc})")
         return 1
-    if rep.failures:
-        print(f"\nRESULT: FAIL ({len(rep.failures)} check(s))")
-        for f in rep.failures:
+    # reconciliation failures and live-content findings both fail the run; they
+    # are counted separately because they describe different subjects (docstring)
+    if rep.failures or rep.live_failures:
+        print(f"\nRESULT: FAIL ({len(rep.failures) + len(rep.live_failures)} finding(s): "
+              f"{len(rep.failures)} reconciliation, {len(rep.live_failures)} live-content)")
+        for f in rep.failures + rep.live_failures:
             print(f"  - {f}")
         return 1
     print(f"\nRESULT: OK ({len(rep.checks)} checks passed)")

@@ -434,5 +434,179 @@ class EndToEndChecker(unittest.TestCase):
             self.assertIn("no removed row is still present verbatim", joined)
 
 
+class LiveContentHygiene(unittest.TestCase):
+    """Check 11: the over-escaping class, in the WORKING-TREE board.
+
+    The check is deliberately not revision-pinned (see the verifier docstring),
+    so it is exercised in three directions: the real checked-out board, the
+    immutable revision content, and a synthetic throwaway repo whose only
+    defect is one added row. The real board is never mutated.
+    """
+
+    def test_real_board_is_free_of_over_escaped_text(self) -> None:
+        text = (REPO / vbr.BOARD_REL / "tasks.jsonl").read_text()
+        findings, err = vbr.scan_over_escaped(text)
+        self.assertEqual(err, "")
+        self.assertEqual(findings, [], f"checked-out board still over-escaped: {findings}")
+
+    def test_revision_content_flags_exactly_the_known_four_rows(self) -> None:
+        """The pinned revision still carries the corruption: the check must see it."""
+        findings, err = vbr.scan_over_escaped(
+            vbr.git_show(REPO, REV, f"{vbr.BOARD_REL}/tasks.jsonl"))
+        self.assertEqual(err, "")
+        self.assertEqual([rid for rid, _fields in findings],
+                         ["QA-WARPFS-1", "QA-WARPFS-2", "QA-WARPFS-1-2", "QA-WARPFS-3-4"])
+        self.assertEqual(dict(findings), {
+            "QA-WARPFS-1": ["detail", "review_notes"],
+            "QA-WARPFS-2": ["detail", "review_notes"],
+            "QA-WARPFS-1-2": ["detail"],
+            "QA-WARPFS-3-4": ["detail", "review_notes"]})
+
+    def test_plain_quotes_and_ordinary_escapes_are_not_flagged(self) -> None:
+        """The rule is backslash+quote inside the DECODED value, nothing looser."""
+        self.assertEqual(vbr.over_escaped_fields(
+            {"id": "X", "detail": 'stderr "bunker-las-03" not found in config'}), [])
+        self.assertEqual(vbr.over_escaped_fields(
+            {"id": "X", "detail": "tab\there em\u2014dash windows\\u2014escape"}), [])
+        self.assertEqual(vbr.over_escaped_fields(
+            {"id": "X", "detail": 'stderr \\"bunker-las-03\\" not found in config'}), ["detail"])
+        self.assertEqual(vbr.over_escaped_fields(
+            {"id": "X", "reconciliation": {"note": 'left \\" right'}}), ["reconciliation.note"])
+
+    def test_default_run_carries_the_new_check_and_stays_green(self) -> None:
+        rep = vbr.check_board(REPO, quiet=True)
+        self.assertEqual(len(rep.checks), 27, "the default run's check count changed")
+        self.assertEqual([n for n, st in rep.checks if st == "FAIL"], [])
+        self.assertEqual(rep.failures, [])
+        self.assertEqual(rep.live_failures, [])
+
+    def test_events_findings_are_reported_but_neither_repaired_nor_fatal(self) -> None:
+        text = (REPO / vbr.BOARD_REL / "events.jsonl").read_text()
+        rows, fields = vbr.events_hygiene(text)
+        self.assertGreaterEqual(rows, 8, "the historical over-escaped details vanished")
+        self.assertGreaterEqual(fields, rows)
+        self.assertTrue(
+            text.startswith(vbr.git_show(REPO, REV, f"{vbr.BOARD_REL}/events.jsonl")),
+            "events.jsonl is append-only history and must not be rewritten")
+        rep = vbr.check_board(REPO, quiet=True)
+        self.assertEqual([f for f in rep.failures + rep.live_failures if "events" in f], [],
+                         "events.jsonl history must be reported, never fatal")
+
+    def test_live_mode_accepts_the_over_escaping_repair_itself(self) -> None:
+        """Removing the corruption in place is a documented repair, not mutation."""
+        tmp = tempfile.mkdtemp(prefix="warpfs187-hygiene-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        fake = Path(tmp)
+        base_sha, rev_sha = seed_repo(fake)
+        path = fake / vbr.BOARD_REL / "tasks.jsonl"
+        rewritten, repaired = [], 0
+        for line in path.read_text().split("\n"):
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if vbr.over_escaped_fields(row):
+                row = vbr.reduce_over_escaping(row)
+                repaired += 1
+            rewritten.append(json.dumps(row))
+        self.assertEqual(repaired, 4, "fixture premise: the revision carries four over-escaped rows")
+        path.write_text("".join(ln + "\n" for ln in rewritten))
+        rep = vbr.check_board(fake, base=base_sha, rev=rev_sha, live=True, quiet=True)
+        self.assertEqual(rep.failures, [], "the repair itself was read as a content mutation")
+
+    def test_live_mode_rejects_a_repair_that_also_edits_content(self) -> None:
+        tmp = tempfile.mkdtemp(prefix="warpfs187-hygiene-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        fake = Path(tmp)
+        base_sha, rev_sha = seed_repo(fake)
+        path = fake / vbr.BOARD_REL / "tasks.jsonl"
+        rewritten = []
+        for line in path.read_text().split("\n"):
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if row["id"] == "QA-WARPFS-1":
+                fixed = vbr.reduce_over_escaping(row)
+                fixed["detail"] = fixed["detail"] + " (and a silent content edit)"
+                row = fixed
+            rewritten.append(json.dumps(row))
+        path.write_text("".join(ln + "\n" for ln in rewritten))
+        rep = vbr.check_board(fake, base=base_sha, rev=rev_sha, live=True, quiet=True)
+        self.assertIn("QA-WARPFS-1", "\n".join(rep.failures))
+
+    def test_live_mode_accepts_escaping_only_edits(self) -> None:
+        """A pinned row re-encoded (same values) is not a content mutation."""
+        tmp = tempfile.mkdtemp(prefix="warpfs187-hygiene-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        fake = Path(tmp)
+        base_sha, rev_sha = seed_repo(fake)
+        path = fake / vbr.BOARD_REL / "tasks.jsonl"
+        rewritten = []
+        for line in path.read_text().split("\n"):
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            # same decoded content, different bytes (non-ASCII written literally)
+            alt = json.dumps(row, ensure_ascii=False)
+            rewritten.append(alt)
+        self.assertTrue(any(alt != ln for alt, ln in
+                            zip(rewritten, [l for l in path.read_text().split("\n") if l.strip()])),
+                        "fixture premise: no row re-encodes differently")
+        path.write_text("".join(ln + "\n" for ln in rewritten))
+        rep = vbr.check_board(fake, base=base_sha, rev=rev_sha, live=True, quiet=True)
+        self.assertEqual(rep.failures, [],
+                         "an escaping-only edit was read as a content mutation")
+
+    def test_live_mode_still_rejects_content_edits(self) -> None:
+        tmp = tempfile.mkdtemp(prefix="warpfs187-hygiene-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        fake = Path(tmp)
+        base_sha, rev_sha = seed_repo(fake)
+
+        def mutate(row: dict, line: str):
+            if row["id"] != "QA-WARPFS-3-4":
+                return None
+            return {**row, "detail": "rewritten by a later tick with no evidence"}
+
+        edit_task_lines(fake, mutate)
+        rep = vbr.check_board(fake, base=base_sha, rev=rev_sha, live=True, quiet=True)
+        joined = "\n".join(rep.failures)
+        self.assertIn("closed with completion evidence", joined)
+        self.assertIn("QA-WARPFS-3-4", joined)
+
+    def test_synthetic_over_escaped_row_is_flagged_and_fails_the_run(self) -> None:
+        """Negative control, in a throwaway repo: the check must be able to FAIL."""
+        tmp = tempfile.mkdtemp(prefix="warpfs187-hygiene-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        fake = Path(tmp)
+        base_sha, rev_sha = seed_repo(fake)
+        legit_post_reconciliation_activity(fake)
+        append_task(fake, {"id": "QA-WARPFS-99", "status": "pending",
+                           "title": "synthetic over-escaped row",
+                           "detail": 'stderr \\"bunker-las-03\\" not found in config',
+                           "ts": "2026-09-17T09:00:00-05:00"})
+        rep = vbr.check_board(fake, base=base_sha, rev=rev_sha, quiet=True)
+        self.assertEqual(rep.failures, [], "the reconciliation contract broke in the fixture")
+        self.assertEqual([n for n, st in rep.checks if st == "FAIL"],
+                         ["live tasks.jsonl carries no over-escaped string values"])
+        self.assertEqual(len(rep.live_failures), 1)
+        self.assertIn("QA-WARPFS-99", rep.live_failures[0])
+
+        cmd = [sys.executable, str(REPO / "scripts" / "verify_board_reconciliation.py"),
+               "--repo", str(fake), "--base", base_sha, "--rev", rev_sha, "--quiet"]
+        out = subprocess.run(cmd, capture_output=True, text=True, cwd=str(REPO))
+        self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+        self.assertIn("RESULT: FAIL", out.stdout)
+        self.assertIn("QA-WARPFS-99", out.stdout)
+
+        # differential control: drop that one row and the finding disappears
+        path = fake / vbr.BOARD_REL / "tasks.jsonl"
+        keep = [ln for ln in path.read_text().split("\n")
+                if ln.strip() and json.loads(ln).get("id") != "QA-WARPFS-99"]
+        path.write_text("".join(ln + "\n" for ln in keep))
+        out = subprocess.run(cmd, capture_output=True, text=True, cwd=str(REPO))
+        self.assertNotIn("QA-WARPFS-99", out.stdout,
+                         "the finding did not come from the synthetic row")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
