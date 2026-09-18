@@ -1138,4 +1138,32 @@ tasks:
     is reported)
   status: complete
   created_at: '2026-09-18T04:55:20.656680+00:00'
-  completed_at: '2026-09-18T05:15:27.665658+00:00'
+  completed_at: '2026-09-18T05:43:04.124915+00:00'
+- id: GAP-081-P4
+  title: 'service_contract phase 2b: non-Go gRPC client anchors link callers to the
+    contract'
+  criteria:
+  - 'AC1 hilo-cli/src/commands/graph.rs records non-Go gRPC client anchors into the
+    SAME ServiceCallSites.callers map that phase 1 and phase 2a consume: Python <Name>ServiceStub(
+    , Java <Name>ServiceGrpc.newBlockingStub( / .newStub( , C#/TS/JS new <Name>ServiceClient(
+    each record the calling file as a caller of <Name>Service'
+  - 'AC2 generated protoc/gRPC stub files are excluded in every scanned language:
+    on a fresh copy of /tmp/bakeoff/microservices-demo the pass never records src/emailservice/demo_pb2_grpc.py
+    or src/recommendationservice/demo_pb2_grpc.py as a caller of any service, although
+    those files declare <X>ServiceStub for every service in the proto'
+  - AC3 hilo graph impact protos/demo.proto exits 0 and lists the non-Go callers src/recommendationservice/client.py,
+    src/emailservice/email_client.py, src/adservice/src/main/java/hipstershop/AdServiceClient.java
+    and src/cartservice/tests/CartServiceTests.cs as service_contract dependents
+  - 'AC4 additivity: REMOVED == 0 against the pre-change baseline (449 lines / 14
+    service_contract / 3 lines targeting protos/demo.proto, captured in /tmp/wfp4-base)
+    and the ADDED count is reported'
+  - 'AC5 idempotence: a second hilo graph warm on the same warmed corpus appends 0
+    lines to edges.jsonl'
+  - AC6 new unit tests in the existing mod tests of hilo-cli/src/commands/graph.rs
+    cover each language anchor form, the generated-file exclusion and no-caller-no-edge;
+    cargo test -p hilo-cli and cargo test -p hilo_graph --lib exit 0
+  - 'AC7 only hilo-cli/src/commands/graph.rs is modified: no Cargo.toml, no Cargo.lock,
+    no board or .gitreins changes by the worker'
+  - AC8 the work is committed in this repo and the commit hash is reported
+  status: in_progress
+  created_at: '2026-09-18T06:38:44.840156+00:00'
