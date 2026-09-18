@@ -446,6 +446,10 @@ impl GraphDB {
     /// - `Forward` (default): `WHERE "from" = ?` — outgoing edges.
     /// - `Reverse`: `WHERE "to" = ?` — incoming edges (e.g. `imported_by`).
     ///
+    /// GAP-083: each returned `Edge` keeps its own `to`, which is what lets the
+    /// caller separate a file-level hit (`edge.to == path`) from a crate-level
+    /// hit (`edge.to == pkg:<crate>`, added by the GAP-034 target below).
+    ///
     /// Returns an empty `Vec` if no edges match.
     pub fn related(
         &self,

@@ -115,6 +115,8 @@ fn test_impact_json_format() -> Result<(), Box<dyn std::error::Error>> {
                 path: "b.rs".to_string(),
                 relation: "imports".to_string(),
                 depth: 1,
+                scope: "file".to_string(),
+                via: None,
                 provenance: None,
                 confidence: None,
             },
@@ -122,6 +124,8 @@ fn test_impact_json_format() -> Result<(), Box<dyn std::error::Error>> {
                 path: "a.rs".to_string(),
                 relation: "imports".to_string(),
                 depth: 2,
+                scope: "crate".to_string(),
+                via: Some("pkg:a".to_string()),
                 provenance: None,
                 confidence: None,
             },
@@ -135,6 +139,11 @@ fn test_impact_json_format() -> Result<(), Box<dyn std::error::Error>> {
     assert!(json.contains("\"depth\": 1"));
     assert!(json.contains("\"path\": \"a.rs\""));
     assert!(json.contains("\"depth\": 2"));
+    // GAP-083: scope is ALWAYS serialized (no skip), so a JSON consumer can
+    // tell a file-level row from a crate-level one.
+    assert!(json.contains("\"scope\": \"file\""));
+    assert!(json.contains("\"scope\": \"crate\""));
+    assert!(json.contains("\"via\": \"pkg:a\""));
 
     Ok(())
 }
@@ -190,7 +199,11 @@ fn test_impact_python_file_query_returns_package_importers(
     ));
     graph.insert_edges(&edges)?;
 
-    let results = compute_impact(graph.conn(), &routing, 1)?;
+    // GAP-083: those rows are matched through the module's resolved `pkg:`
+    // node, not the file itself, so they are crate-scoped and pay the
+    // file→module hop (depth 2). max_depth must therefore be 2 for the
+    // module's importers to be in budget at all.
+    let results = compute_impact(graph.conn(), &routing, 2)?;
 
     let mut got: Vec<&str> = results.iter().map(|r| r.path.as_str()).collect();
     got.sort_unstable();
@@ -202,7 +215,10 @@ fn test_impact_python_file_query_returns_package_importers(
     ];
     want.sort_unstable();
     assert_eq!(got, want, "file-form impact must return every importer");
-    assert!(results.iter().all(|r| r.depth == 1));
+    assert!(
+        results.iter().all(|r| r.depth == 2 && r.scope == "crate"),
+        "pkg:-matched importers are crate-scoped at depth 2: {results:?}"
+    );
 
     // Control: without the package (same file name, no `__init__.py`) the
     // query resolves to nothing and returns no importers.
@@ -328,10 +344,15 @@ fn test_impact_ts_file_query_returns_local_specifier_importers(
 /// GAP-076 (criterion 2): relative imports parsed FROM DISK must survive the
 /// whole pipeline — Python parser → real `Edge` rows → `GraphDB` →
 /// `compute_impact` — and every importer of ONE module inside ONE package
-/// must come back at depth 1. The parser-level tests only assert what the
-/// parser emits; this one drives the public query surface the CLI/MCP use.
+/// must come back in the result set. The parser-level tests only assert what
+/// the parser emits; this one drives the public query surface the CLI/MCP use.
+///
+/// GAP-083 renamed this test: the importers are matched through the module's
+/// resolved `pkg:` node, so they are crate-scoped and sit at depth 2 (the
+/// file→module hop), not depth 1 — `depth 1` now means a true file-level
+/// importer, of which this fixture has none.
 #[test]
-fn relative_imports_parsed_from_disk_make_impact_list_every_importer_at_depth_one(
+fn relative_imports_parsed_from_disk_make_impact_list_every_importer(
 ) -> Result<(), Box<dyn std::error::Error>> {
     use hilo_graph::parser::{Language, Parser};
 
@@ -368,16 +389,21 @@ fn relative_imports_parsed_from_disk_make_impact_list_every_importer_at_depth_on
 
     // The end-to-end claim, asserted FIRST so this test fails on it (and not
     // only on the parser premise below) if the fix is not in place.
-    let results = compute_impact(graph.conn(), &target, 1)?;
+    // GAP-083: matched through the resolved `pkg:pkg.mod` node → crate scope,
+    // depth 2 (file→module hop); max_depth must cover that hop.
+    let results = compute_impact(graph.conn(), &target, 2)?;
     let mut got: Vec<String> = results.iter().map(|r| r.path.clone()).collect();
     got.sort();
     let mut want = vec![a, b, c];
     want.sort();
     assert_eq!(
         got, want,
-        "every importer of pkg/mod.py must be listed at depth 1"
+        "every importer of pkg/mod.py must be listed (crate-scoped, depth 2)"
     );
-    assert!(results.iter().all(|r| r.depth == 1), "{results:?}");
+    assert!(
+        results.iter().all(|r| r.depth == 2 && r.scope == "crate"),
+        "{results:?}"
+    );
 
     // Premise this depends on (exactly what the fix added): each importer
     // emitted the RESOLVED absolute module node alongside its raw relative
@@ -445,17 +471,21 @@ fn namespace_package_file_resolves_so_impact_lists_its_importers(
 
     // The end-to-end claim FIRST: the query-time resolver must turn the
     // namespace file's path into `pkg:flask.sansio.app` implicitly, so all
-    // three importers come back at depth 1.
-    let results = compute_impact(graph.conn(), &target, 1)?;
+    // three importers come back. GAP-083: they are matched through that
+    // `pkg:` node → crate scope at depth 2 (file→module hop).
+    let results = compute_impact(graph.conn(), &target, 2)?;
     let mut got: Vec<String> = results.iter().map(|r| r.path.clone()).collect();
     got.sort();
     let mut want = vec![a, b, c];
     want.sort();
     assert_eq!(
         got, want,
-        "every importer of the namespace-package module must be listed at depth 1"
+        "every importer of the namespace-package module must be listed (crate-scoped, depth 2)"
     );
-    assert!(results.iter().all(|r| r.depth == 1), "{results:?}");
+    assert!(
+        results.iter().all(|r| r.depth == 2 && r.scope == "crate"),
+        "{results:?}"
+    );
 
     // Premise: the parser emitted the RESOLVED namespace node — both from
     // the relative import inside the namespace dir (`.app` →

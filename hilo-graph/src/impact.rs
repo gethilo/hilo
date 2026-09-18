@@ -8,6 +8,13 @@ use serde::Serialize;
 use crate::error::GraphResult;
 use crate::resolution::PkgResolver;
 
+/// GAP-083 `scope` value: the row is a true file-level dependent (an edge whose
+/// target IS the queried file, or a `local:` node that resolves to it).
+pub const SCOPE_FILE: &str = "file";
+/// GAP-083 `scope` value: the row was matched through a `pkg:<crate>` node
+/// rather than the queried file itself.
+pub const SCOPE_CRATE: &str = "crate";
+
 /// A single file in the impact chain.
 #[derive(Debug, Clone, Serialize)]
 pub struct ImpactFile {
@@ -17,12 +24,49 @@ pub struct ImpactFile {
     pub relation: String,
     /// Distance from the start file (1 = direct dependent, N = N-hop dependent).
     pub depth: u32,
+    /// GAP-083: how this row was matched — `SCOPE_FILE` when the edge targets
+    /// the queried file, `SCOPE_CRATE` when it was reached through the queried
+    /// file's `pkg:<crate>` node. Always serialized: without it "0 files import
+    /// this" and "N files import this file's crate" look identical.
+    pub scope: String,
+    /// GAP-083: for crate-scoped rows, the `pkg:<crate>` node the row was
+    /// matched through (`None` for file-scoped rows).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub via: Option<String>,
     /// How the edge was discovered (provenance string).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provenance: Option<String>,
     /// Confidence weight (0.0 – 1.0) of the edge.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub confidence: Option<f64>,
+}
+
+/// How a batch of edge rows was matched. Carried into [`collect`] /
+/// [`collect_family`] so every emitted row states its own scope and depth.
+#[derive(Debug, Clone, Copy)]
+struct MatchKind<'a> {
+    /// `SCOPE_FILE` or `SCOPE_CRATE`.
+    scope: &'a str,
+    /// Extra hops this match costs on top of the single edge hop. A FILE query
+    /// that reaches rows through its `pkg:<crate>` node pays one extra hop
+    /// (file → crate → importer); that is what keeps `depth: 1` a strict claim
+    /// about true file-level importers. Symbol-node queries (whose target IS the
+    /// crate node) keep the historical accounting, so `extra` is 0 there.
+    extra: u32,
+    /// For crate matches: the `pkg:<crate>` node the rows were matched through.
+    via: Option<&'a str>,
+}
+
+/// Mutable BFS state shared by every collector of one query: the result set,
+/// the visited set, the frontier and the caller's depth budget. Bundling them
+/// keeps the collector signatures small (GAP-083 added two more per-batch
+/// parameters) and makes it impossible to pass one query's queue with another's
+/// visited set.
+struct Collector<'a> {
+    results: &'a mut Vec<ImpactFile>,
+    visited: &'a mut HashSet<String>,
+    queue: &'a mut VecDeque<(String, u32)>,
+    max_depth: u32,
 }
 
 /// Result of an impact analysis.
@@ -32,24 +76,36 @@ pub struct ImpactResult {
 }
 
 /// Collect query rows into the BFS result set (visited-dedup, depth-tagged).
+///
+/// `kind` carries the scope label and the extra hop cost of this match class
+/// (GAP-083), so the same helper serves file-level and crate-level batches
+/// without either of them being able to claim the other's depth.
 fn collect(
     rows: impl Iterator<Item = duckdb::Result<(String, String, Option<String>, Option<f64>)>>,
-    results: &mut Vec<ImpactFile>,
-    visited: &mut HashSet<String>,
-    queue: &mut VecDeque<(String, u32)>,
+    cx: &mut Collector<'_>,
     depth: u32,
+    kind: MatchKind<'_>,
 ) -> GraphResult<()> {
+    let child_depth = depth + 1 + kind.extra;
     for row in rows {
         let (from, rel, prov, conf) = row?;
-        if visited.insert(from.clone()) {
-            results.push(ImpactFile {
+        // A crate hop can push a row past the caller's budget; reporting it
+        // (or queueing it) would be a lie about the traversal. The row is not
+        // marked visited either, so a shallower route to it can still win.
+        if child_depth > cx.max_depth {
+            continue;
+        }
+        if cx.visited.insert(from.clone()) {
+            cx.results.push(ImpactFile {
                 path: from.clone(),
                 relation: rel,
-                depth: depth + 1,
+                depth: child_depth,
+                scope: kind.scope.to_string(),
+                via: kind.via.map(str::to_string),
                 provenance: prov,
                 confidence: conf,
             });
-            queue.push_back((from, depth + 1));
+            cx.queue.push_back((from, child_depth));
         }
     }
     Ok(())
@@ -66,27 +122,32 @@ fn collect(
 fn collect_family(
     rows: impl Iterator<Item = duckdb::Result<(String, String, String, Option<String>, Option<f64>)>>,
     pkg: &str,
-    results: &mut Vec<ImpactFile>,
-    visited: &mut HashSet<String>,
-    queue: &mut VecDeque<(String, u32)>,
+    cx: &mut Collector<'_>,
     depth: u32,
+    kind: MatchKind<'_>,
 ) -> GraphResult<()> {
     let member = format!("{pkg}::");
     let sibling = format!("{pkg}_");
+    let child_depth = depth + 1 + kind.extra;
     for row in rows {
         let (from, to, rel, prov, conf) = row?;
         if !to.starts_with(&member) && !to.starts_with(&sibling) {
             continue;
         }
-        if visited.insert(from.clone()) {
-            results.push(ImpactFile {
+        if child_depth > cx.max_depth {
+            continue;
+        }
+        if cx.visited.insert(from.clone()) {
+            cx.results.push(ImpactFile {
                 path: from.clone(),
                 relation: rel,
-                depth: depth + 1,
+                depth: child_depth,
+                scope: kind.scope.to_string(),
+                via: kind.via.map(str::to_string),
                 provenance: prov,
                 confidence: conf,
             });
-            queue.push_back((from, depth + 1));
+            cx.queue.push_back((from, child_depth));
         }
     }
     Ok(())
@@ -102,6 +163,14 @@ fn collect_family(
 /// Uses BFS with a visited set to protect against circular imports.
 /// Returns files ordered by discovery (BFS order) — direct dependents first,
 /// then 2-hop, etc.
+///
+/// GAP-083: every returned row states its `scope`. `SCOPE_FILE` rows name the
+/// queried path (or a `local:` node resolving to it) and keep the historical
+/// depth accounting. `SCOPE_CRATE` rows were matched through the queried file's
+/// `pkg:<crate>` node (GAP-034/GAP-048) and cost one extra hop, so `depth == 1`
+/// is a strict claim: that file really does import this file. Symbol-node
+/// queries (`pkg:`/`sys:`) keep their historical sets and depths — there the
+/// crate node IS the query target.
 pub fn compute_impact(
     conn: &Connection,
     start_path: &str,
@@ -136,13 +205,33 @@ pub fn compute_impact(
     // hash lookup and the traversal stays linear.
     let local_resolver = crate::resolution::LocalSpecResolver::from_edges(conn).ok();
     let mut resolver = PkgResolver::new();
+    // GAP-083: a query target that is a real FILE reaches crate-level rows one
+    // extra hop away (file → pkg:<crate> → importer), so those rows can never
+    // claim `depth: 1`. Symbol-node targets (`pkg:`/`sys:`) keep the historical
+    // accounting: there the crate node IS the queried node.
+    let file_query = !start_path.starts_with("pkg:") && !start_path.starts_with("sys:");
 
-    while let Some((path, depth)) = queue.pop_front() {
+    let mut cx = Collector {
+        results: &mut results,
+        visited: &mut visited,
+        queue: &mut queue,
+        max_depth,
+    };
+
+    while let Some((path, depth)) = cx.queue.pop_front() {
         if depth >= max_depth {
             continue;
         }
 
-        // Exact match (local edges).
+        // Exact match. For a file node these rows are true file-level
+        // dependents; when the queued node is the query's own symbol node
+        // (`pkg:`/`sys:`) they were matched through that crate node instead.
+        let symbol_node = path.starts_with("pkg:") || path.starts_with("sys:");
+        let exact_kind = MatchKind {
+            scope: if symbol_node { SCOPE_CRATE } else { SCOPE_FILE },
+            extra: 0,
+            via: None,
+        };
         collect(
             stmt.query_map(params![path.clone()], |row| {
                 Ok((
@@ -152,10 +241,9 @@ pub fn compute_impact(
                     row.get::<_, Option<f64>>(3)?,
                 ))
             })?,
-            &mut results,
-            &mut visited,
-            &mut queue,
+            &mut cx,
             depth,
+            exact_kind,
         )?;
 
         // GAP-034: file-level resolution — a file query must also match
@@ -174,6 +262,14 @@ pub fn compute_impact(
             resolver.pkg_node(&path)
         };
         if let Some(pkg) = pkg_target {
+            // GAP-083: rows matched through a `pkg:<crate>` node of a FILE
+            // query are crate-scoped and cost one extra hop (the file→crate
+            // hop), so `depth == 1` stays strictly "true file-level importer".
+            let crate_kind = MatchKind {
+                scope: SCOPE_CRATE,
+                extra: u32::from(file_query),
+                via: Some(pkg.as_str()),
+            };
             if !path.starts_with("pkg:") {
                 collect(
                     stmt.query_map(params![pkg.clone()], |row| {
@@ -184,10 +280,9 @@ pub fn compute_impact(
                             row.get::<_, Option<f64>>(3)?,
                         ))
                     })?,
-                    &mut results,
-                    &mut visited,
-                    &mut queue,
+                    &mut cx,
                     depth,
+                    crate_kind,
                 )?;
             }
             collect_family(
@@ -201,10 +296,9 @@ pub fn compute_impact(
                     ))
                 })?,
                 &pkg,
-                &mut results,
-                &mut visited,
-                &mut queue,
+                &mut cx,
                 depth,
+                crate_kind,
             )?;
         }
 
@@ -235,10 +329,15 @@ pub fn compute_impact(
                             row.as_ref()
                                 .map_or(true, |(from, ..)| importers.contains(from))
                         }),
-                        &mut results,
-                        &mut visited,
-                        &mut queue,
+                        &mut cx,
                         depth,
+                        // GAP-069 `local:` nodes resolve to the queried file
+                        // itself, so they are file-level (GAP-083).
+                        MatchKind {
+                            scope: SCOPE_FILE,
+                            extra: 0,
+                            via: None,
+                        },
                     )?;
                 }
             }
@@ -283,6 +382,16 @@ pub fn compute_impact_with_external(
     // GAP-069: TS/JS `local:` reverse index — one scan per query, shared
     // across the whole BFS (see compute_impact).
     let local_resolver = crate::resolution::LocalSpecResolver::from_edges(conn).ok();
+    // GAP-083: same file-vs-symbol accounting as compute_impact — a FILE query
+    // pays one extra hop for rows reached through its `pkg:<crate>` node.
+    let file_query = !start_path.starts_with("pkg:") && !start_path.starts_with("sys:");
+
+    let mut cx = Collector {
+        results: &mut results,
+        visited: &mut visited,
+        queue: &mut queue,
+        max_depth,
+    };
 
     if include_external {
         // Match edges where `to` ends with `:path` (the external edge format
@@ -292,12 +401,20 @@ pub fn compute_impact_with_external(
         )?);
     }
 
-    while let Some((path, depth)) = queue.pop_front() {
+    while let Some((path, depth)) = cx.queue.pop_front() {
         if depth >= max_depth {
             continue;
         }
 
-        // Exact match (local edges).
+        // Exact match. Rows matched by the queued node itself: true
+        // file-level dependents for a file node, crate-scoped matches when
+        // the queued node is the query's own `pkg:`/`sys:` target.
+        let symbol_node = path.starts_with("pkg:") || path.starts_with("sys:");
+        let exact_kind = MatchKind {
+            scope: if symbol_node { SCOPE_CRATE } else { SCOPE_FILE },
+            extra: 0,
+            via: None,
+        };
         collect(
             stmt.query_map(params![path.clone()], |row| {
                 Ok((
@@ -307,10 +424,9 @@ pub fn compute_impact_with_external(
                     row.get::<_, Option<f64>>(3)?,
                 ))
             })?,
-            &mut results,
-            &mut visited,
-            &mut queue,
+            &mut cx,
             depth,
+            exact_kind,
         )?;
 
         // GAP-034: file-level resolution — match dependents that target the
@@ -326,6 +442,14 @@ pub fn compute_impact_with_external(
             resolver.pkg_node(&path)
         };
         if let Some(pkg) = pkg_target {
+            // GAP-083: rows matched through a `pkg:<crate>` node of a FILE
+            // query are crate-scoped and cost one extra hop (the file→crate
+            // hop), so `depth == 1` stays strictly "true file-level importer".
+            let crate_kind = MatchKind {
+                scope: SCOPE_CRATE,
+                extra: u32::from(file_query),
+                via: Some(pkg.as_str()),
+            };
             if !path.starts_with("pkg:") {
                 collect(
                     stmt.query_map(params![pkg.clone()], |row| {
@@ -336,10 +460,9 @@ pub fn compute_impact_with_external(
                             row.get::<_, Option<f64>>(3)?,
                         ))
                     })?,
-                    &mut results,
-                    &mut visited,
-                    &mut queue,
+                    &mut cx,
                     depth,
+                    crate_kind,
                 )?;
             }
             collect_family(
@@ -353,10 +476,9 @@ pub fn compute_impact_with_external(
                     ))
                 })?,
                 &pkg,
-                &mut results,
-                &mut visited,
-                &mut queue,
+                &mut cx,
                 depth,
+                crate_kind,
             )?;
         }
 
@@ -382,10 +504,15 @@ pub fn compute_impact_with_external(
                             row.as_ref()
                                 .map_or(true, |(from, ..)| importers.contains(from))
                         }),
-                        &mut results,
-                        &mut visited,
-                        &mut queue,
+                        &mut cx,
                         depth,
+                        // GAP-069 `local:` nodes resolve to the queried file
+                        // itself, so they are file-level (GAP-083).
+                        MatchKind {
+                            scope: SCOPE_FILE,
+                            extra: 0,
+                            via: None,
+                        },
                     )?;
                 }
             }
@@ -404,17 +531,32 @@ pub fn compute_impact_with_external(
                     row.get::<_, Option<f64>>(3)?,
                 ))
             })?;
+            // `external:repo:path` edges name a file in another repo, so these
+            // rows stay file-scoped (GAP-083) — only `pkg:` matches are
+            // crate-level, and a `pkg:` node never appears here (the match is
+            // on the popped node's own path suffix).
+            let ext_kind = MatchKind {
+                scope: SCOPE_FILE,
+                extra: 0,
+                via: None,
+            };
             for row in rows {
                 let (from, rel, prov, conf) = row?;
-                if visited.insert(from.clone()) {
-                    results.push(ImpactFile {
+                let child_depth = depth + 1;
+                if child_depth > cx.max_depth {
+                    continue;
+                }
+                if cx.visited.insert(from.clone()) {
+                    cx.results.push(ImpactFile {
                         path: from.clone(),
                         relation: rel,
-                        depth: depth + 1,
+                        depth: child_depth,
+                        scope: ext_kind.scope.to_string(),
+                        via: ext_kind.via.map(str::to_string),
                         provenance: prov,
                         confidence: conf,
                     });
-                    queue.push_back((from, depth + 1));
+                    cx.queue.push_back((from, child_depth));
                 }
             }
         }
@@ -474,20 +616,122 @@ mod tests {
         insert_edges_into(&conn, &parse(&lib)).unwrap();
         insert_edges_into(&conn, &parse(&main)).unwrap();
 
-        // Sanity: pkg: query works (the old happy path).
+        // Sanity: pkg: query works (the old happy path). GAP-083 must not
+        // change a symbol-node query: same set, same depths.
         let via_pkg = compute_impact(&conn, "pkg:a", 10).unwrap();
         assert!(
             via_pkg.iter().any(|f| f.path == main),
             "pkg:a must be found by main.rs, got: {via_pkg:?}"
         );
+        assert_eq!(via_pkg[0].path, main);
+        assert_eq!(via_pkg[0].depth, 1, "pkg: query depths are unchanged");
+        assert_eq!(via_pkg[0].scope, SCOPE_CRATE);
 
         // The GAP-034 fix: file-level query resolves to the crate pkg node.
+        // GAP-083: those rows are crate-scoped and pay one extra hop (the
+        // file→crate hop), so they can never be read as file-level importers.
         let via_file = compute_impact(&conn, &lib, 10).unwrap();
-        assert!(
-            via_file.iter().any(|f| f.path == main),
-            "impact on crate root file must resolve to pkg:a dependents, got: {via_file:?}"
+        let crate_row = via_file.iter().find(|f| f.path == main).unwrap_or_else(|| {
+            panic!("impact on crate root file must resolve to pkg:a dependents, got: {via_file:?}")
+        });
+        assert_eq!(crate_row.scope, SCOPE_CRATE);
+        assert_eq!(
+            crate_row.depth, 2,
+            "one crate hop: 1 edge hop + 1 file→pkg:a hop"
         );
-        assert_eq!(via_file[0].depth, 1);
+        assert_eq!(crate_row.via.as_deref(), Some("pkg:a"));
+    }
+
+    /// GAP-083 AC 3: `depth == 1` must mean "this file really imports the
+    /// queried file". A row reached through the file's `pkg:<crate>` node is
+    /// crate-scoped and sits at depth >= 2, while a true file-level row keeps
+    /// depth 1 even when the same fixture also holds crate-level rows.
+    #[test]
+    fn file_query_separates_file_level_rows_from_crate_level_rows() {
+        let (_dir, lib, main) = build_two_crate_workspace();
+
+        let conn = duckdb::Connection::open_in_memory().unwrap();
+        insert_edges_into(&conn, &[]).unwrap();
+        let parse = |path: &str| {
+            let source = std::fs::read_to_string(path).unwrap();
+            let mut parser = Parser::for_language(Language::Rust).unwrap();
+            parser.parse_imports(path, &source).unwrap()
+        };
+        insert_edges_into(&conn, &parse(&lib)).unwrap();
+        insert_edges_into(&conn, &parse(&main)).unwrap();
+
+        // A TRUE file-level importer: an edge whose target IS the queried file
+        // (the Rust parser emits `pkg:` edges for `use a::...`, so this is
+        // inserted directly — the shape a `mod`/path edge produces).
+        let direct = "crates/c/src/lib.rs".to_string();
+        insert_edges_into(
+            &conn,
+            &[crate::Edge {
+                from: direct.clone(),
+                to: lib.clone(),
+                rel: "imports".into(),
+                provenance: "ast_exact".into(),
+                confidence: 1.0,
+            }],
+        )
+        .unwrap();
+
+        let results = compute_impact(&conn, &lib, 10).unwrap();
+
+        let file_row = results
+            .iter()
+            .find(|f| f.path == direct)
+            .unwrap_or_else(|| panic!("file-level importer must be reported: {results:?}"));
+        assert_eq!(file_row.scope, SCOPE_FILE);
+        assert_eq!(file_row.depth, 1, "a true file-level importer stays at 1");
+        assert_eq!(file_row.via, None);
+
+        let crate_row = results
+            .iter()
+            .find(|f| f.path == main)
+            .unwrap_or_else(|| panic!("crate-level importer must be reported: {results:?}"));
+        assert_eq!(crate_row.scope, SCOPE_CRATE);
+        assert!(
+            crate_row.depth >= 2,
+            "crate-level rows can never claim depth 1, got {}",
+            crate_row.depth
+        );
+        assert_eq!(crate_row.via.as_deref(), Some("pkg:a"));
+
+        // The exact-match query runs before the crate expansion, so the true
+        // file-level row is discovered (and ordered) first.
+        assert_eq!(results[0].path, direct);
+    }
+
+    /// GAP-083: a crate-level row must also respect the caller's depth budget —
+    /// the extra hop cannot push a row past `max_depth`.
+    #[test]
+    fn crate_rows_respect_max_depth_budget() {
+        let (_dir, lib, main) = build_two_crate_workspace();
+
+        let conn = duckdb::Connection::open_in_memory().unwrap();
+        insert_edges_into(&conn, &[]).unwrap();
+        let parse = |path: &str| {
+            let source = std::fs::read_to_string(path).unwrap();
+            let mut parser = Parser::for_language(Language::Rust).unwrap();
+            parser.parse_imports(path, &source).unwrap()
+        };
+        insert_edges_into(&conn, &parse(&lib)).unwrap();
+        insert_edges_into(&conn, &parse(&main)).unwrap();
+
+        // max_depth = 1: only true file-level dependents fit (there are none).
+        let shallow = compute_impact(&conn, &lib, 1).unwrap();
+        assert!(
+            shallow.is_empty(),
+            "depth-1 budget must not admit crate-level rows: {shallow:?}"
+        );
+
+        // max_depth = 2: exactly the crate hop fits.
+        let deep = compute_impact(&conn, &lib, 2).unwrap();
+        assert_eq!(deep.len(), 1, "crate row fits at depth 2: {deep:?}");
+        assert_eq!(deep[0].path, main);
+        assert_eq!(deep[0].depth, 2);
+        assert_eq!(deep[0].scope, SCOPE_CRATE);
     }
 
     #[test]
@@ -560,11 +804,13 @@ mod tests {
         // File-level query: the crate root must match member edges via the
         // pkg prefix (the GAP-048 fix).
         let via_file = compute_impact(&conn, &lib, 10).unwrap();
-        assert!(
-            via_file.iter().any(|f| f.path == main),
-            "impact on crate root must match pkg:a::<member> edges, got: {via_file:?}"
-        );
-        assert_eq!(via_file[0].depth, 1);
+        let crate_row = via_file.iter().find(|f| f.path == main).unwrap_or_else(|| {
+            panic!("impact on crate root must match pkg:a::<member> edges, got: {via_file:?}")
+        });
+        // GAP-083: member edges are crate-level too — never depth 1.
+        assert_eq!(crate_row.scope, SCOPE_CRATE);
+        assert_eq!(crate_row.depth, 2);
+        assert_eq!(crate_row.via.as_deref(), Some("pkg:a"));
 
         // Bare pkg node query must match member edges too.
         let via_pkg = compute_impact(&conn, "pkg:a", 10).unwrap();
@@ -681,10 +927,13 @@ mod tests {
         }
 
         let via_file = compute_impact(&conn, &a_lib, 10).unwrap();
-        assert!(
-            via_file.iter().any(|f| f.path == main),
-            "crate a file impact must include a_derive importers, got: {via_file:?}"
-        );
+        let sibling_row = via_file.iter().find(|f| f.path == main).unwrap_or_else(|| {
+            panic!("crate a file impact must include a_derive importers, got: {via_file:?}")
+        });
+        // GAP-083: family (sibling) matches are crate-level as well.
+        assert_eq!(sibling_row.scope, SCOPE_CRATE);
+        assert_eq!(sibling_row.depth, 2);
+        assert_eq!(sibling_row.via.as_deref(), Some("pkg:a"));
         let via_pkg_a = compute_impact(&conn, "pkg:a", 10).unwrap();
         assert!(
             via_pkg_a.iter().any(|f| f.path == main),

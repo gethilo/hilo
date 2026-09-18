@@ -529,10 +529,20 @@ fn graph_related(arguments: &serde_json::Value) -> McpResult<serde_json::Value> 
     let result: Vec<serde_json::Value> = edges
         .iter()
         .map(|e| {
+            // GAP-083: name the granularity of this row's `to` endpoint. A row
+            // matched through a `pkg:<crate>` node (GAP-034) is crate-level;
+            // a row whose `to` is a file is file-level. Without it an MCP
+            // client cannot tell "0 files import this" from "N files import
+            // this file's crate" — the CLI prints the same distinction.
             serde_json::json!({
                 "from": e.from,
                 "to": e.to,
                 "relation": e.rel,
+                "scope": if e.to.starts_with("pkg:") || e.to.starts_with("sys:") {
+                    "crate"
+                } else {
+                    "file"
+                },
                 "provenance": e.provenance,
                 "confidence": e.confidence,
             })

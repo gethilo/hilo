@@ -673,18 +673,52 @@ pub fn run_related(path: &str, relation: Option<&str>, direction: Option<&str>) 
         return Ok(());
     }
 
+    // GAP-083: a reverse query on a FILE also matches dependents of the file's
+    // crate `pkg:<name>` node (GAP-034). Those rows are crate-level, not
+    // file-level, and without a summary "0 files import this" is
+    // indistinguishable from "31 files import this file's crate". File rows
+    // keep their existing rendering byte-for-byte; crate rows are re-labelled.
+    let reverse_file_query = matches!(dir, hilo_graph::Direction::Reverse)
+        && !path.starts_with("pkg:")
+        && !path.starts_with("sys:");
+    if reverse_file_query {
+        let file_level = edges.iter().filter(|e| !e.to.starts_with("pkg:")).count();
+        let mut pkgs: Vec<&str> = edges
+            .iter()
+            .filter(|e| e.to.starts_with("pkg:"))
+            .map(|e| e.to.as_str())
+            .collect();
+        pkgs.sort_unstable();
+        pkgs.dedup();
+        let via = if pkgs.is_empty() {
+            String::new()
+        } else {
+            format!(" via {}", pkgs.join(", "))
+        };
+        println!(
+            "{file_level} direct (file-level) dependents; {crate_level} crate-level dependents{via}",
+            crate_level = edges.len() - file_level
+        );
+    }
+
     for edge in &edges {
         // GAP-045: pkg:* targets are external-package pseudo-nodes, not
         // resolvable file paths — label them so agents don't try to pass
         // them to meta/impact (GAP-038 covered stats/search only).
-        let external = if edge.from.starts_with("pkg:") || edge.to.starts_with("pkg:") {
-            " [external package]"
+        // GAP-083: in a reverse query on a file, a row pointing at the file's
+        // `pkg:<crate>` node is CRATE-level (GAP-034 resolution), not an
+        // external package — the `[external package]` label hid that and made
+        // the row read as a file-level dependent.
+        let label = if reverse_file_query && edge.to.starts_with("pkg:") {
+            format!(" [crate-level {}]", edge.to)
+        } else if edge.from.starts_with("pkg:") || edge.to.starts_with("pkg:") {
+            " [external package]".to_string()
         } else {
-            ""
+            String::new()
         };
         println!(
             "{}  →  {}  ({})  [{} conf={:.2}]{}",
-            edge.from, edge.to, edge.rel, edge.provenance, edge.confidence, external
+            edge.from, edge.to, edge.rel, edge.provenance, edge.confidence, label
         );
     }
 
@@ -744,9 +778,16 @@ pub fn run_impact(path: &str, max_depth: u32, format: Option<&str>, external: bo
                 for file in &results {
                     let prov = file.provenance.as_deref().unwrap_or("ast_exact");
                     let conf = file.confidence.unwrap_or(1.0);
+                    // GAP-083: every row states its scope, so a crate-level
+                    // match can never be read as a file-level dependent.
+                    let via = file
+                        .via
+                        .as_deref()
+                        .map(|v| format!(", via {v}"))
+                        .unwrap_or_default();
                     println!(
-                        "{}  ←  {}  (depth: {})  [{} conf={:.2}]",
-                        file.path, file.relation, file.depth, prov, conf
+                        "{}  ←  {}  (depth: {}, scope={}{})  [{} conf={:.2}]",
+                        file.path, file.relation, file.depth, file.scope, via, prov, conf
                     );
                 }
             }

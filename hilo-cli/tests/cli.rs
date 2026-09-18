@@ -719,6 +719,122 @@ fn graph_related_nonexistent_file_errors() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+// ─────────────── graph related (GAP-083 file vs crate level) ───────────────
+
+/// GAP-083: a reverse query on a file with ZERO file-level importers but N
+/// crate-level ones must say so. The summary line comes first (so "0 files
+/// import this" can never be mistaken for "N files import this file's crate")
+/// and every row is explicitly labelled crate-level instead of the misleading
+/// `[external package]` tag, which hid that the row is crate-scoped.
+#[test]
+fn graph_related_reverse_reports_file_level_and_crate_level_counts() {
+    let dir = unique_tempdir("related-crate-level");
+
+    // Two-crate workspace: only crates/b imports crate `a`, so the sole
+    // dependents of crates/a/src/lib.rs live on the `pkg:a` node.
+    fs::create_dir_all(dir.join("crates/a/src")).expect("failed to create crates/a/src");
+    fs::create_dir_all(dir.join("crates/b/src")).expect("failed to create crates/b/src");
+    fs::write(
+        dir.join("Cargo.toml"),
+        "[workspace]\nmembers = [\"crates/a\", \"crates/b\"]\n",
+    )
+    .expect("failed to write workspace Cargo.toml");
+    fs::write(
+        dir.join("crates/a/Cargo.toml"),
+        "[package]\nname = \"a\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("failed to write crates/a/Cargo.toml");
+    fs::write(dir.join("crates/a/src/lib.rs"), "pub struct Glob;\n")
+        .expect("failed to write crates/a/src/lib.rs");
+    fs::write(
+        dir.join("crates/b/Cargo.toml"),
+        "[package]\nname = \"b\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("failed to write crates/b/Cargo.toml");
+    fs::write(
+        dir.join("crates/b/src/main.rs"),
+        "use a::Glob;\nfn main() {}\n",
+    )
+    .expect("failed to write crates/b/src/main.rs");
+
+    let init = Command::new(BIN)
+        .arg("init")
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo init");
+    assert!(
+        init.status.success(),
+        "init failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+
+    // The importer's edge must exist in the graph: `related` only lazily parses
+    // the QUERIED file, so warm is what puts crates/b/src/main.rs in.
+    let warm = Command::new(BIN)
+        .args(["graph", "warm"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo graph warm");
+    assert!(
+        warm.status.success(),
+        "graph warm failed: {}",
+        String::from_utf8_lossy(&warm.stderr)
+    );
+
+    let output = Command::new(BIN)
+        .args([
+            "graph",
+            "related",
+            "crates/a/src/lib.rs",
+            "--direction",
+            "reverse",
+        ])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo graph related");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "graph related failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let lines: Vec<&str> = stdout.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert!(!lines.is_empty(), "expected output, got: {stdout:?}");
+
+    // 1. The summary line comes FIRST and names 0 direct (file-level)
+    //    dependents plus the real crate-level count and node.
+    let summary = lines[0];
+    assert!(
+        summary.starts_with("0 direct (file-level) dependents;"),
+        "first line must be the file-level summary, got: {summary:?}"
+    );
+    assert!(
+        summary.contains("1 crate-level dependents via pkg:a"),
+        "summary must name the crate-level count and node, got: {summary:?}"
+    );
+
+    // 2. Rows come after the summary; here every row is crate-level and must
+    //    say so explicitly (and never be called an external package — pkg:a is
+    //    an in-repo workspace member).
+    assert!(
+        lines.len() > 1,
+        "crate-level rows must still be listed after the summary: {stdout:?}"
+    );
+    for row in &lines[1..] {
+        assert!(
+            row.contains("[crate-level pkg:a]"),
+            "every crate-level row must be explicitly labelled, got: {row:?}"
+        );
+        assert!(
+            !row.contains("[external package]"),
+            "an in-repo crate node must not be called an external package: {row:?}"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 // ─────────────────────── serve ───────────────────────
 
 #[test]
