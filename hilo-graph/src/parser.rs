@@ -47,13 +47,18 @@ pub enum Language {
 
 impl Language {
     /// Detect language from a file extension.
+    ///
+    /// `.mjs`/`.cjs` are JavaScript, not a language of their own: the ESM/CJS
+    /// module flavours share tree-sitter's JS grammar, and `resolution.rs`
+    /// already probes both as first-class JS. They were missing from this
+    /// table, which made every `.mjs`/`.cjs` file invisible to discovery.
     pub fn from_extension(ext: &str) -> Option<Self> {
         match ext {
             "go" => Some(Language::Go),
             "py" => Some(Language::Python),
             "ts" | "tsx" => Some(Language::TypeScript),
             "rs" => Some(Language::Rust),
-            "js" | "jsx" => Some(Language::JavaScript),
+            "js" | "jsx" | "mjs" | "cjs" => Some(Language::JavaScript),
             "java" => Some(Language::Java),
             "c" => Some(Language::C),
             "cpp" | "cc" | "cxx" | "hpp" | "hxx" => Some(Language::Cpp),
@@ -82,10 +87,10 @@ impl Language {
     /// All extensions this parser handles.
     pub fn all_extensions() -> &'static [&'static str] {
         &[
-            "go", "py", "ts", "tsx", "rs", "js", "jsx", "java", "c", "cpp", "cc", "cxx", "rb",
-            "cs", "kt", "kts", "php", "phtml", "swift", "ex", "exs", "hs", "lhs", "erl", "hrl",
-            "scala", "sc", "zig", "lua", "dart", "clj", "cljs", "cljc", "edn", "ml", "mli", "r",
-            "jl", "elm", "nim",
+            "go", "py", "ts", "tsx", "rs", "js", "jsx", "mjs", "cjs", "java", "c", "cpp", "cc",
+            "cxx", "rb", "cs", "kt", "kts", "php", "phtml", "swift", "ex", "exs", "hs", "lhs",
+            "erl", "hrl", "scala", "sc", "zig", "lua", "dart", "clj", "cljs", "cljc", "edn", "ml",
+            "mli", "r", "jl", "elm", "nim",
         ]
     }
 }
@@ -1946,6 +1951,8 @@ use anyhow::{bail, Context as _};
         assert_eq!(Language::from_extension("ts"), Some(Language::TypeScript));
         assert_eq!(Language::from_extension("rs"), Some(Language::Rust));
         assert_eq!(Language::from_extension("js"), Some(Language::JavaScript));
+        assert_eq!(Language::from_extension("mjs"), Some(Language::JavaScript));
+        assert_eq!(Language::from_extension("cjs"), Some(Language::JavaScript));
         assert_eq!(Language::from_extension("java"), Some(Language::Java));
         assert_eq!(Language::from_extension("c"), Some(Language::C));
         assert_eq!(Language::from_extension("cpp"), Some(Language::Cpp));
@@ -1973,6 +1980,28 @@ use anyhow::{bail, Context as _};
         assert_eq!(Language::from_extension("elm"), Some(Language::Elm));
         assert_eq!(Language::from_extension("nim"), Some(Language::Nim));
         assert_eq!(Language::from_extension("txt"), None);
+    }
+
+    /// `all_extensions` is the user-visible list (the `graph warm` "no source
+    /// files found" message prints it), so it must name every extension
+    /// [`Language::from_extension`] resolves — the two tables drifting apart
+    /// is how `.mjs`/`.cjs` stayed undiscovered while `resolution.rs` already
+    /// treated them as first-class JS.
+    #[test]
+    fn all_extensions_agree_with_from_extension() {
+        let extensions = Language::all_extensions();
+        for required in ["js", "jsx", "mjs", "cjs"] {
+            assert!(
+                extensions.contains(&required),
+                "`all_extensions` must list `{required}`"
+            );
+        }
+        for ext in extensions {
+            assert!(
+                Language::from_extension(ext).is_some(),
+                "every listed extension must resolve to a language: {ext}"
+            );
+        }
     }
 
     #[test]
