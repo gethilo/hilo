@@ -1227,4 +1227,12 @@ tasks:
     -p hilo_graph -p hilo-cli --all-targets -- -D warnings clean'
   status: complete
   created_at: '2026-09-18T10:01:28.373543+00:00'
-  completed_at: '2026-09-18T10:21:01.854621+00:00'
+  completed_at: '2026-09-18T11:23:57.771835+00:00'
+- id: GAP-086
+  title: graph warm and MCP project preconditions
+  criteria:
+  - graph warm without init fails clearly or initializes completely; MCP from non-project
+    cwd fails clearly; cache artifacts are ignored; focused and workspace gates pass
+  status: complete
+  created_at: '2026-09-18T11:35:07.641669+00:00'
+  completed_at: '2026-09-18T11:47:11.036015+00:00'
