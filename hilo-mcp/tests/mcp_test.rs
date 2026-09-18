@@ -238,6 +238,11 @@ fn documented_tools_mirror_tools_list() {
 /// such file), but it must never be the handler's "missing argument" error.
 #[test]
 fn documented_arguments_are_accepted_by_the_server() {
+    // The probe calls every tool, including the graph and workspace tools,
+    // which resolve their paths relative to the process CWD — the same
+    // process-global state the CWD-dependent tests below mutate, so it takes
+    // the same lock.
+    let _guard = cwd_test_lock().lock().unwrap();
     let documented = documented_tools(&doc_text());
     let tools = hilo_mcp::tools::list_tools();
 
