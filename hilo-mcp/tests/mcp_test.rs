@@ -236,13 +236,15 @@ fn documented_tools_mirror_tools_list() {
 /// server. The call is issued with the documented names and type-appropriate
 /// dummies; the response may fail for any environmental reason (no graph, no
 /// such file), but it must never be the handler's "missing argument" error.
+///
+/// The probe drives all 17 tools, and the graph and workspace tools resolve
+/// their paths against the process CWD, so it runs in the same throwaway-CWD
+/// fixture the graph tests use (holding `cwd_test_lock`): that keeps
+/// `.vfs/graph/graph.db` out of the crate directory and keeps a fixture graph
+/// from leaking into the sibling empty-graph tests.
 #[test]
 fn documented_arguments_are_accepted_by_the_server() {
-    // The probe calls every tool, including the graph and workspace tools,
-    // which resolve their paths relative to the process CWD — the same
-    // process-global state the CWD-dependent tests below mutate, so it takes
-    // the same lock.
-    let _guard = cwd_test_lock().lock().unwrap();
+    let _cwd = CwdGraphFixture::new();
     let documented = documented_tools(&doc_text());
     let tools = hilo_mcp::tools::list_tools();
 
