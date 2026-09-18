@@ -119,6 +119,88 @@ fn init_is_idempotent() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// GAP-087: `hilo init --no-hooks` must not create or modify anything under
+/// `.git/hooks/` — byte-identical opt-out, even with pre-existing hook content.
+#[test]
+fn init_no_hooks_preserves_existing_hooks() {
+    let dir = unique_tempdir("init-no-hooks");
+    let hooks = dir.join(".git").join("hooks");
+    fs::create_dir_all(&hooks).expect("failed to create .git/hooks");
+    let custom = "#!/bin/sh\necho 'pre-existing project hook'\n";
+    fs::write(hooks.join("post-commit"), custom).expect("failed to write hook");
+
+    run_hilo_ok(&dir, &["init", "--no-hooks"]);
+
+    assert!(
+        dir.join(".vfs").join("manifest.yaml").exists(),
+        "--no-hooks must still create the manifest"
+    );
+    assert_eq!(
+        fs::read_to_string(hooks.join("post-commit")).expect("failed to read hook"),
+        custom,
+        "pre-existing hook must be byte-identical after --no-hooks"
+    );
+    assert!(
+        !hooks.join("post-merge").exists(),
+        "--no-hooks must not create a post-merge hook"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// GAP-087: the opt-out does not even create `.git/hooks/`.
+#[test]
+fn init_no_hooks_does_not_create_git_hooks_dir() {
+    let dir = unique_tempdir("init-no-hooks-no-git");
+
+    run_hilo_ok(&dir, &["init", "--no-hooks"]);
+
+    assert!(dir.join(".vfs").join("manifest.yaml").exists());
+    assert!(
+        !dir.join(".git").exists(),
+        "--no-hooks must not create .git/ or .git/hooks/"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Control for the opt-out: a plain `hilo init` still installs both hooks.
+#[test]
+fn init_without_flag_installs_hooks_by_default() {
+    let dir = unique_tempdir("init-hooks-default");
+    fs::create_dir_all(dir.join(".git").join("hooks")).expect("failed to create .git/hooks");
+
+    run_hilo_ok(&dir, &["init"]);
+
+    let post_commit =
+        fs::read_to_string(dir.join(".git").join("hooks").join("post-commit")).expect("no hook");
+    assert!(
+        post_commit.contains("### HILO"),
+        "default init must install the Hilo block, got:\n{post_commit}"
+    );
+    assert!(
+        dir.join(".git").join("hooks").join("post-merge").exists(),
+        "default init must install post-merge"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// GAP-087: the opt-out is documented in `hilo init --help`.
+#[test]
+fn init_help_documents_no_hooks() {
+    let out = Command::new(BIN)
+        .args(["init", "--help"])
+        .output()
+        .expect("failed to spawn hilo init --help");
+    assert!(out.status.success(), "--help must exit 0");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("--no-hooks"),
+        "help must document --no-hooks, got:\n{stdout}"
+    );
+}
+
 // ─────────────────────── meta ───────────────────────
 
 #[test]

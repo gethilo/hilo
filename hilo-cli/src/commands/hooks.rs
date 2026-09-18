@@ -1,10 +1,16 @@
 //! Git hook installation — auto-update Hilo metadata on commit and pull.
 //!
-//! When `hilo init` runs, it installs two git hooks into `.git/hooks/`:
+//! When `hilo init` runs (without `--no-hooks`), it installs two git hooks
+//! into `.git/hooks/`:
 //! - **post-commit** — runs `hilo graph warm --changed` (incremental parse)
-//!   when Hilo is available, or writes a `.vfs/.dirty` marker when it is not.
-//! - **post-merge** — on pull, checks for `.vfs/.dirty`; if present and Hilo is
-//!   installed, runs full `hilo graph warm` and deletes the marker.
+//!   when Hilo is on `PATH`.
+//! - **post-merge** — on pull, checks for `.vfs/.dirty`; if present and Hilo
+//!   is installed, runs full `hilo graph warm` and deletes the marker.
+//!
+//! GAP-087: both hooks are no-ops when the `hilo` executable is absent — they
+//! exit 0 and touch nothing. Neither creates a `.vfs/.dirty` marker merely
+//! because Hilo is missing: a hook must never fail a commit, and must not
+//! leave behind state that only a Hilo which is not installed could clear.
 //!
 //! Both hooks use `### HILO` / `### /HILO` block markers so they can be safely
 //! appended to existing hooks without overwriting content.
@@ -17,31 +23,30 @@ use anyhow::{Context, Result};
 const HILO_MARKER_START: &str = "### HILO";
 const HILO_MARKER_END: &str = "### /HILO";
 
-/// post-commit hook content — incremental graph warm or dirty marker.
+/// post-commit hook content — incremental graph warm when Hilo is installed.
+///
+/// GAP-087: with no `hilo` on `PATH` this is a pure no-op that exits 0. It must
+/// not create a `.vfs/.dirty` marker: nothing installed could clear it, and a
+/// failed write would make the hook fail the commit.
 const POST_COMMIT_HOOK: &str = r#"#!/bin/sh
 ### HILO — auto-update metadata on commit
 if command -v hilo >/dev/null 2>&1; then
     hilo graph warm --changed 2>/dev/null || true
-else
-    # Hilo not installed — mark dirty
-    echo "Hilo: not installed — marking metadata as dirty"
-    echo "stale" > .vfs/.dirty
 fi
 ### /HILO
 "#;
 
 /// post-merge hook content — sync metadata on pull.
+///
+/// GAP-087: with no `hilo` on `PATH` this exits 0 and leaves `.vfs/.dirty`
+/// untouched — only an installed Hilo clears the staleness marker.
 const POST_MERGE_HOOK: &str = r#"#!/bin/sh
 ### HILO — sync metadata on pull
-if [ -f .vfs/.dirty ]; then
-    if command -v hilo >/dev/null 2>&1; then
-        echo "Hilo: dirty marker found — updating metadata"
-        hilo graph warm 2>/dev/null || true
-        rm -f .vfs/.dirty
-        echo "Hilo: metadata updated, dirty marker removed"
-    else
-        echo "Hilo: not installed — leaving dirty marker"
-    fi
+if [ -f .vfs/.dirty ] && command -v hilo >/dev/null 2>&1; then
+    echo "Hilo: dirty marker found — updating metadata"
+    hilo graph warm 2>/dev/null || true
+    rm -f .vfs/.dirty
+    echo "Hilo: metadata updated, dirty marker removed"
 fi
 ### /HILO
 "#;
@@ -292,7 +297,7 @@ mod tests {
     }
 
     #[test]
-    fn test_post_commit_hook_contains_dirty_logic() {
+    fn test_post_commit_hook_has_no_dirty_side_effect() {
         let dir = make_temp_git_project();
         install_hooks(dir.path()).unwrap();
         let content =
@@ -302,9 +307,15 @@ mod tests {
             content.contains("command -v hilo"),
             "should check if hilo is installed"
         );
+        // GAP-087: post-commit must never write the dirty marker — a marker
+        // created while Hilo is absent can only be cleared by Hilo.
         assert!(
-            content.contains(".vfs/.dirty"),
-            "should write dirty marker when hilo not installed"
+            !content.contains(".vfs/.dirty"),
+            "post-commit must not create a dirty marker"
+        );
+        assert!(
+            !content.contains("echo \"stale\""),
+            "post-commit must not write the stale marker"
         );
     }
 
@@ -363,6 +374,225 @@ mod tests {
         assert!(
             content.contains("hi\n\n#!/bin/sh\n### HILO"),
             "should have newline between existing and Hilo block"
+        );
+    }
+
+    // ─────────────────── GAP-087: hook runtime behavior ───────────────────
+    //
+    // These tests execute the installed hook scripts with `/bin/sh`, with
+    // `PATH` pointed at a private temp directory so the host's `hilo` (or its
+    // absence) can never influence the result.
+
+    /// Temp dir used as the hook's `PATH`, optionally holding a stub `hilo`.
+    #[cfg(unix)]
+    fn make_path_dir(stub_hilo: Option<&str>) -> tempfile::TempDir {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        if let Some(body) = stub_hilo {
+            let stub = dir.path().join("hilo");
+            std::fs::write(&stub, body).unwrap();
+            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        dir
+    }
+
+    /// Run an installed hook with `sh`, in `project`, with `PATH=path`.
+    #[cfg(unix)]
+    fn run_installed_hook(
+        project: &Path,
+        hook: &str,
+        path: &std::ffi::OsStr,
+    ) -> std::process::Output {
+        let hook_path = project.join(".git").join("hooks").join(hook);
+        std::process::Command::new("/bin/sh")
+            .arg(&hook_path)
+            .current_dir(project)
+            .env("PATH", path)
+            .output()
+            .unwrap_or_else(|e| panic!("failed to run {hook}: {e}"))
+    }
+
+    /// `PATH` for a hook run: `stub_dir` always FIRST, so a stub `hilo` wins
+    /// over any host installation, optionally followed by the system binary
+    /// directories the hook itself needs (`rm` is not a shell builtin).
+    ///
+    /// Tests that assert the absent-`hilo` behavior pass `with_system_dirs =
+    /// false` — the hook's no-op path needs no external commands at all, so an
+    /// empty `PATH` proves the behavior without the host's `hilo` in play.
+    #[cfg(unix)]
+    fn hook_path(stub_dir: &Path, with_system_dirs: bool) -> std::ffi::OsString {
+        let mut path = std::ffi::OsString::from(stub_dir.as_os_str());
+        if with_system_dirs {
+            path.push(":/usr/local/bin:/usr/bin:/bin");
+        }
+        path
+    }
+
+    /// Body of a stub `hilo` that records its argv into `log`.
+    #[cfg(unix)]
+    fn stub_hilo_recording(log: &Path) -> String {
+        format!("#!/bin/sh\necho \"$@\" >> {}\n", log.display())
+    }
+
+    /// A stub `hilo` that always fails — the hook must still exit 0.
+    #[cfg(unix)]
+    const STUB_HILO_FAILING: &str = "#!/bin/sh\nexit 1\n";
+
+    #[cfg(unix)]
+    #[test]
+    fn test_post_commit_noop_without_hilo() {
+        let dir = make_temp_git_project();
+        install_hooks(dir.path()).unwrap();
+        // `.vfs/` exists and is writable, so a marker would land here if the
+        // hook still wrote one.
+        std::fs::create_dir_all(dir.path().join(".vfs")).unwrap();
+        let path_dir = make_path_dir(None);
+
+        let out = run_installed_hook(
+            dir.path(),
+            "post-commit",
+            &hook_path(path_dir.path(), false),
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "post-commit must exit 0 without hilo: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            !dir.path().join(".vfs").join(".dirty").exists(),
+            "post-commit must not create .vfs/.dirty when hilo is absent"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_post_commit_noop_without_hilo_or_vfs_dir() {
+        let dir = make_temp_git_project();
+        install_hooks(dir.path()).unwrap();
+        let path_dir = make_path_dir(None);
+
+        let out = run_installed_hook(
+            dir.path(),
+            "post-commit",
+            &hook_path(path_dir.path(), false),
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "post-commit must exit 0 without hilo even when .vfs/ is missing: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            !dir.path().join(".vfs").exists(),
+            "post-commit must not create .vfs/ state"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_post_merge_noop_without_hilo() {
+        let dir = make_temp_git_project();
+        install_hooks(dir.path()).unwrap();
+        std::fs::create_dir_all(dir.path().join(".vfs")).unwrap();
+        let path_dir = make_path_dir(None);
+
+        let out = run_installed_hook(dir.path(), "post-merge", &hook_path(path_dir.path(), false));
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "post-merge must exit 0 without hilo: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            !dir.path().join(".vfs").join(".dirty").exists(),
+            "post-merge must not create .vfs/.dirty when hilo is absent"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_post_merge_without_hilo_leaves_preexisting_marker() {
+        let dir = make_temp_git_project();
+        install_hooks(dir.path()).unwrap();
+        let marker = dir.path().join(".vfs").join(".dirty");
+        std::fs::create_dir_all(dir.path().join(".vfs")).unwrap();
+        std::fs::write(&marker, "stale\n").unwrap();
+        let path_dir = make_path_dir(None);
+
+        let out = run_installed_hook(dir.path(), "post-merge", &hook_path(path_dir.path(), false));
+        assert_eq!(out.status.code(), Some(0));
+        // Only an installed hilo may clear the marker — an absent one must not
+        // silently drop the staleness signal.
+        assert_eq!(
+            std::fs::read_to_string(&marker).unwrap(),
+            "stale\n",
+            "pre-existing marker must be untouched when hilo is absent"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_post_commit_exits_zero_when_hilo_fails() {
+        let dir = make_temp_git_project();
+        install_hooks(dir.path()).unwrap();
+        let path_dir = make_path_dir(Some(STUB_HILO_FAILING));
+
+        let out = run_installed_hook(dir.path(), "post-commit", &hook_path(path_dir.path(), true));
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "a failing hilo must not fail the commit"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_post_commit_warms_when_hilo_present() {
+        let dir = make_temp_git_project();
+        install_hooks(dir.path()).unwrap();
+        let log = dir.path().join("hilo-calls.log");
+        let path_dir = make_path_dir(Some(&stub_hilo_recording(&log)));
+
+        let out = run_installed_hook(dir.path(), "post-commit", &hook_path(path_dir.path(), true));
+        assert_eq!(out.status.code(), Some(0));
+        let calls = std::fs::read_to_string(&log).expect("stub hilo should have been invoked");
+        assert_eq!(calls.trim(), "graph warm --changed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_post_merge_warms_and_clears_marker_when_hilo_present() {
+        let dir = make_temp_git_project();
+        install_hooks(dir.path()).unwrap();
+        let marker = dir.path().join(".vfs").join(".dirty");
+        std::fs::create_dir_all(dir.path().join(".vfs")).unwrap();
+        std::fs::write(&marker, "stale\n").unwrap();
+        let log = dir.path().join("hilo-calls.log");
+        let path_dir = make_path_dir(Some(&stub_hilo_recording(&log)));
+
+        let out = run_installed_hook(dir.path(), "post-merge", &hook_path(path_dir.path(), true));
+        assert_eq!(out.status.code(), Some(0));
+        assert!(
+            !marker.exists(),
+            "installed hilo must clear the marker after a full warm"
+        );
+        assert_eq!(std::fs::read_to_string(&log).unwrap().trim(), "graph warm");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_post_merge_without_marker_does_not_invoke_hilo() {
+        let dir = make_temp_git_project();
+        install_hooks(dir.path()).unwrap();
+        let log = dir.path().join("hilo-calls.log");
+        let path_dir = make_path_dir(Some(&stub_hilo_recording(&log)));
+
+        let out = run_installed_hook(dir.path(), "post-merge", &hook_path(path_dir.path(), true));
+        assert_eq!(out.status.code(), Some(0));
+        assert!(
+            !log.exists(),
+            "post-merge must not warm unless a dirty marker exists"
         );
     }
 }

@@ -65,6 +65,15 @@ struct InitArgs {
     /// Without this flag `hilo init` refuses to create `.vfs/` inside HOME.
     #[arg(long)]
     allow_home: bool,
+
+    /// Do not install git hooks.
+    ///
+    /// Normal `hilo init` appends a marked `### HILO` block to
+    /// `.git/hooks/post-commit` and `.git/hooks/post-merge` (existing hook
+    /// content is preserved). With this flag nothing under `.git/hooks/` is
+    /// created or modified, so hook setup can stay owned by other tooling.
+    #[arg(long)]
+    no_hooks: bool,
 }
 
 #[derive(clap::Args)]
@@ -358,7 +367,7 @@ fn main() {
     let cli = Cli::parse();
 
     let result = match cli.command {
-        Commands::Init(args) => init::run(args.allow_home),
+        Commands::Init(args) => init::run(args.allow_home, args.no_hooks),
         Commands::Meta(args) => meta::run(&args.path, args.set.as_deref(), args.value.as_deref()),
         Commands::Graph(GraphCommand::Warm(args)) => {
             graph::run_warm(args.workspace, args.language, args.changed, args.allow_home)

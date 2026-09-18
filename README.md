@@ -42,7 +42,7 @@ standard tools (`getfattr`, `ls`, `cat`) or an MCP server. Zero file reads
 for structural questions.
 
 ```
-$ hilo init              # Create .vfs/ metadata directory
+$ hilo init              # Create .vfs/ + install git hooks (see below)
 $ hilo graph warm        # Parse AST, build graph (26 languages)
   parsing 100/817 files...
   parsing 817/817 files...
@@ -112,8 +112,15 @@ stamped query cache): [docs/performance.md](docs/performance.md).
 ## Quickstart
 
 ```bash
-# Initialize Hilo in any repo
+# Initialize Hilo in any repo.
+# This also installs git hooks: `hilo init` appends a marked `### HILO` block
+# to .git/hooks/post-commit and .git/hooks/post-merge so metadata follows
+# commits and pulls. Existing hook content is preserved — Hilo only appends
+# its own delimited block (re-running init rewrites that block in place).
 hilo init
+
+# Opt out of hook installation (another tool owns .git/hooks/):
+hilo init --no-hooks
 
 # Build the dependency graph
 hilo graph warm
@@ -138,6 +145,35 @@ getfattr -n user.vfs.role /mnt/vfs/src/main.rs
 # Or serve MCP for agents (requires `hilo init` to have been run in the project first)
 hilo serve --mcp
 ```
+
+### Git hooks installed by `hilo init`
+
+`hilo init` installs two hooks by appending a `### HILO` … `### /HILO` block to
+the project's hook files:
+
+| Hook | What the Hilo block does |
+|------|--------------------------|
+| `.git/hooks/post-commit` | runs `hilo graph warm --changed` so the graph tracks the commit |
+| `.git/hooks/post-merge` | after a pull: if `.vfs/.dirty` exists, runs a full `hilo graph warm` and deletes the marker |
+
+Both blocks exit `0` when the `hilo` executable is not on `PATH` — they never
+fail a commit, and neither creates a `.vfs/.dirty` file merely because Hilo is
+missing. Content outside the markers is never touched. Hooks are only installed
+while a fresh manifest is being created, so re-running `hilo init` on an
+existing project leaves `.git/hooks/` alone, and `hilo init --no-hooks` creates
+and modifies nothing there at all.
+
+To remove them:
+
+1. Delete the `### HILO` … `### /HILO` block from `.git/hooks/post-commit` and
+   `.git/hooks/post-merge`.
+2. If a file then contains nothing but a shebang, delete the file.
+3. Leave every other line alone — `.git/hooks/` may hold hooks from other
+   tools, and Hilo never writes outside its own markers.
+
+Removing the hooks does not remove `.vfs/`: the manifest and graph keep working
+through the CLI and the MCP server (you just lose automatic refreshes on commit
+and pull).
 
 ## More commands
 
