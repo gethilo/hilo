@@ -1205,3 +1205,26 @@ tasks:
   status: complete
   created_at: '2026-09-18T09:05:32.721904+00:00'
   completed_at: '2026-09-18T09:57:18.144973+00:00'
+- id: GAP-084
+  title: graph understand must not print literal template placeholders as content
+    and every tier must be labelled empty or carry real entries
+  criteria:
+  - 'hilo graph understand <task> (default harmonic resolution) output contains zero
+    literal template placeholder lines: no line starting with ''<file>'' , no line
+    equal to ''- <key symbols, one per line>'' or ''<source (whitespace-minified)>''
+    , no line matching ''^<file>:<line>'''
+  - Every '##' section either carries at least one real entry or its tier-body states
+    explicitly that the tier is empty; a section is never a header followed only by
+    scaffolding or nothing
+  - 'Budget semantics are pinned by a test: on a fixture graph, graph understand byte
+    size is non-decreasing in --budget and --budget 200 differs from --budget 40000
+    in harmonic mode; --resolution flat behaviour (budget-independent today) is either
+    made budget-aware or stated in the flag''s help text and covered by the same test
+    file'
+  - 'No data regression: for a fixed fixture the real entry lines of MAP/SIGNATURES/DETAIL
+    are unchanged apart from the removed scaffolding; cargo test -p hilo_graph --lib
+    and cargo test -p hilo-cli stay green, cargo fmt --all --check and cargo clippy
+    -p hilo_graph -p hilo-cli --all-targets -- -D warnings clean'
+  status: complete
+  created_at: '2026-09-18T10:01:28.373543+00:00'
+  completed_at: '2026-09-18T10:21:01.854621+00:00'
