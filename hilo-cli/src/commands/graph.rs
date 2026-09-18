@@ -2165,9 +2165,30 @@ pub fn run_search(query: &str, limit: Option<usize>, no_symbols: bool) -> Result
 ///
 /// Returns file list, edge count, and test coverage for files under a
 /// directory prefix (e.g. "hilo-graph/src"). See `GraphDB::module_files_at`.
+///
+/// GAP-085: an unknown prefix fails loudly, mirroring the GAP-039 contract in
+/// [`run_impact`]. A prefix that is neither a directory on disk nor named by
+/// the graph is almost always an agent typo, and the old success-shaped
+/// `Files: 0` report was indistinguishable from a real but empty module — the
+/// command now exits non-zero with an error naming the prefix. The
+/// classification runs BEFORE the "No graph data" path, so a fresh, unwarmed
+/// directory gets the honest error rather than a missing-graph message.
+/// Tolerance: a prefix the warmed graph still names (e.g. the directory was
+/// deleted after a `warm`) keeps reporting normally. A real directory with no
+/// warmed coverage stays exit 0 but always states the situation explicitly —
+/// never a bare `Files: 0` report.
 pub fn run_module(module_name: &str) -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
+
+    // GAP-085: classify the prefix against the filesystem first — this must
+    // not sit behind the graph-db resolution, or an unwarmed directory answers
+    // a typo with "No graph data".
+    let empty = classify_empty_module(&cwd, module_name);
+
     let Some(graph_db) = resolve_graph_db_path(&cwd) else {
+        if empty == EmptyModule::UnknownPrefix {
+            return Err(unknown_module_error(module_name));
+        }
         anyhow::bail!("No graph data. Run `hilo graph warm` first.");
     };
 
@@ -2178,19 +2199,65 @@ pub fn run_module(module_name: &str) -> Result<()> {
         .module_files_at(&cwd, module_name)
         .context("failed to query module stats")?;
 
+    // GAP-085: an unknown prefix must never print a success-shaped empty
+    // report. A prefix the graph still names is reported normally (tolerance
+    // for a directory deleted after a warm).
+    if stats.files.is_empty() && empty == EmptyModule::UnknownPrefix {
+        return Err(unknown_module_error(module_name));
+    }
+
     println!("Module: {}", stats.module);
     println!("Files:  {}", stats.files.len());
     println!("Edges:  {}", stats.edges_count);
     println!("Tests:  {:.1}%", stats.test_coverage_pct);
 
-    if !stats.files.is_empty() {
-        println!("── Files ──");
-        for f in &stats.files {
-            println!("  {f}");
-        }
+    if stats.files.is_empty() {
+        // GAP-085: state-independent empty report — the directory exists but
+        // nothing under it is in the graph yet, so this can never read as an
+        // empty module.
+        println!(
+            "No files in the graph under '{module_name}' — the directory exists but no warmed graph entry covers it. Run `hilo graph warm`."
+        );
+        return Ok(());
+    }
+
+    println!("── Files ──");
+    for f in &stats.files {
+        println!("  {f}");
     }
 
     Ok(())
+}
+
+/// GAP-085: why `hilo graph module <prefix>` found no files in the graph.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EmptyModule {
+    /// The prefix is not a directory on disk and the graph cannot answer for
+    /// it either — an unknown prefix, i.e. almost always a typo. Loud failure.
+    UnknownPrefix,
+    /// The directory exists but no warmed graph entry covers it. Honest empty
+    /// report, exit 0.
+    UncoveredDirectory,
+}
+
+/// GAP-085: classify an empty `hilo graph module` result WITHOUT touching the
+/// graph, so the decision is unit-testable without DuckDB.
+///
+/// `root` is the resolution root the prefix is interpreted against (the
+/// process cwd for the CLI).
+fn classify_empty_module(root: &Path, module_name: &str) -> EmptyModule {
+    if root.join(module_name).is_dir() {
+        EmptyModule::UncoveredDirectory
+    } else {
+        EmptyModule::UnknownPrefix
+    }
+}
+
+/// GAP-085: the loud failure for an unknown module prefix, naming the prefix.
+fn unknown_module_error(module_name: &str) -> anyhow::Error {
+    anyhow::anyhow!(
+        "'{module_name}' is not in the graph (no such directory and no matching module prefix)"
+    )
 }
 
 /// `hilo graph untested` — list source files with no test coverage.
@@ -2325,6 +2392,48 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    /// GAP-085: a prefix that is neither a directory on disk nor named by the
+    /// graph is an unknown prefix — classifiable without DuckDB, so the
+    /// command can fail loudly before it queries anything.
+    #[test]
+    fn classify_empty_module_unknown_prefix() {
+        let dir = TempDir::new().unwrap();
+
+        assert_eq!(
+            classify_empty_module(dir.path(), "no/such/dir"),
+            EmptyModule::UnknownPrefix
+        );
+
+        let err = unknown_module_error("no/such/dir");
+        assert!(
+            err.to_string().contains("no/such/dir"),
+            "error must name the prefix, got: {err}"
+        );
+    }
+
+    /// GAP-085: a real directory with no warmed graph entries is NOT an
+    /// unknown prefix — the directory itself is not an error, it just has no
+    /// coverage yet.
+    #[test]
+    fn classify_empty_module_uncovered_directory() {
+        let dir = TempDir::new().unwrap();
+        fs::create_dir_all(dir.path().join("src").join("nested")).unwrap();
+
+        assert_eq!(
+            classify_empty_module(dir.path(), "src"),
+            EmptyModule::UncoveredDirectory
+        );
+        assert_eq!(
+            classify_empty_module(dir.path(), "src/nested"),
+            EmptyModule::UncoveredDirectory
+        );
+        // The root itself is a directory too — never classified as unknown.
+        assert_eq!(
+            classify_empty_module(dir.path(), "."),
+            EmptyModule::UncoveredDirectory
+        );
+    }
 
     #[test]
     fn clean_removes_graph_cache() {

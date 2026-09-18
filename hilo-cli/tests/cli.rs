@@ -792,6 +792,37 @@ fn graph_impact_nonexistent_file_errors() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+// ─────────────────────── graph module (unknown prefix, GAP-085) ───────────────────────
+
+#[test]
+fn graph_module_unknown_prefix_errors() {
+    let dir = unique_tempdir("module");
+
+    let output = Command::new(BIN)
+        .args(["graph", "module", "no/such/dir"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo graph module");
+
+    // Contract (GAP-085): a prefix that is neither a directory on disk nor
+    // named by the graph must fail loudly with a non-zero exit and an error
+    // naming the prefix — never a success-shaped `Files: 0` report that an
+    // agent reads as "this module has no files". The directory is fresh and
+    // unwarmed, so this also pins that the check runs before the "No graph
+    // data" path.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "graph module on an unknown prefix should exit non-zero, stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("no/such/dir"),
+        "stderr should name the prefix, got: {stderr}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 // ─────────────────────── graph related (absent path) ─────────────────────
 
 #[test]
