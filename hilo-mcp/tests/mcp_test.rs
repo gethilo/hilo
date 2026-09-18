@@ -88,6 +88,217 @@ fn test_tools_list() {
 }
 
 // -------------------------------------------------------------------------
+// docs/hilo-mcp.md — the documented tool surface must mirror tools/list
+// -------------------------------------------------------------------------
+
+/// Path to the MCP server document under test.
+fn doc_path() -> &'static str {
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/hilo-mcp.md")
+}
+
+/// The raw text of `docs/hilo-mcp.md`.
+fn doc_text() -> String {
+    std::fs::read_to_string(doc_path())
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", doc_path()))
+}
+
+/// One row of the tool table in `docs/hilo-mcp.md`.
+struct DocumentedTool {
+    name: String,
+    /// `(property, optional)` for every documented input argument, sorted.
+    inputs: Vec<(String, bool)>,
+}
+
+/// Parse the tool table in `docs/hilo-mcp.md`.
+///
+/// A row is `| `tool` | `{a, b?}` | output | description |`; a trailing `?`
+/// on an input name marks an argument that is *not* in the schema's
+/// `required` array.
+fn documented_tools(doc: &str) -> Vec<DocumentedTool> {
+    let mut tools = Vec::new();
+    for line in doc.lines() {
+        let line = line.trim();
+        if !line.starts_with("| `vfs_") {
+            continue;
+        }
+        let cells: Vec<&str> = line.trim_matches('|').split('|').map(str::trim).collect();
+        assert!(
+            cells.len() >= 2,
+            "a tool row needs Tool and Input cells: {line}"
+        );
+        let name = cells[0].trim_matches('`').to_string();
+        let inner = cells[1]
+            .trim_matches('`')
+            .trim()
+            .strip_prefix('{')
+            .and_then(|s| s.strip_suffix('}'))
+            .unwrap_or_else(|| {
+                panic!(
+                    "Input cell for {name} must be a `{{...}}` argument list, got {:?}",
+                    cells[1]
+                )
+            });
+        let mut inputs: Vec<(String, bool)> = inner
+            .split(',')
+            .map(str::trim)
+            .filter(|a| !a.is_empty())
+            .map(|arg| match arg.strip_suffix('?') {
+                Some(a) => (a.to_string(), true),
+                None => (arg.to_string(), false),
+            })
+            .collect();
+        inputs.sort();
+        tools.push(DocumentedTool { name, inputs });
+    }
+    assert!(
+        !tools.is_empty(),
+        "no `| `vfs_…`` tool rows found in {}",
+        doc_path()
+    );
+    tools
+}
+
+/// The `(property, optional)` pairs a tool's `inputSchema` declares, sorted.
+///
+/// `optional` means "absent from the schema's `required` array" — the same
+/// thing `?` means in the doc table.
+fn declared_inputs(schema: &serde_json::Value) -> Vec<(String, bool)> {
+    let props = schema
+        .get("properties")
+        .and_then(|p| p.as_object())
+        .unwrap_or_else(|| panic!("inputSchema has no `properties` object: {schema}"));
+    let required: Vec<&str> = schema
+        .get("required")
+        .and_then(|r| r.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_default();
+    let mut inputs: Vec<(String, bool)> = props
+        .keys()
+        .map(|k| (k.clone(), !required.contains(&k.as_str())))
+        .collect();
+    inputs.sort();
+    inputs
+}
+
+/// GAP-088: `docs/hilo-mcp.md` must describe exactly the tools `tools/list`
+/// returns — every documented tool and argument name must exist in the
+/// descriptors, every `inputSchema` property must be documented, and the
+/// documented required/optional split must match `required`.
+#[test]
+fn documented_tools_mirror_tools_list() {
+    let doc = doc_text();
+    let documented = documented_tools(&doc);
+    let tools = hilo_mcp::tools::list_tools();
+
+    assert_eq!(
+        documented.len(),
+        tools.len(),
+        "docs/hilo-mcp.md documents {} tools but tools/list returns {}",
+        documented.len(),
+        tools.len()
+    );
+
+    let mut seen = std::collections::HashSet::new();
+    for d in &documented {
+        assert!(
+            seen.insert(d.name.as_str()),
+            "duplicate tool row for {} in {}",
+            d.name,
+            doc_path()
+        );
+        let tool = tools
+            .iter()
+            .find(|t| t.name == d.name)
+            .unwrap_or_else(|| panic!("docs/hilo-mcp.md documents unknown tool {}", d.name));
+        assert_eq!(
+            d.inputs,
+            declared_inputs(&tool.input_schema),
+            "the documented input for {} must mirror its tools/list inputSchema \
+             (a `?` suffix marks an argument outside `required`)",
+            d.name
+        );
+    }
+
+    // The prose count claims must track the real tool count too.
+    for claim in [
+        format!("exposes {} tools", tools.len()),
+        format!("**Tools:** {}", tools.len()),
+        format!("exactly {} descriptors", tools.len()),
+    ] {
+        assert!(
+            doc.contains(&claim),
+            "docs/hilo-mcp.md must claim {claim:?}, mirroring tools/list"
+        );
+    }
+}
+
+/// GAP-088: every argument name documented for a tool must be accepted by the
+/// server. The call is issued with the documented names and type-appropriate
+/// dummies; the response may fail for any environmental reason (no graph, no
+/// such file), but it must never be the handler's "missing argument" error.
+#[test]
+fn documented_arguments_are_accepted_by_the_server() {
+    let documented = documented_tools(&doc_text());
+    let tools = hilo_mcp::tools::list_tools();
+
+    for d in &documented {
+        let tool = tools
+            .iter()
+            .find(|t| t.name == d.name)
+            .unwrap_or_else(|| panic!("docs/hilo-mcp.md documents unknown tool {}", d.name));
+        let props = tool.input_schema["properties"]
+            .as_object()
+            .expect("properties object");
+
+        let mut arguments = serde_json::Map::new();
+        for (name, _optional) in &d.inputs {
+            let declared = props.get(name).unwrap_or_else(|| {
+                panic!(
+                    "docs/hilo-mcp.md documents argument `{name}` for {} but its inputSchema \
+                     has no such property (its properties are {:?})",
+                    d.name,
+                    props.keys().collect::<Vec<_>>()
+                )
+            });
+            let value = match declared["type"].as_str().unwrap_or("string") {
+                "integer" => serde_json::json!(1),
+                "boolean" => {
+                    // `vfs_workspace_wipe` reads `dry_run: false` as "delete":
+                    // the probe only checks that the NAME is accepted, so it
+                    // always asks for the planning mode.
+                    serde_json::json!(true)
+                }
+                "array" => serde_json::json!([]),
+                _ => serde_json::json!("/nonexistent/hilo-gap088-probe"),
+            };
+            arguments.insert(name.clone(), value);
+        }
+
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 99,
+            "method": "tools/call",
+            "params": { "name": d.name, "arguments": arguments },
+        });
+        let resp = rpc(&request.to_string());
+
+        if let Some(err) = resp.get("error") {
+            let message = err["message"].as_str().unwrap_or_default();
+            // The handler's argument rejection is `missing '<name>' argument`
+            // (`missing path` for the older tools) — nothing else in the
+            // server or its dependencies produces that shape.
+            let rejected_an_argument =
+                message.contains("missing '") || message.starts_with("missing ");
+            assert!(
+                !rejected_an_argument,
+                "{} rejected a documented argument name: {message} (arguments: {arguments:?})",
+                d.name
+            );
+        }
+    }
+}
+
+// -------------------------------------------------------------------------
 // vfs_get_metadata — nonexistent file should produce an error, not a crash
 // -------------------------------------------------------------------------
 

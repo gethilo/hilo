@@ -1317,6 +1317,58 @@ fn serve_without_flag_errors() {
     );
 }
 
+/// Extract the tool count from `hilo serve --help`.
+///
+/// The help states it as `Exposes <N> vfs_* tools`; reading the number out of
+/// that sentence keeps the assertion tied to the tool set instead of to a
+/// literal copied into the test.
+fn advertised_tool_count(help: &str) -> usize {
+    const MARKER: &str = "Exposes ";
+    let start = help.find(MARKER).unwrap_or_else(|| {
+        panic!("help must state the tool count as `{MARKER}<N> vfs_* tools`, got:\n{help}")
+    }) + MARKER.len();
+    let rest = &help[start..];
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    assert!(
+        !digits.is_empty(),
+        "expected a digit after `{MARKER}` in the help text:\n{help}"
+    );
+    assert!(
+        rest[digits.len()..].starts_with(" vfs_* tools"),
+        "the advertised count must be followed by ` vfs_* tools`:\n{help}"
+    );
+    digits.parse().expect("tool count must fit in usize")
+}
+
+/// GAP-088: `hilo serve --help` advertises a tool count that must equal the
+/// number of descriptors `tools/list` returns — `hilo_mcp::tools::list_tools()`
+/// is the single source of truth (its absolute value, 17, is pinned by
+/// `hilo-mcp/tests/mcp_test.rs::test_tools_list`). A tool added or removed
+/// without updating the help text fails here, naming the number to write.
+#[test]
+fn serve_help_tool_count_matches_tools_list() {
+    let output = Command::new(BIN)
+        .args(["serve", "--help"])
+        .output()
+        .expect("failed to spawn hilo serve --help");
+
+    assert!(
+        output.status.success(),
+        "serve --help should exit 0: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let help = String::from_utf8_lossy(&output.stdout);
+    let advertised = advertised_tool_count(&help);
+    let actual = hilo_mcp::tools::list_tools().len();
+
+    assert_eq!(
+        advertised, actual,
+        "`hilo serve --help` advertises {advertised} tools but tools/list returns {actual} — \
+         update the Serve doc comment in hilo-cli/src/main.rs:\n{help}"
+    );
+}
+
 #[test]
 fn mcp_stdio_stdout_is_pure_jsonrpc() {
     use std::io::Write;

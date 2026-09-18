@@ -24,7 +24,7 @@ enum Commands {
     /// Dependency-graph discovery, statistics, and impact analysis.
     #[command(subcommand)]
     Graph(GraphCommand),
-    /// Run a Hilo server (MCP stdio transport). Exposes 15 vfs_* tools — see README.
+    /// Run a Hilo server (MCP stdio transport). Exposes 17 vfs_* tools — see README.
     Serve(ServeArgs),
     /// Manage virtual backends (S3, git, local).
     #[command(subcommand)]
