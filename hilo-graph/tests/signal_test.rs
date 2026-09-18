@@ -235,3 +235,118 @@ fn test_signal_signatures_include_line_numbers() {
         "signatures should include line numbers"
     );
 }
+
+/// GAP-084: `understand` output is a clean contract — no format template
+/// shipped as content, every tier header carries a body, and the budget knob
+/// is observable (non-decreasing size, 200 vs 40000 measurably different).
+#[test]
+fn test_signal_understand_output_contract_gap084() {
+    let db = GraphDB::open(":memory:").unwrap();
+    let edges: Vec<Edge> = (0..12)
+        .map(|i| edge(&format!("src/auth/mod{i}.go"), "src/auth/lib.go", "imports"))
+        .chain(std::iter::once(edge(
+            "src/auth/lib.go",
+            "src/main.go",
+            "imports",
+        )))
+        .collect();
+    db.insert_edges(&edges).unwrap();
+
+    // 48 functions per file → one DETAIL block is ≈3 KB, so a small budget
+    // cannot fit even the first block.
+    let reader = |path: &str| -> Option<String> {
+        if !path.ends_with(".go") {
+            return None;
+        }
+        let mut src = String::from("package fixture\n\n");
+        for i in 0..48 {
+            src.push_str(&format!(
+                "func Handler{i}(ctx context.Context) error {{\n    return nil\n}}\n\n"
+            ));
+        }
+        Some(src)
+    };
+
+    let text_at = |budget: usize| -> String {
+        understand_with_source(
+            &db,
+            "auth",
+            &SignalOpts {
+                token_budget: budget,
+                ..Default::default()
+            },
+            Some(reader),
+        )
+        .unwrap()
+        .text
+    };
+
+    let small = text_at(200);
+    let big = text_at(40000);
+
+    // 1. No format template ever ships as content.
+    for line in small.lines().chain(big.lines()) {
+        assert!(
+            !line.starts_with('<') && !line.starts_with("  - <"),
+            "placeholder-shaped line leaked: {line:?}"
+        );
+        assert!(!line.contains("<file>"), "template token leaked: {line:?}");
+    }
+
+    // 2. Every tier header carries a body — rows or the explicit empty marker.
+    for text in [&small, &big] {
+        let lines: Vec<&str> = text.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            if line.starts_with("## ") {
+                let body = lines.get(i + 1).map(|l| l.trim()).unwrap_or("");
+                assert!(!body.is_empty(), "bare tier header {line:?}");
+            }
+        }
+    }
+    assert!(
+        small.contains("(no files in this tier"),
+        "budget 200 must state why DETAIL is empty:\n{small}"
+    );
+    assert!(
+        big.contains(" [provenance="),
+        "budget 40000 must render real detail blocks"
+    );
+
+    // 3. Budget semantics: non-decreasing size, 200 != 40000.
+    let mut prev = 0usize;
+    for budget in [1usize, 200, 6000, 40000] {
+        let size = text_at(budget).len();
+        assert!(
+            size >= prev,
+            "budget {budget} shrank the output: {size} < {prev}"
+        );
+        prev = size;
+    }
+    assert!(
+        big.len() > small.len(),
+        "budget 40000 ({}) must differ from budget 200 ({})",
+        big.len(),
+        small.len()
+    );
+
+    // 4. Flat resolution stays budget-independent (documented on Resolution).
+    let flat_at = |budget: usize| -> String {
+        understand_with_source(
+            &db,
+            "auth",
+            &SignalOpts {
+                token_budget: budget,
+                resolution: Resolution::Flat,
+                ..Default::default()
+            },
+            Some(reader),
+        )
+        .unwrap()
+        .text
+    };
+    assert_eq!(
+        flat_at(200),
+        flat_at(40000),
+        "flat resolution ignores the budget by design"
+    );
+}

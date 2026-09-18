@@ -44,6 +44,12 @@ pub enum Resolution {
     #[default]
     Harmonic,
     /// Single-tier flat dump (all DETAIL).
+    ///
+    /// Budget-independent by design: `token_budget` sizes the harmonic tiers
+    /// (its DETAIL tier is capped at 60% of the budget in chars), while flat
+    /// exists to hand back every matched file's detail block, so it ignores
+    /// the budget entirely — changing `token_budget` never changes flat
+    /// output. Pinned by `understand_flat_resolution_ignores_budget`.
     Flat,
 }
 
@@ -95,6 +101,10 @@ pub struct SignalFile {
 #[derive(Debug, Clone)]
 pub struct SignalOpts {
     /// Approximate token budget (1 token ≈ 4 chars). Default 6000.
+    ///
+    /// Only the harmonic resolution consumes it: the DETAIL tier is capped at
+    /// `token_budget * 4 * 60 / 100` chars, so for a fixed graph the output
+    /// size is non-decreasing in this value. `Resolution::Flat` ignores it.
     pub token_budget: usize,
     /// Maximum anchor/seed files. Default 8.
     pub seed_limit: usize,
@@ -1472,13 +1482,27 @@ fn minify_whitespace(source: &str) -> String {
     result.join("\n")
 }
 
+/// Explicit empty-tier marker.
+///
+/// A tier with no rows prints this sentence instead of an empty body, so a
+/// `##` header is never followed by another header or by EOF (GAP-084).
+const EMPTY_TIER: &str = "(no files in this tier)";
+
 /// Format the full output text with MAP → SIGNATURES → DETAIL sections.
 ///
 /// Files are position-ordered: highest-signal at the edges (first and last),
 /// lower-signal in the middle. This beats "lost in the middle" for
 /// attention-limited models.
+///
+/// Output contract (GAP-084): every `##` header is followed by either real
+/// data rows or an explicit empty-tier marker. The format template itself
+/// (`<file> →`, `<file>:<line>  <signature>`, `<file> [provenance=…]`, …) is
+/// never emitted — it was indistinguishable from data to any parser reading
+/// the answer.
 fn format_output(files: &[SignalFile], anchors: &[String], opts: &SignalOpts) -> String {
     if files.is_empty() {
+        // Nothing matched: the MAP tier states that explicitly and no
+        // further tiers are emitted (there is nothing to tier).
         return format!(
             "## MAP\nNo files matched task: {:?}\n\n(No anchors found — try a different task description.)\n",
             anchors
@@ -1498,7 +1522,6 @@ fn format_output(files: &[SignalFile], anchors: &[String], opts: &SignalOpts) ->
 
     // ── MAP tier (15% budget) ──
     output.push_str("## MAP\n");
-    output.push_str("<file> →\n  - <key symbols, one per line>\n\n");
 
     // Render in the caller's relevance order (signal score descending,
     // anchor grade then path ascending as tie-breaks) so anchors lead the
@@ -1521,13 +1544,16 @@ fn format_output(files: &[SignalFile], anchors: &[String], opts: &SignalOpts) ->
 
     // ── SIGNATURES tier (25% budget) ──
     output.push_str("## SIGNATURES\n");
-    output.push_str("<file>:<line>  <signature>\n\n");
 
     let sig_files: Vec<&SignalFile> = files
         .iter()
         .filter(|f| f.tier == Tier::Signature || f.tier == Tier::Detail)
         .collect();
 
+    if sig_files.is_empty() {
+        output.push_str(EMPTY_TIER);
+        output.push('\n');
+    }
     for sf in &sig_files {
         if sf.signatures.is_empty() {
             output.push_str(&format!("{}:0  (no symbols)\n", sf.path));
@@ -1541,10 +1567,10 @@ fn format_output(files: &[SignalFile], anchors: &[String], opts: &SignalOpts) ->
 
     // ── DETAIL tier (60% budget) ──
     output.push_str("## DETAIL\n");
-    output.push_str("<file> [provenance=…, score=…]\n<source (whitespace-minified)>\n\n");
 
     let detail_budget_chars = opts.token_budget * 4 * 60 / 100;
     let mut used = 0usize;
+    let mut rendered = 0usize;
 
     for sf in &position_ordered {
         if let Some(ref detail) = sf.detail {
@@ -1561,6 +1587,20 @@ fn format_output(files: &[SignalFile], anchors: &[String], opts: &SignalOpts) ->
 
             output.push_str(&block);
             used += block.len();
+            rendered += 1;
+        }
+    }
+
+    if rendered == 0 {
+        if position_ordered.is_empty() {
+            output.push_str(EMPTY_TIER);
+            output.push('\n');
+        } else {
+            // Candidates existed but not even the first block fit the 60%
+            // slice — say so instead of shipping a bare header.
+            output.push_str(&format!(
+                "{EMPTY_TIER} — no detail block fits the {detail_budget_chars}-char budget\n"
+            ));
         }
     }
 
@@ -1625,6 +1665,68 @@ mod tests {
 
     fn edge(from: &str, to: &str, rel: &str) -> Edge {
         Edge::new(from, to, rel)
+    }
+
+    /// Body lines of a tier: everything after its `## <name>` header up to the
+    /// next `##` header.
+    fn tier_body<'a>(text: &'a str, header: &str) -> Vec<&'a str> {
+        text.split(header)
+            .nth(1)
+            .unwrap_or_else(|| panic!("{header} tier must exist"))
+            .lines()
+            .take_while(|l| !l.starts_with("## "))
+            .collect()
+    }
+
+    /// First non-blank body line of a tier — fails loudly when the header is
+    /// bare (GAP-084: a tier header must always be followed by a body).
+    fn tier_first_body_line<'a>(text: &'a str, header: &str) -> &'a str {
+        tier_body(text, header)
+            .into_iter()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or_else(|| panic!("{header} is a bare header (no body):\n{text}"))
+    }
+
+    fn detail_block_count(text: &str) -> usize {
+        text.lines().filter(|l| l.contains(" [provenance=")).count()
+    }
+
+    /// Source-reader fixture: every `*.go` path gets the same 48-function Go
+    /// body, so one DETAIL block is ≈3 KB — big enough that a small
+    /// `token_budget` cannot fit even the first block.
+    fn budget_reader(path: &str) -> Option<String> {
+        if !path.ends_with(".go") {
+            return None;
+        }
+        let mut src = String::from("package fixture\n\n");
+        for i in 0..48 {
+            src.push_str(&format!(
+                "func Handler{i}(ctx context.Context) error {{\n    return nil\n}}\n\n"
+            ));
+        }
+        Some(src)
+    }
+
+    /// 12 files under `src/auth/` wired to a shared lib: enough Detail-tier
+    /// candidates that the 60% budget slice bites at mid-size budgets.
+    fn budget_fixture() -> GraphDB {
+        let db = GraphDB::open(":memory:").unwrap();
+        let edges: Vec<Edge> = (0..12)
+            .map(|i| edge(&format!("src/auth/mod{i}.go"), "src/auth/lib.go", "imports"))
+            .chain(std::iter::once(edge(
+                "src/auth/lib.go",
+                "src/main.go",
+                "imports",
+            )))
+            .collect();
+        db.insert_edges(&edges).unwrap();
+        db
+    }
+
+    fn harmonic_text(db: &GraphDB, opts: &SignalOpts) -> String {
+        understand_with_source(db, "auth", opts, Some(budget_reader))
+            .unwrap()
+            .text
     }
 
     #[test]
@@ -1714,6 +1816,18 @@ mod tests {
         assert!(result.files.is_empty());
         assert!(result.anchors.is_empty());
         assert!(result.text.contains("No files matched"));
+        // GAP-084: even the empty result never ships a bare header — the one
+        // tier it emits states the emptiness explicitly.
+        let body = result
+            .text
+            .split("## MAP")
+            .nth(1)
+            .and_then(|rest| rest.lines().find(|l| !l.trim().is_empty()))
+            .expect("empty result must still carry a MAP body");
+        assert!(
+            body.starts_with("No files matched"),
+            "MAP must state the empty result, got {body:?}"
+        );
     }
 
     #[test]
@@ -1822,7 +1936,7 @@ mod tests {
 
         let first_entry = map
             .lines()
-            .find(|l| !l.starts_with("<file>") && !l.starts_with("  - ") && !l.trim().is_empty())
+            .find(|l| !l.trim().is_empty())
             .expect("MAP must have at least one entry");
         assert!(
             first_entry.starts_with(anchor_line),
@@ -2017,6 +2131,273 @@ mod tests {
             "should have SIGNATURES tier"
         );
         assert!(result.text.contains("## DETAIL"), "should have DETAIL tier");
+
+        // GAP-084: each tier header is followed by a real body — rows or the
+        // explicit empty marker — never by nothing and never by a template.
+        for header in ["## MAP", "## SIGNATURES", "## DETAIL"] {
+            let first = tier_first_body_line(&result.text, header);
+            assert!(
+                !first.starts_with('<'),
+                "{header} body must be real content, got {first:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn understand_output_has_no_format_placeholders() {
+        let db = budget_fixture();
+        for opts in [
+            SignalOpts::default(),
+            SignalOpts {
+                token_budget: 1,
+                ..Default::default()
+            },
+            SignalOpts {
+                token_budget: 40000,
+                ..Default::default()
+            },
+            SignalOpts {
+                resolution: Resolution::Flat,
+                ..Default::default()
+            },
+        ] {
+            let text = harmonic_text(&db, &opts);
+            for line in text.lines() {
+                for token in [
+                    "<file>",
+                    "<key symbols",
+                    "<signature>",
+                    "<source (whitespace-minified)>",
+                    "[provenance=…",
+                ] {
+                    assert!(
+                        !line.contains(token),
+                        "format template leaked into output as content ({token}): {line:?}"
+                    );
+                }
+                assert!(
+                    !line.starts_with('<') && !line.starts_with("  - <"),
+                    "placeholder-shaped line leaked: {line:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn understand_never_ships_a_bare_tier_header() {
+        let db = budget_fixture();
+        let cases = [
+            SignalOpts::default(),
+            SignalOpts {
+                token_budget: 1,
+                ..Default::default()
+            },
+            SignalOpts {
+                token_budget: 40000,
+                ..Default::default()
+            },
+            // Zero seed limit → no anchors → the empty-graph early return:
+            // its single tier must still carry a body.
+            SignalOpts {
+                seed_limit: 0,
+                ..Default::default()
+            },
+        ];
+
+        for opts in cases {
+            let text = harmonic_text(&db, &opts);
+            let lines: Vec<&str> = text.lines().collect();
+            for (i, line) in lines.iter().enumerate() {
+                if line.starts_with("## ") {
+                    let body = lines.get(i + 1).map(|l| l.trim()).unwrap_or("");
+                    assert!(
+                        !body.is_empty(),
+                        "tier header {line:?} has no body (opts {opts:?}):\n{text}"
+                    );
+                    assert!(
+                        !body.starts_with("## "),
+                        "tier header {line:?} is followed by another header"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn understand_empty_tiers_state_they_are_empty() {
+        // Direct formatter contract: a tier with no candidates must say so.
+        // An all-Map file set is unreachable through `understand()` — a zero
+        // seed_limit yields no anchors at all, which takes the empty-graph
+        // path — so drive the formatter itself.
+        let files = vec![SignalFile {
+            path: "src/auth/only.rs".into(),
+            symbols: vec!["Auth::new".into()],
+            signatures: vec![],
+            tier: Tier::Map,
+            provenance: "ast_exact".into(),
+            signal_score: 1.0,
+            detail: None,
+        }];
+        let text = format_output(
+            &files,
+            &["src/auth/only.rs".to_string()],
+            &SignalOpts::default(),
+        );
+
+        assert!(
+            tier_first_body_line(&text, "## MAP").starts_with("src/auth/only.rs →"),
+            "MAP must still render its real row"
+        );
+        assert_eq!(
+            tier_first_body_line(&text, "## SIGNATURES").trim(),
+            "(no files in this tier)"
+        );
+        assert_eq!(
+            tier_first_body_line(&text, "## DETAIL").trim(),
+            "(no files in this tier)"
+        );
+    }
+
+    #[test]
+    fn understand_detail_tier_names_a_budget_too_small_for_one_block() {
+        let db = budget_fixture();
+        let text = harmonic_text(
+            &db,
+            &SignalOpts {
+                token_budget: 1,
+                ..Default::default()
+            },
+        );
+
+        let first = tier_first_body_line(&text, "## DETAIL");
+        assert!(
+            first.starts_with("(no files in this tier"),
+            "DETAIL must announce the empty tier, got {first:?}"
+        );
+        assert!(
+            first.contains("no detail block fits"),
+            "the budget-starved marker must name the cause, got {first:?}"
+        );
+        // Premise: at a large budget the same fixture renders real blocks.
+        let big = harmonic_text(
+            &db,
+            &SignalOpts {
+                token_budget: 40000,
+                ..Default::default()
+            },
+        );
+        assert!(
+            detail_block_count(&big) > 0,
+            "fixture must render detail blocks at a large budget"
+        );
+    }
+
+    #[test]
+    fn understand_output_size_is_monotonic_in_budget() {
+        let db = budget_fixture();
+        let mut sizes: Vec<(usize, usize)> = Vec::new();
+        for budget in [1usize, 200, 6000, 40000] {
+            let text = harmonic_text(
+                &db,
+                &SignalOpts {
+                    token_budget: budget,
+                    ..Default::default()
+                },
+            );
+            sizes.push((budget, text.len()));
+        }
+
+        for pair in sizes.windows(2) {
+            assert!(
+                pair[1].1 >= pair[0].1,
+                "budget {} produced {} bytes, shrinking from budget {} ({} bytes)",
+                pair[1].0,
+                pair[1].1,
+                pair[0].0,
+                pair[0].1
+            );
+        }
+        assert!(
+            sizes[3].1 > sizes[1].1,
+            "--budget 200 ({} bytes) must differ from --budget 40000 ({} bytes)",
+            sizes[1].1,
+            sizes[3].1
+        );
+        assert!(
+            sizes[2].1 > sizes[1].1,
+            "--budget 6000 ({} bytes) must admit more detail than --budget 200 ({} bytes)",
+            sizes[2].1,
+            sizes[1].1
+        );
+    }
+
+    #[test]
+    fn understand_budget_split_is_observable_in_detail_blocks() {
+        let db = budget_fixture();
+        let blocks = |budget: usize| {
+            let text = harmonic_text(
+                &db,
+                &SignalOpts {
+                    token_budget: budget,
+                    ..Default::default()
+                },
+            );
+            (detail_block_count(&text), text.len())
+        };
+
+        let (small_blocks, small_bytes) = blocks(200);
+        let (mid_blocks, mid_bytes) = blocks(6000);
+        let (big_blocks, big_bytes) = blocks(40000);
+
+        assert_eq!(small_blocks, 0, "200 tokens = 480 chars fits no block");
+        assert!(mid_blocks > 0, "6000 tokens must fit detail blocks");
+        assert!(
+            big_blocks > mid_blocks,
+            "40000 tokens must fit strictly more blocks than 6000 ({big_blocks} vs {mid_blocks})"
+        );
+        assert!(
+            small_bytes < mid_bytes && mid_bytes < big_bytes,
+            "byte sizes must grow with the budget: {small_bytes} / {mid_bytes} / {big_bytes}"
+        );
+    }
+
+    #[test]
+    fn understand_flat_resolution_ignores_budget() {
+        let db = budget_fixture();
+        let flat = |budget: usize| {
+            understand_with_source(
+                &db,
+                "auth",
+                &SignalOpts {
+                    token_budget: budget,
+                    resolution: Resolution::Flat,
+                    ..Default::default()
+                },
+                Some(budget_reader),
+            )
+            .unwrap()
+            .text
+        };
+
+        let small = flat(200);
+        let big = flat(40000);
+
+        assert!(
+            small.contains("DETAIL (flat)"),
+            "flat resolution must emit its single tier"
+        );
+        assert!(
+            detail_block_count(&small) > 0,
+            "flat output must carry real detail blocks"
+        );
+        assert_eq!(
+            small, big,
+            "Resolution::Flat is budget-independent by design (documented on the enum)"
+        );
+        assert!(
+            !small.contains("no detail block fits"),
+            "flat never reports a budget cut"
+        );
     }
 
     #[test]

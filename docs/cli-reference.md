@@ -152,11 +152,24 @@ Multi-resolution harmonic context output for a natural-language task.
 hilo graph understand "how does plugin execution get sandboxed"
 ```
 
+Output is three tiers — `## MAP` (file → symbols), `## SIGNATURES`
+(`file:line  signature`) and `## DETAIL` (`file [provenance=…, score=…]` plus
+whitespace-minified source). A tier with nothing to show says
+`(no files in this tier)` instead of printing an empty body.
+
 Token budget override (default: 6000):
 
 ```bash
 hilo graph understand "how does plugin execution get sandboxed" --budget 12000
 ```
+
+The budget sizes the harmonic tiers only — it caps the `DETAIL` tier at 60% of
+the budget in characters, so for a fixed graph the output is non-decreasing in
+`--budget` (higher budgets admit more detail blocks; `--budget 1` and
+`--budget 200` both fit none and report the empty tier). The flat resolution
+(MCP `vfs_graph_understand` with `resolution: "flat"`) ignores the budget by
+design: it returns every matched file's detail block. The CLI itself only
+exposes the harmonic resolution.
 
 ### `search`
 
