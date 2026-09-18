@@ -1025,3 +1025,87 @@ tasks:
   status: complete
   created_at: '2026-09-17T07:36:08.106842+00:00'
   completed_at: '2026-09-17T07:54:04.451747+00:00'
+- id: QA-WARPFS-2-2
+  title: 'Board text-integrity: repair over-escaped rows + detect the class in the
+    reconciliation verifier'
+  criteria:
+  - '1) .coding-hermes/board/tasks.jsonl: the 4 rows with over-escaped string fields
+    (QA-WARPFS-1 detail+review_notes, QA-WARPFS-2 detail+review_notes, QA-WARPFS-1-2
+    detail, QA-WARPFS-3-4 detail+review_notes) have exactly one backslash-escaping
+    level removed; decoded values equal the pre-repair values with one level un-escaped;
+    row count still 129; every row parses with python json.loads and jq; only those
+    4 lines differ (git diff shows 4 changed lines). 2) scripts/verify_board_reconciliation.py
+    gains an over-escaped-text detection check that reports 0 findings on the repaired
+    board and exactly those 4 rows when run against the de9374c revision content.
+    3) scripts/tests/test_board_reconciliation.py gains regression tests: synthetic
+    over-escaped row is flagged; real repaired board is clean; existing 25 tests still
+    pass. 4) Evidence (before/after parse counts, jq counts, affected ids/fields,
+    exact commands) is in the commit body; commit carries the Co-authored-by trailer;
+    work pushed to origin/master.'
+  status: complete
+  created_at: '2026-09-17T08:16:55.469410+00:00'
+  completed_at: '2026-09-17T08:30:39.942631+00:00'
+- id: QA-WARPFS-2-2-R2
+  title: Verifier live mode accepts artifact-documented reidentification when closing
+    a reidentified row
+  criteria:
+  - '1) verify_board_reconciliation.py: a pending->complete flip is accepted as documented
+    only when the reconciliation artifact''s reidentified_rows maps the base row (original_line+original_id)
+    to the live row id, the live row is complete with the same title and a non-empty
+    completion marker; flips without the artifact entry, with a different title, or
+    without completion evidence are still reported. 2) 4 new regression tests cover
+    the real case plus the three negatives; all pre-existing tests untouched and green
+    (39 total). 3) python3 scripts/verify_board_reconciliation.py --quiet and --live
+    --quiet both exit 0 with 27 checks passed. 4) Commit carries the Co-authored-by
+    trailer and is pushed to origin/master with 0 unpushed.'
+  status: complete
+  created_at: '2026-09-17T08:34:04.548024+00:00'
+  completed_at: '2026-09-17T08:45:50.741439+00:00'
+- id: GAP-081
+  title: 'Phase 1: emit service_call edges for Go gRPC client/server call sites so
+    impact/search see cross-service dependencies'
+  criteria:
+  - '1) New pass in hilo-cli/src/commands/graph.rs (mirroring discover_test_associations)
+    scans discovered non-generated .go files: a file that calls pb.New<Svc>ServiceClient(
+    is a caller, a file that calls pb.Register<Svc>Server( is a provider; emit Edge{from:
+    caller rel, to: provider rel, rel: ''service_call'', stable provenance, confidence
+    1.0}. Files containing the protoc-gen-go generated marker (e.g. ''Code generated
+    by protoc-gen-go'') must NEVER be a service_call endpoint, and function-definition
+    lines (''func New...Client('' / ''func Register...Server('') must not count as
+    call sites.'
+  - '2) LIVE acceptance on a fresh copy of /tmp/bakeoff/microservices-demo warmed
+    with the new binary: edges.jsonl contains exactly these 5 service_call pairs -
+    src/frontend/rpc.go -> src/productcatalogservice/server.go, src/frontend/rpc.go
+    -> src/shippingservice/main.go, src/frontend/handlers.go -> src/checkoutservice/main.go,
+    src/checkoutservice/main.go -> src/productcatalogservice/server.go, src/checkoutservice/main.go
+    -> src/shippingservice/main.go - and no service_call endpoint path contains /genproto/.'
+  - '3) LIVE acceptance: in that warmed corpus, ''hilo graph impact src/productcatalogservice/server.go''
+    lists src/frontend/rpc.go and src/checkoutservice/main.go as dependents (pre-change
+    baseline printed ''No dependents found'').'
+  - '4) Additivity: the pass adds ONLY service_call edges. On the same corpus the
+    imports/tested_by edge sets are unchanged versus the pre-change baseline recorded
+    by the foreman (393 imports / 33 tested_by / 4 tests raw lines, stats 424 distinct
+    / 59 files).'
+  - '5) The service-call pass must NOT be skipped by the full-parse-cache-hit early
+    return in run_warm_in: warming a corpus that already has a fully valid parse cache
+    but no service_call lines in edges.jsonl must restore those lines; second warm
+    adds zero duplicate lines (append_edges_deduped idempotence).'
+  - 6) A regression test warms a tempdir fixture (provider file with a Register call
+    site, two caller files with New...Client call sites, plus a generated *_grpc.pb.go
+    decoy that defines both anchor forms) and asserts the exact expected service_call
+    edge set; the worker reports the falsification run (removing the generated-file
+    exclusion or the pass must make the test fail).
+  - '7) Gates green: cargo check --workspace exit 0; cargo fmt --all --check clean;
+    bash scripts/rust-lint.sh exit 0; RUSTFLAGS=''-D warnings'' cargo test --workspace
+    --no-run exit 0; cargo test -p hilo_graph --lib green; cargo test -p hilo_cli
+    green. Exactly ONE commit by the worker (git rev-list --count c4fe3b6..HEAD ==
+    1), its message contains ''Addresses GAP-081'' and the ''Co-authored-by: Alexis
+    Okuwa <wojonstech@gmail.com>'' trailer, author identity unchanged (totalwindupflightsystems).
+    The worker does not push; the FOREMAN pushes after the gates pass (tick doctrine),
+    so the accepted end state is origin/master == HEAD with git rev-list --count origin/master..HEAD
+    == 0. This criterion supersedes an earlier wording that required ''no push'' in
+    the repo state at judge time - that wording contradicted the mandatory foreman
+    push and failed a correct implementation (verdict 61551f68).'
+  status: complete
+  created_at: '2026-09-18T02:15:27.420324+00:00'
+  completed_at: '2026-09-18T02:15:31.727415+00:00'
