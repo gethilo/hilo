@@ -1109,3 +1109,33 @@ tasks:
   status: complete
   created_at: '2026-09-18T02:15:27.420324+00:00'
   completed_at: '2026-09-18T02:15:31.727415+00:00'
+- id: GAP-081-P2
+  title: service_contract edges from proto service declarations + contract anchors
+    queryable via impact/related
+  criteria:
+  - AC1 hilo-cli/src/commands/graph.rs defines SERVICE_CONTRACT_REL="service_contract"
+    and SERVICE_CONTRACT_PROVENANCE="grpc_proto" and a discover_service_contracts
+    pass wired into run_warm_in whose PERF-002 fast-path guard covers the new dimension
+  - AC2 the pass locates *.proto files with the same pruning semantics as collect_source_files,
+    ignores commented-out service declarations, emits one service_contract edge per
+    (caller file, declaring proto file) pair and emits nothing for a service with
+    no caller
+  - AC3 new unit tests exist in hilo-cli graph.rs tests mod and hilo-graph graph.rs
+    tests mod; cargo test -p hilo-cli and cargo test -p hilo_graph --lib exit 0
+  - 'AC4 live on a fresh scratch copy of /tmp/bakeoff/microservices-demo: grep -c
+    service_contract .vfs/graph/edges.jsonl > 0 and hilo graph impact protos/demo.proto
+    exits 0 listing the Go caller files (src/checkoutservice/main.go, src/frontend/rpc.go)
+    with no PERF-004 error'
+  - 'AC5 additivity: REMOVED == 0 versus the pre-phase-1 430-edge baseline and the
+    ADDED count is reported'
+  - 'AC6 idempotence: a second hilo graph warm on the same warmed corpus adds 0 lines
+    to edges.jsonl'
+  - 'AC7 PERF-004 preserved: hilo graph impact README.md still exits 1 with the unchanged
+    not-an-indexable-source-file error'
+  - 'AC8 only hilo-cli/src/commands/graph.rs and hilo-graph/src/graph.rs are modified:
+    no Cargo.toml/Cargo.lock, no board or .gitreins changes'
+  - AC9 the work is committed in this repo (git log shows the new commit and its hash
+    is reported)
+  status: complete
+  created_at: '2026-09-18T04:55:20.656680+00:00'
+  completed_at: '2026-09-18T05:15:27.665658+00:00'
