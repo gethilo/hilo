@@ -1246,3 +1246,20 @@ tasks:
   status: complete
   created_at: '2026-09-18T12:53:15.978692+00:00'
   completed_at: '2026-09-18T12:56:28.808115+00:00'
+- id: GAP-085
+  title: graph module must fail loudly on an unknown prefix
+  criteria:
+  - 'Unknown prefix fails loudly: the built binary with ''graph module no/such/dir''
+    exits non-zero and the error text contains the prefix, from any cwd, warm or unwarmed'
+  - 'Known prefix unaffected: ''graph module hilo-graph/src'' in the repo still exits
+    0 and prints Files and Edges counts greater than zero'
+  - 'Real-but-uncovered prefix is honest: when the prefix is an existing directory
+    with zero graph files the command exits 0 and prints the exact phrase No files
+    in the graph under plus the prefix'
+  - 'Unit coverage: a hilo-cli unit test asserts both the unknown-prefix error and
+    the empty-but-real-prefix outcome, and the tests pass'
+  - 'Gates: cargo fmt --all --check clean; cargo test -p hilo-cli green; cargo test
+    -p hilo_graph --lib green'
+  status: complete
+  created_at: '2026-09-18T13:22:28.274665+00:00'
+  completed_at: '2026-09-18T14:08:01.151782+00:00'
