@@ -6,6 +6,11 @@ target/
 .vfs/graph/graph.db.wal
 .vfs/graph/graph.duckdb
 .vfs/graph/.last_warm
+# GAP-086: per-file parse cache (mtime+size keyed) and the reconcile stamp.
+# Rebuildable runtime state — but NOT a wildcard: `.vfs/manifest.yaml` and
+# `.vfs/graph/edges.jsonl` are inventory truth and stay tracked.
+.vfs/graph/.parse_cache.json
+.vfs/graph/.last_reconcile
 
 # GitReins local state
 .gitreins/tasks.yaml

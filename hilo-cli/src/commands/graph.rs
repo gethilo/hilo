@@ -211,6 +211,13 @@ pub fn run_warm_in(
     // home directory including dependency and cache trees.
     guard::ensure_not_home_with(cwd, allow_home, home)?;
 
+    // GAP-086: warm requires a Hilo project root. Discovery used to run in
+    // any directory and leave a partial `.vfs/graph/` behind (parse cache,
+    // edges.jsonl, DuckDB cache) with no manifest and none of the standard
+    // `.vfs/` layout — a tree that looks initialized but is not. Refuse
+    // instead, naming the fix; `hilo init` creates the full layout.
+    guard::ensure_project_root(cwd)?;
+
     // PERF-005: explicit per-path re-include overrides from the manifest
     // (`graph.include_paths`). No manifest (or no field) = empty list, i.e.
     // pure default behavior.
@@ -2047,12 +2054,13 @@ fn glob_matches(pattern: &str, path: &str) -> bool {
 // Rule engine — manifest-driven SQL queries against the graph
 // ---------------------------------------------------------------------------
 
-/// Default manifest paths (relative to CWD).
-const MANIFEST_PATHS: &[&str] = &["manifest.yaml", ".vfs/manifest.yaml"];
-
 /// Load the manifest from the first available path.
+///
+/// The candidate list is shared with the project precondition
+/// ([`guard::ensure_project_root`]) so a directory warm accepts can never
+/// disagree with a directory the loader can read.
 fn load_manifest() -> Result<hilo_core::manifest::Manifest> {
-    for path in MANIFEST_PATHS {
+    for path in guard::MANIFEST_PATHS {
         if std::path::Path::new(path).exists() {
             return Ok(hilo_core::manifest::Manifest::from_file(path)?);
         }
@@ -2064,7 +2072,7 @@ fn load_manifest() -> Result<hilo_core::manifest::Manifest> {
 
 /// Load the workspace manifest from the first available path.
 fn load_workspace_manifest() -> Result<hilo_core::workspace::WorkspaceManifest> {
-    for path in MANIFEST_PATHS {
+    for path in guard::MANIFEST_PATHS {
         if std::path::Path::new(path).exists() {
             return Ok(hilo_core::workspace::WorkspaceManifest::load(path)?);
         }
@@ -2769,6 +2777,37 @@ mod tests {
         anyhow::bail!("no manifest in fixture")
     }
 
+    /// GAP-086: warm requires a project root, so every fixture that expects
+    /// warm to proceed must look like a project. Writes the manifest `hilo
+    /// init` produces (`.vfs/manifest.yaml`) and lets the code under test
+    /// create the rest of the `.vfs/` layout.
+    fn write_fixture_manifest(root: &Path) {
+        std::fs::create_dir_all(root.join(".vfs")).unwrap();
+        std::fs::write(
+            root.join(".vfs").join("manifest.yaml"),
+            "version: 2\nproject:\n  name: fixture\n",
+        )
+        .unwrap();
+    }
+
+    /// Warm a fixture project that already has a manifest on disk.
+    fn warm_project_fixture(
+        root: &Path,
+        home: &Path,
+        load_manifest_fn: &dyn Fn(&Path) -> Result<hilo_core::manifest::Manifest>,
+    ) -> Result<()> {
+        write_fixture_manifest(root);
+        run_warm_in(
+            root,
+            false,
+            None,
+            false,
+            false,
+            Some(home.to_path_buf()),
+            load_manifest_fn,
+        )
+    }
+
     fn manifest_with_include(paths: &[&str]) -> hilo_core::manifest::Manifest {
         let mut yaml = String::from("project:\n  name: fixture\ngraph:\n  include_paths:\n");
         for p in paths {
@@ -2818,6 +2857,7 @@ mod tests {
     fn warm_allow_home_overrides() {
         let home = TempDir::new().unwrap();
         std::fs::write(home.path().join("keep.rs"), "fn keep() {}\n").unwrap();
+        write_fixture_manifest(home.path());
 
         run_warm_in(
             home.path(),
@@ -2838,16 +2878,7 @@ mod tests {
         let project = TempDir::new().unwrap();
         std::fs::write(project.path().join("lib.rs"), "fn lib() {}\n").unwrap();
 
-        run_warm_in(
-            project.path(),
-            false,
-            None,
-            false,
-            false,
-            Some(home.path().to_path_buf()),
-            &no_manifest,
-        )
-        .unwrap();
+        warm_project_fixture(project.path(), home.path(), &no_manifest).unwrap();
         assert_eq!(warm_cache_keys(project.path()), vec!["lib.rs".to_string()]);
     }
 
@@ -2872,16 +2903,7 @@ mod tests {
         let manifest = manifest_with_include(&["vendor/critical"]);
         let loader = move |_root: &Path| Ok(manifest.clone());
 
-        run_warm_in(
-            project.path(),
-            false,
-            None,
-            false,
-            false,
-            Some(home.path().to_path_buf()),
-            &loader,
-        )
-        .unwrap();
+        warm_project_fixture(project.path(), home.path(), &loader).unwrap();
 
         let keys = warm_cache_keys(project.path());
         assert!(
@@ -2896,6 +2918,86 @@ mod tests {
             keys.contains(&"lib.rs".to_string()),
             "control file: {keys:?}"
         );
+    }
+
+    // ======================================================================
+    // GAP-086: warm requires a project root (manifest precondition)
+    // ======================================================================
+
+    #[test]
+    fn warm_without_manifest_refuses_and_creates_no_state() {
+        let home = TempDir::new().unwrap();
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("lib.rs"), "fn lib() {}\n").unwrap();
+
+        let err = run_warm_in(
+            dir.path(),
+            false,
+            None,
+            false,
+            false,
+            Some(home.path().to_path_buf()),
+            &no_manifest,
+        )
+        .unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("hilo init"), "error must name the fix: {msg}");
+        assert!(
+            !dir.path().join(".vfs").exists(),
+            "a refused warm must not scatter .vfs state into a non-project tree"
+        );
+    }
+
+    #[test]
+    fn warm_allow_home_does_not_bypass_the_project_gate() {
+        // --allow-home overrides the HOME refusal only; a directory that is
+        // not a project is still refused, with the same actionable error.
+        let home = TempDir::new().unwrap();
+        std::fs::write(home.path().join("keep.rs"), "fn keep() {}\n").unwrap();
+
+        let err = run_warm_in(
+            home.path(),
+            false,
+            None,
+            false,
+            true, // --allow-home
+            Some(home.path().to_path_buf()),
+            &no_manifest,
+        )
+        .unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("hilo init"), "error must name the fix: {msg}");
+        assert!(
+            !msg.contains("--allow-home"),
+            "the project gate, not the HOME gate, must be the failure here: {msg}"
+        );
+        assert!(!home.path().join(".vfs").exists());
+    }
+
+    #[test]
+    fn warm_accepts_root_level_manifest_project() {
+        // A root-level `manifest.yaml` (no `.vfs/` yet) is a valid project —
+        // it is the older layout the CLI's manifest lookup still honors.
+        let home = TempDir::new().unwrap();
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("lib.rs"), "fn lib() {}\n").unwrap();
+        std::fs::write(
+            dir.path().join("manifest.yaml"),
+            "version: 2\nproject:\n  name: legacy\n",
+        )
+        .unwrap();
+
+        run_warm_in(
+            dir.path(),
+            false,
+            None,
+            false,
+            false,
+            Some(home.path().to_path_buf()),
+            &no_manifest,
+        )
+        .unwrap();
+        assert_eq!(warm_cache_keys(dir.path()), vec!["lib.rs".to_string()]);
     }
 
     // ======================================================================
@@ -3050,6 +3152,8 @@ mod tests {
     }
 
     fn warm_fixture(root: &Path, home: &Path) {
+        // GAP-086: warm requires a project root; these fixtures are projects.
+        write_fixture_manifest(root);
         run_warm_in(
             root,
             false,

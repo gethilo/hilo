@@ -1,6 +1,12 @@
 //! PERF-005: refuse destructive project-root defaults (HOME) unless the user
 //! explicitly overrides with `--allow-home`.
 //!
+//! GAP-086: also refuse to *operate* on a directory that is not a Hilo
+//! project. `graph warm` walked any directory and left a partial `.vfs/graph/`
+//! (parse cache, `edges.jsonl`, DuckDB cache) behind, and `serve --mcp`
+//! happily served a zeroed graph — both produced state or answers from a tree
+//! that is not a project, and neither named the fix.
+//!
 //! Both `hilo init` (writes `.vfs/` into the current directory) and
 //! `hilo graph warm` (recursively parses everything under the current
 //! directory, including dependency/cache trees) are unsafe when the effective
@@ -10,6 +16,14 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
+
+/// Manifest filenames that make a directory a Hilo project root, in the
+/// precedence order used by the graph commands ([`crate::commands::graph`]).
+///
+/// A root-level `manifest.yaml` is accepted because the CLI has always read
+/// manifests from either location; `hilo init` writes the `.vfs/` form (and
+/// the standard `.vfs/` layout alongside it).
+pub const MANIFEST_PATHS: &[&str] = &["manifest.yaml", ".vfs/manifest.yaml"];
 
 /// Default prune names for graph source discovery (PERF-005).
 ///
@@ -79,6 +93,35 @@ pub fn ensure_not_home_with(cwd: &Path, allow_home: bool, home: Option<PathBuf>)
     Ok(())
 }
 
+/// The manifest that makes `root` a Hilo project, if one is present.
+///
+/// Returns the first existing candidate of [`MANIFEST_PATHS`] (root-level
+/// `manifest.yaml` before `.vfs/manifest.yaml`, both relative to `root`).
+pub fn manifest_path(root: &Path) -> Option<PathBuf> {
+    MANIFEST_PATHS
+        .iter()
+        .map(|rel| root.join(rel))
+        .find(|candidate| candidate.exists())
+}
+
+/// Refuse to operate on a directory that is not a Hilo project root.
+///
+/// GAP-086: callers that require a project (`graph warm`, `serve --mcp`)
+/// use this so a missing manifest fails loudly, naming `hilo init`, instead
+/// of scattering a partial `.vfs/graph/` into an unrelated tree or answering
+/// from a zeroed graph. An initialized project with no edges yet is a valid
+/// project: only the manifest's presence is checked, never its contents.
+pub fn ensure_project_root(root: &Path) -> Result<()> {
+    if manifest_path(root).is_some() {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "no Hilo project found in {}: expected manifest.yaml or .vfs/manifest.yaml; \
+         run `hilo init` first",
+        root.display()
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -136,5 +179,59 @@ mod tests {
         std::os::unix::fs::symlink(home.path(), &link).unwrap();
         let err = ensure_not_home_with(&link, false, Some(home.path().to_path_buf())).unwrap_err();
         assert!(format!("{err:#}").contains("--allow-home"));
+    }
+
+    // ======================================================================
+    // GAP-086: project-root precondition (manifest presence)
+    // ======================================================================
+
+    #[test]
+    fn project_root_accepts_vfs_manifest() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".vfs")).unwrap();
+        std::fs::write(dir.path().join(".vfs/manifest.yaml"), "version: 2\n").unwrap();
+        ensure_project_root(dir.path()).unwrap();
+        assert_eq!(
+            manifest_path(dir.path()),
+            Some(dir.path().join(".vfs/manifest.yaml"))
+        );
+    }
+
+    #[test]
+    fn project_root_accepts_root_level_manifest() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("manifest.yaml"), "version: 2\n").unwrap();
+        ensure_project_root(dir.path()).unwrap();
+        assert_eq!(
+            manifest_path(dir.path()),
+            Some(dir.path().join("manifest.yaml"))
+        );
+    }
+
+    #[test]
+    fn project_root_without_manifest_names_init() {
+        let dir = TempDir::new().unwrap();
+        let err = ensure_project_root(dir.path()).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("hilo init"), "error must name the fix: {msg}");
+        assert!(
+            msg.contains(&dir.path().display().to_string()),
+            "error must name the directory it refused: {msg}"
+        );
+        assert_eq!(manifest_path(dir.path()), None);
+    }
+
+    #[test]
+    fn project_root_does_not_require_a_vfs_directory() {
+        // The precondition is the manifest, not the layout: a project rooted
+        // at a tree whose `.vfs/` has not been created yet is still refused,
+        // and an initialized-but-empty project is accepted (no edge files).
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("lib.rs"), "fn lib() {}\n").unwrap();
+        assert!(ensure_project_root(dir.path()).is_err());
+
+        std::fs::create_dir_all(dir.path().join(".vfs")).unwrap();
+        std::fs::write(dir.path().join(".vfs/manifest.yaml"), "version: 2\n").unwrap();
+        ensure_project_root(dir.path()).unwrap();
     }
 }

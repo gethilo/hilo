@@ -91,6 +91,19 @@ it only when you really mean it:
 hilo graph warm --allow-home
 ```
 
+### Project precondition
+
+`hilo graph warm` requires a Hilo project root: a directory with
+`.vfs/manifest.yaml` (what `hilo init` writes) or a root-level
+`manifest.yaml`. Outside a project it exits non-zero naming `hilo init`
+instead of leaving a partial `.vfs/graph/` (parse cache, `edges.jsonl`,
+DuckDB cache) behind. `--allow-home` overrides the HOME refusal only — it
+does not stand in for `hilo init`.
+
+`hilo serve --mcp` has the same precondition: outside a project it refuses
+to start rather than serving tools that can only answer from an empty graph.
+An initialized project with no edges yet is a valid server root.
+
 ### `stats`
 
 Aggregate statistics about the dependency graph.
@@ -286,6 +299,10 @@ Start the MCP server for agent integration.
 # Stdio transport (for Claude Desktop, Hermes)
 hilo serve --mcp
 ```
+
+Run it from inside a Hilo project (`hilo init` first): without a manifest the
+server refuses to start and names `hilo init`, rather than exposing tools
+that can only answer from an empty graph.
 
 ## `hilo backend`
 

@@ -93,6 +93,10 @@ enum GraphCommand {
     /// default. Override a pruning decision with `graph.include_paths` in
     /// `.vfs/manifest.yaml` or `manifest.yaml`. `.hiloignore` controls backend
     /// sync and does not override graph discovery.
+    ///
+    /// Requires a Hilo project root: run `hilo init` first if this directory
+    /// has no manifest. Without one, warm exits non-zero naming that command
+    /// instead of leaving a partial `.vfs/graph/` behind.
     #[clap(alias = "discover")]
     Warm(WarmArgs),
     /// Print summary statistics from the dependency graph.
@@ -125,6 +129,9 @@ enum GraphCommand {
 /// To override a pruning decision, set `graph.include_paths` in
 /// `.vfs/manifest.yaml` or `manifest.yaml`. `.hiloignore` controls backend
 /// sync and does not override graph discovery.
+///
+/// Requires a Hilo project (`.vfs/manifest.yaml`, or a root-level
+/// `manifest.yaml`): run `hilo init` in a directory without one.
 struct WarmArgs {
     /// Detect cross-repo imports using the workspace manifest.
     /// When set, import paths that resolve to files in another workspace
@@ -219,6 +226,10 @@ struct ModuleArgs {
 #[derive(clap::Args)]
 struct ServeArgs {
     /// Run as an MCP server (required — the only implemented server mode).
+    ///
+    /// Requires a Hilo project: run `hilo init` in the directory first.
+    /// Without a manifest the server exits non-zero, naming that command,
+    /// rather than serving tools that can only answer from an empty graph.
     #[arg(long, required = true)]
     mcp: bool,
 }

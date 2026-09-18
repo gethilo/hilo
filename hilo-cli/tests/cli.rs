@@ -29,6 +29,39 @@ fn unique_tempdir(label: &str) -> PathBuf {
     dir
 }
 
+/// Run `hilo init` in `dir` and assert it succeeded.
+///
+/// GAP-086: `graph warm` and `serve --mcp` require a project root, so any
+/// test that expects them to proceed has to initialize first.
+fn init_project(dir: &std::path::Path) {
+    let output = Command::new(BIN)
+        .arg("init")
+        .current_dir(dir)
+        .output()
+        .expect("failed to spawn hilo init");
+    assert!(
+        output.status.success(),
+        "init failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Run `hilo <args>` in `dir`, asserting it exited 0, and return stdout.
+fn run_hilo_ok(dir: &std::path::Path, args: &[&str]) -> String {
+    let output = Command::new(BIN)
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap_or_else(|e| panic!("failed to spawn hilo {}: {e}", args.join(" ")));
+    assert!(
+        output.status.success(),
+        "hilo {} failed: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
 // ─────────────────────── init ───────────────────────
 
 #[test]
@@ -835,15 +868,275 @@ fn graph_related_reverse_reports_file_level_and_crate_level_counts() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+// ─────────────── project preconditions (GAP-086) ───────────────
+
+#[test]
+fn graph_warm_without_init_errors_naming_init() {
+    // A tree that is not a Hilo project must be refused: warm used to walk it
+    // and leave a partial `.vfs/graph/` (parse cache, edges.jsonl, DuckDB
+    // cache) with no manifest and none of the standard `.vfs/` layout.
+    let dir = unique_tempdir("warm-without-init");
+    let src = dir.join("src");
+    fs::create_dir_all(&src).expect("failed to create src");
+    fs::write(
+        src.join("main.go"),
+        "package main\nimport \"fmt\"\nfunc main() { fmt.Println(\"hi\") }\n",
+    )
+    .expect("failed to write main.go");
+
+    let output = Command::new(BIN)
+        .args(["graph", "warm"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo graph warm");
+
+    assert!(
+        !output.status.success(),
+        "warm without a project must exit non-zero; stdout was:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("hilo init"),
+        "the error must name the fix (`hilo init`), got: {stderr}"
+    );
+    assert!(
+        !dir.join(".vfs").exists(),
+        "a refused warm must not scatter .vfs state into a non-project tree"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn graph_warm_without_init_creates_no_partial_graph() {
+    // Same refusal, asserted on the exact artifacts the defect produced: no
+    // parse cache, no edges, no DuckDB cache, no warm marker.
+    let dir = unique_tempdir("warm-without-init-artifacts");
+    fs::write(dir.join("lib.rs"), "fn lib() {}\n").expect("failed to write lib.rs");
+
+    let output = Command::new(BIN)
+        .args(["graph", "warm"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo graph warm");
+    assert!(!output.status.success(), "warm without init must fail");
+
+    for artifact in [
+        ".vfs/graph/.parse_cache.json",
+        ".vfs/graph/.last_warm",
+        ".vfs/graph/.last_reconcile",
+        ".vfs/graph/edges.jsonl",
+        ".vfs/graph/graph.db",
+    ] {
+        assert!(
+            !dir.join(artifact).exists(),
+            "{artifact} must not exist after a refused warm"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn graph_warm_after_init_still_warms() {
+    // Positive control for the refusal: with a manifest present the same tree
+    // warms exactly as before, producing the graph artifacts.
+    let dir = unique_tempdir("warm-after-init");
+    let src = dir.join("src");
+    fs::create_dir_all(&src).expect("failed to create src");
+    fs::write(
+        src.join("main.go"),
+        "package main\nimport \"fmt\"\nfunc main() { fmt.Println(\"hi\") }\n",
+    )
+    .expect("failed to write main.go");
+
+    init_project(&dir);
+    let stdout = run_hilo_ok(&dir, &["graph", "warm"]);
+    assert!(
+        stdout.contains("Discovered"),
+        "warm must report its discovery summary, got: {stdout}"
+    );
+    assert!(
+        dir.join(".vfs").join("graph").join("edges.jsonl").exists(),
+        "init + warm must still produce edges.jsonl"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// ─────────────── ignored cache artifacts (GAP-086) ───────────────
+
+/// The repository root — this crate lives in `<root>/hilo-cli`.
+#[cfg(unix)]
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("hilo-cli must have a parent directory")
+        .to_path_buf()
+}
+
+/// `git` in `dir`, isolated from the developer's global/system config so the
+/// verdict comes from the repository's own committed `.gitignore`.
+#[cfg(unix)]
+fn git_in(dir: &std::path::Path, args: &[&str]) -> std::process::Output {
+    Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .args(args)
+        .output()
+        .expect("failed to run git")
+}
+
+#[cfg(unix)]
+#[test]
+fn repo_gitignore_ignores_only_the_rebuildable_cache_artifacts() {
+    let root = repo_root();
+    let out = git_in(
+        &root,
+        &[
+            "check-ignore",
+            "-v",
+            ".vfs/graph/.parse_cache.json",
+            ".vfs/graph/.last_reconcile",
+        ],
+    );
+    assert!(
+        out.status.success(),
+        "both cache artifacts must be ignored, check-ignore said: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        text.lines().count(),
+        2,
+        "expected one ignore verdict per artifact, got: {text}"
+    );
+    assert!(
+        text.lines().all(|l| l.starts_with(".gitignore:")),
+        "the rules must come from the committed .gitignore, got: {text}"
+    );
+
+    // Precision: inventory truth must NOT be swallowed by a broad rule.
+    for path in [".vfs/manifest.yaml", ".vfs/graph/edges.jsonl"] {
+        let out = git_in(&root, &["check-ignore", "-v", path]);
+        assert!(
+            !out.status.success(),
+            "{path} is inventory truth and must stay visible, but it is ignored: {}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+        let tracked = git_in(&root, &["ls-files", "--error-unmatch", path]);
+        assert!(
+            tracked.status.success(),
+            "{path} must be tracked in this repository: {}",
+            String::from_utf8_lossy(&tracked.stderr)
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn init_warm_classify_leaves_no_untracked_cache_artifacts_in_a_fresh_clone() {
+    let dir = unique_tempdir("gap086-fresh-clone");
+    // A fresh clone's ignore rules come from the repo's committed .gitignore.
+    fs::copy(repo_root().join(".gitignore"), dir.join(".gitignore"))
+        .expect("failed to copy the repository .gitignore");
+
+    // A real project: two Go files so warm emits edges and reconcile stamps.
+    let src = dir.join("src");
+    fs::create_dir_all(&src).expect("failed to create src");
+    fs::write(
+        src.join("main.go"),
+        "package main\nimport \"fmt\"\nfunc main() { fmt.Println(\"hi\") }\n",
+    )
+    .expect("failed to write main.go");
+    fs::write(
+        src.join("helper.go"),
+        "package main\nfunc Helper() string { return \"help\" }\n",
+    )
+    .expect("failed to write helper.go");
+
+    let init = git_in(&dir, &["init", "-q"]);
+    assert!(
+        init.status.success(),
+        "git init failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+
+    init_project(&dir);
+    run_hilo_ok(&dir, &["graph", "warm"]);
+    run_hilo_ok(&dir, &["classify"]);
+
+    // Premise: the artifacts the acceptance criterion names really exist.
+    for artifact in [".vfs/graph/.parse_cache.json", ".vfs/graph/.last_reconcile"] {
+        assert!(
+            dir.join(artifact).exists(),
+            "premise failed: {artifact} must exist after init+warm+classify"
+        );
+    }
+
+    let status = git_in(
+        &dir,
+        &[
+            "status",
+            "--porcelain",
+            "-uall",
+            "--",
+            ".vfs/graph/.parse_cache.json",
+            ".vfs/graph/.last_reconcile",
+        ],
+    );
+    assert!(
+        status.status.success(),
+        "git status failed: {}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    let text = String::from_utf8_lossy(&status.stdout);
+    assert!(
+        text.is_empty(),
+        "cache artifacts must not be untracked after init+warm+classify: {text}"
+    );
+
+    // Precision control in the same tree: inventory truth is still reported
+    // as untracked (nothing committed here), so the ignore rule hides only
+    // the cache files.
+    let inventory = git_in(
+        &dir,
+        &[
+            "status",
+            "--porcelain",
+            "-uall",
+            "--",
+            ".vfs/manifest.yaml",
+            ".vfs/graph/edges.jsonl",
+        ],
+    );
+    let text = String::from_utf8_lossy(&inventory.stdout);
+    for path in [".vfs/manifest.yaml", ".vfs/graph/edges.jsonl"] {
+        assert!(
+            text.contains(&format!("?? {path}")),
+            "{path} must stay visible as untracked, got: {text}"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 // ─────────────────────── serve ───────────────────────
 
 #[test]
 fn serve_mcp_exits_cleanly_on_eof() {
     // `serve --mcp` starts the MCP stdio server.  With no stdin piped
     // (Command::output gives an empty/closed stdin) the server reads EOF
-    // immediately and exits 0.
+    // immediately and exits 0.  GAP-086: the server requires a project root,
+    // so run it in an initialized project (an empty one is valid).
+    let dir = unique_tempdir("serve-eof");
+    init_project(&dir);
     let output = Command::new(BIN)
         .args(["serve", "--mcp"])
+        .current_dir(&dir)
         .output()
         .expect("failed to spawn hilo serve --mcp");
 
@@ -852,6 +1145,45 @@ fn serve_mcp_exits_cleanly_on_eof() {
         "serve --mcp should exit 0 on stdin EOF: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("MCP server started"),
+        "an initialized (empty) project must start the server"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn serve_mcp_without_project_errors_naming_init() {
+    // GAP-086: outside a Hilo project the server used to start and answer
+    // from a zeroed graph. It must refuse up front and name `hilo init`.
+    let dir = unique_tempdir("serve-without-project");
+    let output = Command::new(BIN)
+        .args(["serve", "--mcp"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo serve --mcp");
+
+    assert!(
+        !output.status.success(),
+        "serve --mcp outside a project must exit non-zero"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("hilo init"),
+        "the error must name the fix (`hilo init`), got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("MCP server started"),
+        "the server must not start before the project precondition: {stderr}"
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "a refused server must not emit JSON-RPC bytes on stdout: {:?}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -878,6 +1210,8 @@ fn mcp_stdio_stdout_is_pure_jsonrpc() {
     use std::process::Stdio;
 
     let dir = unique_tempdir("mcp-purity");
+    // GAP-086: the MCP server requires a project root.
+    init_project(&dir);
     let mut child = Command::new(BIN)
         .args(["serve", "--mcp"])
         .current_dir(&dir)
