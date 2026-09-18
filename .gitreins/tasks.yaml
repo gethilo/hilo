@@ -1236,3 +1236,13 @@ tasks:
   status: complete
   created_at: '2026-09-18T11:35:07.641669+00:00'
   completed_at: '2026-09-18T11:58:57.469175+00:00'
+- id: GAP-060
+  title: Refresh documented performance claims and examples
+  criteria:
+  - 'docs/performance.md and README.md record the verified containerd-scale warm/query
+    measurements and a full-path pkg: example; existing claims are corrected without
+    code changes; documentation remains internally consistent and cargo fmt/check
+    are unaffected'
+  status: complete
+  created_at: '2026-09-18T12:53:15.978692+00:00'
+  completed_at: '2026-09-18T12:56:28.808115+00:00'
