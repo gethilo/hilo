@@ -1165,5 +1165,6 @@ tasks:
   - 'AC7 only hilo-cli/src/commands/graph.rs is modified: no Cargo.toml, no Cargo.lock,
     no board or .gitreins changes by the worker'
   - AC8 the work is committed in this repo and the commit hash is reported
-  status: in_progress
+  status: complete
   created_at: '2026-09-18T06:38:44.840156+00:00'
+  completed_at: '2026-09-18T07:18:23.527925+00:00'
