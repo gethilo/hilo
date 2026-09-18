@@ -9,8 +9,16 @@ guards:
   test_command: bash scripts/rust-lint.sh
   test_timeout: 300
   hook_timeout: 600
-  lsp: true
-  lsp_tools: ["rust-analyzer"]
+  # Disabled: the native LSP leg fails open — engine/lsp.py run_lsp_check()
+  # returns [] both when the tool is missing on PATH ("not found on PATH -
+  # skipping") and when it fails to initialize, and guard_manager.py
+  # _check_lsp() swallows every exception; the empty diagnostic list then
+  # prints "  rust-analyzer — clean" and PASSES, so a rustup shim with no
+  # rust-analyzer component reported a clean tick for a leg that did no work
+  # (INT-GITREINS-003). Enforced instead inside scripts/rust-lint.sh
+  # (test_command above), which fails closed on a missing or broken tool.
+  lsp: false
+  lsp_tools: []
   # Clippy is enforced above; disable the misleading native cppcheck path.
   static_analysis: false
   static_analysis_tools: {}

@@ -39,7 +39,7 @@ hilo-ffi/           # UniFFI bindings (Go, Python, Kotlin, Swift)
 
 ## Git Conventions
 
-- **Pre-commit:** GitReins guards (secrets, tests, static_analysis, lsp)
+- **Pre-commit:** GitReins guards — **secrets + tests** (`guards.test_command` = `scripts/rust-lint.sh`: `cargo clippy --workspace --all-targets -- -D warnings`, a fail-closed rust-analyzer proof, then `cargo test -p hilo_graph --lib`). The native `static_analysis` and `lsp` legs are **disabled**: both map a missing, timed-out or broken tool to an empty finding list and still print `clean` / PASS (INT-GITREINS-002/003), so a rustup shim with no component installed read as a green tick. Enforcement lives in the script instead, which exits non-zero (4 = tool unusable, 5 = hung).
 - **Commit:** `gitreins commit -m "message"` — guards run before commit
 - **Push:** `git push origin master`
 - **Repo:** `github.com/gethilo/hilo`
