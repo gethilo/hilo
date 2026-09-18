@@ -52,9 +52,19 @@ $ hilo graph warm        # Parse AST, build graph (26 languages)
 $ hilo graph impact 'sys:gtest/gtest.h' --max-depth 5
   349 files impacted — 347 C++, 2 headers
 
+$ hilo graph impact 'pkg:github.com/containerd/containerd/v2/core/mount' --max-depth 1
+  126 files impacted — 126 Go files (grep-verified against the import set)
+
 $ hilo classify          # Auto-tag every file with role + stability
   1064 files: 423 library, 405 test, 39 entrypoint
 ```
+
+Symbol queries take two forms. The short `sys:` header form above works
+for C/C++ headers, but Go, Java, and TypeScript repositories query the
+**full package import path** with the `pkg:` prefix — e.g.
+`pkg:github.com/containerd/containerd/v2/core/mount` on containerd.
+`sys:gtest/gtest.h` is one example, not the only form; per-language
+resolution rules are in [docs/dogfood/diagnostics.md](docs/dogfood/diagnostics.md).
 
 ## Performance
 
@@ -63,6 +73,14 @@ Graph queries are near-instant regardless of repo size — `graph stats`,
 corpus (up to 880× faster than the 0.2.x era, which paid a 12–15 s
 cache-revalidation tax on every command). `graph impact` runs in ~0.5 s,
 `understand` in ~1.5 s. Output is byte-deterministic across runs.
+
+At containerd scale — 1367 project files after the `vendor/` policy
+exclusion — the one-time `graph warm` cost **~80 s**, while `stats` and a
+one-hop `impact` answered in **~0.03 s–0.1 s** afterwards. Those are two
+different phases (graph construction vs query latency), not competing
+numbers; the [containerd-scale table](docs/performance.md#real-world-scale-containerd-2026-09-11)
+records both, and the [run-3 dogfood report](docs/dogfood/2026-09-11-integration.md)
+holds the raw measurements.
 
 Full numbers, methodology, and the cache-coherence design (JSONL truth +
 stamped query cache): [docs/performance.md](docs/performance.md).

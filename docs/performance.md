@@ -42,6 +42,36 @@ constant per invocation.
 | Full `graph warm` (tokio) | 41.9 s | 793 files, 132 MB peak RSS |
 | `hilo mount --daemon` | background | FUSE detach added in 0.3.0 |
 
+## Real-world scale: containerd (2026-09-11)
+
+The battery above is a controlled measurement on three fixed Rust corpora.
+This is the opposite case: the full [containerd](https://github.com/containerd/containerd)
+Go repository (depth-1 clone), as a user actually meets it — a committed
+`vendor/` tree of 4122 files is excluded by policy (PERF-005), leaving
+**1367 project files** in the graph (14070 edges across 1287 files).
+
+| Phase | Command | Result |
+|---|---|---:|
+| Graph construction (one-time) | `hilo graph warm` | **~80 s** for 1367 files |
+| Incremental rebuild | `hilo graph warm --changed` | **~1 s** for 1 changed file |
+| Query (graph already built) | `hilo graph stats` | **~0.03 s** (26 ms measured) |
+| Query (graph already built) | `hilo graph impact 'pkg:github.com/containerd/containerd/v2/core/mount' --max-depth 1` | **~0.1 s** (108 ms measured), 126 dependents |
+
+**The warm and query numbers measure different phases, so they are not
+competing claims.** The ~80 s is *graph construction*: the one-time AST
+parse and edge build paid once per repository (or per changed-file delta
+with `--changed`). The ~0.03 s figure is *query latency*: what a cheap
+query costs on every invocation once that graph exists, and it does not
+grow with the 80 s. In short, at containerd scale the queries ran in
+~0.03 s–0.1 s (tens of milliseconds), never the 12–15 s cache-revalidation
+tax the 0.2.x era paid — which is exactly the PERF-001 claim above,
+re-verified on Go code.
+
+The measured numbers, the corpus shape, and the per-hub blast-radius
+cross-checks (client 110, plugins 98, `pkg/namespaces` 92, `core/content`
+88 — all matching grep import counts) live in
+[the run-3 dogfood report](dogfood/2026-09-11-integration.md).
+
 ## Determinism
 
 `hilo graph stats` output is now byte-identical across repeated runs
