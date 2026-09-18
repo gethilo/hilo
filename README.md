@@ -16,12 +16,28 @@ cp target/release/hilo ~/.cargo/bin/hilo   # put hilo on PATH
 hilo --help
 ```
 
-Requirements: Rust 1.80+, `libfuse3-dev` (for FUSE mount), `attr` (for xattrs).
+Requirements:
 
-> ⚠️ **Build time:** the first `cargo build --release` also compiles
-> `duckdb-sys`/`arrow` from source — expect 15-20 min and a full C/C++
-> toolchain (`clang`, `CMake`, `g++`). Subsequent builds are incremental
-> and fast (~seconds).
+- **Rust 1.80+** — to build from source.
+- **`libfuse3` runtime library** (Ubuntu/Debian package `libfuse3-4`) — the
+  shipped `hilo` binary links it (`libfuse3.so.4`), so it must be present to
+  run `hilo` at all, including commands that never mount.
+- **`attr`** — provides `getfattr`/`setfattr`, used for xattr operations
+  (reading and writing `user.vfs.*`).
+- **`libfuse3-dev`** — headers and `pkg-config` files, needed only to
+  *compile* the FUSE mount support in a source build. It is not a runtime
+  requirement, and it is not needed at all to run a prebuilt binary.
+
+```bash
+# Ubuntu/Debian — installing libfuse3-dev pulls in libfuse3-4
+sudo apt install libfuse3-dev attr
+```
+
+> ⚠️ **Build time:** the first `cargo build --release` also compiles DuckDB
+> (`duckdb-sys`)/Arrow from source — expect 15-20 min. That step needs a
+> C/C++ compiler (`g++`, e.g. from `build-essential`) plus `pkg-config`;
+> `clang` and `CMake` are **not** required for the standard build.
+> Subsequent builds are incremental and fast (~seconds).
 
 ## The Problem
 
