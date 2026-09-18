@@ -576,6 +576,23 @@ impl GraphDB {
         Ok(count > 0)
     }
 
+    /// GAP-081 phase 2a: does the store hold `path` as an edge endpoint?
+    ///
+    /// The `edges` table is the authority on what the graph can answer for: a
+    /// path that appears as `from` or `to` has a real answer even when its
+    /// extension is not one of the 26 AST languages. The motivating case is a
+    /// `.proto` service contract anchor — no AST language claims `.proto`, but
+    /// `service_contract` edges point at it, so `impact`/`related` on that path
+    /// is a real query with real dependents.
+    ///
+    /// Any query error reads as "not an endpoint": this predicate only ever
+    /// RELAXES the PERF-004 fast failure, so it must not panic and must not
+    /// propagate — a store that cannot answer leaves the previous, stricter
+    /// behaviour in place.
+    fn path_is_graph_endpoint(&self, path: &str) -> bool {
+        self.file_in_graph(path).unwrap_or(false)
+    }
+
     /// Access the underlying DuckDB connection (for direct queries by other modules).
     pub fn conn(&self) -> &Connection {
         &self.conn
@@ -1023,14 +1040,16 @@ impl GraphDB {
         rel_filter: Option<&str>,
         direction: Direction,
     ) -> GraphResult<Vec<Edge>> {
-        // PERF-004: same short-circuit as impact_or_parse (see there).
+        // PERF-004: same short-circuit as impact_or_parse (see there). GAP-081
+        // phase 2a: it applies only when the path is NOT a graph endpoint — a
+        // `.proto` contract anchor is an endpoint, so its answer is real.
         if !path.starts_with("pkg:") && !path.starts_with("sys:") {
             let not_indexable = Path::new(path)
                 .extension()
                 .and_then(|e| e.to_str())
                 .map(|e| crate::parser::Language::from_extension(e).is_none())
                 .unwrap_or(false);
-            if not_indexable {
+            if not_indexable && !self.path_is_graph_endpoint(path) {
                 return Err(GraphError::Other(format!(
                     "'{path}' is not an indexable source file (26 AST languages) — impact/related cannot answer for it"
                 )));
@@ -1086,13 +1105,21 @@ impl GraphDB {
         // ...) can never appear in the AST graph — fail fast with the real
         // reason instead of a misleading "No dependents found". Symbol nodes
         // (pkg:/sys:) and files with no extension are exempt.
+        //
+        // GAP-081 phase 2a: the guard fires only when the path is NOT a graph
+        // endpoint. PERF-004 exists so that a non-indexable file can never
+        // return a silently empty answer; when the path IS an edge endpoint the
+        // answer is real — a `.proto` service contract anchor has dependents
+        // (`service_contract` edges from every caller of the declared service),
+        // so the fast failure no longer applies to it. An unknown
+        // non-indexable path still fails exactly as before.
         if !start_path.starts_with("pkg:") && !start_path.starts_with("sys:") {
             let not_indexable = Path::new(start_path)
                 .extension()
                 .and_then(|e| e.to_str())
                 .map(|e| crate::parser::Language::from_extension(e).is_none())
                 .unwrap_or(false);
-            if not_indexable {
+            if not_indexable && !self.path_is_graph_endpoint(start_path) {
                 return Err(GraphError::Other(format!(
                     "'{start_path}' is not an indexable source file (26 AST languages) — impact/related cannot answer for it"
                 )));
@@ -1148,6 +1175,75 @@ mod tests {
             err.to_string().contains("not an indexable source file"),
             "wrong error: {err}"
         );
+    }
+
+    /// GAP-081 phase 2a: a `.proto` service contract anchor is not an
+    /// indexable AST file, but the store holds real dependents for it
+    /// (`service_contract` edges from every caller of the declared service), so
+    /// `impact_or_parse` and `related_or_parse` must answer rather than take
+    /// the PERF-004 fast failure. The companion assertion is the falsification:
+    /// an unseen non-indexable path still fails with the message unchanged.
+    #[test]
+    fn contract_anchor_that_is_an_edge_endpoint_answers_instead_of_failing() {
+        let db = GraphDB::open(":memory:").unwrap();
+        let edges = vec![
+            Edge::new(
+                "src/frontend/rpc.go",
+                "protos/demo.proto",
+                "service_contract",
+            ),
+            Edge::new(
+                "src/checkoutservice/main.go",
+                "protos/demo.proto",
+                "service_contract",
+            ),
+        ];
+        db.insert_edges(&edges).unwrap();
+        assert!(
+            db.path_is_graph_endpoint("protos/demo.proto"),
+            "precondition: the anchor is an edge endpoint in the store"
+        );
+
+        // impact: the contract anchor has exactly the two callers as dependents.
+        let impact = db
+            .impact_or_parse("protos/demo.proto", 8)
+            .expect("an endpoint must answer instead of taking the PERF-004 fast failure");
+        let mut paths: Vec<String> = impact.iter().map(|f| f.path.clone()).collect();
+        paths.sort();
+        assert_eq!(
+            paths,
+            vec![
+                "src/checkoutservice/main.go".to_string(),
+                "src/frontend/rpc.go".to_string()
+            ],
+            "contract dependents must be returned, got {impact:?}"
+        );
+        assert!(
+            impact.iter().all(|f| f.relation == "service_contract"),
+            "the relation must survive the query: {impact:?}"
+        );
+
+        // related (reverse): same two edges, the other entry point.
+        let related = db
+            .related_or_parse("protos/demo.proto", None, Direction::Reverse)
+            .expect("an endpoint must answer instead of taking the PERF-004 fast failure");
+        assert_eq!(related.len(), 2, "expected 2 incoming edges: {related:?}");
+
+        // Falsification: a non-indexable path the store has never seen is still
+        // rejected, with the message byte-identical to the pre-change one.
+        for unseen in ["protos/unknown.proto", "docs/notes.md"] {
+            let expected = format!(
+                "graph error: '{unseen}' is not an indexable source file (26 AST languages) — impact/related cannot answer for it"
+            );
+            let impact_err = db
+                .impact_or_parse(unseen, 8)
+                .expect_err("an unknown non-indexable path must still fail");
+            assert_eq!(impact_err.to_string(), expected);
+            let related_err = db
+                .related_or_parse(unseen, None, Direction::Reverse)
+                .expect_err("an unknown non-indexable path must still fail");
+            assert_eq!(related_err.to_string(), expected);
+        }
     }
 
     #[test]
