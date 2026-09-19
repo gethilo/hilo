@@ -198,6 +198,16 @@ pub fn append_edges_deduped(edges_jsonl: &Path, edges: &[Edge]) -> Result<usize,
         .collect();
 
     if new_edges.is_empty() {
+        // INV-001: a warm that parsed the tree still materializes the
+        // tracked inventory file — an empty-but-present edges.jsonl is the
+        // honest "this project has no discovered edges" state and keeps
+        // the file's existence independent of edge count.
+        if !edges_jsonl.exists() {
+            if let Some(parent) = edges_jsonl.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::File::create(edges_jsonl)?;
+        }
         return Ok(0);
     }
 

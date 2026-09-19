@@ -395,9 +395,25 @@ pub fn run_warm_in(
             let mut parser = Parser::for_language(lang)
                 .with_context(|| format!("failed to initialize {:?} parser", lang))?;
 
-            let edges = parser
-                .parse_imports(&rel, &source)
+            // Parse with the ABSOLUTE path: rust/python import resolution
+            // walks up from the given path (Cargo.toml / package __init__)
+            // and must anchor at the warm root, not the process cwd — warm
+            // with cwd != root used to resolve against the wrong tree and
+            // silently yield 0 edges (found by the INV-001 regression test).
+            let abs = file.canonicalize().unwrap_or_else(|_| file.clone());
+            let mut edges = parser
+                .parse_imports(&abs.to_string_lossy(), &source)
                 .with_context(|| format!("failed to parse {rel}"))?;
+            // Edge endpoints are graph-stable REL paths; the absolute parse
+            // path leaks into from/to, so strip the root back off.
+            for e in edges.iter_mut() {
+                if let Ok(stripped) = Path::new(&e.from).strip_prefix(cwd) {
+                    e.from = stripped.to_string_lossy().into_owned();
+                }
+                if let Ok(stripped) = Path::new(&e.to).strip_prefix(cwd) {
+                    e.to = stripped.to_string_lossy().into_owned();
+                }
+            }
 
             // record fingerprint + serialized edges for next run
             let entry = serde_json::json!({
@@ -3145,15 +3161,41 @@ mod tests {
     fn warm_refreshes_tracked_edges_jsonl_append_only_and_rewarm_adds_no_duplicates() {
         let home = TempDir::new().unwrap();
         let project = TempDir::new().unwrap();
-        // Two Rust files so warm discovers at least one real `imports` edge.
-        std::fs::write(project.path().join("lib.rs"), "pub fn lib() {}\n").unwrap();
+        // A minimal Cargo package so warm discovers a real `imports` edge:
+        // rust import resolution (RustModuleCtx) only builds inside a
+        // package root with src/main.rs collecting `mod` declarations —
+        // bare files at a temp root yield "no imports" (verified live),
+        // which made this test's step (1) unsatisfiable as first written.
         std::fs::write(
-            project.path().join("main.rs"),
-            "mod lib;\nfn main() { lib::lib(); }\n",
+            project.path().join("Cargo.toml"),
+            "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(project.path().join("src")).unwrap();
+        std::fs::write(
+            project.path().join("src").join("lib.rs"),
+            "pub fn lib() {}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            project.path().join("src").join("main.rs"),
+            "mod lib;\nuse crate::lib::lib;\nfn main() { lib(); }\n",
         )
         .unwrap();
 
         warm_project_fixture(project.path(), home.path(), &no_manifest).unwrap();
+
+        // (0) INV-001: the tracked inventory exists after a parsing warm,
+        // even if this fixture yielded zero edges.
+        assert!(
+            project
+                .path()
+                .join(".vfs")
+                .join("graph")
+                .join("edges.jsonl")
+                .exists(),
+            "a parsing warm must materialize the tracked edges.jsonl inventory"
+        );
 
         // (1) The tracked inventory now carries the warm-discovered edges.
         let after_first = edges_jsonl_lines(project.path());
