@@ -30,13 +30,15 @@ Requirements:
 
 ```bash
 # Ubuntu/Debian — installing libfuse3-dev pulls in libfuse3-4
-sudo apt install libfuse3-dev attr
+sudo apt install build-essential pkg-config libssl-dev libfuse3-dev attr
 ```
 
 > ⚠️ **Build time:** the first `cargo build --release` also compiles DuckDB
-> (`duckdb-sys`)/Arrow from source — expect 15-20 min. That step needs a
-> C/C++ compiler (`g++`, e.g. from `build-essential`) plus `pkg-config`;
-> `clang` and `CMake` are **not** required for the standard build.
+> (`duckdb-sys`)/Arrow from source — expect 15-20 min. A full source build
+> needs a C/C++ toolchain (`g++`, e.g. from `build-essential`), `pkg-config`,
+> and the OpenSSL and FUSE 3 **development** packages (`libssl-dev`,
+> `libfuse3-dev`) for the crates that link them (`openssl-sys` via `git2`,
+> `hilo-fuse`); `clang` and `CMake` are **not** required for the standard build.
 > Subsequent builds are incremental and fast (~seconds).
 
 ## The Problem
