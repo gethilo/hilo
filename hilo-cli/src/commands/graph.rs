@@ -3306,6 +3306,55 @@ mod tests {
         }
     }
 
+    /// a905c0b regression: warm with root != process cwd must anchor rust
+    /// import resolution at the WARM ROOT. Pre-fix, parse_imports received
+    /// repo-relative paths and RustModuleCtx::build walked up from the
+    /// process cwd — the fixture's `use crate::lib::lib` resolved against
+    /// the CRATE's own module tree and the warm silently yielded 0 edges.
+    #[test]
+    fn warm_from_foreign_cwd_resolves_imports_at_warm_root() {
+        let home = TempDir::new().unwrap();
+        let project = TempDir::new().unwrap();
+        std::fs::write(
+            project.path().join("Cargo.toml"),
+            "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(project.path().join("src")).unwrap();
+        std::fs::write(
+            project.path().join("src").join("lib.rs"),
+            "pub fn lib() {}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            project.path().join("src").join("main.rs"),
+            "mod lib;\nuse crate::lib::lib;\nfn main() { lib(); }\n",
+        )
+        .unwrap();
+
+        // The pre-fix condition: process cwd is somewhere else entirely.
+        // (Parallel tests share the process cwd, so this test must restore
+        // it on every exit path; rust test harness runs tests on threads
+        // but the INV-001 suite here is the only cwd-touching pair and
+        // both restore before returning.)
+        let prev_cwd = std::env::current_dir().unwrap();
+        let foreign = TempDir::new().unwrap();
+        std::env::set_current_dir(foreign.path()).unwrap();
+        let result = warm_project_fixture(project.path(), home.path(), &no_manifest);
+        std::env::set_current_dir(prev_cwd).unwrap();
+        result.unwrap();
+
+        let lines = edges_jsonl_lines(project.path());
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("\"rel\":\"imports\"")
+                    && l.contains("\"from\":\"src/main.rs\"")
+                    && l.contains("\"to\":\"src/lib.rs\"")),
+            "warm with cwd != root must still resolve crate-local imports at the warm root: {lines:?}"
+        );
+    }
+
     #[test]
     fn coverage_classifier_distinguishes_contributes_facade_and_no_imports() {
         let contributing = Path::new("pkg/app.py");

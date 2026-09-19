@@ -255,3 +255,47 @@ pub fn write_mounts(mounts_yaml: &Path, mounts: &[BackendMount]) -> Result<(), M
     fs::write(mounts_yaml, yaml)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    /// INV-001 / a905c0b companion: a warm that discovers zero new edges
+    /// still materializes the tracked edges.jsonl — empty-but-present is
+    /// the honest no-edges state (pre-fix the file was never created and
+    /// the INV-001 contract test panicked on the missing file).
+    #[test]
+    fn append_deduped_creates_empty_inventory_when_absent() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("graph").join("edges.jsonl");
+        let n = append_edges_deduped(&path, &[]).unwrap();
+        assert_eq!(n, 0);
+        assert!(
+            path.exists(),
+            "zero-edge warm must still create the tracked inventory"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
+    }
+
+    /// Control: a real edge is appended exactly once across repeated calls.
+    #[test]
+    fn append_deduped_appends_once_and_is_idempotent() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("edges.jsonl");
+        let edge = Edge {
+            from: "src/main.rs".into(),
+            to: "src/lib.rs".into(),
+            rel: "imports".into(),
+            provenance: "ast_exact".into(),
+            confidence: 1.0,
+        };
+        assert_eq!(
+            append_edges_deduped(&path, std::slice::from_ref(&edge)).unwrap(),
+            1
+        );
+        assert_eq!(append_edges_deduped(&path, &[edge]).unwrap(), 0);
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(contents.lines().count(), 1, "no duplicates: {contents}");
+    }
+}
