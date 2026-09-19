@@ -19,6 +19,7 @@ Run:  python3 -m unittest discover -s scripts/tests -t . -v
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import subprocess
@@ -739,6 +740,307 @@ class LiveContentHygiene(unittest.TestCase):
         out = subprocess.run(cmd, capture_output=True, text=True, cwd=str(REPO))
         self.assertNotIn("QA-WARPFS-99", out.stdout,
                          "the finding did not come from the synthetic row")
+
+
+def repair_live_over_escaping(root: Path) -> int:
+    """Repair the check-11 over-escaping class in the working-tree board.
+
+    Check 11 always scans the WORKING TREE, and the pinned revision de9374c
+    carries the corruption itself, so a fixture that wants a clean working tree
+    has to repair it the way the live board already has. Returns the number of
+    repaired rows (the caller asserts it, so a stale premise fails loudly).
+    """
+    path = root / vbr.BOARD_REL / "tasks.jsonl"
+    rewritten, repaired = [], 0
+    for line in path.read_text().split("\n"):
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        if vbr.over_escaped_fields(row):
+            row = vbr.reduce_over_escaping(row)
+            repaired += 1
+        rewritten.append(json.dumps(row))
+    path.write_text("".join(ln + "\n" for ln in rewritten))
+    return repaired
+
+
+def boardctl_header_update(root: Path, **fields) -> dict:
+    """Apply the exact rewrite `boardctl header --set-...` performs.
+
+    boardctl's SetHeader rewrites ONLY line 1 of board.jsonl: the `--set` field
+    plus a refreshed `updated_at` (BT-024); every other line round-trips
+    byte-identically, and it aborts rather than touch them. Returns
+    {field: (before, after)} for the fields that really changed.
+    """
+    path = root / vbr.BOARD_REL / "board.jsonl"
+    lines = path.read_text().split("\n")
+    idx = next(i for i, ln in enumerate(lines) if ln.strip())
+    row = json.loads(lines[idx])
+    before = {k: row.get(k) for k in fields}
+    row.update(fields)
+    lines[idx] = json.dumps(row)
+    path.write_text("\n".join(lines))
+    return {k: (before[k], fields[k]) for k in fields if before[k] != fields[k]}
+
+
+def board_header(root: Path) -> dict:
+    return json.loads(vbr.split_header_lines((root / vbr.BOARD_REL / "board.jsonl").read_text())[0])
+
+
+BOARDCTL = shutil.which("boardctl")
+
+
+class MutableBoardHeader(unittest.TestCase):
+    """BOARD-VERIFY-002: `--live` must accept a documented header update.
+
+    Tick 187 ran `boardctl header --set-ticks-total 187` and the optional live
+    check then failed with `board.jsonl keeps every de9374c line` — an ordinary
+    tick rewriting the board header is not content loss. Live mode therefore
+    compares the header FIELD-WISE against the documented mutable set
+    (ticks_total/ticks_idle/last_commit/last_tick/updated_at) while everything
+    else about the header — identity, key set, and the content lines after it —
+    is still enforced, and the default (immutable revision) mode is untouched.
+
+    Every case runs in a throwaway git repo seeded from the real board history,
+    so the suite never touches the checked-out board.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.mkdtemp(prefix="warpfs187-header-")
+        self.fake = Path(self.tmp)
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.base_sha, self.rev_sha = seed_repo(self.fake)
+        # fixture premise: the pinned header carries the ticket's tick counter
+        self.assertEqual(board_header(self.fake)["ticks_total"], 186)
+        self.repaired = repair_live_over_escaping(self.fake)
+        self.assertEqual(self.repaired, 4,
+                         "fixture premise: the revision carries four over-escaped rows")
+
+    def _mutate_header(self, mutate) -> None:
+        path = self.fake / vbr.BOARD_REL / "board.jsonl"
+        lines = path.read_text().split("\n")
+        idx = next(i for i, ln in enumerate(lines) if ln.strip())
+        lines[idx] = json.dumps(mutate(json.loads(lines[idx])))
+        path.write_text("\n".join(lines))
+
+    def _git(self, *args: str) -> str:
+        subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", *args],
+                       cwd=self.fake, check=True)
+        return subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.fake,
+                              capture_output=True, text=True, check=True).stdout.strip()
+
+    def _live(self, rev: str | None = None):
+        return vbr.check_board(self.fake, base=self.base_sha, rev=rev or self.rev_sha,
+                               live=True, quiet=True)
+
+    def _cli_live(self, rev: str | None = None, quiet: bool = True):
+        args = [sys.executable, str(REPO / "scripts" / "verify_board_reconciliation.py"),
+                "--repo", str(self.fake), "--base", self.base_sha,
+                "--rev", rev or self.rev_sha, "--live"]
+        if quiet:
+            args.append("--quiet")
+        return subprocess.run(args, capture_output=True, text=True, cwd=str(REPO))
+
+    def _assert_rejected(self, needle: str, rev: str | None = None) -> None:
+        rep = self._live(rev)
+        joined = "\n".join(rep.failures)
+        self.assertIn(needle, joined, f"live mode accepted a header mutation: {joined!r}")
+        out = self._cli_live(rev)
+        self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+        self.assertIn(needle, out.stdout)
+
+    # ---- the reported repro ------------------------------------------------
+    def test_live_mode_accepts_the_documented_header_update(self) -> None:
+        """The exact tick-187 rewrite: ticks_total 186 -> 187 (+ updated_at)."""
+        before = (self.fake / vbr.BOARD_REL / "board.jsonl").read_text()
+        changed = boardctl_header_update(
+            self.fake, ticks_total=187, updated_at="2026-09-17T09:12:00+00:00")
+        self.assertEqual(sorted(changed), ["ticks_total", "updated_at"])
+        live_line = vbr.split_header_lines(
+            (self.fake / vbr.BOARD_REL / "board.jsonl").read_text())[0]
+        # premise: the pinned line really is gone, so the old rule had to flag it
+        self.assertNotIn(live_line, vbr.split_header_lines(before))
+        self.assertEqual(board_header(self.fake)["ticks_total"], 187)
+
+        ok, detail, changed_fields = vbr.compare_mutable_board_header(
+            vbr.git_show(self.fake, self.rev_sha, f"{vbr.BOARD_REL}/board.jsonl"),
+            (self.fake / vbr.BOARD_REL / "board.jsonl").read_text())
+        self.assertTrue(ok, detail)
+        self.assertEqual(changed_fields, ["ticks_total", "updated_at"])
+
+        rep = self._live()
+        self.assertEqual(rep.failures, [])
+        self.assertEqual(rep.live_failures, [])
+        # not --quiet: the accepted mutation must be REPORTED, not just tolerated
+        out = self._cli_live(quiet=False)
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertIn("RESULT: OK", out.stdout)
+        self.assertIn("board.jsonl header updated in documented mutable field(s): "
+                      "ticks_total, updated_at", out.stdout)
+
+    def test_live_mode_accepts_every_documented_mutable_field(self) -> None:
+        boardctl_header_update(self.fake, ticks_total=188, ticks_idle=1,
+                               last_commit="0123456789abcdef0123456789abcdef01234567",
+                               last_tick="2026-09-17 09:12:00",
+                               updated_at="2026-09-17 09:12:00")
+        rep = self._live()
+        self.assertEqual(rep.failures, [])
+        self.assertEqual(self._cli_live().returncode, 0)
+
+    @unittest.skipUnless(BOARDCTL, "boardctl is not on PATH")
+    def test_real_boardctl_header_command_is_accepted_in_live_mode(self) -> None:
+        """Drive the real binary, not a hand-rolled equivalent."""
+        board = self.fake / vbr.BOARD_REL
+        untouched = {n: hashlib.sha256((board / n).read_bytes()).hexdigest()
+                     for n in vbr.BOARD_FILES if n != "board.jsonl"}
+        lines_before = vbr.split_header_lines((board / "board.jsonl").read_text())
+        self.assertEqual(len(lines_before), 1, "fixture premise: one header line")
+        out = subprocess.run([BOARDCTL, "-C", str(self.fake), "header",
+                              "--set-ticks-total", "187"],
+                             capture_output=True, text=True)
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertIn("line 1 of board.jsonl", out.stdout)
+        self.assertEqual(board_header(self.fake)["ticks_total"], 187)
+        # boardctl rewrites ONLY the header line: the other board files are
+        # untouched, and board.jsonl still carries exactly one non-blank line
+        for name, digest in untouched.items():
+            self.assertEqual(hashlib.sha256((board / name).read_bytes()).hexdigest(), digest,
+                             f"boardctl rewrote {name}, which is not the header file")
+        self.assertEqual(len(vbr.split_header_lines((board / "board.jsonl").read_text())), 1)
+        rep = self._live()
+        self.assertEqual(rep.failures, [])
+        cli = self._cli_live()
+        self.assertEqual(cli.returncode, 0, cli.stdout + cli.stderr)
+
+    def test_default_mode_still_rejects_the_same_header_update(self) -> None:
+        """No --live: the mutated header is committed and becomes the revision."""
+        boardctl_header_update(self.fake, ticks_total=187)
+        mutated = self._git("commit", "-qam", "header bumped to 187")
+        rep = vbr.check_board(self.fake, base=self.base_sha, rev=mutated, quiet=True)
+        joined = "\n".join(rep.failures)
+        self.assertIn("board.jsonl byte-identical", joined)
+        out = subprocess.run(
+            [sys.executable, str(REPO / "scripts" / "verify_board_reconciliation.py"),
+             "--repo", str(self.fake), "--base", self.base_sha, "--rev", mutated, "--quiet"],
+            capture_output=True, text=True, cwd=str(REPO))
+        self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+        self.assertIn("board.jsonl byte-identical", out.stdout)
+
+    # ---- rejection boundaries ---------------------------------------------
+    def test_live_mode_rejects_a_changed_identity_field(self) -> None:
+        self._mutate_header(lambda h: {**h, "namespace": "somewhere-else"})
+        self._assert_rejected("identity field(s) changed: ['namespace']")
+
+    def test_live_mode_rejects_a_changed_version_and_remote(self) -> None:
+        self._mutate_header(lambda h: {**h, "version": 3, "git_remote": "fork"})
+        self._assert_rejected("identity field(s) changed: ['git_remote', 'version']")
+
+    def test_live_mode_rejects_a_lost_header_key(self) -> None:
+        self._mutate_header(lambda h: {k: v for k, v in h.items() if k != "ticks_total"})
+        self._assert_rejected("board header lost key(s): ['ticks_total']")
+
+    def test_live_mode_rejects_a_new_undocumented_header_key(self) -> None:
+        self._mutate_header(lambda h: {**h, "evil": True})
+        self._assert_rejected("gained undocumented key(s): ['evil']")
+
+    def test_live_mode_rejects_a_lost_header_line(self) -> None:
+        (self.fake / vbr.BOARD_REL / "board.jsonl").write_text("")
+        self._assert_rejected("board header row lost")
+
+    def test_live_mode_accepts_an_appended_line_after_the_header(self) -> None:
+        """An append is not loss: the old line-presence rule allowed it too."""
+        path = self.fake / vbr.BOARD_REL / "board.jsonl"
+        path.write_text(path.read_text() + json.dumps({"type": "tick", "id": 187}) + "\n")
+        boardctl_header_update(self.fake, ticks_total=187)
+        self.assertEqual(len(vbr.split_header_lines(path.read_text())), 2,
+                         "fixture premise: the appended line is there")
+        rep = self._live()
+        self.assertEqual(rep.failures, [])
+        self.assertEqual(self._cli_live().returncode, 0)
+
+    def test_live_mode_rejects_a_lost_line_after_the_header(self) -> None:
+        """The revision carries the extra line: dropping it IS loss."""
+        path = self.fake / vbr.BOARD_REL / "board.jsonl"
+        path.write_text(path.read_text() + json.dumps({"type": "tick"}) + "\n")
+        rev2 = self._git("commit", "-qam", "board.jsonl grows a content line")
+        self.assertEqual(len(vbr.split_header_lines(path.read_text())), 2)
+        path.write_text(vbr.split_header_lines(path.read_text())[0] + "\n")
+        self.assertEqual(len(vbr.split_header_lines(path.read_text())), 1,
+                         "fixture premise: the content line is gone")
+        self._assert_rejected("board line 2 (after the header row) was lost", rev=rev2)
+
+    def test_live_mode_rejects_a_rewritten_line_after_the_header(self) -> None:
+        """A second line is legitimate content: rewriting it is not.
+
+        The revision is extended to carry the extra line first, so the line
+        COUNT matches and only the rewrite can be the finding.
+        """
+        path = self.fake / vbr.BOARD_REL / "board.jsonl"
+        path.write_text(path.read_text() + json.dumps({"type": "tick"}) + "\n")
+        rev2 = self._git("commit", "-qam", "board.jsonl grows a content line")
+        self.assertEqual(len(vbr.split_header_lines(path.read_text())), 2)
+        lines = vbr.split_header_lines(path.read_text())
+        path.write_text(lines[0] + "\n" + json.dumps({"type": "elsewhere"}) + "\n")
+        self.assertEqual(len(vbr.split_header_lines(path.read_text())), 2,
+                         "fixture premise: the line count is unchanged")
+        self._assert_rejected("board line 2 (after the header row) was rewritten", rev=rev2)
+
+    def test_live_mode_rejects_a_corrupt_header(self) -> None:
+        (self.fake / vbr.BOARD_REL / "board.jsonl").write_text("{not json\n")
+        self._assert_rejected("board header does not parse")
+
+    def test_live_mode_still_rejects_task_row_and_event_loss(self) -> None:
+        """The header allowance must not soften the row/event guarantees."""
+        boardctl_header_update(self.fake, ticks_total=187)
+        self.assertEqual(self._live().failures, [])
+        board = self.fake / vbr.BOARD_REL
+        keep = [ln for ln in (board / "tasks.jsonl").read_text().split("\n")
+                if ln.strip() and json.loads(ln).get("id") != "GAP-060"]
+        (board / "tasks.jsonl").write_text("".join(ln + "\n" for ln in keep))
+        events = (board / "events.jsonl").read_text().split("\n")
+        (board / "events.jsonl").write_text("\n".join(events[: len(events) // 2]))
+        joined = "\n".join(self._live().failures)
+        self.assertIn("no row deleted", joined)
+        self.assertIn("append-only prefix", joined)
+
+    # ---- the helper's own boundary table ----------------------------------
+    def test_compare_mutable_board_header_boundaries(self) -> None:
+        rev = vbr.git_show(self.fake, self.rev_sha, f"{vbr.BOARD_REL}/board.jsonl")
+        hdr = json.loads(vbr.split_header_lines(rev)[0])
+        cases = [
+            ("documented counter", {**hdr, "ticks_total": 187}, True),
+            ("documented timestamp", {**hdr, "updated_at": "later"}, True),
+            ("documented commit", {**hdr, "last_commit": "deadbeef"}, True),
+            ("identity", {**hdr, "project": "Other"}, False),
+            ("unknown field", {**hdr, "mood": "good"}, False),
+            ("dropped key", {k: v for k, v in hdr.items() if k != "last_tick"}, False),
+            ("reordered keys", dict(reversed(list(hdr.items()))), True),
+        ]
+        for label, row, want in cases:
+            live = json.dumps(row) + "\n"
+            ok, detail, _changed = vbr.compare_mutable_board_header(rev, live)
+            self.assertEqual(ok, want, f"{label}: ok={ok} detail={detail!r}")
+        # a header whose own text is unchanged is accepted with no changed fields
+        ok, _detail, changed = vbr.compare_mutable_board_header(rev, rev)
+        self.assertTrue(ok)
+        self.assertEqual(changed, [])
+        # a line APPENDED after the header is accepted (not loss) ...
+        two = rev.rstrip("\n") + "\n" + json.dumps({"type": "tick"}) + "\n"
+        ok2, detail2, _c2 = vbr.compare_mutable_board_header(rev, two)
+        self.assertTrue(ok2, detail2)
+        # ... but rewriting or dropping it is not
+        ok3, detail3, _c3 = vbr.compare_mutable_board_header(
+            two, two.replace('{"type": "tick"}', '{"type": "not-a-tick"}'))
+        self.assertFalse(ok3)
+        self.assertIn("board line 2", detail3)
+        self.assertIn("rewritten", detail3)
+        ok4, detail4, _c4 = vbr.compare_mutable_board_header(
+            two, rev.rstrip("\n") + "\n")
+        self.assertFalse(ok4)
+        self.assertIn("board line 2 (after the header row) was lost", detail4)
+        # empty live file / empty revision
+        self.assertFalse(vbr.compare_mutable_board_header(rev, "")[0])
+        self.assertFalse(vbr.compare_mutable_board_header("", rev)[0])
 
 
 if __name__ == "__main__":

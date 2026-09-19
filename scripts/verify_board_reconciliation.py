@@ -24,9 +24,31 @@ default (immutable revision)
     (status -> complete with completed_at / completed_commit / closure_evidence);
     for a row the artifact re-identified, the documented rename is accepted too.
     Tolerated in live mode: appended rows and events, a rewritten/appended board
-    header, id-preserving closures with evidence. Reported as failures:
-    deleted rows, reordered/rewritten history, mutation of a materialised
-    revision, silent closures, regressions complete -> pending, prefix loss.
+    header (see "MUTABLE BOARD HEADER" below), id-preserving closures with
+    evidence. Reported as failures: deleted rows, reordered/rewritten history,
+    mutation of a materialised revision, silent closures, regressions
+    complete -> pending, prefix loss.
+
+MUTABLE BOARD HEADER (live mode only)
+-------------------------------------
+board.jsonl (topology A) IS the board header: line 1 is the header row and an
+ordinary tick REWRITES it. `boardctl header --set-ticks-total N` sets a
+counter, `--set-ticks-idle N` the idle counter, `--set-last-commit SHA` the
+tick's commit, every header mutation refreshes `updated_at` (boardctl
+SetHeader, BT-024), and the tick writer stamps `last_tick`. Those five keys --
+HEADER_MUTABLE_FIELDS -- are the DOCUMENTED mutable set, so live mode compares
+the header FIELD-WISE and accepts a value change there instead of demanding the
+pinned line bytes (which cannot survive a single legitimate tick). Everything
+else about the header is identity (`project`, `namespace`, `version`,
+`git_branch`, `git_remote`, ...) and everything after the header is content:
+a changed identity field, a lost or added header key, a rewritten or lost line
+after the header, an unparsable header, or an empty file is still a failure --
+the check detects real loss, it is not a blanket "board.jsonl is free"
+allowance. Lines APPENDED after the header stay accepted, exactly as they were
+under the old line-presence rule (board.jsonl is append-only after line 1, and
+the repository's own legit-activity fixture appends one). The
+default (immutable revision) mode is untouched: it still requires board.jsonl
+to be byte-identical to the base snapshot.
 
 CHECKS (against the pre-change snapshot 71b333f)
   1. every board JSONL line parses;
@@ -36,7 +58,9 @@ CHECKS (against the pre-change snapshot 71b333f)
   5. no reasoning field is left as a character array;
   6. events.jsonl / board.jsonl / fixtures.jsonl are byte-identical to the
      snapshot, and every tasks.jsonl line the artifact does not list is
-     byte-identical too (live mode: append-only prefix / line-presence);
+     byte-identical too (live mode: append-only prefix / line-presence, with
+     board.jsonl's header row compared field-wise against the documented
+     mutable set -- see "MUTABLE BOARD HEADER");
   7. the audit artifact records every removed row (verbatim) and every
      re-identified row, and the original-row -> canonical-id mapping;
   8. the completed rows keep completion evidence and are not pending;
@@ -100,6 +124,14 @@ BOARD_FILES = ("tasks.jsonl", "events.jsonl", "board.jsonl", "fixtures.jsonl")
 APPEND_ONLY_FILES = ("events.jsonl", "fixtures.jsonl")
 # files a legitimate tick may rewrite, but never lose a line of
 PRESENCE_FILES = ("board.jsonl",)
+# of those, the ones whose FIRST line is the board header and may therefore be
+# rewritten in the documented mutable fields (see "MUTABLE BOARD HEADER")
+MUTABLE_HEADER_FILES = ("board.jsonl",)
+# board.jsonl carries the board HEADER on line 1 and a legitimate tick rewrites
+# that line: these are the documented mutable header fields (see the module
+# docstring section "MUTABLE BOARD HEADER"). Anything else about the header is
+# identity, and every line after the header is content.
+HEADER_MUTABLE_FIELDS = ("ticks_total", "ticks_idle", "last_commit", "last_tick", "updated_at")
 # a row may flip to complete only with one of these non-empty (live mode)
 COMPLETION_MARKERS = ("completed_at", "completed_commit", "completed_commit_hash",
                       "closure_evidence")
@@ -360,6 +392,74 @@ def same_content_ignoring_escaping(rev_row: dict, live_row: dict) -> bool:
             == json.dumps(live_row, sort_keys=True, ensure_ascii=False))
 
 
+# ------------------------------------------------- mutable board header (live)
+def split_header_lines(text: str) -> list[str]:
+    """Non-blank lines of a board file, the header row first."""
+    return [ln for ln in text.split("\n") if ln.strip()]
+
+
+def compare_mutable_board_header(rev_text: str, live_text: str) -> tuple[bool, str, list[str]]:
+    """Compare the board header file, accepting only documented mutable fields.
+
+    Returns (ok, detail, changed_fields). Used by live mode in place of the
+    line-presence check for PRESENCE_FILES: the header row is compared FIELD-WISE
+    against HEADER_MUTABLE_FIELDS (boardctl `header --set-ticks-total/--set-ticks-idle/
+    --set-last-commit`, the refreshed `updated_at`, the tick-stamped
+    `last_tick`), so an ordinary tick cannot turn the suite red.
+
+    Everything else about the header is identity and everything after it is
+    content, so all of these still FAIL:
+      * an unparsable or non-object header row;
+      * a header key that disappeared (loss);
+      * a header key that appeared and is not documented as mutable (an
+        unauthorized header write is not "a documented header update");
+      * a changed identity field (project/namespace/version/git_branch/...);
+      * a pinned line after the header that was rewritten or lost;
+      * an empty live file (the header row itself is gone).
+
+    Lines APPENDED after the header are accepted, exactly as they were under the
+    old line-presence rule: board.jsonl is append-only after line 1 (the
+    repository's own legit-activity fixture appends a tick line to it) and an
+    append is not loss.
+
+    `changed_fields` lists the documented mutable fields that differ, so a
+    caller can report the accepted mutation instead of only tolerating it.
+    """
+    rev_lines = split_header_lines(rev_text)
+    live_lines = split_header_lines(live_text)
+    if not rev_lines:
+        return False, "the pinned revision carries no board header line", []
+    if not live_lines:
+        return False, "board header row lost (the file no longer has a header line)", []
+    try:
+        rev_hdr = json.loads(rev_lines[0])
+        live_hdr = json.loads(live_lines[0])
+    except json.JSONDecodeError as exc:
+        return False, f"board header does not parse: {exc}", []
+    if not isinstance(rev_hdr, dict) or not isinstance(live_hdr, dict):
+        return False, "board header is not a JSON object", []
+    lost = sorted(k for k in rev_hdr if k not in live_hdr)
+    if lost:
+        return False, f"board header lost key(s): {lost}", []
+    added = sorted(k for k in live_hdr if k not in rev_hdr)
+    if added:
+        return False, (f"board header gained undocumented key(s): {added} — only "
+                       f"{list(HEADER_MUTABLE_FIELDS)} are mutable in live mode"), []
+    identity = sorted(k for k in rev_hdr
+                      if rev_hdr[k] != live_hdr[k] and k not in HEADER_MUTABLE_FIELDS)
+    if identity:
+        return False, (f"board header identity field(s) changed: {identity} — only "
+                       f"{list(HEADER_MUTABLE_FIELDS)} are mutable in live mode"), []
+    live_tail = live_lines[1:]
+    for i, rev_ln in enumerate(rev_lines[1:]):
+        if i >= len(live_tail):
+            return False, f"board line {i + 2} (after the header row) was lost", []
+        if live_tail[i] != rev_ln:
+            return False, f"board line {i + 2} (after the header row) was rewritten", []
+    changed = sorted(k for k in rev_hdr if rev_hdr[k] != live_hdr[k])
+    return True, "", changed
+
+
 def check_board(repo: Path, base: str = BASE_COMMIT_DEFAULT,
                 rev: str = RECONCILED_REV_DEFAULT, live: bool = False,
                 quiet: bool = False) -> Report:
@@ -435,8 +535,21 @@ def _check(repo: Path, base: str, rev: str, target: Path, live: bool,
                       (board / name).read_text().startswith(rev_text),
                       "revision content was rewritten or truncated, not appended to")
         for name in PRESENCE_FILES:
-            rev_lines = [ln for ln in git_show(repo, rev, f"{BOARD_REL}/{name}").split("\n") if ln.strip()]
-            live_lines = [ln for ln in (board / name).read_text().split("\n") if ln.strip()]
+            rev_text = git_show(repo, rev, f"{BOARD_REL}/{name}")
+            live_text = (board / name).read_text()
+            if name in MUTABLE_HEADER_FILES:
+                # board.jsonl is the mutable board HEADER: the header row may
+                # change in the documented fields, nothing else may (docstring
+                # section "MUTABLE BOARD HEADER").
+                ok, detail, changed = compare_mutable_board_header(rev_text, live_text)
+                rep.check(f"{name} keeps the {rev} content (header row compared "
+                          "field-wise, documented mutable fields only)", ok, detail)
+                if ok and changed:
+                    rep.note(f"{name} header updated in documented mutable field(s): "
+                             f"{', '.join(changed)}")
+                continue
+            rev_lines = split_header_lines(rev_text)
+            live_lines = split_header_lines(live_text)
             missing = [ln[:80] for ln in rev_lines if ln not in live_lines]
             rep.check(f"{name} keeps every {rev} line", not missing,
                       f"header lines lost: {missing[:3]}")
