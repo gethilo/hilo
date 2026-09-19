@@ -99,6 +99,24 @@ A missing `graph.db` is no longer an error: with an `edges.jsonl`
 present, commands rebuild the cache automatically (previously
 `understand`, `search`, `module`, `untested`, and `rule-check` bailed).
 
+### Which files a warm may change (INV-001)
+
+`edges.jsonl` is the single source of truth, but it is **append-only from
+warm's side**: a warm with any parse-cache miss appends the newly discovered,
+deduplicated edges to the *tracked* `.vfs/graph/edges.jsonl`, and that diff
+is intentional inventory refresh — commit it with the change that produced
+it. A warm that fully hits the parse cache (and finds no missing derived
+edges) takes its fast path and writes nothing at all; a fully-cached re-warm
+of an untouched tree therefore leaves `git status` clean. Rebuildable cache
+artifacts warm also touches on the slow path — `graph.db`, the
+`.parse_cache.json` parse cache, and the `.last_warm` marker — are gitignored
+and never committed. The full contract, the cache-artifact table, and the
+operator recipe for a deliberate full refresh (`graph clean` + `warm` +
+recommit) live in [inventory-policy.md](inventory-policy.md); the contract is
+pinned by
+`warm_refreshes_tracked_edges_jsonl_append_only_and_rewarm_adds_no_duplicates`
+in `hilo-cli/src/commands/graph.rs`.
+
 ## Memory & binary size
 
 | Metric | Value |

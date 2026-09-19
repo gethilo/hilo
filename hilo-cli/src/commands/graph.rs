@@ -3110,6 +3110,147 @@ mod tests {
     }
 
     // ======================================================================
+    // INV-001: the tracked `.vfs/graph/edges.jsonl` inventory contract
+    // ======================================================================
+
+    /// Sorted non-empty JSONL lines of the fixture's edge inventory (order is
+    /// not part of the contract — warm parses in parallel).
+    fn edges_jsonl_lines(root: &Path) -> Vec<String> {
+        let path = root.join(".vfs").join("graph").join("edges.jsonl");
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|_| panic!("edges.jsonl must exist at {}", path.display()));
+        let mut lines: Vec<String> = raw
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(str::to_string)
+            .collect();
+        lines.sort();
+        lines
+    }
+
+    /// INV-001 contract, pinned against the real warm path:
+    ///
+    /// 1. A warm that parses anything writes the discovered, deduplicated
+    ///    edges into `.vfs/graph/edges.jsonl` — the tracked inventory, not a
+    ///    throwaway cache.
+    /// 2. A fully-cached warm (nothing re-parsed, no missing derived edges)
+    ///    leaves the inventory untouched.
+    /// 3. A warm with a parse-cache miss appends to whatever is already in
+    ///    the inventory: pre-existing (e.g. hand-maintained) lines survive
+    ///    verbatim, newly discovered edges are added once, and no line is
+    ///    ever duplicated — the append-only dedup by
+    ///    `(from, to, rel, provenance)` is what keeps a committed inventory
+    ///    drift-free across repeated warms.
+    #[test]
+    fn warm_refreshes_tracked_edges_jsonl_append_only_and_rewarm_adds_no_duplicates() {
+        let home = TempDir::new().unwrap();
+        let project = TempDir::new().unwrap();
+        // Two Rust files so warm discovers at least one real `imports` edge.
+        std::fs::write(project.path().join("lib.rs"), "pub fn lib() {}\n").unwrap();
+        std::fs::write(
+            project.path().join("main.rs"),
+            "mod lib;\nfn main() { lib::lib(); }\n",
+        )
+        .unwrap();
+
+        warm_project_fixture(project.path(), home.path(), &no_manifest).unwrap();
+
+        // (1) The tracked inventory now carries the warm-discovered edges.
+        let after_first = edges_jsonl_lines(project.path());
+        assert!(
+            after_first
+                .iter()
+                .any(|l| l.contains("\"rel\":\"imports\"")),
+            "first warm must persist discovered edges into the tracked inventory: {after_first:?}"
+        );
+
+        // (2) A fully-cached re-warm must not touch the inventory.
+        warm_project_fixture(project.path(), home.path(), &no_manifest).unwrap();
+        assert_eq!(
+            edges_jsonl_lines(project.path()),
+            after_first,
+            "a fully-cached warm must leave the tracked inventory unchanged"
+        );
+
+        // (3a) A parse-cache miss re-parses and appends — pre-existing lines
+        // survive verbatim and nothing duplicates. Seed the inventory with a
+        // single hand-written sentinel line (the drifted/hand-maintained
+        // shape), wipe only the parse cache, and warm again.
+        let edges = project
+            .path()
+            .join(".vfs")
+            .join("graph")
+            .join("edges.jsonl");
+        let sentinel = serde_json::to_string(&Edge {
+            from: "main.rs".to_string(),
+            to: "sys:manual".to_string(),
+            rel: "imports".to_string(),
+            provenance: "manual".to_string(),
+            confidence: 1.0,
+        })
+        .unwrap();
+        std::fs::write(&edges, format!("{sentinel}\n")).unwrap();
+        std::fs::remove_file(
+            project
+                .path()
+                .join(".vfs")
+                .join("graph")
+                .join(".parse_cache.json"),
+        )
+        .unwrap();
+
+        warm_project_fixture(project.path(), home.path(), &no_manifest).unwrap();
+
+        let mut expected = after_first.clone();
+        expected.push(sentinel);
+        expected.sort();
+        assert_eq!(
+            edges_jsonl_lines(project.path()),
+            expected,
+            "cache-miss warm must re-append the discovered edges next to the \
+             surviving sentinel line, exactly once each"
+        );
+
+        // (3b) And it stays idempotent: another cache-miss warm must add no
+        // duplicate lines to the tracked inventory.
+        std::fs::remove_file(
+            project
+                .path()
+                .join(".vfs")
+                .join("graph")
+                .join(".parse_cache.json"),
+        )
+        .unwrap();
+        warm_project_fixture(project.path(), home.path(), &no_manifest).unwrap();
+        assert_eq!(
+            edges_jsonl_lines(project.path()),
+            expected,
+            "repeated cache-miss warms must not duplicate tracked inventory lines"
+        );
+
+        // The rebuildable cache artifacts warm leaves behind are the
+        // gitignored companions of the tracked inventory (never committed).
+        assert!(
+            project
+                .path()
+                .join(".vfs")
+                .join("graph")
+                .join(".parse_cache.json")
+                .exists(),
+            "parse cache is a warm cache artifact"
+        );
+        assert!(
+            project
+                .path()
+                .join(".vfs")
+                .join("graph")
+                .join(".last_warm")
+                .exists(),
+            "last-warm marker is a warm cache artifact"
+        );
+    }
+
+    // ======================================================================
     // GAP-065: warm coverage accounting
     // ======================================================================
 

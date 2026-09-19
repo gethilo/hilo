@@ -182,6 +182,11 @@ getfattr -n user.vfs.role /mnt/vfs/src/main.rs
 hilo serve --mcp
 ```
 
+Note: `graph warm` may append newly discovered edges to the tracked
+`.vfs/graph/edges.jsonl` (the inventory) — that diff is intentional refresh,
+commit it; everything else under `.vfs/graph/` is a rebuildable cache.
+[docs/inventory-policy.md](docs/inventory-policy.md) is the full contract.
+
 ### Git hooks installed by `hilo init`
 
 `hilo init` installs two hooks by appending a `### HILO` … `### /HILO` block to
@@ -189,7 +194,7 @@ the project's hook files:
 
 | Hook | What the Hilo block does |
 |------|--------------------------|
-| `.git/hooks/post-commit` | runs `hilo graph warm --changed` so the graph tracks the commit |
+| `.git/hooks/post-commit` | runs `hilo graph warm --changed` so the graph tracks the commit. If the warm discovers new edges, it **appends** them to the tracked `.vfs/graph/edges.jsonl` — that diff is intentional inventory refresh, commit it with your change (see the [inventory policy](docs/inventory-policy.md)) |
 | `.git/hooks/post-merge` | after a pull: if `.vfs/.dirty` exists, runs a full `hilo graph warm` and deletes the marker |
 
 Both blocks exit `0` when the `hilo` executable is not on `PATH` — they never

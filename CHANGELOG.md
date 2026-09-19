@@ -23,6 +23,19 @@ All notable changes to Hilo are documented in this file.
   the shared ignore format (S3 today; Google Drive / OneDrive / Dropbox
   backends reuse it).
 
+### Changed
+
+- **Tracked inventory policy documented (INV-001)** — docs/inventory-policy.md
+  is now the contract for the tracked `.vfs/graph/edges.jsonl`: a warm with a
+  parse-cache miss appends newly discovered, deduplicated edges to it
+  (intentional refresh — commit the diff with your change), a fully-cached
+  warm leaves it untouched, `graph.db` / `.parse_cache.json` / `.last_warm` /
+  `.last_reconcile` are gitignored cache artifacts, and `graph clean` +
+  re-warm is the operator recipe for a deliberate full inventory refresh.
+  README (hooks table + quickstart note) and docs/performance.md point at
+  it; the append-only/idempotency contract is pinned by a `hilo-cli` warm
+  regression test.
+
 ## [0.3.0] — 2026-08-17
 
 ### Added
