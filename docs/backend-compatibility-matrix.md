@@ -57,7 +57,7 @@ artifacts and other transient files stay local-only.
 | External-tool drivers (rclone / gdrive / onedrive / dropbox) + `--tool` resolution | ✅ landed (GAP-055 tick 152: `ExternalToolDriver`, `BackendRegistry`) |
 | `hilo backend mount --type gdrive/onedrive/dropbox/external` (writes mounts.yaml), `backend sync` (planner-driven, ignore-aware), `backend setup` (detect/creds/next steps) | ✅ landed (GAP-055 tick 155) |
 | `hilo mount --triggers` backend sync hook (spec §7.1): inotify → debounce (HILO_DEBOUNCE_MS) → ignore/ephemeral check → dirty batch → settle push; poll pull every `poll_secs` | ✅ landed (GAP-055 tick 157: `hilo_triggers::sync_hook`) |
-| Stream mode placeholders (`hilo-fuse`) | ⏳ spec §8 — pending |
+| Stream mode placeholders (`hilo-fuse`) | ✅ landed (GAP-055: 7b06e61 placeholder engine + bff8c17 FUSE wiring) — stream mounts create zero-byte placeholders carrying `user.vfs.remote` + `user.vfs.materialized` xattrs with remote sizes from the backend walk listing; `getattr` reports the remote size and the first `open` materializes the file in place (metadata ops never materialize), writes flow through the FUSE write handler into the backing file and out via the dirty→push sync hook, and the sync planner never pushes an unmaterialized placeholder |
 | MCP tools 15 → 17 (`vfs_workspace_ephemeral`, `vfs_workspace_wipe`) | ✅ landed (GAP-055 tick 156) |
 | Ephemeral classification + `workspace ephemeral` / `wipe --ephemeral` | ✅ landed (GAP-055/056 tick 151: `hilo_backends::ephemeral` + CLIs) |
 
