@@ -129,6 +129,18 @@ in `hilo-cli/src/commands/graph.rs`.
 No leaks observed across the battery; memory scales with graph size and
 is released on exit.
 
+## Resource-constrained environments
+
+`cargo test --workspace` fails under a 3 GB virtual-memory cap
+(`ulimit -v 3145728`): the `-p hilo_graph --lib` suite aborts with
+`error: test failed, to rerun pass '-p hilo_graph --lib'`. This is the
+known duckdb/arrow address-space class — both reserve large virtual
+address ranges up front regardless of resident memory — not a memory
+leak, and the same suite is green uncapped (CI Test job and the native
+suite both PASS). Take the reservations into account before gating CI on
+memory-capped runners. Evidence: QA battery cell `chaos-resource`,
+2026-09-07 (board row QA-WARPFS-4 carries the cell output verbatim).
+
 ## Reproducing
 
 The battery is simple to rerun on any box:
