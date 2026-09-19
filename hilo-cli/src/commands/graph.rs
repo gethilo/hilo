@@ -2168,6 +2168,9 @@ pub fn run_search(query: &str, limit: Option<usize>, no_symbols: bool) -> Result
     }
 
     for r in &results {
+        // GAP-081-P3: provenance prints unmodified, so an edge-aware hit
+        // renders its marker directly, e.g.
+        // `0.0200  src/checkoutservice/main.go  [edge:service_call]`.
         println!("{:.4}  {}  [{}]", r.score, r.file_path, r.provenance);
         if !r.symbols.is_empty() {
             println!("         symbols: {}", r.symbols.join(", "));

@@ -440,6 +440,39 @@ impl GraphDB {
         Ok((froms, tos))
     }
 
+    /// The `(from, to, rel)` triples of every edge whose `rel` is in `rels`,
+    /// sorted by `(from, to, rel)` for determinism (GAP-081-P3: the
+    /// edge-aware search pass reads exactly the service-dimension edges).
+    ///
+    /// A row dedupes on all three columns: the same pair carried at two
+    /// provenances (`grpc_ast` + `grpc_proto` contract edges) is one search
+    /// fact, and the same file pair serving two services is two.
+    pub fn distinct_service_edges(
+        &self,
+        rels: &[&str],
+    ) -> GraphResult<Vec<(String, String, String)>> {
+        let placeholders = rels.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+        let sql = format!(
+            "SELECT DISTINCT \"from\", \"to\", rel FROM edges WHERE rel IN ({placeholders}) \
+             ORDER BY \"from\", \"to\", rel"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let param_refs: Vec<&dyn duckdb::ToSql> =
+            rels.iter().map(|r| r as &dyn duckdb::ToSql).collect();
+        let rows = stmt.query_map(param_refs.as_slice(), |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
     /// Query edges for a file path, optionally filtered by relation type and
     /// direction.
     ///

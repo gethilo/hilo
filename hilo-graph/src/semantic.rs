@@ -492,6 +492,92 @@ pub fn search(db: &GraphDB, query: &str, opts: &SearchOpts) -> GraphResult<Vec<S
     search_with_symbols(db, query, opts, None)
 }
 
+/// The relations the edge-aware pass scans. Deliberately scoped to the
+/// GAP-081 service dimension — the caller-by-service recall hole the lexical
+/// index cannot close — and never a lift of arbitrary edge endpoints.
+const EDGE_SEARCH_RELS: [&str; 2] = ["service_call", "service_contract"];
+
+/// A query token is `near-matched` by an edge token when the edge token
+/// STARTS WITH the query token (never the reverse). This is what lets the
+/// path-less caller of `ProductCatalogService` surface for the query
+/// "product catalog service": its edge metadata carries `catalog`, the
+/// query carries `catalogservice`, and containment in THAT direction —
+/// plus `service`, which is exact — is enough. Query-side stems only
+/// (`catalog` for a token of `catalogservice`), never token prefixes:
+/// "ser" finding every service is the false-positive shape this avoids.
+fn edge_token_near_matches(edge_token: &str, query_token: &str) -> bool {
+    edge_token.starts_with(query_token)
+}
+
+/// One matched edge, folded to the (file, marker, score) a result needs.
+struct EdgeHit {
+    /// The repo-relative file this hit surfaces.
+    file: String,
+    /// The provenance marker: `edge:<rel>`.
+    marker: String,
+    /// The query tokens the edge matched — the hit's `symbols` (what matched,
+    /// per the SearchResult contract) and, by count, its score.
+    matched: Vec<String>,
+}
+
+/// Scan the graph's service-dimension edges for query-token containment and
+/// fold each matching edge into at most one hit per file.
+///
+/// A matching edge surfaces BOTH endpoints: the caller (`from`) — the file
+/// whose own path carries none of the service's tokens, which is the point —
+/// and the provider/contract (`to`) when that side is not a pseudo-node.
+/// Endpoints are tokenized with the SAME tokenizer as the lexical index, so
+/// `edge.to = "pkg:ProductCatalogService"` contributes `product`, `catalog`,
+/// `service`, while `edge.to = "src/catalogservice/server.go"` contributes
+/// its path segments; the rel contributes its own words (`service_call` →
+/// `service`, `call`), making the relation itself searchable metadata.
+///
+/// Determinism: edges come back sorted by `(from, to, rel)` from
+/// `distinct_service_edges`, and files fold into a BTreeMap.
+fn edge_hits(db: &GraphDB, query_tokens: &[String]) -> GraphResult<Vec<EdgeHit>> {
+    let mut hits: Vec<EdgeHit> = Vec::new();
+    if query_tokens.is_empty() {
+        return Ok(hits);
+    }
+    for (from, to, rel) in db.distinct_service_edges(&EDGE_SEARCH_RELS)? {
+        // Token set of the edge's metadata: rel words, both endpoints.
+        let mut tokens: HashSet<String> = tokenize(&rel).into_iter().collect();
+        tokens.extend(tokenize(&from));
+        tokens.extend(tokenize(&to));
+        let matched: Vec<String> = query_tokens
+            .iter()
+            .filter(|qt| tokens.iter().any(|t| edge_token_near_matches(t, qt)))
+            .cloned()
+            .collect();
+        if matched.is_empty() {
+            continue;
+        }
+        let marker = format!("edge:{rel}");
+        hits.push(EdgeHit {
+            file: from,
+            marker: marker.clone(),
+            matched: matched.clone(),
+        });
+        // A `pkg:`/`local:` target is a pseudo-node, not an openable file —
+        // the same result-shape contract as the lexical pass.
+        if !to.starts_with("pkg:") && !to.starts_with("local:") {
+            hits.push(EdgeHit {
+                file: to,
+                marker,
+                matched,
+            });
+        }
+    }
+    Ok(hits)
+}
+
+/// Score of one edge-aware hit: `EDGE_HIT_SCORE_PER_TOKEN` per DISTINCT
+/// matched query token. Modest by construction — even a three-token match
+/// stays below the smallest RRF fused score (2/61 ≈ 0.033), so edge hits
+/// boost recall without ever re-ordering the lexical results above them;
+/// the count still ranks a stem+`service` match above a bare rel match.
+const EDGE_HIT_SCORE_PER_TOKEN: f64 = 0.01;
+
 /// Run semantic search with optional symbol extraction.
 ///
 /// When `symbol_extractor` is provided, symbols (function/type names) are
@@ -583,6 +669,49 @@ pub fn search_with_symbols(
         }
         if emitted.insert(path.clone()) {
             results.push(lexical_result(path, &query_tokens, score));
+        }
+    }
+
+    // GAP-081-P3: the edge-aware pass. Lexical search is path(+symbol)-only,
+    // so the Go caller whose path names neither the service nor the provider
+    // — `src/checkoutservice/main.go`, holding a `service_call` edge to the
+    // product catalog service — can never surface for the query "product
+    // catalog service", even though the graph already carries the fact. The
+    // pass scans ONLY the GAP-081 service rels (never arbitrary endpoints),
+    // keeps the hits the lexical set has not already emitted, marks each with
+    // `edge:<rel>` so a row's provenance is always stated, scores them below
+    // every lexical score (see EDGE_HIT_SCORE_PER_TOKEN), and folds into the
+    // SAME final truncation — added hits consume result budget only after the
+    // lexical results are safe, never displacing them.
+    let lexical_paths: HashSet<String> = results.iter().map(|r| r.file_path.clone()).collect();
+    let mut edge_files: std::collections::BTreeMap<String, (String, Vec<String>)> =
+        std::collections::BTreeMap::new();
+    for hit in edge_hits(db, &query_tokens)? {
+        if lexical_paths.contains(&hit.file) {
+            // Already surfaced lexically — the dedupe the contract asks for;
+            // the lexical row keeps its provenance and score.
+            continue;
+        }
+        // A file can sit on several matching edges (service_call + contract);
+        // the strongest rel wins by (match count, rel) so the marker is
+        // deterministic. Ties resolve lexicographically (BTreeMap update rule
+        // below keeps the FIRST strictly-greater entry).
+        let score = hit.matched.len() as f64 * EDGE_HIT_SCORE_PER_TOKEN;
+        let entry = edge_files.entry(hit.file).or_default();
+        let incumbent_score = entry.1.len() as f64 * EDGE_HIT_SCORE_PER_TOKEN;
+        if score > incumbent_score || (score == incumbent_score && hit.marker < entry.0) {
+            *entry = (hit.marker, hit.matched);
+        }
+    }
+    for (file, (marker, matched)) in edge_files {
+        if emitted.insert(file.clone()) {
+            let score = matched.len() as f64 * EDGE_HIT_SCORE_PER_TOKEN;
+            results.push(SearchResult {
+                file_path: file,
+                symbols: matched,
+                score,
+                provenance: marker,
+            });
         }
     }
     results.truncate(opts.limit);
@@ -1298,5 +1427,198 @@ mod tests {
             "resolved hit keeps its matched symbols, got {:?}",
             resolved.symbols
         );
+    }
+
+    // ── GAP-081-P3: edge-aware results for service_call/service_contract ──
+
+    /// The tick-189 Go gRPC shape, distilled: `src/catalogservice/server.go`
+    /// registers `ProductCatalogService` (`Register<ProductCatalog>ServiceServer`,
+    /// so `graph warm`'s service pass links it as the provider) and
+    /// `src/checkoutservice/main.go` calls it (`New<ProductCatalog>ServiceClient`),
+    /// with the `.proto` contract alongside. NOTHING in the caller's path
+    /// carries the service's tokens — "product catalog service" is lexical
+    /// dead air for `src/checkoutservice/main.go` — which is exactly the
+    /// recall hole this pass exists for.
+    fn gap081_fixture() -> GraphDB {
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[
+            // Caller -> provider, as the `graph warm` service pass writes it.
+            Edge {
+                from: "src/checkoutservice/main.go".to_string(),
+                to: "src/catalogservice/server.go".to_string(),
+                rel: "service_call".to_string(),
+                provenance: "grpc_ast".to_string(),
+                confidence: 1.0,
+            },
+            // Caller -> declaring contract (phase 2a).
+            Edge {
+                from: "src/checkoutservice/main.go".to_string(),
+                to: "protos/demo.proto".to_string(),
+                rel: "service_contract".to_string(),
+                provenance: "grpc_proto".to_string(),
+                confidence: 1.0,
+            },
+            // An unrelated import edge: proves the pass is SCOPED to the
+            // service rels and never lifts arbitrary edge endpoints.
+            Edge::new(
+                "src/checkoutservice/main.go",
+                "src/checkoutservice/stdlib.go",
+                "imports",
+            ),
+        ])
+        .unwrap();
+        db
+    }
+
+    #[test]
+    fn search_surfaces_service_caller_by_service_stem_with_edge_marker() {
+        let db = gap081_fixture();
+        // Symbols OFF: the caller must surface through its edge metadata
+        // alone, not through file-defined symbols.
+        let opts = SearchOpts {
+            limit: 10,
+            index_symbols: false,
+        };
+        let results = search(&db, "product catalog service", &opts).unwrap();
+
+        let caller = results
+            .iter()
+            .find(|r| r.file_path == "src/checkoutservice/main.go")
+            .expect("the service_call caller must surface for its service stem");
+        assert_eq!(
+            caller.provenance, "edge:service_call",
+            "edge-derived hits carry the edge:<rel> marker"
+        );
+        assert!(
+            caller.symbols.contains(&"catalog".to_string()),
+            "edge hits report which query tokens matched, got {:?}",
+            caller.symbols
+        );
+
+        let provider = results
+            .iter()
+            .find(|r| r.file_path == "src/catalogservice/server.go")
+            .expect("the provider file is edge metadata for the same edge");
+        assert_eq!(provider.provenance, "edge:service_call");
+
+        let contract = results
+            .iter()
+            .find(|r| r.file_path == "protos/demo.proto")
+            .expect("the declaring contract surfaces via its endpoint tokens");
+        assert_eq!(contract.provenance, "edge:service_contract");
+
+        // The pass is scoped: the import edge's endpoint must NOT appear —
+        // "stdlib.go" matches no service-edge token.
+        assert!(
+            !results
+                .iter()
+                .any(|r| r.file_path == "src/checkoutservice/stdlib.go"),
+            "import-edge endpoints stay out of the edge pass, got {:?}",
+            results.iter().map(|r| &r.file_path).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn search_service_call_query_finds_caller_via_rel_tokens() {
+        let db = gap081_fixture();
+        // A query of ONLY rel tokens ("service_call") still finds the caller:
+        // the relation itself is searchable metadata. The caller sits on both
+        // service edges, so the stronger service_call marker wins.
+        let results = search(&db, "service call", &SearchOpts::default()).unwrap();
+        let caller = results
+            .iter()
+            .find(|r| r.file_path == "src/checkoutservice/main.go")
+            .expect("rel-token query must surface the caller holding the edges");
+        assert_eq!(caller.provenance, "edge:service_call");
+    }
+
+    #[test]
+    fn search_contract_query_marks_contract_hits() {
+        let db = gap081_fixture();
+        // "contract" is a token of service_contract's rel — and of nothing
+        // else in the fixture — so every hit must carry the contract marker.
+        let results = search(&db, "contract", &SearchOpts::default()).unwrap();
+        assert!(
+            !results.is_empty(),
+            "the contract rel token must surface its edge endpoints"
+        );
+        for r in &results {
+            assert_eq!(
+                r.provenance, "edge:service_contract",
+                "rel-token-only hits keep that rel as their marker"
+            );
+        }
+        assert!(
+            results.iter().any(|r| r.file_path == "protos/demo.proto")
+                && results
+                    .iter()
+                    .any(|r| r.file_path == "src/checkoutservice/main.go"),
+            "both endpoints of the contract edge surface"
+        );
+    }
+
+    #[test]
+    fn search_dedupes_edge_hits_against_lexical_hits() {
+        let db = gap081_fixture();
+        // "checkoutservice" is a path token, so the caller is a lexical hit
+        // AND an edge hit — it must appear exactly once, with the lexical
+        // provenance standing.
+        let results = search(&db, "checkoutservice", &SearchOpts::default()).unwrap();
+        let caller_hits: Vec<&SearchResult> = results
+            .iter()
+            .filter(|r| r.file_path == "src/checkoutservice/main.go")
+            .collect();
+        assert_eq!(
+            caller_hits.len(),
+            1,
+            "a file reached both lexically and via edges appears once"
+        );
+        assert_eq!(
+            caller_hits[0].provenance, "lexical",
+            "lexical provenance wins the dedupe"
+        );
+    }
+
+    #[test]
+    fn search_edge_pass_stays_silent_when_nothing_matches() {
+        let db = gap081_fixture();
+        // No path token, no edge token: empty, never a fabricated hit.
+        let results = search(&db, "zigdatabase", &SearchOpts::default()).unwrap();
+        assert!(
+            results.is_empty(),
+            "a query matching neither paths nor edge metadata stays empty, got {:?}",
+            results.iter().map(|r| &r.file_path).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn search_edge_hits_do_not_displace_lexical_results_from_the_limit() {
+        let db = gap081_fixture();
+        // The caller (lexical 1.0 + edge boost) out-ranks everything; with
+        // limit 1 exactly it survives, and the edge pass may not push the
+        // total past the limit.
+        let results = search(
+            &db,
+            "checkoutservice",
+            &SearchOpts {
+                limit: 1,
+                index_symbols: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(results.len(), 1, "limit caps the merged result set");
+        assert_eq!(results[0].file_path, "src/checkoutservice/main.go");
+    }
+
+    #[test]
+    fn search_edge_hits_are_deterministic() {
+        let db = gap081_fixture();
+        let opts = SearchOpts {
+            limit: 10,
+            index_symbols: false,
+        };
+        let r1 = search(&db, "product catalog service", &opts).unwrap();
+        let r2 = search(&db, "product catalog service", &opts).unwrap();
+        assert_eq!(r1, r2, "edge-aware search must be deterministic");
     }
 }
