@@ -527,3 +527,6 @@
 {"id": 410, "timestamp": "2026-09-19 21:47:20.000000", "event_type": "task_completed", "task_id": "DOC-1", "actor": "plus-ultra-wave1", "detail": "{\"commit\": \"d766ad9\"}"}
 {"id": 411, "timestamp": "2026-09-19 21:47:20.000000", "event_type": "task_completed", "task_id": "GAP-061", "actor": "plus-ultra-wave1", "detail": "{\"commit\": \"d766ad9 (folded; row already duplicate-superseded by DOC-2)\"}"}
 {"id": 412, "timestamp": "2026-09-19 21:47:20.000000", "event_type": "task_completed", "task_id": "INT-CI-005", "actor": "plus-ultra-wave1", "detail": "{\"commit\": \"1170956\"}"}
+{"id": 413, "timestamp": "2026-09-19 23:38:56.000000", "event_type": "task_completed", "task_id": "PERF-003", "actor": "plus-ultra-wave2", "detail": "{\"commit\": \"2309e58\"}"}
+{"id": 414, "timestamp": "2026-09-19 23:38:56.000000", "event_type": "task_completed", "task_id": "CLN-1", "actor": "plus-ultra-wave2", "detail": "{\"commit\": \"2309e58\"}"}
+{"id": 415, "timestamp": "2026-09-19 23:38:56.000000", "event_type": "task_completed", "task_id": "GAP-081-P3", "actor": "plus-ultra-wave2", "detail": "{\"commit\": \"a8989ba\"}"}
