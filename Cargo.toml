@@ -2,6 +2,16 @@
 members = ["hilo-core", "hilo-metadata", "hilo-graph", "hilo-cli", "hilo-mcp", "hilo-backends", "hilo-triggers", "hilo-fuse", "hilo-plugins", "hilo-permissions", "hilo-ffi"]
 resolver = "2"
 
+# PERF-003: the dev binary linked every workspace crate plus duckdb with full
+# debuginfo and hit 1.22 GB (release: 118 MB). Keep line tables for workspace
+# crates (backtrace symbols survive), drop debuginfo from dependencies
+# entirely. Same rebuild, ~90% smaller dev binary.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 [workspace.package]
 version = "0.3.0"
 edition = "2021"

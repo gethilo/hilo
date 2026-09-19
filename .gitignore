@@ -16,6 +16,8 @@ target/
 .gitreins/tasks.yaml
 .gitreins/history/
 .gitreins/config.yaml.bak*
+# usage.jsonl: runtime telemetry gitreins appends during local commits (CLN-1)
+.gitreins/usage.jsonl
 
 # Python cache
 __pycache__/

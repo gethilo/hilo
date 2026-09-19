@@ -124,10 +124,39 @@ in `hilo-cli/src/commands/graph.rs`.
 | Query peak RSS | ~80 MB (tokio-scale graph) |
 | Warm peak RSS | 132 MB (tokio), 90 MB (ripgrep) |
 | Release binary | 118 MB (embeds DuckDB) |
-| Debug binary | 1.22 GB (full symtabs — dev-profile tuning under evaluation) |
+| Debug binary | 230 MiB (line-tables-only workspace, dep debuginfo off — PERF-003) |
 
 No leaks observed across the battery; memory scales with graph size and
 is released on exit.
+
+## Debug binary size (PERF-003)
+
+The dev-profile binary linked the whole workspace — plus duckdb/arrow,
+wasmtime, and aws-sdk — with full debuginfo into one `target/debug/hilo`
+and hit **1.22 GB** (release: 118 MB). Two workspace-profile settings fix
+it with no functional change: workspace crates keep line tables (backtrace
+symbols survive), dependencies carry no debuginfo at all.
+
+```toml
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+```
+
+Measured 2026-09-19 after a clean-configuration full rebuild
+(`cargo build -p hilo-cli`, rustc 1.98.0):
+
+| Binary | Before | After | Δ |
+|---|---:|---:|---:|
+| `target/debug/hilo` | 1.22 GB (1,268,859,160 B) | **230 MiB (240,807,968 B)** | **−81%** |
+| `target/release/hilo` | 118 MB | 118 MB | unchanged |
+
+Note: the `target/debug` *directory* also shrinks going forward (deps emit
+no debuginfo and incremental artifacts get leaner), but artifacts compiled
+before this change stay on disk until `cargo clean` or cargo's gc reclaims
+them — the directory `du` only reflects the win after that.
 
 ## Resource-constrained environments
 
@@ -159,5 +188,5 @@ Tracked on the project board (`.coding-hermes/board/tasks.jsonl`):
 - **PERF-002** — incremental `graph warm`: skip unchanged files via a
   content-hash/mtime parse cache (a no-change re-warm currently
   re-parses everything; target < 5 s on tokio)
-- **PERF-003** — dev-profile binary-size tuning + keeping this document
-  current as numbers change
+- **PERF-003** — DONE 2026-09-19: dev-profile slimmed (see "Debug binary
+  size (PERF-003)" above); this document stays current as numbers change
