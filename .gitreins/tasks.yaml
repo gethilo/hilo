@@ -1309,3 +1309,26 @@ tasks:
   status: complete
   created_at: '2026-09-20T01:11:41.582202+00:00'
   completed_at: '2026-09-20T02:24:04.606566+00:00'
+- id: GAP-090
+  title: MCP tool-count drift in CONTRIBUTING.md is unguarded
+  criteria:
+  - CONTRIBUTING.md states the real MCP tool count (17) and an additive regression
+    test in hilo-cli/tests/cli.rs fails when any live top-level doc names a count
+    that disagrees with hilo_mcp::tools::list_tools().len(); cargo fmt --check clean,
+    cargo clippy --workspace --all-targets -- -D warnings clean, cargo test -p hilo-cli
+    --test cli green
+  status: complete
+  created_at: '2026-09-20T03:51:20.162015+00:00'
+  completed_at: '2026-09-20T04:11:11.800339+00:00'
+- id: DF-WARPFS-18
+  title: Flaky hilo_graph lib test blocks Tier-1 guard (CWD-global-state)
+  criteria:
+  - 'cargo test -p hilo_graph --lib passes 10 consecutive runs with no set_current_dir-dependent
+    failures; the two CWD-mutating semantic.rs tests (search_with_symbols_finds_defining_file_by_exact_symbol,
+    search_without_symbols_keeps_path_only_behavior) no longer mutate or depend on
+    process-global CWD (root passed explicitly); RED proof: tests find their fixture
+    file with process CWD held in an unrelated directory; cargo fmt --check clean;
+    cargo clippy -p hilo_graph --all-targets -- -D warnings clean'
+  status: complete
+  created_at: '2026-09-20T05:58:25.920318+00:00'
+  completed_at: '2026-09-20T06:53:43.355235+00:00'
