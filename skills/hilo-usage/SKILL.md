@@ -143,3 +143,75 @@ the stat call, so "what changed recently?" is unanswerable there
   radius + coverage need the dialect workarounds above (GAP-069/071/072)
 - Full run histories: `docs/dogfood/` (7 integration reports +
   diagnostics.md); run 7 = `2026-09-20-run7-fuse-integration.md`
+
+## Backends + FFI: read this BEFORE you mount or embed anything (run 8, 2026-09-20)
+
+Two surfaces nobody had used before run 8. Both currently require workarounds.
+
+**S3 backend overlay — use `workspace sync`, not `backend sync`.** They are
+different engines with different flags and different bugs. For pushing a local
+directory to a bucket, this is the one that works on a fresh bucket:
+
+```bash
+export AWS_ENDPOINT_URL=http://minio:9000   # or whatever your endpoint is
+export AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=… AWS_DEFAULT_REGION=us-east-1
+hilo workspace sync --bucket <B> --at <DIR> --dry-run   # plan first
+hilo workspace sync --bucket <B> --at <DIR>             # two-way, last-writer-wins
+```
+
+It is verified byte-exact (3 MB binary sha256 matched), honours `.hiloignore`
+(ignored files never leave the machine), never transfers `.vfs/` or the ignore
+file, is idempotent on re-run, and handles nested + unicode paths. There is no
+`--pull`/`--push` flag on it — a plain run is two-way; `--pull` exits 2.
+
+**Do not use `hilo backend mount` without a §9 flag.** The plain form exits 0,
+prints `mounted s3://…`, and registers nothing (D1). Any one of
+`--tool native` / `--mode mirror` / `--poll-secs 30` selects the real path —
+but even then `hilo backend list` will still say `No backends configured in
+manifest.`, because the list half reads a different file (D3). Read
+`.vfs/backends/mounts.yaml` directly if you need to know what is mounted.
+
+**`hilo backend sync` fails on the first push against a real S3 endpoint** (D2):
+it plans the file, then dies with `aws sdk error: service error` because it
+HEADs the absent remote key and only converts an error to "not found" when the
+message contains the literal `NotFound`. Pre-creating the remote object makes
+the same command succeed — useful as a workaround, and decisive as proof of the
+cause.
+
+> **Endpoint trap (D4):** `S3Client` only uses an explicit endpoint when
+> `AWS_ENDPOINT_URL` is set; otherwise it falls back to the ambient AWS chain
+> (`~/.aws/config` + credentials). With the var unset, `backend sync` silently
+> targeted a real production bucket from `~/.aws/config` and reported a real
+> object to transfer. **Always set `AWS_ENDPOINT_URL` explicitly**, and confirm
+> from the plan/bucket listing which store you are actually pointed at before
+> letting a sync run.
+
+**Ignore the S3 integration test suite's green tick.** `cargo test -p
+hilo_backends --test s3_integration_test` reports `7 passed` in ~0.05–0.23 s
+whether or not an S3 endpoint is reachable: it gates on MinIO's own
+`/minio/health/live` and reports the early-return skip as `ok` (D5). It is not
+evidence about any S3 endpoint.
+
+**FFI (`hilo-ffi`): the library is real, the path to it is not.** The crate
+builds and exports the full UniFFI ABI for Go/Python/Kotlin/Swift, but:
+
+- `uniffi-bindgen` is not provided by the repo (no `[[bin]]`, no docs on
+  installing it) — the documented `uniffi-bindgen generate …` exits 127 (D8).
+  Generate bindings outside this repo, or pin the generator yourself.
+- Every graph function opens the literal `.vfs/graph/graph.db` **relative to the
+  embedding process's CWD**, and `vfs_graph_related`'s `path` argument is not
+  used to find the graph (D6). In a host app the "empty result" you get from the
+  wrong CWD is indistinguishable from "no dependencies". Run the embedding
+  process with its CWD at the repo root, or expect zeros.
+- `vfs_resolve_backend` and the MCP `vfs_backend_status`/`vfs_sync_backend`/
+  `vfs_resolve_path` return **constants** (`backend:"local"`, `last_synced:"synced"`,
+  `synced_files:1`) regardless of any mounted backend (D7). Do not use them to
+  answer "where does this file come from" or "is my remote copy current".
+
+**MCP `serverInfo.version` lies.** `initialize` reports `0.2.0` while the CLI and
+workspace are `0.3.0` (D9) — key bug reports off `hilo --version`, not the MCP
+handshake.
+
+**Testing this surface cheaply:** a throwaway `moto_server` (S3-compatible) plus
+the AWS CLI gives you an independent ground truth to diff every "sync complete"
+line against — that comparison produced three of run 8's findings.

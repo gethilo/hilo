@@ -435,3 +435,130 @@ what the project contains. On this workspace that means a mount exposing a
 - Honest limitation: mount `stat` latency (105 ms/call) was **not** a Hilo
   defect — disk measured the same under this host's load (~14). Recorded here
   so a future run does not file it as one.
+
+## Run 8 — 2026-09-20 (warpfs-dogfood, backend overlay + FFI bindings)
+
+Runs 1–6 swept the CLI/graph surface; run 7 took the FUSE mount. This run took
+the two surfaces nobody had touched: the **S3 backend overlay** and the
+**UniFFI bindings**. Full report:
+`docs/dogfood/2026-09-20-run8-backends-ffi-integration.md`.
+
+### How the backend layer is built (and why it breaks)
+
+There is a **legacy path and a §9 path** in `hilo-cli/src/commands/backend.rs`,
+and which one you get is decided by a flag-presence test at the top of
+`run_mount`:
+
+```rust
+let new_surface = matches!(kind, "gdrive"|"onedrive"|"dropbox"|"external")
+    || args.remote.is_some() || args.tool.is_some() || args.mode.is_some()
+    || args.ignore_file.is_some() || args.poll_secs != 60 || args.no_default_ignores;
+if !new_surface { return run_mount_legacy(args); }
+```
+
+`run_mount_legacy` is a print statement with a comment admitting it
+("In a real implementation, this would register the backend…"). So the plain
+form of `backend mount` — the one `backend setup` prints in its own next-steps
+line — exits 0 having done nothing (D1). Adding `--tool native` to the identical
+command routes to `run_mount_new`, which validates the driver and appends to
+`.vfs/backends/mounts.yaml`.
+
+The two halves then disagree about where mounts live: `run_mount_new` writes
+`mounts.yaml`, while `run_list` reads `.vfs/manifest.yaml` under `backends:` and
+still carries `// Phase 3: read manifest backends`. A mount that exists is
+invisible to `backend list` (D3).
+
+### Why `backend sync` dies on the first push (D2)
+
+`S3Driver` wraps `S3Client`, whose `head_object_meta` converts a missing object
+to `Ok(None)` by **string-matching the Display of the error**:
+
+```rust
+Err(e) if format!("{}", e).contains("NotFound") => Ok(None),
+Err(e) => Err(S3Error::from(e)),
+```
+
+The 404 a real S3 service returns for a HEAD on an absent key does not
+necessarily render as "NotFound", so the "remote counterpart is absent → upload
+it" branch is never taken and the whole sync aborts:
+
+```
+plan s3data: 1 to transfer, …          <- the driver's own plan says 1 file
+error: s3data: backend error: aws sdk error: s3: aws error: service error
+```
+
+The mechanism is visible in the endpoint's request log (a `HEAD …404` right
+before the failure), and the discriminator is decisive: pre-create the remote
+key so the HEAD returns 200 and the same command succeeds. Two sync
+implementations coexist (`commands/workspace.rs` uses `SyncEngine`+`S3Client`,
+`commands/backend.rs` uses `BackendRegistry`+`S3Driver`) and only the
+`workspace` one handles a fresh bucket (D4). Read the source of the one you are
+actually running — they do not share a code path.
+
+**Endpoint selection is ambient.** `S3Client::new` only builds an explicit
+endpoint client when `AWS_ENDPOINT_URL` is set; otherwise it takes
+`aws_config::defaults(…).load()`, i.e. `~/.aws/config` + the ambient credential
+chain. That is why `backend sync` with the env var unset silently targeted a
+real cloud endpoint from `~/.aws/config` and reported a real object to transfer
+before failing (D4). When testing this surface, always know which of the two
+paths is live — the CLI will not tell you.
+
+### The S3 integration suite is phantom coverage (D5)
+
+`hilo-backends/tests/s3_integration_test.rs` gates every test on
+`check_minio_available()`, which curls `{endpoint}/minio/health/live` and
+requires **200**. Anything that is not MinIO fails that probe (`moto` answers
+404 there, 200 on `/`), so every test takes the `require_minio!` early
+`return`s — and is still reported `ok`. Measured: 7 passed in 0.23s with no
+endpoint, and **7 passed in 0.05s with a live S3-compatible server answering on
+the configured URL**. The file's own header documents the skip as intentional
+("so `cargo test` never fails on machines without Docker/MinIO"); the defect is
+that a skip is indistinguishable from a pass in the report, and the readiness
+gate proves "is this MinIO" rather than "can I reach S3". Do not treat this
+suite's green as evidence about any S3 endpoint.
+
+### The FFI layer (D6/D7/D8)
+
+`hilo-ffi` really does build and really does export a UniFFI ABI — the UDL's 8
+functions are present (`uniffi_hilo_ffi_fn_func_*`, plus checksums and
+`UNIFFI_META_UDL_HILO`). That half is honest. What is missing is a usable path
+in:
+
+- **No generator in the repo.** No `[[bin]]`, no `uniffi_bindgen_main`;
+  `uniffi-bindgen generate …` exits 127 and no doc says how to install it (D8).
+- **Hard-coded resolution.** Every graph function opens the literal
+  `.vfs/graph/graph.db` relative to the process CWD, and `vfs_graph_related`'s
+  `path` argument is never used for resolution; `vfs_rule_check` probes
+  `manifest.yaml`/`.vfs/manifest.yaml` the same way (D6). The CWD-dependence is
+  the same architecture the CLI has — but the CLI is *documented* as
+  per-repo and the FFI is for embedding in a host application, where the CWD is
+  someone else's.
+- **Constants dressed as facts.** `vfs_resolve_backend` always answers
+  `backend:"local"`, `last_synced:"synced"`; the MCP twins
+  (`vfs_backend_status`, `vfs_sync_backend`, `vfs_resolve_path`) do the same
+  (`tools/mod.rs:922-1005`). Measured over MCP with an S3 backend mounted: still
+  `{"backend":"local",…,"last_synced":"synced"}` (D7).
+
+### Diagnostics and inspection recipe that worked
+
+- `nm -D --defined-only target/debug/libhilo_ffi.so | grep uniffi` — the only
+  cheap way to prove what a language binding will actually link against.
+- A throwaway S3-compatible server (`moto[server]`, `pip install "moto[server]"`)
+  plus the AWS CLI for bucket/object ground truth: `aws --endpoint-url … s3 ls
+  --recursive` is the independent check on every "sync completed" claim.
+- **Compare the plan count against the bucket listing, every time.** The
+  `plan … N to transfer` line and the bucket are independent measurements; three
+  of this run's findings came from them disagreeing.
+- Read the endpoint's own request log. The `HEAD … 404` line is what turned
+  "aws sdk error: service error" into an exact mechanism.
+- Keep credentials for scratch endpoints in a file and source it, never on a
+  command line — and never in the repo.
+
+### Honest limitation
+
+The conflict test is **not** a defect. `docs/` documents last-writer-wins by
+mtime, and both directions were verified to follow it (local newer → upload and
+keep local; remote newer → download and overwrite local). No conflict artifact
+is produced because none is promised. Recorded here so a future run does not
+file it as data loss — but note the local edit is genuinely unrecoverable once
+overwritten, which is worth knowing before putting a directory under sync.

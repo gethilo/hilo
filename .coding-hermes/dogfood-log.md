@@ -255,3 +255,74 @@ doc-drift family rather than a new row.
 left behind: docs/dogfood/2026-09-20-run7-fuse-integration.md,
 docs/dogfood/diagnostics.md Run 7 section, skills/hilo-usage/SKILL.md FUSE
 section, rows DF-WARPFS-5..8 (events 431-435), this entry.
+
+---
+
+## 2026-09-20 (warpfs-dogfood tick 2026-09-20-04-54-10) — run 8, backend overlay + FFI bindings
+
+verdict: PROMISING-BUT-ROUGH (backend-overlay + FFI surfaces; CLI/graph/FUSE unchanged)
+promise: agent stores a workspace in a remote backend (S3/compat) and syncs it
+two-way, and consumes Hilo's metadata + graph from Go/Python/Kotlin/Swift via
+the UniFFI bindings.
+angle: deliberately NOT the CLI/CAG pass (runs 1-6) and NOT the FUSE mount
+(run 7). First run on either the backend overlay or the FFI bindings — run 7
+explicitly left `.vfs/backends/mounts.yaml` unpopulated.
+consumer pass: live S3-compatible endpoint (moto, 127.0.0.1:19001) + AWS CLI as
+independent ground truth, scratch corpus with a real ignore case; then
+`cargo build -p hilo_ffi` + `nm -D` on the produced .so; then a real stdio MCP
+session driving vfs_backend_status / vfs_sync_backend / vfs_resolve_path.
+VERIFIED WORKING: `workspace sync` two-way + byte-exact (3 MB binary sha256
+matched local vs the object pulled back out of the bucket); remote-only object
+pulled down; `.hiloignore` honoured (target/junk.o never uploaded; `workspace
+ephemeral` agrees); `.vfs/` and the ignore file never transferred; `--dry-run`
+printed exactly what the real run then uploaded; idempotent re-run (0/0/2
+unchanged, later 6 unchanged); nested + unicode paths correct; last-writer-wins
+by mtime confirmed in BOTH directions as documented; `backend setup` a useful
+diagnostic; mount/sync failures fail fast with legible errors and exit 4 (missing
+tool) / 2 (bad mode) and leave no partial state; FFI crate builds and really
+exports the UniFFI ABI (8 `uniffi_hilo_ffi_fn_func_*` + checksums + META_UDL).
+FOUND (9 rows, events 446-454): DF-WARPFS-9 (P0) the PLAIN documented `backend
+mount` prints 'mounted s3://...' + exit 0 and registers NOTHING (legacy arm is a
+print statement; the tool's own `setup` next-steps line recommends that form) —
+adding any spec-9 flag makes the identical command write mounts.yaml;
+DF-WARPFS-10 (P0) `backend sync` ALWAYS fails on the first push to a real
+endpoint — its own plan says '1 to transfer' then 'aws sdk error: service error',
+because S3Client::head_object_meta only maps an error to NotFound by
+string-matching the Display text; DISCRIMINATOR RUN: pre-create the remote key so
+the HEAD returns 200 and the identical command succeeds (1 transferred, exit 0);
+DF-WARPFS-11 (P1) `backend list` can never see a mount — mount writes
+.vfs/backends/mounts.yaml, list reads .vfs/manifest.yaml ('No backends configured
+in manifest.' after a verified mount); DF-WARPFS-12 (P1) two sync engines with
+different flags (workspace sync: no --pull/--push, needs no mount, works on a
+fresh bucket; backend sync: opposite on all three) AND with AWS_ENDPOINT_URL
+unset backend sync silently planned against the REAL ambient ~/.aws/config
+endpoint while never telling the user which store it resolved; DF-WARPFS-13 (P1)
+the S3 integration suite reports '7 passed' in 0.05s WITH a live endpoint
+answering — the readiness gate requires MinIO's own /minio/health/live and a
+returned-early skip is scored ok, i.e. phantom coverage for exactly the surface
+DF-WARPFS-10 breaks; DF-WARPFS-14 (P1) every FFI graph function resolves
+.vfs/graph/graph.db from the EMBEDDING PROCESS CWD and vfs_graph_related's path
+argument never participates in finding the graph; DF-WARPFS-15 (P1)
+vfs_resolve_backend and the MCP vfs_backend_status/vfs_sync_backend/
+vfs_resolve_path return hardcoded constants — measured 'backend:local',
+'last_synced:synced', 'synced_files:1' over MCP with an S3 backend mounted;
+DF-WARPFS-16 (P2) the documented binding workflow exits 127 with no in-repo
+generator and no doc saying how to install one; DF-WARPFS-17 (P2) MCP
+initialize advertises serverInfo.version 0.2.0 while the workspace/CLI are 0.3.0.
+not-filed-by-design: the conflict test is NOT a defect — last-writer-wins is what
+the docs promise and both directions follow it (recorded in diagnostics.md so a
+future run does not file it as data loss).
+time-to-first-success: ~2 min (moto up + bucket + corpus + first dry-run/real
+sync); friction count 5 blocking-or-honesty (9/10/11/13/15) + 4 friction/docs.
+bunker install leg: PASSED — agent d6c6fc9a @ las-bunker-03, fresh Debian 13,
+public clone at daaf1e7 (no credential minted, no visibility change), rustup
+minimal 1.98.1, `cargo build --release` RC=0 in 2025s (33m45s — OVER the README's
+15-20 min claim), smoke (--version 0.3.0 / init / warm 3s 994 edges / stats /
+classify / MCP tools/list = 17) all OK. The P0 mount defects were then
+reproduced on that SAME fresh box (plain mount -> 'mounted s3://some-bucket/' +
+empty .vfs/backends/; same command + --tool native -> 156-byte mounts.yaml) and
+`backend list` stayed blind in both cases. Agent destroyed, key removed.
+left behind: docs/dogfood/2026-09-20-run8-backends-ffi-integration.md,
+docs/dogfood/diagnostics.md Run 8 section, skills/hilo-usage/SKILL.md
+backends+FFI section, rows DF-WARPFS-9..17 (events 446-454) + the audit event
+455, this entry.
