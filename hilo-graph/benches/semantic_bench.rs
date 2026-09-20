@@ -234,6 +234,7 @@ fn bench_search_e2e(c: &mut Criterion) {
     db.insert_edges(&edges).unwrap();
     let opts = SearchOpts {
         limit: 20,
+        root: None,
         ..Default::default()
     };
 

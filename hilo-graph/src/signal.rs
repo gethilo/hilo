@@ -283,6 +283,7 @@ fn discover_anchors(db: &GraphDB, task: &str, seed_limit: usize) -> Vec<String> 
     let search_opts = crate::semantic::SearchOpts {
         limit: seed_limit,
         index_symbols: true,
+        root: None,
     };
     let semantic_results = match crate::semantic::search(db, task, &search_opts) {
         Ok(results) => results,

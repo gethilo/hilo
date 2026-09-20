@@ -110,6 +110,12 @@ pub struct SearchOpts {
     /// across processes). Callers that need exact-symbol recall — CLI
     /// interactive use, MCP `vfs_graph_search` — opt in.
     pub index_symbols: bool,
+    /// Root directory the default symbol extractor reads fixture files
+    /// from. `None` (the default) reads the process CWD — the historical
+    /// behavior for CLI/MCP callers. Callers holding a root that is NOT
+    /// the process CWD (tests with a temp dir, embedded/sandboxed hosts)
+    /// set this explicitly instead of chdir'ing the process.
+    pub root: Option<std::path::PathBuf>,
 }
 
 impl Default for SearchOpts {
@@ -117,6 +123,7 @@ impl Default for SearchOpts {
         Self {
             limit: 20,
             index_symbols: false,
+            root: None,
         }
     }
 }
@@ -603,9 +610,10 @@ pub fn search_with_symbols(
 ) -> GraphResult<Vec<SearchResult>> {
     // GAP-077: a bare `search()` call (CLI/MCP/understand-fallback pass None)
     // must still index file-defined symbols, else exact-symbol queries find
-    // nothing. The default extractor reads from the cwd, matching how the
-    // rest of the CLI resolves repo files; callers with a real extractor
-    // (tests, MCP sandboxing) keep full control.
+    // nothing. The default extractor reads from `opts.root` when set, else
+    // the process cwd — matching how the rest of the CLI resolves repo
+    // files; callers with a real extractor (tests, MCP sandboxing) keep
+    // full control.
     // Borrow-shape: when the default extractor is needed, EVERYTHING that
     // borrows it (cwd, extractor closure, index) lives inside one scope and
     // `fused` escapes as owned data. No cross-statement borrows.
@@ -615,8 +623,11 @@ pub fn search_with_symbols(
             build_fused(db, query, &index, index.is_empty())?
         }
         None if opts.index_symbols => {
-            let cwd_tmp = std::env::current_dir().unwrap_or_default();
-            let extracted = default_symbol_extractor(&cwd_tmp);
+            let root_tmp = opts
+                .root
+                .clone()
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+            let extracted = default_symbol_extractor(&root_tmp);
             let index = TfIdfIndex::build_with_symbols(db, Some(&extracted))?;
             build_fused(db, query, &index, index.is_empty())?
         }
@@ -775,14 +786,15 @@ mod tests {
     #[test]
     fn search_with_symbols_finds_defining_file_by_exact_symbol() {
         let (dir, db) = gap077_fixture();
-        let prev_cwd = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
+        // The default extractor reads fixture files relative to the
+        // EXPLICIT root — never the process CWD (chdir is process-global
+        // and races sibling tests on the parallel harness, DF-WARPFS-18).
         let opts = SearchOpts {
             limit: 10,
             index_symbols: true,
+            root: Some(dir.path().to_path_buf()),
         };
         let results = search(&db, "url_for", &opts).unwrap();
-        std::env::set_current_dir(prev_cwd).unwrap();
         assert!(
             results
                 .iter()
@@ -795,11 +807,18 @@ mod tests {
     #[test]
     fn search_without_symbols_keeps_path_only_behavior() {
         let (dir, db) = gap077_fixture();
-        let prev_cwd = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
         // Default: index_symbols=false — the cheap pre-GAP-077 contract.
-        let results = search(&db, "url_for", &SearchOpts::default()).unwrap();
-        std::env::set_current_dir(prev_cwd).unwrap();
+        // Root is still explicit (defaults ignored here); symbols-off means
+        // the definition file must not match by definition name.
+        let results = search(
+            &db,
+            "url_for",
+            &SearchOpts {
+                root: Some(dir.path().to_path_buf()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert!(
             !results
                 .iter()
@@ -1478,6 +1497,7 @@ mod tests {
         let opts = SearchOpts {
             limit: 10,
             index_symbols: false,
+            root: None,
         };
         let results = search(&db, "product catalog service", &opts).unwrap();
 
@@ -1603,6 +1623,7 @@ mod tests {
             &SearchOpts {
                 limit: 1,
                 index_symbols: false,
+                root: None,
             },
         )
         .unwrap();
@@ -1616,6 +1637,7 @@ mod tests {
         let opts = SearchOpts {
             limit: 10,
             index_symbols: false,
+            root: None,
         };
         let r1 = search(&db, "product catalog service", &opts).unwrap();
         let r2 = search(&db, "product catalog service", &opts).unwrap();
