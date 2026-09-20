@@ -276,14 +276,40 @@ impl Hilo {
             entry.size
         };
         let now = SystemTime::now();
+        // DF-WARPFS-8: report the BACKING file's real timestamps.
+        //
+        // These four fields used to be `now` — the moment of the stat call — so
+        // every file through the mount claimed the current time. Measured:
+        // README.md disk 20:13:55 vs mount 20:47:12; Makefile disk 2026-07-19 vs
+        // mount 20:47:12; and two sessions minutes apart reported different
+        // values for the same unchanged files. Sizes and content were already
+        // byte-exact, so this was purely metadata dishonesty — and it silently
+        // broke every mtime-based tool (cargo/rsync/make/`git status`) run over
+        // a mount, since nothing ever looked modified.
+        //
+        // A failed stat falls back to `now`: an approximate time is better than
+        // an error here, and the caller cannot act on a getattr failure anyway.
+        let (atime, mtime, ctime, crtime) = match self.backing_metadata(ino, entry) {
+            Some(md) => (
+                md.accessed().unwrap_or(now),
+                md.modified().unwrap_or(now),
+                // std exposes no birth/change time portably; modified time is
+                // the closest honest substitute for ctime, and real ctime is
+                // used for crtime where the platform provides it.
+                md.modified().unwrap_or(now),
+                md.created()
+                    .unwrap_or_else(|_| md.modified().unwrap_or(now)),
+            ),
+            None => (now, now, now, now),
+        };
         FileAttr {
             ino,
             size,
             blocks: size.div_ceil(512),
-            atime: now,
-            mtime: now,
-            ctime: now,
-            crtime: now,
+            atime,
+            mtime,
+            ctime,
+            crtime,
             kind,
             perm: (entry.mode & 0o7777) as u16,
             nlink: if matches!(entry.kind, InodeKind::Directory) {
@@ -297,6 +323,18 @@ impl Hilo {
             blksize: 512,
             flags: 0,
         }
+    }
+
+    /// The on-disk metadata for an inode's backing path (DF-WARPFS-8).
+    /// `None` when the inode is the root, has no backing file, or cannot be
+    /// stat'd — callers then fall back rather than inventing a value.
+    fn backing_metadata(&self, ino: u64, entry: &InodeEntry) -> Option<std::fs::Metadata> {
+        let path = if ino == ROOT_INO {
+            self.root.clone()
+        } else {
+            self.root.join(&entry.path)
+        };
+        std::fs::metadata(path).ok()
     }
 
     /// Reference to the config (used by daemon code).
@@ -671,6 +709,15 @@ pub fn readdir_entries_for_test(
     children: &[(u64, String, bool)],
 ) -> Vec<(u64, i64, String, bool)> {
     readdir_entries(offset, children)
+}
+
+/// Test-only: the `FileAttr` the mount would report for an inode (DF-WARPFS-8),
+/// so metadata honesty is provable without a kernel mount.
+#[doc(hidden)]
+pub fn attr_for_test(wfs: &Hilo, ino: u64) -> Option<FileAttr> {
+    let files = wfs.files.read().unwrap();
+    let entry = files.get(&ino)?;
+    Some(wfs.make_attr(ino, entry))
 }
 
 /// Test-only: does a bare `Hilo` (no stack attached) filter anything? (DF-7)

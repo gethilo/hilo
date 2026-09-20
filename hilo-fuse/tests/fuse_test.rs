@@ -372,7 +372,7 @@ fn test_auto_unmount_off_is_not_reported_as_suppressed() {
 // ephemeral and backend paths but never on the mount itself.
 
 use hilo_backends::IgnoreMatcher;
-use hilo_fuse::ops::{is_ignored_for_test, is_ignored_for_test_absent};
+use hilo_fuse::ops::{attr_for_test, is_ignored_for_test, is_ignored_for_test_absent};
 
 /// The built-in default stack, rebuilt per call (IgnoreMatcher is not Clone).
 fn ignored(rel: &str) -> bool {
@@ -422,4 +422,103 @@ fn test_no_matcher_means_no_filtering() {
     // A mount built without a stack keeps its previous behaviour rather than
     // silently hiding the tree — attaching the stack is an explicit act.
     assert!(!is_ignored_for_test_absent());
+}
+
+// ─── DF-WARPFS-8: getattr must report the BACKING file's mtime ──────────────
+//
+// Measured: README.md disk 2026-09-19 20:13:55 vs mount 20:47:12; Makefile disk
+// 2026-07-19 12:15:26 vs mount 20:47:12; LICENSE disk 2026-06-24 vs mount
+// 20:47:12. The fabricated value was not a constant — it was the moment of the
+// call (two sessions minutes apart disagreed for the same unchanged files).
+// Sizes stayed byte-exact and content hashes matched, so this was purely
+// metadata dishonesty, and it broke every mtime-driven tool run over the mount.
+
+use std::time::{Duration, SystemTime};
+
+#[test]
+fn test_attr_mtime_matches_the_backing_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = test_config(tmp.path().to_path_buf());
+    let wfs = Hilo::new(tmp.path().to_path_buf(), cfg);
+    let p = tmp.path().join("stamped.txt");
+    fs::write(&p, b"x").unwrap();
+
+    // Set a recognisable mtime well in the past (2010-01-01).
+    let past = SystemTime::UNIX_EPOCH + Duration::from_secs(1_262_304_000);
+    filetime_set(&p, past);
+
+    hilo_fuse::ops::populated_child_count(&wfs, 1);
+    let ino = hilo_fuse::ops::inode_for_path(&wfs, "stamped.txt").expect("inode");
+    let attr = attr_for_test(&wfs, ino).expect("attr");
+
+    let backing = fs::metadata(&p).unwrap().modified().unwrap();
+    let got = attr.mtime;
+    let delta = got
+        .duration_since(backing)
+        .or_else(|_| backing.duration_since(got))
+        .unwrap_or_default();
+    assert!(
+        delta < Duration::from_secs(2),
+        "getattr reported mtime {:?} but the backing file's mtime is {:?} — \
+         metadata through the mount must be honest",
+        got,
+        backing
+    );
+    assert!(
+        got < SystemTime::now() - Duration::from_secs(86_400),
+        "mtime looks fabricated (close to now) for a file last touched years ago"
+    );
+}
+
+#[test]
+fn test_attr_mtime_is_stable_across_calls() {
+    // The old bug returned the time OF THE CALL, so two stats disagreed. An
+    // honest mtime does not move for an unmodified file.
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = test_config(tmp.path().to_path_buf());
+    let wfs = Hilo::new(tmp.path().to_path_buf(), cfg);
+    fs::write(tmp.path().join("a.txt"), b"y").unwrap();
+    hilo_fuse::ops::populated_child_count(&wfs, 1);
+    let ino = hilo_fuse::ops::inode_for_path(&wfs, "a.txt").expect("inode");
+
+    let first = attr_for_test(&wfs, ino).expect("attr").mtime;
+    std::thread::sleep(Duration::from_millis(1100));
+    let second = attr_for_test(&wfs, ino).expect("attr").mtime;
+    assert_eq!(
+        first, second,
+        "mtime changed between two stats of an untouched file — that is the \
+         fabricated-time-of-call bug"
+    );
+}
+
+#[test]
+fn test_attr_size_is_still_byte_exact() {
+    // Guard the property that was already correct, so a metadata fix cannot
+    // regress it.
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = test_config(tmp.path().to_path_buf());
+    let wfs = Hilo::new(tmp.path().to_path_buf(), cfg);
+    fs::write(tmp.path().join("s.bin"), b"0123456789").unwrap();
+    hilo_fuse::ops::populated_child_count(&wfs, 1);
+    let ino = hilo_fuse::ops::inode_for_path(&wfs, "s.bin").expect("inode");
+    assert_eq!(attr_for_test(&wfs, ino).expect("attr").size, 10);
+}
+
+/// Set a file's mtime with no extra dependency (utimensat via libc).
+fn filetime_set(path: &std::path::Path, t: SystemTime) {
+    use std::os::unix::ffi::OsStrExt;
+    let secs = t.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs() as i64;
+    let times = [
+        libc::timespec {
+            tv_sec: secs,
+            tv_nsec: 0,
+        },
+        libc::timespec {
+            tv_sec: secs,
+            tv_nsec: 0,
+        },
+    ];
+    let c = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+    let rc = unsafe { libc::utimensat(libc::AT_FDCWD, c.as_ptr(), times.as_ptr(), 0) };
+    assert_eq!(rc, 0, "utimensat failed");
 }
