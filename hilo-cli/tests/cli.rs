@@ -1545,6 +1545,99 @@ fn serve_help_tool_count_matches_tools_list() {
     );
 }
 
+/// GAP-090: every live top-level doc that advertises an MCP tool count must
+/// agree with `hilo_mcp::tools::list_tools()` — the same source of truth the
+/// `serve --help` guard above pins. The list below is an explicit ALLOWLIST,
+/// not a tree walk, by construction: `docs/dogfood/**`, `CHANGELOG.md`,
+/// `.gitreins/history/**` and `SKILL.md` are dated historical records that
+/// legitimately quote older counts (SKILL.md's `15 tools` mentions sit inside
+/// its "Field Notes — dogfood 2026-08-13" section), and scanning them would
+/// fail the suite for history that was true when it was written. Never
+/// "improve" this into an unbounded repo walk.
+#[cfg(unix)]
+#[test]
+fn live_docs_tool_count_matches_tools_list() {
+    const LIVE_DOCS: &[&str] = &[
+        "README.md",
+        "AGENTS.md",
+        "CONTRIBUTING.md",
+        "docs/index.md",
+        "docs/hilo-mcp.md",
+        "docs/mcp-tools.md",
+    ];
+    let root = repo_root();
+    let actual = hilo_mcp::tools::list_tools().len();
+
+    let mut problems: Vec<String> = Vec::new();
+    for doc in LIVE_DOCS {
+        let path = root.join(doc);
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(err) => {
+                problems.push(format!("{doc}: missing or unreadable ({err})"));
+                continue;
+            }
+        };
+        let mut claims = 0;
+        for (idx, line) in text.lines().enumerate() {
+            for count in tool_count_claims(line) {
+                claims += 1;
+                if count != actual {
+                    problems.push(format!(
+                        "{doc}:{}: advertises {count} tools but the server \
+                         exposes {actual} — line reads: {line}",
+                        idx + 1
+                    ));
+                }
+            }
+        }
+        if claims == 0 {
+            problems.push(format!(
+                "{doc}: no `<N> tools` claim found — every file in this \
+                 allowlist carries one today; if the wording changed, check \
+                 it by hand against the real count ({actual})"
+            ));
+        }
+    }
+
+    assert!(
+        problems.is_empty(),
+        "live docs disagree with hilo_mcp::tools::list_tools() ({actual} tools):\n  {}",
+        problems.join("\n  ")
+    );
+}
+
+/// All `<N> tools` / `<N> vfs_* tools` counts advertised on one line.
+/// Total parse: a line without a count claim yields an empty vec, never a
+/// panic, so docs gaining unrelated prose later cannot break the suite.
+fn tool_count_claims(line: &str) -> Vec<usize> {
+    let bytes = line.as_bytes();
+    let mut counts = Vec::new();
+    let mut from = 0;
+    while let Some(rel) = line[from..].find("tools") {
+        let abs = from + rel;
+        // Optional literal `vfs_* ` prefix (`17 vfs_* tools`).
+        let head = line[..abs]
+            .strip_suffix("vfs_* ")
+            .map_or(abs, |stem| stem.len() + "vfs_* ".len());
+        // `<N> ` must sit immediately before the (prefix-stripped) word.
+        if head > 0 && bytes[head - 1] == b' ' {
+            let digits_end = head - 1;
+            let mut start = digits_end;
+            while start > 0 && bytes[start - 1].is_ascii_digit() {
+                start -= 1;
+            }
+            if start < digits_end {
+                if let Ok(n) = line[start..digits_end].parse::<usize>() {
+                    counts.push(n);
+                }
+            }
+        }
+        from = abs + "tools".len();
+    }
+    counts
+}
+
 #[test]
 fn mcp_stdio_stdout_is_pure_jsonrpc() {
     use std::io::Write;
