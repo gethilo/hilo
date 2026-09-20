@@ -21,7 +21,10 @@ Requirements:
 - **Rust 1.80+** — to build from source.
 - **`libfuse3` runtime library** (Ubuntu/Debian package `libfuse3-4`) — the
   shipped `hilo` binary links it (`libfuse3.so.4`), so it must be present to
-  run `hilo` at all, including commands that never mount.
+  run `hilo` at all, including commands that never mount. It is part of the
+  standard Debian/Ubuntu base install (verified present-by-default on a fresh
+  Debian 13 box — no action needed there); only minimal images (containers,
+  stripped-down VMs) need `apt install libfuse3-4` explicitly.
 - **`attr`** — provides `getfattr`/`setfattr`, used for xattr operations
   (reading and writing `user.vfs.*`).
 - **`libfuse3-dev`** — headers and `pkg-config` files, needed only to
@@ -40,6 +43,13 @@ sudo apt install build-essential pkg-config libssl-dev libfuse3-dev attr
 > `libfuse3-dev`) for the crates that link them (`openssl-sys` via `git2`,
 > `hilo-fuse`); `clang` and `CMake` are **not** required for the standard build.
 > Subsequent builds are incremental and fast (~seconds).
+>
+> **Verified fresh-install (2026-09-20 dogfood run):** public clone at
+> a8a401d on a bare Debian 13 box (nothing preinstalled) — rustup minimal →
+> `cargo build --release` RC=0 in 1146s (19m06s) → `--version`, `init`,
+> `warm`, `stats` all pass. Warming hilo's own repo: 6.2s cold, 0.13s
+> incremental (102/103 parse-cache hits), 968 edges across 97 files. Full
+> evidence: `docs/dogfood/2026-09-20-integration.md`.
 
 ## The Problem
 
