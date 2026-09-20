@@ -774,7 +774,10 @@ pub fn run_impact(path: &str, max_depth: u32, format: Option<&str>, external: bo
         // GAP-039: same node-existence check for the external path —
         // unknown paths must fail loudly, not look like zero dependents.
         if !graph.file_in_graph(path)? && !Path::new(path).exists() {
-            anyhow::bail!("'{path}' is not in the graph (no such file and no matching graph node)");
+            anyhow::bail!(
+                "'{path}' is not in the graph (no such file and no matching graph node). {}",
+                hilo_graph::graph::UNRESOLVABLE_TARGET_HINT
+            );
         }
         // For external: parse start file first, then use cross-repo BFS.
         graph.ensure_parsed(path)?;

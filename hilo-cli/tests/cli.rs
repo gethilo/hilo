@@ -971,6 +971,76 @@ fn graph_related_nonexistent_file_errors() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+// ─────────────── graph: file: prefix + id-form teaching (DF-WARPFS-2) ───────
+
+/// DF-WARPFS-2: `hilo graph impact/related` must accept a `file:`-prefixed
+/// repo-relative path exactly like the bare path (the dogfood run showed the
+/// CLI rejecting the documented id form with a file-not-found-shaped error),
+/// and an unresolvable target's error must teach the three accepted id
+/// shapes instead of reading as plain file-not-found.
+#[test]
+fn graph_accepts_file_prefixed_path_and_teaches_id_forms() {
+    let dir = unique_tempdir("file-prefix");
+    fs::write(dir.join("main.go"), "package main\n\nimport \"fmt\"\n")
+        .expect("failed to write main.go");
+
+    // Both subcommands: the `file:` form must resolve like the bare form
+    // (exit 0, and NOT the unresolvable-target error).
+    for args in [
+        vec!["graph", "impact", "file:main.go"],
+        vec!["graph", "related", "file:main.go"],
+    ] {
+        let output = hilo_cmd()
+            .args(&args)
+            .current_dir(&dir)
+            .output()
+            .expect("failed to spawn hilo graph");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "{args:?} on file:main.go should succeed, stderr: {stderr}"
+        );
+        assert!(
+            !stderr.contains("is not in the graph"),
+            "{args:?} must not read as file-not-found, stderr: {stderr}"
+        );
+        assert!(
+            !stdout.contains("is not in the graph"),
+            "{args:?} must not read as file-not-found, stdout: {stdout}"
+        );
+    }
+
+    // An unresolvable target (bare and `file:` forms) must exit non-zero
+    // with the stable "is not in the graph" substring AND the id-form hint.
+    for target in ["nonexistent.rs", "file:nonexistent.rs"] {
+        let output = hilo_cmd()
+            .args(["graph", "impact", target])
+            .current_dir(&dir)
+            .output()
+            .expect("failed to spawn hilo graph impact");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !output.status.success(),
+            "graph impact {target} should exit non-zero, stderr: {stderr}"
+        );
+        for form in [
+            "is not in the graph",
+            "Accepted id forms",
+            "bare repo-relative path",
+            "sys:<header>",
+            "pkg:<crate>",
+        ] {
+            assert!(
+                stderr.contains(form),
+                "stderr must name '{form}' for {target}, got: {stderr}"
+            );
+        }
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 // ─────────────── graph related (GAP-083 file vs crate level) ───────────────
 
 /// GAP-083: a reverse query on a file with ZERO file-level importers but N

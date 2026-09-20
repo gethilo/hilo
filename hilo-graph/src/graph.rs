@@ -33,6 +33,25 @@ fn is_js_like_file(path: &str) -> bool {
     matches!(ext, "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs")
 }
 
+/// Strip a leading `file:` id prefix (DF-WARPFS-2): `file:src/main.rs`
+/// resolves exactly like the bare repo-relative path. One strip only, so
+/// `file:file:x` still targets a path literally named `file:x`; `pkg:` and
+/// `sys:` id forms (and everything else) pass through untouched. Shared by
+/// the graph entry points so MCP and FFI callers get the same
+/// normalization as the CLI.
+pub fn strip_file_prefix(path: &str) -> &str {
+    path.strip_prefix("file:").unwrap_or(path)
+}
+
+/// The unresolvable-target error message shared by `impact_or_parse`,
+/// `related_or_parse`, and the CLI's external-impact bail. Keeps the stable
+/// "is not in the graph" substring (asserted across the CLI/MCP test
+/// suites) and, since DF-WARPFS-2, teaches the accepted id forms so an
+/// agent can self-correct (e.g. drop a `file:` prefix) instead of reading
+/// the message as plain file-not-found.
+pub const UNRESOLVABLE_TARGET_HINT: &str =
+    "Accepted id forms: bare repo-relative path (src/main.rs), sys:<header>, pkg:<crate>";
+
 /// Direction for edge queries: forward (`"from" = ?`) or reverse (`"to" = ?`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
@@ -1080,6 +1099,11 @@ impl GraphDB {
         // PERF-004: same short-circuit as impact_or_parse (see there). GAP-081
         // phase 2a: it applies only when the path is NOT a graph endpoint — a
         // `.proto` contract anchor is an endpoint, so its answer is real.
+        // DF-WARPFS-2: a `file:`-prefixed target resolves exactly like the
+        // bare path — normalize once up front so every check below (guards,
+        // cache lookup, on-the-fly parse) and the query itself use the bare
+        // form, and an unresolvable target's error names the bare form.
+        let path = strip_file_prefix(path);
         if !path.starts_with("pkg:") && !path.starts_with("sys:") {
             let not_indexable = Path::new(path)
                 .extension()
@@ -1107,7 +1131,7 @@ impl GraphDB {
             && !Path::new(path).exists()
         {
             return Err(GraphError::Other(format!(
-                "'{path}' is not in the graph (no such file and no matching graph node)"
+                "'{path}' is not in the graph (no such file and no matching graph node). {UNRESOLVABLE_TARGET_HINT}"
             )));
         }
 
@@ -1135,6 +1159,11 @@ impl GraphDB {
         start_path: &str,
         max_depth: u32,
     ) -> GraphResult<Vec<ImpactFile>> {
+        // DF-WARPFS-2: a `file:`-prefixed target resolves exactly like the
+        // bare path — normalize once up front so every check below (guards,
+        // cache lookup, on-the-fly parse) and the BFS itself use the bare
+        // form, and an unresolvable target's error names the bare form.
+        let start_path = strip_file_prefix(start_path);
         // Node-existence check at query time: unknown paths (not in graph,
         // not on disk) must fail loudly instead of looking like a node with
         // zero dependents. Symbol nodes (pkg:/sys:) pass when in the graph.
@@ -1164,7 +1193,7 @@ impl GraphDB {
         }
         if !self.file_in_graph(start_path)? && !Path::new(start_path).exists() {
             return Err(GraphError::Other(format!(
-                "'{start_path}' is not in the graph (no such file and no matching graph node)"
+                "'{start_path}' is not in the graph (no such file and no matching graph node). {UNRESOLVABLE_TARGET_HINT}"
             )));
         }
         // Parse the start file first (no-op if already cached).
@@ -1453,6 +1482,125 @@ mod tests {
         db.insert_edges(&edges).unwrap();
         let results = db.impact_or_parse("pkg:fmt", 3).unwrap();
         assert_eq!(results.len(), 2, "pkg:fmt should have 2 dependents");
+    }
+
+    // ── DF-WARPFS-2: `file:` id-prefix normalization + teaching errors ──
+
+    #[test]
+    fn strip_file_prefix_strips_one_prefix_only() {
+        // One strip: `file:src/main.rs` → the bare path. `pkg:`/`sys:` and
+        // unprefixed paths pass through; a doubled `file:file:x` keeps its
+        // inner `file:` (it targets a path literally named `file:x`).
+        assert_eq!(strip_file_prefix("file:src/main.rs"), "src/main.rs");
+        assert_eq!(strip_file_prefix("src/main.rs"), "src/main.rs");
+        assert_eq!(strip_file_prefix("pkg:serde"), "pkg:serde");
+        assert_eq!(strip_file_prefix("sys:stdio.h"), "sys:stdio.h");
+        assert_eq!(strip_file_prefix("file:file:x.rs"), "file:x.rs");
+    }
+
+    #[test]
+    fn file_prefixed_path_resolves_like_bare_path_in_related() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_go_file(dir.path(), "main.go", "package main\n\nimport \"fmt\"\n");
+        let edges = vec![Edge::new("consumer.go", &path, "imports")];
+
+        let bare_db = GraphDB::open(":memory:").unwrap();
+        bare_db.insert_edges(&edges).unwrap();
+        let bare = bare_db
+            .related_or_parse(&path, None, Direction::Reverse)
+            .expect("bare path must resolve");
+        assert_eq!(bare.len(), 1, "the bare node has exactly the seeded edge");
+
+        // An identical store queried through the `file:` form must return
+        // the same edges — the prefix resolves to the bare node.
+        let prefixed_db = GraphDB::open(":memory:").unwrap();
+        prefixed_db.insert_edges(&edges).unwrap();
+        let prefixed = prefixed_db
+            .related_or_parse(&format!("file:{path}"), None, Direction::Reverse)
+            .expect("a file:-prefixed path must resolve like the bare path");
+        assert_eq!(prefixed, bare, "prefixed and bare queries must agree");
+        assert!(
+            !prefixed_db.file_in_graph(&format!("file:{path}")).unwrap(),
+            "the prefixed form must not become its own graph node"
+        );
+    }
+
+    #[test]
+    fn file_prefixed_path_resolves_like_bare_path_in_impact() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_go_file(dir.path(), "main.go", "package main\n\nimport \"fmt\"\n");
+        let edges = vec![Edge::new("consumer.go", &path, "imports")];
+
+        let bare_db = GraphDB::open(":memory:").unwrap();
+        bare_db.insert_edges(&edges).unwrap();
+        let bare = bare_db.impact_or_parse(&path, 8).unwrap();
+
+        let prefixed_db = GraphDB::open(":memory:").unwrap();
+        prefixed_db.insert_edges(&edges).unwrap();
+        let prefixed = prefixed_db
+            .impact_or_parse(&format!("file:{path}"), 8)
+            .expect("a file:-prefixed path must resolve like the bare path");
+
+        let mut bare_paths: Vec<String> = bare.iter().map(|f| f.path.clone()).collect();
+        bare_paths.sort();
+        let mut prefixed_paths: Vec<String> = prefixed.iter().map(|f| f.path.clone()).collect();
+        prefixed_paths.sort();
+        assert_eq!(
+            prefixed_paths, bare_paths,
+            "prefixed and bare impact must agree, bare={bare:?} prefixed={prefixed:?}"
+        );
+        assert!(
+            !prefixed_db.file_in_graph(&format!("file:{path}")).unwrap(),
+            "the prefixed form must not become its own graph node"
+        );
+    }
+
+    #[test]
+    fn unresolvable_target_error_teaches_id_forms() {
+        // DF-WARPFS-2: the unresolvable-target error must keep the stable
+        // "is not in the graph" contract AND teach the three accepted id
+        // shapes — a `file:`-prefixed typo must read as "drop the prefix",
+        // not as plain file-not-found. Same wording for both entry points
+        // and for the bare and `file:` input forms.
+        let db = GraphDB::open(":memory:").unwrap();
+        for target in ["no/such/file_xyz.rs", "file:no/such/file_xyz.rs"] {
+            let impact_msg = db
+                .impact_or_parse(target, 3)
+                .expect_err("unresolvable target must error")
+                .to_string();
+            assert!(
+                impact_msg.contains("is not in the graph"),
+                "stable substring must survive, got: {impact_msg}"
+            );
+            for form in [
+                "Accepted id forms",
+                "bare repo-relative path",
+                "sys:<header>",
+                "pkg:<crate>",
+            ] {
+                assert!(
+                    impact_msg.contains(form),
+                    "impact error must name '{form}', got: {impact_msg}"
+                );
+            }
+
+            let related_msg = db
+                .related_or_parse(target, None, Direction::Reverse)
+                .expect_err("unresolvable target must error")
+                .to_string();
+            for form in [
+                "is not in the graph",
+                "Accepted id forms",
+                "bare repo-relative path",
+                "sys:<header>",
+                "pkg:<crate>",
+            ] {
+                assert!(
+                    related_msg.contains(form),
+                    "related error must name '{form}', got: {related_msg}"
+                );
+            }
+        }
     }
 
     // ── Free-function tests: ensure_schema + insert_edges_into ──────────
