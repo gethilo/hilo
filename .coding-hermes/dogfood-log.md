@@ -200,3 +200,24 @@ at exact HEAD 6f0430b → rustup minimal 1.98.1 → `cargo build --release` RC=0
 (1142s = 19m02s clean; README's 15-20 min claim accurate) → `hilo 0.3.0` +
 init/warm/stats smoke on hilo itself. Third box confirming clang/CMake
 unnecessary (GAP-068). Agent destroyed, bunker clean.
+
+---
+
+## 2026-09-20 (warpfs-dogfood tick 2026-09-20-00-06-24)
+
+verdict: SHIPPABLE (PROMISING-BUT-ROUGH not warranted; two P2 UX/doc rows filed)
+promise: agent gets a pre-built codebase map via xattr/CLI/MCP without file reads
+consumer pass: scratch clone at HEAD a8a401d — init 9ms / warm 6.2s cold,
+0.13s incremental (102/103 cache hits), impact+related+search+module+untested+
+classify+xattr+MCP(17 tools) all worked; clean→warm rebuild healthy.
+time-to-first-success: ~2 min (init+warm). Friction count: 2 (id-form UX,
+README libfuse wording).
+bunker install leg: PASSED — clone public repo a8a401d on fresh Debian 13,
+rustup minimal, cargo build --release RC=0 1146s, smoke (version/init/warm/
+stats) OK. agent 9d7da1d4 destroyed, key removed.
+infra finding: 6 spawn 500s across las-03/04 from get.docker.com throughput
+collapse + server-side kill (DF-WARPFS-3); CLI 0.1.4 (300s request budget)
+built from ~/bunker and installed locally to unblock — 0.1.3 in PATH still
+had the 30s CLI deadline (REUSED FIX, did not edit daemon).
+rows: DF-WARPFS-1..4 appended to board (verified at tail, 164 lines).
+left behind: docs/dogfood/2026-09-20-integration.md, this log entry.

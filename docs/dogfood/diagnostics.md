@@ -332,3 +332,22 @@ rustup absent by default (expected), clang/CMake absent and unneeded
 (third confirmation of GAP-068). See the 2026-09-13 integration report
 for timing.
 
+
+## Run 6 — 2026-09-20 (warpfs-dogfood)
+
+- Fresh-bunker install proven on a third machine (Debian 13): clone →
+  rustup → release build 1146s → smoke pass. No sudo used at any point;
+  the README dependency list is additive-only on trixie (base image
+  already had the libfuse3-4 runtime lib; the build never needed the dev
+  headers or pkg-config).
+- Spawn-infra diagnosis: the CLI reported deadline_exceeded at exactly
+  the CLI-side timeout. After verifying the repo source already carries
+  the 300s request budget (cli/spawn.go 137), the 0.1.4 CLI was rebuilt
+  from ~/bunker and REUSED — the daemon was not rebuilt or edited. The
+  server journal shows the kill happening inside the rootless installer
+  ~45-49s in even so, so the CLI fix alone may not be the whole story;
+  DF-WARPFS-3 asks the bunker project to arm the rootlessInstallerCacheDir
+  host-cache seam and re-check the server-side budget.
+- Consumer surface verdict: no P0/P1 product defects found. GAP-070
+  (clean → warm strands the user) regression-checked as fixed: clean
+  removed 4 cache files, next warm fully rebuilt, stats healthy.
