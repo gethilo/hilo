@@ -7,10 +7,124 @@
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Path to the compiled CLI binary, injected by Cargo at compile time.
 const BIN: &str = env!("CARGO_BIN_EXE_hilo");
+
+/// Number of spawn retries after a concurrent-relink casualty.
+const RELINK_RETRIES: usize = 3;
+/// Pause between spawn retries.
+const RELINK_RETRY_SLEEP: Duration = Duration::from_secs(2);
+
+/// Start building a `hilo` command, hardened against concurrent relinks.
+///
+/// INT-GITREINS-004: while another `cargo build` relinks `target/debug/hilo`,
+/// every spawn in this file can fail with ENOENT ("No such file or
+/// directory"), fail with ETXTBSY, or die instantly with a dynamic-linker
+/// error (empty stdout+stderr, no exit code). That made all 33+ integration
+/// tests fail in milliseconds whenever a concurrent build ran — the
+/// documented false-red. Always build spawn chains from this constructor and
+/// run them through [`run_hilo_with_retry`] / [`spawn_hilo_with_retry`],
+/// which detect those signatures and retry.
+fn hilo_cmd() -> Command {
+    Command::new(BIN)
+}
+
+/// Classify a spawn result as a concurrent-relink casualty (INT-GITREINS-004).
+///
+/// A casualty is one of:
+/// - the spawn call itself failed with `NotFound` (the linker has the path
+///   mid-rename) or ETXTBSY (os error 26: the old image is still executing
+///   while the linker swaps the file), or
+/// - the child died instantly with empty stdout+stderr and either no exit
+///   code (killed by a signal) or code 132/134 (a wrapper shell reporting
+///   128+SIGILL / 128+SIGABRT for a link-time crash).
+fn spawn_hit_relink(
+    spawn_err: Option<&std::io::Error>,
+    output: Option<&std::process::Output>,
+) -> bool {
+    if let Some(err) = spawn_err {
+        if err.kind() == std::io::ErrorKind::NotFound {
+            return true;
+        }
+        if err.raw_os_error() == Some(26) {
+            return true; // ETXTBSY
+        }
+    }
+    if let Some(out) = output {
+        let empty = out.stdout.is_empty() && out.stderr.is_empty();
+        let instant_link_death = empty
+            && (!out.status.success())
+            && (out.status.code().is_none()
+                || out.status.code() == Some(132)
+                || out.status.code() == Some(134));
+        if instant_link_death {
+            return true;
+        }
+    }
+    false
+}
+
+/// Run `hilo` to completion, retrying concurrent-relink casualties.
+///
+/// INT-GITREINS-004: up to [`RELINK_RETRIES`] retries with
+/// [`RELINK_RETRY_SLEEP`] pauses; the final attempt's output is always
+/// returned so genuine failures still surface to the caller's asserts.
+fn run_hilo_with_retry(cmd: &mut Command) -> std::process::Output {
+    for attempt in 0..=RELINK_RETRIES {
+        match cmd.output() {
+            Ok(out) => {
+                if attempt < RELINK_RETRIES && spawn_hit_relink(None, Some(&out)) {
+                    eprintln!(
+                        "INT-GITREINS-004: hilo died like a relink casualty (status {:?}, \
+                         stdout {}B, stderr {}B); retry {}/{} in 2s",
+                        out.status,
+                        out.stdout.len(),
+                        out.stderr.len(),
+                        attempt + 1,
+                        RELINK_RETRIES
+                    );
+                    std::thread::sleep(RELINK_RETRY_SLEEP);
+                    continue;
+                }
+                return out;
+            }
+            Err(err) => {
+                if attempt < RELINK_RETRIES && spawn_hit_relink(Some(&err), None) {
+                    eprintln!(
+                        "INT-GITREINS-004: spawn failed with {err}; retry {}/{} in 2s",
+                        attempt + 1,
+                        RELINK_RETRIES
+                    );
+                    std::thread::sleep(RELINK_RETRY_SLEEP);
+                    continue;
+                }
+                panic!("failed to spawn hilo: {err}");
+            }
+        }
+    }
+    unreachable!("retry loop always returns or panics")
+}
+
+/// Spawn `hilo` with piped stdio, retrying concurrent-relink casualties.
+fn spawn_hilo_with_retry(cmd: &mut Command) -> std::process::Child {
+    for attempt in 0..=RELINK_RETRIES {
+        match cmd.spawn() {
+            Ok(child) => return child,
+            Err(err) if attempt < RELINK_RETRIES && spawn_hit_relink(Some(&err), None) => {
+                eprintln!(
+                    "INT-GITREINS-004: spawn failed with {err}; retry {}/{} in 2s",
+                    attempt + 1,
+                    RELINK_RETRIES
+                );
+                std::thread::sleep(RELINK_RETRY_SLEEP);
+            }
+            Err(err) => panic!("failed to spawn hilo: {err}"),
+        }
+    }
+    unreachable!("retry loop always returns or panics")
+}
 
 /// Create a unique temporary directory under the system temp dir.
 ///
@@ -34,11 +148,7 @@ fn unique_tempdir(label: &str) -> PathBuf {
 /// GAP-086: `graph warm` and `serve --mcp` require a project root, so any
 /// test that expects them to proceed has to initialize first.
 fn init_project(dir: &std::path::Path) {
-    let output = Command::new(BIN)
-        .arg("init")
-        .current_dir(dir)
-        .output()
-        .expect("failed to spawn hilo init");
+    let output = run_hilo_with_retry(hilo_cmd().arg("init").current_dir(dir));
     assert!(
         output.status.success(),
         "init failed: {}",
@@ -48,11 +158,7 @@ fn init_project(dir: &std::path::Path) {
 
 /// Run `hilo <args>` in `dir`, asserting it exited 0, and return stdout.
 fn run_hilo_ok(dir: &std::path::Path, args: &[&str]) -> String {
-    let output = Command::new(BIN)
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .unwrap_or_else(|e| panic!("failed to spawn hilo {}: {e}", args.join(" ")));
+    let output = run_hilo_with_retry(hilo_cmd().args(args).current_dir(dir));
     assert!(
         output.status.success(),
         "hilo {} failed: {}",
@@ -67,7 +173,7 @@ fn run_hilo_ok(dir: &std::path::Path, args: &[&str]) -> String {
 #[test]
 fn init_creates_vfs_and_manifest() {
     let dir = unique_tempdir("init");
-    let output = Command::new(BIN)
+    let output = hilo_cmd()
         .arg("init")
         .current_dir(&dir)
         .output()
@@ -99,7 +205,7 @@ fn init_is_idempotent() {
     let dir = unique_tempdir("idempotent");
 
     for i in 0..2 {
-        let output = Command::new(BIN)
+        let output = hilo_cmd()
             .arg("init")
             .current_dir(&dir)
             .output()
@@ -189,7 +295,7 @@ fn init_without_flag_installs_hooks_by_default() {
 /// GAP-087: the opt-out is documented in `hilo init --help`.
 #[test]
 fn init_help_documents_no_hooks() {
-    let out = Command::new(BIN)
+    let out = hilo_cmd()
         .args(["init", "--help"])
         .output()
         .expect("failed to spawn hilo init --help");
@@ -205,7 +311,7 @@ fn init_help_documents_no_hooks() {
 
 #[test]
 fn meta_nonexistent_file_errors() {
-    let output = Command::new(BIN)
+    let output = hilo_cmd()
         .args(["meta", "/nonexistent/path/to/no/such/file"])
         .output()
         .expect("failed to spawn hilo meta");
@@ -224,7 +330,7 @@ fn meta_set_with_equals_in_name_is_usage_error() {
 
     // GAP-067: `--set role=core` used to exit 0 and create a garbage xattr
     // literally named user.vfs.role=core with an empty value.
-    let output = Command::new(BIN)
+    let output = hilo_cmd()
         .args([
             "meta",
             file.to_str().expect("utf8 path"),
@@ -257,7 +363,7 @@ fn meta_set_with_equals_in_name_is_usage_error() {
 fn graph_stats_no_data_prints_message() {
     let dir = unique_tempdir("graph-stats");
 
-    let output = Command::new(BIN)
+    let output = hilo_cmd()
         .args(["graph", "stats"])
         .current_dir(&dir)
         .output()
@@ -284,7 +390,7 @@ fn classify_dry_run_does_not_require_vfs() {
     // `classify --dry-run` on an empty directory should exit 0 gracefully.
     let dir = unique_tempdir("classify-dry");
 
-    let output = Command::new(BIN)
+    let output = hilo_cmd()
         .args(["classify", "--dry-run"])
         .current_dir(&dir)
         .output()
@@ -307,7 +413,7 @@ fn classify_dry_run_with_source_file() {
     fs::create_dir_all(&src_dir).expect("failed to create src dir");
     fs::write(src_dir.join("main.rs"), "fn main() {}").expect("failed to write main.rs");
 
-    let output = Command::new(BIN)
+    let output = hilo_cmd()
         .args(["classify", "--dry-run", "-v"])
         .current_dir(&dir)
         .output()
@@ -349,7 +455,7 @@ fn graph_warm_reports_exclusions_on_normal_and_cached_runs() {
     fs::write(dir.join("vendor/README.txt"), "documentation\n").expect("failed to write README");
     fs::write(dir.join("vendor/asset.bin"), [0_u8, 1, 2]).expect("failed to write asset");
 
-    let init = Command::new(BIN)
+    let init = hilo_cmd()
         .arg("init")
         .current_dir(&dir)
         .output()
@@ -360,7 +466,7 @@ fn graph_warm_reports_exclusions_on_normal_and_cached_runs() {
         String::from_utf8_lossy(&init.stderr)
     );
 
-    let warm = Command::new(BIN)
+    let warm = hilo_cmd()
         .args(["graph", "warm"])
         .current_dir(&dir)
         .output()
@@ -380,7 +486,7 @@ fn graph_warm_reports_exclusions_on_normal_and_cached_runs() {
         "Excluded 4 supported source files (vendor: 1, go/pkg/mod: 1, node_modules: 1, hidden: 1)"
     );
 
-    let cached = Command::new(BIN)
+    let cached = hilo_cmd()
         .args(["graph", "warm"])
         .current_dir(&dir)
         .output()
@@ -444,7 +550,7 @@ fn graph_warm_accounts_for_every_discovered_file() {
         }
     }
 
-    let init = Command::new(BIN)
+    let init = hilo_cmd()
         .arg("init")
         .current_dir(&dir)
         .output()
@@ -455,7 +561,7 @@ fn graph_warm_accounts_for_every_discovered_file() {
         String::from_utf8_lossy(&init.stderr)
     );
 
-    let warm = Command::new(BIN)
+    let warm = hilo_cmd()
         .args(["graph", "warm"])
         .current_dir(&dir)
         .output()
@@ -495,7 +601,7 @@ fn graph_warm_accounts_for_every_discovered_file() {
             .expect("failed to restore locked.rs permissions");
     }
     for round in 2..=3 {
-        let rewarm = Command::new(BIN)
+        let rewarm = hilo_cmd()
             .args(["graph", "warm"])
             .current_dir(&dir)
             .output()
@@ -528,7 +634,7 @@ fn graph_warm_accounts_for_every_discovered_file() {
 
 #[test]
 fn graph_warm_help_documents_discovery_overrides() {
-    let output = Command::new(BIN)
+    let output = hilo_cmd()
         .args(["graph", "warm", "--help"])
         .output()
         .expect("failed to spawn graph warm help");
@@ -580,7 +686,7 @@ fn graph_warm_creates_graph_directory() {
     .expect("failed to write helper.go");
 
     // Initialize VFS first.
-    let init_output = Command::new(BIN)
+    let init_output = hilo_cmd()
         .arg("init")
         .current_dir(&dir)
         .output()
@@ -592,7 +698,7 @@ fn graph_warm_creates_graph_directory() {
     );
 
     // Run graph warm.
-    let output = Command::new(BIN)
+    let output = hilo_cmd()
         .args(["graph", "warm"])
         .current_dir(&dir)
         .output()
@@ -632,7 +738,7 @@ fn graph_clean_rewarms_after_invalidating_parse_cache() {
     )
     .expect("failed to write main.go");
 
-    let init = Command::new(BIN)
+    let init = hilo_cmd()
         .arg("init")
         .current_dir(&dir)
         .output()
@@ -643,7 +749,7 @@ fn graph_clean_rewarms_after_invalidating_parse_cache() {
         String::from_utf8_lossy(&init.stderr)
     );
 
-    let warm = Command::new(BIN)
+    let warm = hilo_cmd()
         .args(["graph", "warm"])
         .current_dir(&dir)
         .output()
@@ -659,7 +765,7 @@ fn graph_clean_rewarms_after_invalidating_parse_cache() {
         "first warm must populate the parse cache"
     );
 
-    let clean = Command::new(BIN)
+    let clean = hilo_cmd()
         .args(["graph", "clean"])
         .current_dir(&dir)
         .output()
@@ -681,7 +787,7 @@ fn graph_clean_rewarms_after_invalidating_parse_cache() {
 
     // Do not touch the source between clean and warm: this is the stale-cache
     // recovery path that previously hit the all-cached early return.
-    let rewarm = Command::new(BIN)
+    let rewarm = hilo_cmd()
         .args(["graph", "warm"])
         .current_dir(&dir)
         .output()
@@ -697,7 +803,7 @@ fn graph_clean_rewarms_after_invalidating_parse_cache() {
         String::from_utf8_lossy(&rewarm.stdout)
     );
 
-    let stats = Command::new(BIN)
+    let stats = hilo_cmd()
         .args(["graph", "stats"])
         .current_dir(&dir)
         .output()
@@ -732,7 +838,7 @@ fn graph_warm_language_filter_unknown_errors() {
     let dir = unique_tempdir("warm-lang");
 
     // Init first.
-    let init_output = Command::new(BIN)
+    let init_output = hilo_cmd()
         .arg("init")
         .current_dir(&dir)
         .output()
@@ -743,7 +849,7 @@ fn graph_warm_language_filter_unknown_errors() {
         String::from_utf8_lossy(&init_output.stderr)
     );
 
-    let output = Command::new(BIN)
+    let output = hilo_cmd()
         .args(["graph", "warm", "--language", "cobol"])
         .current_dir(&dir)
         .output()
@@ -769,7 +875,7 @@ fn graph_warm_language_filter_unknown_errors() {
 fn graph_impact_nonexistent_file_errors() {
     let dir = unique_tempdir("impact");
 
-    let output = Command::new(BIN)
+    let output = hilo_cmd()
         .args(["graph", "impact", "nonexistent.rs"])
         .current_dir(&dir)
         .output()
@@ -798,7 +904,7 @@ fn graph_impact_nonexistent_file_errors() {
 fn graph_module_unknown_prefix_errors() {
     let dir = unique_tempdir("module");
 
-    let output = Command::new(BIN)
+    let output = hilo_cmd()
         .args(["graph", "module", "no/such/dir"])
         .current_dir(&dir)
         .output()
@@ -841,7 +947,7 @@ fn graph_related_nonexistent_file_errors() {
     ];
 
     for args in cases {
-        let output = Command::new(BIN)
+        let output = hilo_cmd()
             .args(args)
             .current_dir(&dir)
             .output()
@@ -903,7 +1009,7 @@ fn graph_related_reverse_reports_file_level_and_crate_level_counts() {
     )
     .expect("failed to write crates/b/src/main.rs");
 
-    let init = Command::new(BIN)
+    let init = hilo_cmd()
         .arg("init")
         .current_dir(&dir)
         .output()
@@ -916,7 +1022,7 @@ fn graph_related_reverse_reports_file_level_and_crate_level_counts() {
 
     // The importer's edge must exist in the graph: `related` only lazily parses
     // the QUERIED file, so warm is what puts crates/b/src/main.rs in.
-    let warm = Command::new(BIN)
+    let warm = hilo_cmd()
         .args(["graph", "warm"])
         .current_dir(&dir)
         .output()
@@ -927,7 +1033,7 @@ fn graph_related_reverse_reports_file_level_and_crate_level_counts() {
         String::from_utf8_lossy(&warm.stderr)
     );
 
-    let output = Command::new(BIN)
+    let output = hilo_cmd()
         .args([
             "graph",
             "related",
@@ -997,7 +1103,7 @@ fn graph_warm_without_init_errors_naming_init() {
     )
     .expect("failed to write main.go");
 
-    let output = Command::new(BIN)
+    let output = hilo_cmd()
         .args(["graph", "warm"])
         .current_dir(&dir)
         .output()
@@ -1028,7 +1134,7 @@ fn graph_warm_without_init_creates_no_partial_graph() {
     let dir = unique_tempdir("warm-without-init-artifacts");
     fs::write(dir.join("lib.rs"), "fn lib() {}\n").expect("failed to write lib.rs");
 
-    let output = Command::new(BIN)
+    let output = hilo_cmd()
         .args(["graph", "warm"])
         .current_dir(&dir)
         .output()
@@ -1247,7 +1353,7 @@ fn serve_mcp_exits_cleanly_on_eof() {
     // so run it in an initialized project (an empty one is valid).
     let dir = unique_tempdir("serve-eof");
     init_project(&dir);
-    let output = Command::new(BIN)
+    let output = hilo_cmd()
         .args(["serve", "--mcp"])
         .current_dir(&dir)
         .output()
@@ -1271,7 +1377,7 @@ fn serve_mcp_without_project_errors_naming_init() {
     // GAP-086: outside a Hilo project the server used to start and answer
     // from a zeroed graph. It must refuse up front and name `hilo init`.
     let dir = unique_tempdir("serve-without-project");
-    let output = Command::new(BIN)
+    let output = hilo_cmd()
         .args(["serve", "--mcp"])
         .current_dir(&dir)
         .output()
@@ -1301,7 +1407,7 @@ fn serve_mcp_without_project_errors_naming_init() {
 
 #[test]
 fn serve_without_flag_errors() {
-    let output = Command::new(BIN)
+    let output = hilo_cmd()
         .args(["serve"])
         .output()
         .expect("failed to spawn hilo serve");
@@ -1347,7 +1453,7 @@ fn advertised_tool_count(help: &str) -> usize {
 /// without updating the help text fails here, naming the number to write.
 #[test]
 fn serve_help_tool_count_matches_tools_list() {
-    let output = Command::new(BIN)
+    let output = hilo_cmd()
         .args(["serve", "--help"])
         .output()
         .expect("failed to spawn hilo serve --help");
@@ -1377,14 +1483,14 @@ fn mcp_stdio_stdout_is_pure_jsonrpc() {
     let dir = unique_tempdir("mcp-purity");
     // GAP-086: the MCP server requires a project root.
     init_project(&dir);
-    let mut child = Command::new(BIN)
-        .args(["serve", "--mcp"])
-        .current_dir(&dir)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("failed to spawn hilo serve --mcp");
+    let mut child = spawn_hilo_with_retry(
+        hilo_cmd()
+            .args(["serve", "--mcp"])
+            .current_dir(&dir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    );
 
     // Naive client: send initialize -> tools/list -> tools/call, then EOF.
     {
@@ -1442,7 +1548,7 @@ fn ignore_check_reports_decision_and_rule() {
     fs::write(dir.join(".hiloignore"), "*.bin\nbuild/\n!keep.bin\n").expect("write .hiloignore");
 
     // Ignored path: prints ignored:true with the matching rule.
-    let out = Command::new(BIN)
+    let out = hilo_cmd()
         .args(["ignore", "check", "a.bin"])
         .current_dir(&dir)
         .output()
@@ -1467,7 +1573,7 @@ fn ignore_check_reports_decision_and_rule() {
     );
 
     // Re-included path: not ignored, but the deciding rule is reported.
-    let out = Command::new(BIN)
+    let out = hilo_cmd()
         .args(["ignore", "check", "keep.bin"])
         .current_dir(&dir)
         .output()
@@ -1483,7 +1589,7 @@ fn ignore_check_reports_decision_and_rule() {
     );
 
     // Unmatched path: not ignored, no rule.
-    let out = Command::new(BIN)
+    let out = hilo_cmd()
         .args(["ignore", "check", "src/main.rs"])
         .current_dir(&dir)
         .output()
@@ -1507,7 +1613,7 @@ fn ignore_check_reports_decision_and_rule() {
 fn ignore_check_reports_builtin_defaults_and_no_defaults_flag() {
     let dir = unique_tempdir("ignore-check-builtins");
     // No .hiloignore: built-in defaults apply (spec §4.2).
-    let out = Command::new(BIN)
+    let out = hilo_cmd()
         .args(["ignore", "check", "target/artifact.bin"])
         .current_dir(&dir)
         .output()
@@ -1523,7 +1629,7 @@ fn ignore_check_reports_builtin_defaults_and_no_defaults_flag() {
     );
 
     // --no-default-ignores disables the builtins.
-    let out = Command::new(BIN)
+    let out = hilo_cmd()
         .args([
             "ignore",
             "check",
@@ -1547,7 +1653,7 @@ fn ignore_check_reports_nested_ignore_source() {
     let dir = unique_tempdir("ignore-check-nested");
     fs::create_dir(dir.join("sub")).expect("mkdir sub");
     fs::write(dir.join("sub/.hiloignore"), "secret.txt\n").expect("write nested");
-    let out = Command::new(BIN)
+    let out = hilo_cmd()
         .args(["ignore", "check", "sub/secret.txt"])
         .current_dir(&dir)
         .output()
@@ -1582,7 +1688,7 @@ fn ephemeral_fixture(label: &str) -> PathBuf {
 #[test]
 fn workspace_ephemeral_lists_ephemeral_files_as_tsv() {
     let dir = ephemeral_fixture("ephemeral-list");
-    let out = Command::new(BIN)
+    let out = hilo_cmd()
         .args(["workspace", "ephemeral"])
         .current_dir(&dir)
         .output()
@@ -1611,7 +1717,7 @@ fn workspace_ephemeral_lists_ephemeral_files_as_tsv() {
 #[test]
 fn workspace_ephemeral_path_filter_limits_listing() {
     let dir = ephemeral_fixture("ephemeral-filter");
-    let out = Command::new(BIN)
+    let out = hilo_cmd()
         .args(["workspace", "ephemeral", "node_modules"])
         .current_dir(&dir)
         .output()
@@ -1631,7 +1737,7 @@ fn workspace_ephemeral_path_filter_limits_listing() {
 #[test]
 fn workspace_wipe_dry_run_lists_plan_without_deleting() {
     let dir = ephemeral_fixture("wipe-dry");
-    let out = Command::new(BIN)
+    let out = hilo_cmd()
         .args(["workspace", "wipe", "--ephemeral"])
         .current_dir(&dir)
         .output()
@@ -1662,7 +1768,7 @@ fn workspace_wipe_dry_run_lists_plan_without_deleting() {
 #[test]
 fn workspace_wipe_apply_deletes_only_ephemeral_and_reports_freed() {
     let dir = ephemeral_fixture("wipe-apply");
-    let out = Command::new(BIN)
+    let out = hilo_cmd()
         .args(["workspace", "wipe", "--ephemeral", "--apply"])
         .current_dir(&dir)
         .output()
@@ -1702,7 +1808,7 @@ fn workspace_wipe_respects_hiloephemeral_negation() {
     fs::write(dir.join(".hiloephemeral"), "!target/keep.bin\n").expect("write .hiloephemeral");
     fs::write(dir.join("target/keep.bin"), vec![0u8; 8]).expect("write keep.bin");
 
-    let out = Command::new(BIN)
+    let out = hilo_cmd()
         .args(["workspace", "wipe", "--ephemeral", "--apply"])
         .current_dir(&dir)
         .output()
@@ -1739,7 +1845,7 @@ fn e2e_ephemeral_sync_wipe_and_regenerate_loop() {
     fs::create_dir_all(&backend_root).expect("failed to create backend root");
 
     // init first so .vfs/manifest.yaml exists (never ephemeral).
-    let init_output = Command::new(BIN)
+    let init_output = hilo_cmd()
         .arg("init")
         .current_dir(&workspace)
         .output()
@@ -1778,7 +1884,7 @@ fn e2e_ephemeral_sync_wipe_and_regenerate_loop() {
     );
 
     // (1) push: ephemeral target/artifact.bin must NOT go upstream.
-    let pushed = Command::new(BIN)
+    let pushed = hilo_cmd()
         .args(["backend", "sync", "--push"])
         .current_dir(&workspace)
         .output()
@@ -1803,7 +1909,7 @@ fn e2e_ephemeral_sync_wipe_and_regenerate_loop() {
     );
 
     // (2) wipe dry-run lists only ephemeral files.
-    let dry = Command::new(BIN)
+    let dry = hilo_cmd()
         .args(["workspace", "wipe", "--ephemeral"])
         .current_dir(&workspace)
         .output()
@@ -1825,7 +1931,7 @@ fn e2e_ephemeral_sync_wipe_and_regenerate_loop() {
 
     // (3) wipe --apply removes only ephemeral, reports freed bytes, and
     // never touches .vfs/manifest.yaml (workspace truth).
-    let applied = Command::new(BIN)
+    let applied = hilo_cmd()
         .args(["workspace", "wipe", "--ephemeral", "--apply"])
         .current_dir(&workspace)
         .output()
@@ -1860,7 +1966,7 @@ fn e2e_ephemeral_sync_wipe_and_regenerate_loop() {
     // (4) regenerable: a rebuilt artifact is classified ephemeral again.
     fs::write(workspace.join("target/artifact.bin"), vec![0u8; 64])
         .expect("failed to rebuild artifact.bin");
-    let relist = Command::new(BIN)
+    let relist = hilo_cmd()
         .args(["workspace", "ephemeral"])
         .current_dir(&workspace)
         .output()
@@ -1877,7 +1983,7 @@ fn e2e_ephemeral_sync_wipe_and_regenerate_loop() {
 
     // (5) graph rebuild path: .vfs/graph/ is in the ephemeral catalog;
     // wiping it and re-warming must still work.
-    let warm = Command::new(BIN)
+    let warm = hilo_cmd()
         .args(["graph", "warm"])
         .current_dir(&workspace)
         .output()
@@ -1891,7 +1997,7 @@ fn e2e_ephemeral_sync_wipe_and_regenerate_loop() {
         workspace.join(".vfs/graph/edges.jsonl").exists(),
         "graph warm must produce edges.jsonl"
     );
-    let wipe_graph = Command::new(BIN)
+    let wipe_graph = hilo_cmd()
         .args(["workspace", "wipe", "--ephemeral", "--apply"])
         .current_dir(&workspace)
         .output()
@@ -1905,7 +2011,7 @@ fn e2e_ephemeral_sync_wipe_and_regenerate_loop() {
         !workspace.join(".vfs/graph/edges.jsonl").exists(),
         "wiped .vfs/graph/edges.jsonl must be gone"
     );
-    let clean = Command::new(BIN)
+    let clean = hilo_cmd()
         .args(["graph", "clean"])
         .current_dir(&workspace)
         .output()
@@ -1915,7 +2021,7 @@ fn e2e_ephemeral_sync_wipe_and_regenerate_loop() {
         "graph clean failed: {}",
         String::from_utf8_lossy(&clean.stderr)
     );
-    let rewarm = Command::new(BIN)
+    let rewarm = hilo_cmd()
         .args(["graph", "warm"])
         .current_dir(&workspace)
         .output()
@@ -1944,7 +2050,7 @@ fn write_mounts_yaml(workspace: &std::path::Path, yaml: &str) {
 #[test]
 fn backend_mount_new_surface_writes_mounts_yaml() {
     let dir = unique_tempdir("backend-mount");
-    let output = Command::new(BIN)
+    let output = hilo_cmd()
         .args([
             "backend",
             "mount",
@@ -1986,7 +2092,7 @@ fn backend_mount_new_surface_writes_mounts_yaml() {
     assert!(yaml.contains("tool: native"), "tool missing: {yaml}");
 
     // Second mount with the same name must be rejected (exit 2, InvalidConfig).
-    let dup = Command::new(BIN)
+    let dup = hilo_cmd()
         .args([
             "backend",
             "mount",
@@ -2009,7 +2115,7 @@ fn backend_mount_new_surface_writes_mounts_yaml() {
 #[test]
 fn backend_mount_missing_tool_exits_4() {
     let dir = unique_tempdir("backend-mount-tool");
-    let output = Command::new(BIN)
+    let output = hilo_cmd()
         .args([
             "backend",
             "mount",
@@ -2071,7 +2177,7 @@ fn backend_sync_local_pushes_pulls_and_filters() {
     );
 
     // Subtree filter: only sub/ is pushed.
-    let filtered = Command::new(BIN)
+    let filtered = hilo_cmd()
         .args(["backend", "sync", "--push", "sub"])
         .current_dir(&workspace)
         .output()
@@ -2091,7 +2197,7 @@ fn backend_sync_local_pushes_pulls_and_filters() {
     );
 
     // Full push: a.txt lands, x.tmp stays local-only (ignored).
-    let pushed = Command::new(BIN)
+    let pushed = hilo_cmd()
         .args(["backend", "sync", "--push"])
         .current_dir(&workspace)
         .output()
@@ -2117,7 +2223,7 @@ fn backend_sync_local_pushes_pulls_and_filters() {
 
     // Idempotent: a second --both sync transfers nothing (equal mtimes after
     // mtime alignment → the spec's no-ping-pong tie-break).
-    let again = Command::new(BIN)
+    let again = hilo_cmd()
         .args(["backend", "sync"])
         .current_dir(&workspace)
         .output()
@@ -2135,7 +2241,7 @@ fn backend_sync_local_pushes_pulls_and_filters() {
 
     // Remote newer → pull updates the local copy.
     fs::write(backend_root.join("a.txt"), "from-remote\n").expect("failed to update remote");
-    let pulled = Command::new(BIN)
+    let pulled = hilo_cmd()
         .args(["backend", "sync", "--pull"])
         .current_dir(&workspace)
         .output()
@@ -2156,7 +2262,7 @@ fn backend_sync_local_pushes_pulls_and_filters() {
 #[test]
 fn backend_sync_no_mounts_exits_2() {
     let dir = unique_tempdir("backend-sync-nomount");
-    let output = Command::new(BIN)
+    let output = hilo_cmd()
         .args(["backend", "sync"])
         .current_dir(&dir)
         .output()
@@ -2173,7 +2279,7 @@ fn backend_sync_no_mounts_exits_2() {
 #[test]
 fn backend_setup_reports_detection_and_next_steps() {
     let dir = unique_tempdir("backend-setup");
-    let s3 = Command::new(BIN)
+    let s3 = hilo_cmd()
         .args(["backend", "setup", "--type", "s3"])
         .current_dir(&dir)
         .output()
@@ -2194,7 +2300,7 @@ fn backend_setup_reports_detection_and_next_steps() {
         "next steps missing: {stdout}"
     );
 
-    let gdrive = Command::new(BIN)
+    let gdrive = hilo_cmd()
         .args(["backend", "setup", "--type", "gdrive"])
         .current_dir(&dir)
         .output()
@@ -2209,7 +2315,7 @@ fn backend_setup_reports_detection_and_next_steps() {
     assert!(stdout.contains("rclone:"), "rclone line missing: {stdout}");
 
     // Unknown type is a usage error (exit 1).
-    let bad = Command::new(BIN)
+    let bad = hilo_cmd()
         .args(["backend", "setup", "--type", "ftp"])
         .current_dir(&dir)
         .output()
@@ -2275,7 +2381,7 @@ fn graph_stats_does_not_panic_when_stdout_closes_early() {
     )
     .expect("failed to write hub.go");
 
-    let init = Command::new(BIN)
+    let init = hilo_cmd()
         .arg("init")
         .current_dir(&dir)
         .output()
@@ -2286,7 +2392,7 @@ fn graph_stats_does_not_panic_when_stdout_closes_early() {
         String::from_utf8_lossy(&init.stderr)
     );
 
-    let warm = Command::new(BIN)
+    let warm = hilo_cmd()
         .args(["graph", "warm"])
         .current_dir(&dir)
         .output()
@@ -2299,7 +2405,7 @@ fn graph_stats_does_not_panic_when_stdout_closes_early() {
 
     // 1. Prove the fixture really emits more than one pipe buffer, so the
     //    closed-pipe scenario below is genuine and not a phantom.
-    let full = Command::new(BIN)
+    let full = hilo_cmd()
         .args(["graph", "stats", "--limit", "0"])
         .current_dir(&dir)
         .output()
@@ -2320,13 +2426,13 @@ fn graph_stats_does_not_panic_when_stdout_closes_early() {
 
     // 2. Read one line, then drop the read end while the child is still
     //    writing; the child must not panic.
-    let mut child = Command::new(BIN)
-        .args(["graph", "stats", "--limit", "0"])
-        .current_dir(&dir)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("failed to spawn graph stats with a piped stdout");
+    let mut child = spawn_hilo_with_retry(
+        hilo_cmd()
+            .args(["graph", "stats", "--limit", "0"])
+            .current_dir(&dir)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    );
 
     let stdout = child.stdout.take().expect("stdout was not piped");
     {
@@ -2375,4 +2481,64 @@ fn graph_stats_does_not_panic_when_stdout_closes_early() {
     );
 
     let _ = fs::remove_dir_all(&dir);
+}
+
+// ─────────────────── spawn-retry helper (INT-GITREINS-004) ───────────────────
+
+/// Unit-ish tests for the concurrent-relink casualty classifier. These run
+/// entirely in-process (no binary spawn), so they pass even while a
+/// concurrent `cargo build` holds `target/debug/hilo` mid-relink.
+mod relink_classifier {
+    use super::spawn_hit_relink;
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::{ExitStatus, Output};
+
+    /// Build an `Output` with an exact synthetic `ExitStatus`:
+    /// `Some(code)` becomes a normal exit with that code, `None` becomes a
+    /// death by SIGILL (raw wait status 4).
+    fn output(code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> Output {
+        Output {
+            status: match code {
+                Some(c) => ExitStatus::from_raw(c << 8),
+                None => ExitStatus::from_raw(4), // killed by SIGILL
+            },
+            stdout: stdout.to_vec(),
+            stderr: stderr.to_vec(),
+        }
+    }
+
+    #[test]
+    fn not_found_and_etxtbsy_spawn_errors_are_casualties() {
+        let enoent = std::io::Error::from_raw_os_error(2);
+        assert!(spawn_hit_relink(Some(&enoent), None));
+        let etxtbsy = std::io::Error::from_raw_os_error(26);
+        assert!(spawn_hit_relink(Some(&etxtbsy), None));
+        let other = std::io::Error::from_raw_os_error(13);
+        assert!(!spawn_hit_relink(Some(&other), None));
+    }
+
+    #[test]
+    fn empty_instant_deaths_are_casualties() {
+        // Signal death (no exit code) with silent output: dynamic-linker kill.
+        assert!(spawn_hit_relink(None, Some(&output(None, b"", b""))));
+        // 128+SIGILL / 128+SIGABRT reported by a wrapper shell.
+        assert!(spawn_hit_relink(None, Some(&output(Some(132), b"", b""))));
+        assert!(spawn_hit_relink(None, Some(&output(Some(134), b"", b""))));
+    }
+
+    #[test]
+    fn normal_results_are_not_casualties() {
+        // Genuine usage error: message printed, exit 1 — must NOT be retried.
+        assert!(!spawn_hit_relink(
+            None,
+            Some(&output(Some(1), b"", b"usage error"))
+        ));
+        // Empty output but success.
+        assert!(!spawn_hit_relink(None, Some(&output(Some(0), b"", b""))));
+        // Non-empty output with an odd code: a real failure, not a relink.
+        assert!(!spawn_hit_relink(
+            None,
+            Some(&output(Some(5), b"", b"boom"))
+        ));
+    }
 }

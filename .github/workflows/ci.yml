@@ -9,6 +9,8 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
+  # GAP-089: cap test threads on shared runners
+  RUST_TEST_THREADS: "8"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
