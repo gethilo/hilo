@@ -83,7 +83,9 @@ pub fn run_mount(mount_point: &str, triggers: bool, allow_other: bool, daemon: b
     let fs = match hilo_backends::IgnoreMatcher::load(&current_dir, None, false) {
         Ok(matcher) => fs.with_ignores(matcher),
         Err(e) => {
-            eprintln!("warning: could not load the ignore stack ({e}); mounting without ignore filtering");
+            eprintln!(
+                "warning: could not load the ignore stack ({e}); mounting without ignore filtering"
+            );
             fs
         }
     };
