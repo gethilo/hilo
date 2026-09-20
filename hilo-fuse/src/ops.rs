@@ -26,6 +26,45 @@ use crate::FuseConfig;
 const ROOT_INO: u64 = 1;
 const TTL: Duration = Duration::from_secs(1);
 
+/// DF-WARPFS-5: build the entries a `readdir` at `offset` must return.
+///
+/// Offsets are FUSE cookies: entry N is emitted at offset N+1 and a resume
+/// passes the LAST cookie it saw. `.`=1 and `..`=2 are therefore emitted only
+/// when the resume offset is BELOW them.
+///
+/// This used to compare with `<=` (`if offset <= 1` for `.`, `offset <= 2` for
+/// `..`), which is correct only while some later entry raises the cookie past 2.
+/// On a directory with no children the last cookie the kernel ever sees is 2,
+/// so the next `readdir(offset=2)` re-emitted `..` with cookie 2 — and the
+/// kernel asked again, forever. That is the reported hang: `ls` on the empty
+/// dir never returned, `find -type f` over the mount produced nothing and hung,
+/// while every non-empty sibling answered in ~110 ms (a child's cookie is >= 3,
+/// so the next call matched nothing and terminated the stream).
+///
+/// The rule is "emit entry k iff offset < k", which returns an empty batch for
+/// offset >= 3 and lets the resume terminate.
+fn readdir_entries(
+    offset: i64,
+    children: &[(u64, String, bool)], // (ino, name, is_dir)
+) -> Vec<(u64, i64, String, bool)> {
+    let mut out = Vec::new();
+    // "." at cookie 1
+    if offset < 1 {
+        out.push((ROOT_INO, 1, ".".to_string(), true));
+    }
+    // ".." at cookie 2
+    if offset < 2 {
+        out.push((ROOT_INO, 2, "..".to_string(), true));
+    }
+    // children start at cookie 3
+    let skip = offset.saturating_sub(2).max(0) as usize;
+    for (idx, (ino, name, is_dir)) in children.iter().skip(skip).enumerate() {
+        let cookie = (idx + 3) as i64;
+        out.push((*ino, cookie, name.clone(), *is_dir));
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------
 // Inode data model
 // ---------------------------------------------------------------------------
@@ -288,30 +327,8 @@ impl Filesystem for Hilo {
 
         let files = self.files.read().unwrap();
 
-        // "." entry
-        if offset <= 1 {
-            if let Some(entry) = files.get(&ino) {
-                let kind = match entry.kind {
-                    InodeKind::Directory => FileType::Directory,
-                    InodeKind::File => FileType::RegularFile,
-                };
-                if reply.add(ino, 1, kind, ".") {
-                    reply.ok();
-                    return;
-                }
-            } else {
-                reply.error(ENOENT);
-                return;
-            }
-        }
-
-        // ".." entry
-        if offset <= 2 && reply.add(1, 2, FileType::Directory, "..") {
-            reply.ok();
-            return;
-        }
-
-        // Collect children (sorted by name for deterministic ordering).
+        // A directory we do not know about is an error; resolve that BEFORE
+        // emitting anything so the reply is unambiguous.
         let dir_entry = match files.get(&ino) {
             Some(e) => e.clone(),
             None => {
@@ -320,7 +337,8 @@ impl Filesystem for Hilo {
             }
         };
 
-        let mut children: Vec<(u64, String, &InodeEntry)> = files
+        // Collect children (sorted by name for deterministic ordering).
+        let mut children: Vec<(u64, String, bool)> = files
             .iter()
             .filter(|(_, e)| {
                 if ino == ROOT_INO {
@@ -335,6 +353,7 @@ impl Filesystem for Hilo {
                 }
             })
             .map(|(i, e)| {
+                let is_dir = matches!(e.kind, InodeKind::Directory);
                 (
                     *i,
                     e.path
@@ -342,22 +361,23 @@ impl Filesystem for Hilo {
                         .unwrap_or_default()
                         .to_string_lossy()
                         .into_owned(),
-                    e,
+                    is_dir,
                 )
             })
             .collect();
         children.sort_by(|a, b| a.1.cmp(&b.1));
 
-        let child_offset = offset.saturating_sub(2) as usize;
-        for (idx, (child_ino, child_name, child_entry)) in
-            children.iter().skip(child_offset).enumerate()
-        {
-            let dir_offset = (idx + 3) as i64; // offset starts at 3 after "." and ".."
-            let kind = match child_entry.kind {
-                InodeKind::Directory => FileType::Directory,
-                InodeKind::File => FileType::RegularFile,
+        // DF-WARPFS-5: entry list is computed in one place, and the resume rule
+        // is `offset < cookie`. Emitting `.`/`..` on `offset <= k` re-sent `..`
+        // forever on an EMPTY directory (whose last cookie is 2), which hung
+        // every `ls`/`find` that touched one. See `readdir_entries`.
+        for (entry_ino, cookie, name, is_dir) in readdir_entries(offset, &children) {
+            let kind = if is_dir {
+                FileType::Directory
+            } else {
+                FileType::RegularFile
             };
-            if reply.add(*child_ino, dir_offset, kind, child_name.as_str()) {
+            if reply.add(entry_ino, cookie, kind, name.as_str()) {
                 break;
             }
         }
@@ -601,6 +621,16 @@ pub fn inode_for_path(wfs: &Hilo, rel: &str) -> Option<u64> {
         }
     }
     None
+}
+
+/// Test-only: the readdir entry builder, so the resume/cookie semantics are
+/// provable without a kernel mount (DF-WARPFS-5).
+#[doc(hidden)]
+pub fn readdir_entries_for_test(
+    offset: i64,
+    children: &[(u64, String, bool)],
+) -> Vec<(u64, i64, String, bool)> {
+    readdir_entries(offset, children)
 }
 
 /// Helper used by tests: populate a directory and return child inode count.

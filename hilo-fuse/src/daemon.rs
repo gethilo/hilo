@@ -68,7 +68,25 @@ pub fn unmount(mount_point: &Path) -> anyhow::Result<()> {
     }
 }
 
-/// Build the mount option list from the config.
+/// Build the kernel mount options (DF-WARPFS-6).
+///
+/// `AutoUnmount` and `AllowOther` are NOT independent: fuser requires
+/// AutoUnmount to be paired with AllowOther (or AllowRoot), and `fusermount3`
+/// then REFUSES the mount unless `/etc/fuse.conf` has `user_allow_other` —
+/// which a stock Debian/Ubuntu image ships commented out. Since `auto_unmount`
+/// is on by default and `allow_other` is opt-in, every default mount on a fresh
+/// box died with:
+///
+/// ```text
+/// fusermount3: option allow_other only allowed if 'user_allow_other' is set ...
+/// error: FUSE mount failed: Operation not permitted (os error 1)
+/// ```
+///
+/// even though nothing asked for `allow_other`. Auto-unmount is a convenience
+/// (it releases the mount when the process dies); allow-other is a real access
+/// decision. Honouring the access decision wins: AutoUnmount is emitted only
+/// when the operator explicitly asked for AllowOther, i.e. only when they are
+/// already responsible for enabling `user_allow_other`.
 fn mount_options(config: &FuseConfig) -> Vec<MountOption> {
     let mut opts = vec![MountOption::FSName("hilo".into())];
 
@@ -77,10 +95,17 @@ fn mount_options(config: &FuseConfig) -> Vec<MountOption> {
     }
     if config.allow_other {
         opts.push(MountOption::AllowOther);
-    }
-    if config.auto_unmount {
-        opts.push(MountOption::AutoUnmount);
+        // Only safe to request alongside the explicit allow-other decision.
+        if config.auto_unmount {
+            opts.push(MountOption::AutoUnmount);
+        }
     }
 
     opts
+}
+
+/// Whether `AutoUnmount` was dropped because `allow_other` was not requested.
+/// Exposed so the CLI can say so instead of silently changing behaviour.
+pub fn auto_unmount_suppressed(config: &FuseConfig) -> bool {
+    config.auto_unmount && !config.allow_other
 }
