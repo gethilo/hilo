@@ -29,7 +29,7 @@ pub enum BackendCommand {
 #[derive(Args)]
 pub struct MountArgs {
     /// Backend type: "s3", "gdrive", "onedrive", "dropbox", "external"
-    /// (legacy: "git", "local")
+    /// (legacy worktree mount: "git"; "local" is no longer accepted)
     #[arg(long)]
     pub r#type: String,
     /// S3 bucket name
@@ -91,15 +91,18 @@ pub struct SetupArgs {
     pub r#type: Option<String>,
 }
 
+/// Mount dispatch (DF-WARPFS-9): the plain documented form
+/// (`hilo backend mount --type s3 --bucket B --at P`) must register the
+/// mount, so every §9-routable type (s3, gdrive, onedrive, dropbox,
+/// external — and any request carrying `--remote`) goes through
+/// `run_mount_new`, which writes `.vfs/backends/mounts.yaml`. Only the
+/// genuinely legacy surfaces (git/local worktree mounts) keep their old
+/// path. Anything else fails loudly instead of printing success for a
+/// silent no-op.
 pub fn run_mount(args: &MountArgs) -> Result<()> {
     let kind = args.r#type.as_str();
-    let new_surface = matches!(kind, "gdrive" | "onedrive" | "dropbox" | "external")
-        || args.remote.is_some()
-        || args.tool.is_some()
-        || args.mode.is_some()
-        || args.ignore_file.is_some()
-        || args.poll_secs != 60
-        || args.no_default_ignores;
+    let new_surface = matches!(kind, "s3" | "gdrive" | "onedrive" | "dropbox" | "external")
+        || args.remote.is_some();
     if !new_surface {
         return run_mount_legacy(args);
     }
@@ -112,21 +115,10 @@ pub fn run_mount(args: &MountArgs) -> Result<()> {
     }
 }
 
-/// Legacy mount surface (GAP-009): s3/git/local with no spec §9 flags.
+/// Legacy mount surface: git/local worktree mounts. These kinds have no §9
+/// registry entry, so they keep their direct behavior and output.
 fn run_mount_legacy(args: &MountArgs) -> Result<()> {
     match args.r#type.as_str() {
-        "s3" => {
-            let bucket = args.bucket.as_deref().unwrap_or("");
-            let prefix = args.prefix.as_deref().unwrap_or("");
-            if bucket.is_empty() {
-                anyhow::bail!("--bucket is required for s3 backend");
-            }
-            println!("mounted s3://{}/{} at {}", bucket, prefix, args.at);
-            // In a real implementation, this would register the backend
-            // in the running VFS. For Phase 3, we validate the args and
-            // report success.
-            Ok(())
-        }
         "git" => {
             let url = args.url.as_deref().unwrap_or("");
             if url.is_empty() {
@@ -154,17 +146,9 @@ fn run_mount_legacy(args: &MountArgs) -> Result<()> {
             );
             Ok(())
         }
-        "local" => {
-            let backend = hilo_backends::local::LocalBackend::mount(
-                hilo_backends::local::LocalBackendConfig {
-                    real_path: PathBuf::from(&args.at),
-                    at: args.at.clone(),
-                },
-            )?;
-            println!("mounted local {} at {}", backend.mount_point(), args.at);
-            Ok(())
-        }
-        other => anyhow::bail!("unknown backend type: {other}"),
+        other => anyhow::bail!(
+            "unsupported backend type: {other} (supported: s3|gdrive|onedrive|dropbox|external; legacy worktree mount: git)"
+        ),
     }
 }
 
@@ -473,7 +457,7 @@ fn setup_s3() {
             }
         );
     }
-    println!("  next steps: hilo backend mount --type s3 --bucket <B> --at <PATH> [--tool native|rclone|s3sync]");
+    println!("  next steps: hilo backend mount --type s3 --bucket <B> --at <PATH> [--tool native|rclone|s3sync]  (the plain form registers the mount in .vfs/backends/mounts.yaml)");
 }
 
 fn setup_external(label: &str, official: &str) {

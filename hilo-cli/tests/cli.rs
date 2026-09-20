@@ -2275,6 +2275,50 @@ fn backend_mount_new_surface_writes_mounts_yaml() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// DF-WARPFS-9: the PLAIN documented form (`--type s3 --bucket B --at P`,
+/// no spec §9 flags) must register the mount. It used to fall into the
+/// legacy placeholder arm, which printed success and wrote nothing.
+#[test]
+fn backend_mount_plain_form_registers_mount() {
+    let dir = unique_tempdir("backend-mount-plain");
+    init_project(&dir);
+    let output = hilo_cmd()
+        .args([
+            "backend",
+            "mount",
+            "--type",
+            "s3",
+            "--bucket",
+            "red-bucket",
+            "--at",
+            "/s3data",
+        ])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo backend mount");
+
+    assert!(
+        output.status.success(),
+        "plain-form mount exited non-zero: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let mounts = dir.join(".vfs").join("backends").join("mounts.yaml");
+    assert!(
+        mounts.exists(),
+        "mounts.yaml was not written by the plain form"
+    );
+    let yaml = fs::read_to_string(&mounts).expect("failed to read mounts.yaml");
+    assert!(yaml.contains("name: s3data"), "name missing: {yaml}");
+    assert!(yaml.contains("type: s3"), "type missing: {yaml}");
+    assert!(
+        yaml.contains("bucket: red-bucket"),
+        "bucket missing: {yaml}"
+    );
+    assert!(yaml.contains("at: /s3data"), "at missing: {yaml}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn backend_mount_missing_tool_exits_4() {
     let dir = unique_tempdir("backend-mount-tool");
