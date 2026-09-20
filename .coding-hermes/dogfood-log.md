@@ -221,3 +221,37 @@ built from ~/bunker and installed locally to unblock — 0.1.3 in PATH still
 had the 30s CLI deadline (REUSED FIX, did not edit daemon).
 rows: DF-WARPFS-1..4 appended to board (verified at tail, 164 lines).
 left behind: docs/dogfood/2026-09-20-integration.md, this log entry.
+
+---
+
+## 2026-09-20 (warpfs-dogfood tick 2026-09-20-01-30-34) — run 7, FUSE mount deep dive
+
+verdict: PROMISING-BUT-ROUGH (mount surface; CLI/graph surface still SHIPPABLE)
+promise: agent mounts the repo as a virtual filesystem and answers structural
+questions via getfattr/ls/cat — zero file reads.
+angle: deliberately NOT the CLI/CAG pass that runs 1-6 covered. First run to
+USE the mount as a user would.
+consumer pass: fresh fixture repo + hilo's own repo mounted with --daemon.
+VERIFIED WORKING: byte-exact size + sha256 fidelity disk↔mount; xattr
+round-trip through the mount (hilo classify sets user.vfs.role, readable via
+getfattr AND `hilo meta <mount-path>`); cat works; clean unmount via
+fusermount3 -u with no leftover process; write attempted correctly refused (RO).
+FOUND (4 rows): DF-WARPFS-5 empty-dir readdir never replies -> `find <mount>
+-type f` = 0 rows and hangs (3/3 runs, 15s cap) vs 24 rows/111ms on disk;
+DF-WARPFS-6 `hilo mount` EXIT=1 on stock Debian (auto_unmount forces
+allow_other; /etc/fuse.conf default) — no CLI escape hatch;
+DF-WARPFS-7 mount ignores the ignore stack (.git//.vfs//130GB target/ served
+though `hilo ignore check target/` says ignored:true);
+DF-WARPFS-8 fabricated mtimes (mtime = time of stat call).
+time-to-first-success: never reached on the mount path (blocked twice);
+friction count 3 blocking + 1 honesty defect + 2 doc gaps.
+bunker install leg: PASSED — agent bd4b20a4 @ las-bunker-03, fresh Debian 13,
+clone public repo b83a68f, rustup minimal, cargo build --release RC=0 1217s,
+smoke (--version/--help/init/warm/stats) OK, MCP tools/list = 17. The SAME box
+then failed `hilo mount` (DF-WARPFS-6) — install-green ≠ mount-works.
+noted-not-filed: serve --help and SKILL.md say "15 tools" while tools/list
+returns 17 (dev host + fresh bunker both) — folded into the DF-WARPFS-1..4
+doc-drift family rather than a new row.
+left behind: docs/dogfood/2026-09-20-run7-fuse-integration.md,
+docs/dogfood/diagnostics.md Run 7 section, skills/hilo-usage/SKILL.md FUSE
+section, rows DF-WARPFS-5..8 (events 431-435), this entry.

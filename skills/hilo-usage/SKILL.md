@@ -100,10 +100,46 @@ printf '%s\n%s\n' \
 file paths on Go/Python/TS currently return `{"total":0}` without an
 error flag — same trap as the CLI.
 
-## Status snapshot (2026-09-13, run 5)
+## FUSE mount: read this BEFORE you mount anything (run 7, 2026-09-20)
 
-- ✅ Rust/Go/Python pkg-form workflows: SHIPPABLE
+The mount is the surface the README leads with, and the one most likely to
+waste your time. Three hard rules:
+
+1. **`hilo mount` fails with `allow_other ... user_allow_other` on a stock
+   box** (DF-WARPFS-6). Hilo always sets `auto_unmount`, and `fuser` requires
+   `user_allow_other` in `/etc/fuse.conf` for that — commented out by default
+   on Debian/Ubuntu — regardless of `--allow-other` being off. There is no
+   CLI flag to disable `auto_unmount`. If you must mount, check
+   `grep -v '^#' /etc/fuse.conf | grep user_allow_other` first (needs root to
+   set). Do NOT "fix" this by editing the repo — it is a product finding.
+2. **Do not walk the mount with `find` / recursive glob / `git status`**
+   (DF-WARPFS-5). `readdir` on an **empty** directory never returns a reply,
+   so `find <mount> -type f` returns 0 rows and hangs forever on any repo
+   with one empty dir. Non-empty dirs answer in ~110 ms. Always cap with
+   `timeout` and treat "0 rows + no error" as a hang, not an empty result.
+3. **The mount serves ignored trees** — `.git/`, `.vfs/`, and `target/`
+   (130 GB here) despite `hilo ignore check target/` saying `ignored: true`
+   (DF-WARPFS-7). The mount does not consult the ignore stack at all.
+
+What DOES work through the mount (verified): exact sizes and sha256 match
+disk; `cat` works; `user.vfs.*` xattrs set by `hilo classify` read back
+through the mount and `hilo meta <mount-path>` resolves them. So xattr
+queries through a mount are safe **if** you address the file directly rather
+than walking the tree. Unmount with `fusermount3 -u <dir>` — clean, no
+leftover process.
+
+Timestamps through the mount are fabricated: every file reports the mtime of
+the stat call, so "what changed recently?" is unanswerable there
+(DF-WARPFS-8). Use the real working tree for anything mtime-based.
+
+## Status snapshot (2026-09-20, run 7)
+
+- ✅ Rust/Go/Python pkg-form workflows + CLI/graph surface: SHIPPABLE
+- ✅ Installability: proven on 3 independent fresh boxes (build 1142-1217 s)
+- 🟡 Mount: 🟡 PROMISING-BUT-ROUGH — unusable on a stock box (DF-WARPFS-6)
+  and traversal-hostile (empty-dir hang DF-WARPFS-5, ignore gap DF-WARPFS-7,
+  fabricated mtimes DF-WARPFS-8). xattr-through-mount DOES work.
 - 🟡 TS/JS: value real (warm/classify/FUSE/stats all clean) but blast
   radius + coverage need the dialect workarounds above (GAP-069/071/072)
-- Full run histories: `docs/dogfood/` (5 integration reports +
-  diagnostics.md)
+- Full run histories: `docs/dogfood/` (7 integration reports +
+  diagnostics.md); run 7 = `2026-09-20-run7-fuse-integration.md`

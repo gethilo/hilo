@@ -351,3 +351,87 @@ for timing.
 - Consumer surface verdict: no P0/P1 product defects found. GAP-070
   (clean → warm strands the user) regression-checked as fixed: clean
   removed 4 cache files, next warm fully rebuilt, stats healthy.
+
+## Run 7 — 2026-09-20 (warpfs-dogfood, FUSE mount deep dive)
+
+This run changed angle: runs 1-6 and every tick since exercised the CLI /
+CAG / MCP surface, so the **mount** — the flagship of "agent-first virtual
+filesystem" — had never been used as a user would use it. It does not hold up.
+
+### Why the empty-directory hang happens (DF-WARPFS-5)
+
+`hilo-fuse/src/ops.rs:277` (`readdir`) always terminates with
+`reply.ok()` at line 364 — **except** on the path at line 315-321, where a
+missing inode entry does `reply.error(ENOENT); return;` … and on the path
+where `populate_directory` (line 121) inserts nothing. Trace it:
+
+1. `readdir(ino)` calls `populate_directory(ino)` at offset 0.
+2. `populate_directory` iterates `std::fs::read_dir` and inserts an inode
+   **per child**. For a directory with zero children the loop body never
+   runs — nothing is inserted.
+3. Back in `readdir`, `files.get(&ino)` is consulted for `"."` (line 293) and
+   then for `dir_entry` (line 315). If the inode is absent, the handler
+   returns having replied to nothing.
+4. The kernel waits for a reply that never arrives → `ls`/`find` block until
+   killed. Deterministic, 100% reproducible, and **only** for empty dirs:
+   every non-empty sibling answers in ~110 ms.
+
+The right way (for whoever fixes it): reply with at least `.` and `..` on
+every code path — an empty directory must still emit those two entries.
+Never return from a `readdir` handler without a reply.
+
+Reproduce in 30 seconds:
+
+```bash
+mkdir -p /tmp/et && cd /tmp/et && mkdir -p emptydir withfile && echo hi > withfile/a.txt
+hilo init && hilo graph warm && mkdir -p /tmp/m && hilo mount /tmp/m --daemon
+sleep 2
+timeout 5 ls -a /tmp/m/emptydir     # hangs: rc=124, no output
+timeout 5 ls -a /tmp/m/withfile     # fine: rc=0, ". .. a.txt"
+timeout 8 find /tmp/m -type f       # 0 rows forever, while disk yields 1+
+fusermount3 -u /tmp/m
+```
+
+### Why the mount fails on a stock box (DF-WARPFS-6)
+
+The error names `allow_other`, but nobody asked for `allow_other` — the
+generated manifest says `allow_other: false` and the CLI flag defaults off.
+The real coupling is inside `fuser` 0.15.1
+(`src/mnt/mount_options.rs:26`, dependency source, not Hilo code):
+
+> `AutoUnmount` requires `AllowOther` or `AllowRoot`. If `AutoUnmount` is set
+> and neither `Allow...` is set, the FUSE configuration must permit
+> `allow_other`, otherwise mounting will fail.
+
+Hilo sets `auto_unmount: true` (`hilo-cli/src/commands/mount.rs:67`) and
+`allow_other: false`, so the mount **must** be refused wherever
+`/etc/fuse.conf` leaves `user_allow_other` commented out — which is the
+default on every Debian/Ubuntu install. Nothing in `hilo mount --help`
+turns `auto_unmount` off, so there is no CLI escape hatch.
+
+This is the classic "works on my machine" shape: the dev host has
+`user_allow_other` set, so months of local testing never saw it. The bunker
+leg is what surfaced it. **Lesson: a mount test that only ever runs on one
+host proves nothing about the mount.**
+
+### Why `target/` and `.git/` are served despite being ignored (DF-WARPFS-7)
+
+`grep -rn ignore hilo-fuse/src/*.rs` → zero hits. The mount tree comes from a
+raw `std::fs::read_dir` walk (`ops.rs:125`). The ignore stack (`hilo ignore
+check target/` → `ignored: true`) is wired into the graph/ephemeral paths but
+never into the mount, so the two surfaces of the same tool disagree about
+what the project contains. On this workspace that means a mount exposing a
+130 GB `target/`.
+
+### How the mount was tested (so the next run can go further)
+
+- Fidelity: `stat -c %s` + `sha256sum` + `getfattr` compared disk↔mount (all
+  matched; xattr round-trip through the mount confirmed).
+- Traversal: per-directory `find`/`ls -R` timing with caps, then bisected by
+  directory class (empty vs non-empty) — that bisect is what isolated the
+  empty-dir bug from the "big target/" noise.
+- Fresh box: mount attempted on the ephemeral bunker agent after the install
+  leg — which is how DF-WARPFS-6 was found at all.
+- Honest limitation: mount `stat` latency (105 ms/call) was **not** a Hilo
+  defect — disk measured the same under this host's load (~14). Recorded here
+  so a future run does not file it as one.
