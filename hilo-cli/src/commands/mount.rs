@@ -75,6 +75,19 @@ pub fn run_mount(mount_point: &str, triggers: bool, allow_other: bool, daemon: b
 
     let fs = Hilo::new(current_dir.clone(), config.clone());
 
+    // DF-WARPFS-7: the mount must honour the same ignore stack as every other
+    // path, otherwise `.git/`, `.vfs/` and `target/` are served through the
+    // mount while `hilo ignore check target/` says ignored:true. Loading is
+    // fail-soft: a broken/missing `.hiloignore` yields the built-in defaults
+    // rather than refusing to mount.
+    let fs = match hilo_backends::IgnoreMatcher::load(&current_dir, None, false) {
+        Ok(matcher) => fs.with_ignores(matcher),
+        Err(e) => {
+            eprintln!("warning: could not load the ignore stack ({e}); mounting without ignore filtering");
+            fs
+        }
+    };
+
     // §8: stream/mirror backend wiring — when the workspace has registered
     // backends (mounts.yaml), a stream-mode entry drives lazy materialization
     // via placeholders and a mirror-mode entry does a full pull on mount.

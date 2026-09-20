@@ -360,3 +360,66 @@ fn test_auto_unmount_off_is_not_reported_as_suppressed() {
     assert!(!auto_unmount_suppressed(&cfg(false, false)));
     assert!(!auto_unmount_suppressed(&cfg(true, false)));
 }
+
+// ─── DF-WARPFS-7: the mount must honour the ignore stack ────────────────────
+//
+// Measured contradiction before the fix: `hilo ignore check target/` ->
+// "ignored: true", `.git/` -> true, `.vfs/` -> true — yet `ls <mount>` listed
+// target, .git, .vfs and .pytest_cache, and `ls <mount>/target` showed the
+// build tree (130 GB on the reporting repo). `grep -rn ignore
+// hilo-fuse/src/*.rs` returned ZERO hits: the mount tree came from a raw
+// `std::fs::read_dir` walk, so ignore policy was enforced on the graph,
+// ephemeral and backend paths but never on the mount itself.
+
+use hilo_backends::IgnoreMatcher;
+use hilo_fuse::ops::{is_ignored_for_test, is_ignored_for_test_absent};
+
+/// The built-in default stack, rebuilt per call (IgnoreMatcher is not Clone).
+fn ignored(rel: &str) -> bool {
+    let m = IgnoreMatcher::parse(
+        "target/\nnode_modules/\n.venv/\nvenv/\n__pycache__/\ndist/\nbuild/\n.next/\n.cargo/\n.vfs/\n.git/\n*.o\n*.pyc\n*.class\n.DS_Store\n*.log\n.hiloignore\n.hiloephemeral\n",
+    );
+    is_ignored_for_test(m, rel)
+}
+
+#[test]
+fn test_mount_hides_the_builtin_ignored_directories() {
+    for p in ["target", ".git", ".vfs", "node_modules", "__pycache__"] {
+        assert!(
+            ignored(p),
+            "`{p}` is reported ignored:true by `hilo ignore check` and must \
+             therefore NOT be served through the mount"
+        );
+    }
+}
+
+#[test]
+fn test_mount_still_serves_ordinary_entries() {
+    for p in ["a.txt", "src", "src/main.rs", "README.md", "docs"] {
+        assert!(
+            !ignored(p),
+            "`{p}` is not ignored — the mount must still serve it (a mount that \
+             over-hides is as broken as one that under-hides)"
+        );
+    }
+}
+
+#[test]
+fn test_nested_paths_under_an_ignored_dir_are_ignored() {
+    // `find -type f` walks into children, so the rule must hold below the dir.
+    assert!(ignored("target/debug/incremental"));
+    assert!(ignored(".git/objects/ab/cdef"));
+}
+
+#[test]
+fn test_log_files_are_ignored_but_sources_are_not() {
+    assert!(ignored("build.log"));
+    assert!(!ignored("build.rs"));
+}
+
+#[test]
+fn test_no_matcher_means_no_filtering() {
+    // A mount built without a stack keeps its previous behaviour rather than
+    // silently hiding the tree — attaching the stack is an explicit act.
+    assert!(!is_ignored_for_test_absent());
+}

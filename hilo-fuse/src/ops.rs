@@ -22,6 +22,7 @@ use libc::{EACCES, EIO, ENODATA, ENOENT};
 use crate::permissions::PermissionEngine;
 use crate::stream::StreamState;
 use crate::FuseConfig;
+use hilo_backends::IgnoreMatcher;
 
 const ROOT_INO: u64 = 1;
 const TTL: Duration = Duration::from_secs(1);
@@ -96,6 +97,12 @@ pub struct Hilo {
     /// Stream-mode state (§8): placeholder plan + backend for lazy
     /// materialization. `None` on plain read-only mounts.
     stream: Option<Arc<StreamState>>,
+    /// DF-WARPFS-7: the workspace ignore stack. The mount previously walked the
+    /// tree with a raw `read_dir` and never consulted it, so `.git/`, `.vfs/`
+    /// and a 130 GB `target/` were served through the mount even though
+    /// `hilo ignore check target/` reported `ignored: true`. `None` = no
+    /// filtering (used by tests and by callers that opt out explicitly).
+    ignores: Option<Arc<IgnoreMatcher>>,
 }
 
 impl Hilo {
@@ -121,7 +128,33 @@ impl Hilo {
             config,
             permissions,
             stream: None,
+            ignores: None,
         }
+    }
+
+    /// DF-WARPFS-7: attach the workspace ignore stack so the mount honours the
+    /// same ignore policy every other path already enforces (`hilo ignore
+    /// check`, backend sync, ephemeral overlay). Without this the mount is the
+    /// one surface that serves `.git/`, `.vfs/` and `target/`.
+    pub fn with_ignores(mut self, matcher: IgnoreMatcher) -> Self {
+        self.ignores = Some(Arc::new(matcher));
+        self
+    }
+
+    /// Whether `rel` is excluded by the ignore stack. A missing matcher means
+    /// "no filtering", so an unconfigured mount keeps its previous behaviour
+    /// rather than silently hiding the tree.
+    fn is_ignored(&self, rel: &Path) -> bool {
+        let Some(matcher) = &self.ignores else {
+            return false;
+        };
+        let posix = rel.to_string_lossy().replace('\\', "/");
+        if posix.is_empty() || posix == "/" {
+            return false;
+        }
+        // The root itself is never ignorable, and a trailing slash is how the
+        // stack spells a directory rule (target/ vs a file named target).
+        matcher.is_ignored(&posix)
     }
 
     /// Attach stream-mode state (spec §8): the placeholder plan and backend
@@ -182,6 +215,13 @@ impl Hilo {
             // Skip if we already have an inode for this relative path.
             let exists = files.values().any(|e| e.path == child_rel);
             if exists {
+                continue;
+            }
+
+            // DF-WARPFS-7: ...and skip anything the ignore stack excludes, so
+            // the mount agrees with `hilo ignore check`. Checked before the
+            // metadata call so an ignored 130 GB target/ is never even stat'd.
+            if self.is_ignored(&child_rel) {
                 continue;
             }
 
@@ -631,6 +671,47 @@ pub fn readdir_entries_for_test(
     children: &[(u64, String, bool)],
 ) -> Vec<(u64, i64, String, bool)> {
     readdir_entries(offset, children)
+}
+
+/// Test-only: does a bare `Hilo` (no stack attached) filter anything? (DF-7)
+#[doc(hidden)]
+pub fn is_ignored_for_test_absent() -> bool {
+    let tmp = std::env::temp_dir();
+    let cfg = crate::FuseConfig {
+        mount_point: tmp.clone(),
+        allow_other: false,
+        direct_io: false,
+        auto_unmount: false,
+        read_only: true,
+        attr_timeout: 1.0,
+        entry_timeout: 1.0,
+        max_read: 131_072,
+        max_write: 131_072,
+        sandbox: None,
+    };
+    let fs = Hilo::new(tmp, cfg);
+    fs.is_ignored(Path::new("target"))
+}
+
+/// Test-only: the ignore predicate the mount applies to a relative path
+/// (DF-WARPFS-7), so the agreement with `hilo ignore check` is provable.
+#[doc(hidden)]
+pub fn is_ignored_for_test(matcher: IgnoreMatcher, rel: &str) -> bool {
+    let tmp = std::env::temp_dir();
+    let cfg = crate::FuseConfig {
+        mount_point: tmp.clone(),
+        allow_other: false,
+        direct_io: false,
+        auto_unmount: false,
+        read_only: true,
+        attr_timeout: 1.0,
+        entry_timeout: 1.0,
+        max_read: 131_072,
+        max_write: 131_072,
+        sandbox: None,
+    };
+    let fs = Hilo::new(tmp, cfg).with_ignores(matcher);
+    fs.is_ignored(Path::new(rel))
 }
 
 /// Helper used by tests: populate a directory and return child inode count.
