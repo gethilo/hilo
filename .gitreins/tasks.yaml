@@ -1342,3 +1342,26 @@ tasks:
   status: complete
   created_at: '2026-09-20T09:20:17.589044+00:00'
   completed_at: '2026-09-20T09:47:46.955003+00:00'
+- id: df-warpfs-10-s3-head-404
+  title: S3 HEAD 404 on an absent key must mean not-found, not abort the sync (DF-WARPFS-10)
+  criteria:
+  - 'All must hold: (1) cargo test -p hilo_backends --lib head_failure runs 4 tests
+    and passes, specifically head_failure_404_status_is_absent, head_failure_typed_not_found_is_absent,
+    head_failure_notfound_code_is_absent and the negative head_failure_real_error_is_not_absent
+    (500/403/AccessDenied/301 stay errors); (2) in hilo-backends/src/s3.rs, head_object_meta
+    AND head_object_last_modified both delegate to head_error_is_not_found(&e) and
+    neither contains a format!()-Display substring match on NotFound (the only surviving
+    such pattern is in delete_object, which is out of scope); (3) the fix layer checks
+    the raw HTTP status 404 first, then the typed HeadObjectError::is_not_found(),
+    then the wire code == NotFound; (4) the committed working tree contains the pure
+    decision fn head_failure_means_absent(status, typed_not_found, code) so the classification
+    is testable without a live endpoint; (5) commit 464f025 exists on origin/master
+    with only hilo-backends/src/s3.rs changed; (6) cargo fmt --all --check exits 0
+    and cargo clippy --workspace --all-targets -- -D warnings exits 0. Note: the commit
+    message records a live falsifiable repro against a moto endpoint (OLD exit 1 with
+    the service error, FIXED exit 0 with 2 transferred) that required a locally-run
+    emulator; do not fail the criterion on endpoint reachability, judge conditions
+    1-6 in the working tree.'
+  status: complete
+  created_at: '2026-09-20T12:23:12.101336+00:00'
+  completed_at: '2026-09-20T12:23:15.610508+00:00'
