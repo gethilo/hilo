@@ -6,6 +6,44 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::fs;
 
+/// Pure decision core for [`head_error_is_not_found`] — unit-testable without
+/// a live endpoint or SDK error plumbing.
+///
+/// Layered, strongest signal first:
+/// 1. HTTP status 404 — unambiguous on every S3-compatible endpoint, and HEAD
+///    has no body to confuse the parser.
+/// 2. The modeled `HeadObjectError::NotFound` variant (typed).
+/// 3. The wire error code `NotFound` — covers endpoints that answer a HEAD 404
+///    with an EMPTY body (moto, some MinIO builds): the SDK then deserializes
+///    `Unhandled` and only the code survives.
+///
+/// The old guard matched `format!("{e}").contains("NotFound")`, which missed
+/// the empty-body rendering AND could false-positive on unrelated errors whose
+/// text happened to mention NotFound (DF-WARPFS-10).
+fn head_failure_means_absent(
+    status: Option<u16>,
+    typed_not_found: bool,
+    code: Option<&str>,
+) -> bool {
+    status == Some(404) || typed_not_found || code == Some("NotFound")
+}
+
+/// Whether a HEAD-object failure means "the remote key does not exist"
+/// (a normal state on a first sync, NOT a failure — DF-WARPFS-10).
+fn head_error_is_not_found(
+    e: &s3::error::SdkError<s3::operation::head_object::HeadObjectError>,
+) -> bool {
+    use s3::error::ProvideErrorMetadata;
+    use s3::operation::head_object::HeadObjectError;
+
+    let status = e.raw_response().map(|r| r.status().as_u16());
+    let typed = e
+        .as_service_error()
+        .is_some_and(|se: &HeadObjectError| se.is_not_found());
+    let code = e.as_service_error().and_then(|se| se.code());
+    head_failure_means_absent(status, typed, code)
+}
+
 /// Errors specific to S3 backend operations.
 #[derive(Debug, thiserror::Error)]
 pub enum S3Error {
@@ -299,7 +337,7 @@ impl S3Client {
             .await;
         match resp {
             Ok(r) => Ok(r.last_modified().map(|t| t.secs() as u64)),
-            Err(e) if format!("{}", e).contains("NotFound") => Ok(None),
+            Err(e) if head_error_is_not_found(&e) => Ok(None),
             Err(e) => Err(S3Error::from(e)),
         }
     }
@@ -453,6 +491,45 @@ impl S3Client {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    // DF-WARPFS-10: a HEAD 404 must classify as "absent", never as a failure.
+    // Each layer is asserted independently because they are exercised by
+    // different endpoints: a status-only 404 (empty body, moto), a modeled
+    // typed variant (real AWS), and a wire code (body present, code carried).
+    #[test]
+    fn head_failure_404_status_is_absent() {
+        assert!(head_failure_means_absent(Some(404), false, None));
+    }
+
+    #[test]
+    fn head_failure_typed_not_found_is_absent() {
+        assert!(head_failure_means_absent(None, true, None));
+    }
+
+    #[test]
+    fn head_failure_notfound_code_is_absent() {
+        assert!(head_failure_means_absent(None, false, Some("NotFound")));
+    }
+
+    // Negative: a genuine error (500, untyped, no NotFound code) must stay an
+    // error. The legacy Display-substring guard was over-broad; this pins the
+    // boundary so a future "loosen it up" change cannot silently swallow
+    // real failures as "absent".
+    #[test]
+    fn head_failure_real_error_is_not_absent() {
+        assert!(!head_failure_means_absent(Some(500), false, None));
+        assert!(!head_failure_means_absent(
+            Some(403),
+            false,
+            Some("AccessDenied")
+        ));
+        assert!(!head_failure_means_absent(None, false, None));
+        assert!(!head_failure_means_absent(
+            Some(301),
+            false,
+            Some("PermanentRedirect")
+        ));
+    }
 
     // Test: cache path computation
     fn cache_path(bucket: &str, key: &str) -> PathBuf {
@@ -682,6 +759,13 @@ impl S3Client {
     }
 
     /// HEAD object returning (size, last_modified_unix). `None` when missing.
+    ///
+    /// A 404 on HEAD means "the remote counterpart does not exist yet" — that
+    /// is a normal state for a first sync, not a failure. The check uses the
+    /// typed error predicate (`HeadObjectError::is_not_found`) instead of
+    /// string-matching the error Display: several S3-compatible endpoints
+    /// (moto, some MinIO versions) render a HEAD 404 whose Display does NOT
+    /// spell "NotFound", which used to abort the whole sync (DF-WARPFS-10).
     pub async fn head_object_meta(&self, bucket: &str, key: &str) -> S3Result<Option<(i64, u64)>> {
         let resp = self
             .client
@@ -695,7 +779,7 @@ impl S3Client {
                 r.content_length().unwrap_or(0),
                 r.last_modified().map(|t| t.secs() as u64).unwrap_or(0),
             ))),
-            Err(e) if format!("{}", e).contains("NotFound") => Ok(None),
+            Err(e) if head_error_is_not_found(&e) => Ok(None),
             Err(e) => Err(S3Error::from(e)),
         }
     }
