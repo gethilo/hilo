@@ -23,8 +23,9 @@ pub mod signal;
 pub use classify::{classify_file, infer_feature, Classification};
 pub use error::{GraphError, GraphResult};
 pub use graph::{
-    ensure_schema, insert_edges_into, reconcile_edges_from_jsonl, strip_file_prefix, Direction,
-    GraphDB, ModuleStats, UNRESOLVABLE_TARGET_HINT,
+    ensure_schema, insert_edges_into, reconcile_edges_from_jsonl,
+    reconcile_edges_from_jsonl_with_chunk_size, strip_file_prefix, Direction, GraphDB, ModuleStats,
+    RECONCILE_CHUNK_ROWS, UNRESOLVABLE_TARGET_HINT,
 };
 pub use impact::{compute_impact, compute_impact_with_external, ImpactFile, ImpactResult};
 pub use parser::{Language, Parser};

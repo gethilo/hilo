@@ -12,6 +12,18 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 debug = false
 
+# PERF-006: the release binary carried ZERO `.debug_` sections, so 55.4% of a
+# perf profile came back `[unknown]` and more than half of every sample was
+# unattributable to a function. Line tables cost binary size, NOT runtime, and
+# let `perf record` / cargo-flamegraph resolve frames for workspace crates AND
+# dependencies (duckdb worker threads included). `strip = "none"` is required:
+# without it the symbols we just emitted are stripped back out of the artefact.
+# A shippable artefact can still be stripped separately; the workspace default
+# stays symbolizable so future profiles are readable.
+[profile.release]
+debug = 1
+strip = "none"
+
 [workspace.package]
 version = "0.3.0"
 edition = "2021"
