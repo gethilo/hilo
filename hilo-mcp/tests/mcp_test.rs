@@ -22,6 +22,14 @@ fn cwd_test_lock() -> &'static std::sync::Mutex<()> {
     LOCK.get_or_init(|| std::sync::Mutex::new(()))
 }
 
+struct RestoreCwd(std::path::PathBuf);
+
+impl Drop for RestoreCwd {
+    fn drop(&mut self) {
+        std::env::set_current_dir(&self.0).ok();
+    }
+}
+
 // -------------------------------------------------------------------------
 // initialize
 // -------------------------------------------------------------------------
@@ -804,11 +812,15 @@ fn test_backend_status_local() {
     let result: serde_json::Value =
         serde_json::from_str(text).expect("tool output should be valid JSON");
 
-    assert_eq!(result["backend"], "local");
+    assert_eq!(result["backend"], "local-only");
     assert_eq!(result["cache_hit"], true);
     assert!(result["cache_path"].is_null());
     assert!(result["remote_url"].is_null());
-    assert_eq!(result["last_synced"], "synced");
+    assert_eq!(
+        result["last_synced"],
+        "not applicable (unmanaged local path)"
+    );
+    assert_eq!(result["managed"], false);
 }
 
 // -------------------------------------------------------------------------
@@ -829,9 +841,60 @@ fn test_backend_status_nonexistent() {
     let result: serde_json::Value =
         serde_json::from_str(text).expect("tool output should be valid JSON");
 
-    assert_eq!(result["backend"], "local");
+    assert_eq!(result["backend"], "local-only");
     assert_eq!(result["cache_hit"], false);
-    assert_eq!(result["last_synced"], "not found on disk");
+    assert_eq!(result["last_synced"], "not found on disk (unmanaged path)");
+}
+
+#[test]
+fn test_backend_surfaces_follow_mounts_yaml_and_never_fake_sync() {
+    let _guard = cwd_test_lock().lock().unwrap();
+    let previous = std::env::current_dir().unwrap();
+    let _restore = RestoreCwd(previous);
+    let root = tempfile::TempDir::new().unwrap();
+    std::env::set_current_dir(root.path()).unwrap();
+    std::fs::create_dir_all(".vfs/backends").unwrap();
+    std::fs::create_dir_all("s3data/src").unwrap();
+    std::fs::write("s3data/src/main.rs", "fn main() {}\n").unwrap();
+    std::fs::write(
+        ".vfs/backends/mounts.yaml",
+        "- name: dog\n  type: s3\n  bucket: hilo-s3-dogfood\n  prefix: dog/\n  at: /s3data\n  tool: native\n  mode: mirror\n",
+    )
+    .unwrap();
+
+    let status_req = r#"{"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"vfs_backend_status","arguments":{"path":"s3data/src/main.rs"}}}"#;
+    let status = rpc(status_req);
+    let text = status["result"]["content"][0]["text"].as_str().unwrap();
+    let result: serde_json::Value = serde_json::from_str(text).unwrap();
+    assert_eq!(result["backend"], "s3");
+    assert_eq!(result["remote_url"], "s3://hilo-s3-dogfood/dog/");
+    assert_eq!(result["cache_hit"], true);
+    assert_ne!(result["last_synced"], "synced");
+
+    let resolve_req = r#"{"jsonrpc":"2.0","id":25,"method":"tools/call","params":{"name":"vfs_resolve_path","arguments":{"path":"s3data/src/main.rs"}}}"#;
+    let resolved = rpc(resolve_req);
+    let text = resolved["result"]["content"][0]["text"].as_str().unwrap();
+    let result: serde_json::Value = serde_json::from_str(text).unwrap();
+    assert_eq!(result["backend"], "s3");
+    assert_eq!(result["remote_url"], "s3://hilo-s3-dogfood/dog/");
+
+    let sync_req = r#"{"jsonrpc":"2.0","id":26,"method":"tools/call","params":{"name":"vfs_sync_backend","arguments":{"path":"s3data/src/main.rs"}}}"#;
+    let sync = rpc(sync_req);
+    assert!(
+        sync.get("error").is_some(),
+        "sync must execute or return an error, never fake success: {sync}"
+    );
+
+    std::fs::write(
+        ".vfs/backends/mounts.yaml",
+        "- name: checkout\n  type: local\n  prefix: s3data\n  at: /s3data\n  tool: native\n  mode: mirror\n",
+    )
+    .unwrap();
+    let changed = rpc(status_req);
+    let text = changed["result"]["content"][0]["text"].as_str().unwrap();
+    let result: serde_json::Value = serde_json::from_str(text).unwrap();
+    assert_eq!(result["backend"], "local");
+    assert!(result["remote_url"].is_null());
 }
 
 // -------------------------------------------------------------------------
@@ -853,17 +916,14 @@ fn test_sync_backend_local() {
     );
     let resp = rpc(&req);
 
-    assert_eq!(resp["jsonrpc"], "2.0");
-    assert_eq!(resp["id"], 22);
-
-    let text = resp["result"]["content"][0]["text"]
+    assert!(
+        resp.get("error").is_some(),
+        "unmanaged local paths must not report a fake sync: {resp}"
+    );
+    assert!(resp["error"]["message"]
         .as_str()
-        .expect("content[0].text should be a string");
-    let result: serde_json::Value =
-        serde_json::from_str(text).expect("tool output should be valid JSON");
-
-    assert_eq!(result["synced_files"], 1);
-    assert_eq!(result["errors"], serde_json::json!([]));
+        .unwrap()
+        .contains("backend sync is not supported"));
 }
 
 // -------------------------------------------------------------------------
@@ -875,21 +935,11 @@ fn test_sync_backend_nonexistent() {
     let req = r#"{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"vfs_sync_backend","arguments":{"path":"/nonexistent/hilo-file-xyz"}}}"#;
     let resp = rpc(req);
 
-    assert_eq!(resp["jsonrpc"], "2.0");
-    assert_eq!(resp["id"], 23);
-
-    let text = resp["result"]["content"][0]["text"]
+    assert!(resp.get("error").is_some());
+    assert!(resp["error"]["message"]
         .as_str()
-        .expect("content[0].text should be a string");
-    let result: serde_json::Value =
-        serde_json::from_str(text).expect("tool output should be valid JSON");
-
-    assert_eq!(result["synced_files"], 0);
-    let errors = result["errors"]
-        .as_array()
-        .expect("errors should be an array");
-    assert!(!errors.is_empty());
-    assert!(errors[0].as_str().unwrap().contains("file not found"));
+        .unwrap()
+        .contains("backend sync is not supported"));
 }
 
 // -------------------------------------------------------------------------
@@ -995,15 +1045,18 @@ fn test_sync_backend_ignored_path_reports_skipped() {
 }
 
 #[test]
-fn test_sync_backend_normal_path_reports_synced() {
+fn test_sync_backend_normal_path_errors_instead_of_faking_sync() {
     let _guard = cwd_test_lock().lock().unwrap();
-    // A source file is not ignored: normal local-backend result.
     let req = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"vfs_sync_backend","arguments":{"path":"src/lib.rs"}}}"#;
     let resp = rpc(req);
-    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
-    let result: serde_json::Value = serde_json::from_str(text).unwrap();
-    assert_eq!(result["synced_files"], 1);
-    assert_eq!(result["skipped_ignored"], 0);
+    assert!(
+        resp.get("error").is_some(),
+        "unexpected fake success: {resp}"
+    );
+    assert!(resp["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("backend sync is not supported"));
 }
 
 // -------------------------------------------------------------------------

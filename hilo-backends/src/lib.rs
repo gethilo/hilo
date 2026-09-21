@@ -18,8 +18,8 @@ pub mod stream;
 pub mod sync;
 
 pub use backend::{
-    BackendConfig, BackendEntry, BackendError, BackendKind, BackendRegistry, LocalDriver,
-    MockBackend, MountEntry, SyncMode, SyncTool,
+    mount_for_path, read_mount_entries, BackendConfig, BackendEntry, BackendError, BackendKind,
+    BackendRegistry, LocalDriver, MockBackend, MountEntry, SyncMode, SyncTool,
 };
 pub use ephemeral::{EphemeralClass, EphemeralEntry, EphemeralError, EphemeralMatcher};
 pub use external::ExternalToolDriver;

@@ -447,11 +447,7 @@ impl BackendRegistry {
     /// Entries missing the new keys get spec defaults (`tool: native` implied
     /// for s3, `mode: mirror`, `poll_secs: 60`).
     pub fn load_mounts(mounts_yaml: &Path) -> Result<Self, BackendError> {
-        let text = std::fs::read_to_string(mounts_yaml).map_err(|e| {
-            BackendError::InvalidConfig(format!("cannot read {}: {e}", mounts_yaml.display()))
-        })?;
-        let entries: Vec<MountEntry> = serde_yaml::from_str(&text)
-            .map_err(|e| BackendError::InvalidConfig(format!("bad mounts.yaml: {e}")))?;
+        let entries = read_mount_entries(mounts_yaml)?;
         let mut reg = Self::new();
         for entry in entries {
             let kind = BackendKind::from_str(entry.kind.as_str()).ok_or_else(|| {
@@ -533,6 +529,45 @@ pub struct MountEntry {
     pub no_default_ignores: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub at: Option<String>,
+}
+
+/// Read the canonical mount inventory without constructing network clients.
+///
+/// Status and resolution surfaces use this helper because answering "which
+/// backend owns this path?" must not contact that backend.
+pub fn read_mount_entries(mounts_yaml: &Path) -> Result<Vec<MountEntry>, BackendError> {
+    let text = std::fs::read_to_string(mounts_yaml).map_err(|e| {
+        BackendError::InvalidConfig(format!("cannot read {}: {e}", mounts_yaml.display()))
+    })?;
+    serde_yaml::from_str(&text)
+        .map_err(|e| BackendError::InvalidConfig(format!("bad mounts.yaml: {e}")))
+}
+
+/// Select the most-specific mount governing a virtual path.
+///
+/// Both `/mount/file` and `mount/file` spellings are accepted. Component
+/// boundaries are enforced so `/data2` never matches a `/data` mount.
+pub fn mount_for_path<'a>(entries: &'a [MountEntry], path: &str) -> Option<&'a MountEntry> {
+    fn normalize(path: &str) -> String {
+        let path = path.replace('\\', "/");
+        format!("/{}", path.trim_start_matches("./").trim_start_matches('/'))
+            .trim_end_matches('/')
+            .to_string()
+    }
+
+    let path = normalize(path);
+    entries
+        .iter()
+        .filter_map(|entry| {
+            let at = normalize(entry.at.as_deref()?);
+            let owns = path == at
+                || path
+                    .strip_prefix(&at)
+                    .is_some_and(|suffix| suffix.starts_with('/'));
+            owns.then_some((at.len(), entry))
+        })
+        .max_by_key(|(length, _)| *length)
+        .map(|(_, entry)| entry)
 }
 
 impl BackendKind {
@@ -843,6 +878,39 @@ mod tests {
         std::fs::write(&src, b"data").unwrap();
         local.put(&src, "p.txt").unwrap();
         assert!(root.join("p.txt").exists());
+    }
+
+    #[test]
+    fn mount_for_path_uses_component_boundaries_and_most_specific_mount() {
+        fn mount(name: &str, at: &str) -> MountEntry {
+            MountEntry {
+                name: name.into(),
+                kind: "s3".into(),
+                bucket: Some(name.into()),
+                prefix: None,
+                region: None,
+                remote: None,
+                tool: None,
+                mode: None,
+                ignore_file: None,
+                poll_secs: None,
+                no_default_ignores: None,
+                at: Some(at.into()),
+            }
+        }
+
+        let entries = vec![mount("parent", "/data"), mount("child", "/data/reports")];
+        assert_eq!(
+            mount_for_path(&entries, "data/reports/today.csv")
+                .unwrap()
+                .name,
+            "child"
+        );
+        assert_eq!(
+            mount_for_path(&entries, "/data/file").unwrap().name,
+            "parent"
+        );
+        assert!(mount_for_path(&entries, "/database/file").is_none());
     }
 
     #[test]
