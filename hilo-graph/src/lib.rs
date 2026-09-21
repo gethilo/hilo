@@ -23,8 +23,10 @@ pub mod signal;
 pub use classify::{classify_file, infer_feature, Classification};
 pub use error::{GraphError, GraphResult};
 pub use graph::{
-    ensure_schema, insert_edges_into, reconcile_edges_from_jsonl, strip_file_prefix, Direction,
-    GraphDB, ModuleStats, UNRESOLVABLE_TARGET_HINT,
+    ensure_schema, insert_edges_into, reconcile_edges_from_jsonl, request_path_reconcile_budget_ms,
+    set_request_path_reconcile_budget_ms, strip_file_prefix, DegradedReason, Direction, GraphDB,
+    ModuleStats, ReconcileMode, ReconcileReport, DEFAULT_REQUEST_PATH_RECONCILE_BUDGET_MS,
+    UNBOUNDED_RECONCILE_BUDGET_MS, UNRESOLVABLE_TARGET_HINT,
 };
 pub use impact::{compute_impact, compute_impact_with_external, ImpactFile, ImpactResult};
 pub use parser::{Language, Parser};
