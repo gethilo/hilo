@@ -120,7 +120,10 @@ pub fn handle_request(line: &str) -> McpResult<Option<serde_json::Value>> {
             "protocolVersion": "2024-11-05",
             "serverInfo": {
                 "name": "hilo-mcp",
-                "version": "0.2.0"
+                // DF-WARPFS-17: always the crate's real version — a
+                // hand-written literal went stale (0.2.0) through the 0.3.0
+                // release. This cannot drift again.
+                "version": env!("CARGO_PKG_VERSION")
             },
             "capabilities": {
                 "tools": {}

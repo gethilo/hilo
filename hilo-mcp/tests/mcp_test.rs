@@ -40,6 +40,19 @@ fn test_initialize() {
     assert_eq!(info["name"], "hilo-mcp");
     assert!(info["version"].is_string());
 
+    // DF-WARPFS-17: the handshake must advertise the crate's REAL version,
+    // never a hand-written literal — a literal went stale (0.2.0) through the
+    // 0.3.0 release while the workspace and `hilo --version` said 0.3.0.
+    // Both sides compile from the same package, so `CARGO_PKG_VERSION` is the
+    // same string in the server and here; this locks the handshake to the
+    // Cargo.toml version across future bumps.
+    assert_eq!(
+        info["version"],
+        env!("CARGO_PKG_VERSION"),
+        "serverInfo.version must equal hilo-mcp's Cargo.toml version \
+         (env!(\"CARGO_PKG_VERSION\")) — the same string `hilo --version` prints"
+    );
+
     // capabilities should advertise tools
     assert!(result["capabilities"]["tools"].is_object());
 }
