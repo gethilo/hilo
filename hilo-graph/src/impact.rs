@@ -6,7 +6,8 @@ use duckdb::{params, Connection};
 use serde::Serialize;
 
 use crate::error::GraphResult;
-use crate::resolution::PkgResolver;
+use crate::resolution::{LocalSpecResolver, PkgResolver};
+use hilo_metadata::inventory::Edge;
 
 /// GAP-083 `scope` value: the row is a true file-level dependent (an edge whose
 /// target IS the queried file, or a `local:` node that resolves to it).
@@ -151,6 +152,142 @@ fn collect_family(
         }
     }
     Ok(())
+}
+
+fn collect_streamed(
+    edges: impl IntoIterator<Item = Edge>,
+    cx: &mut Collector<'_>,
+    depth: u32,
+    kind: MatchKind<'_>,
+) {
+    let child_depth = depth + 1 + kind.extra;
+    for edge in edges {
+        if child_depth > cx.max_depth {
+            continue;
+        }
+        if cx.visited.insert(edge.from.clone()) {
+            cx.results.push(ImpactFile {
+                path: edge.from.clone(),
+                relation: edge.rel,
+                depth: child_depth,
+                scope: kind.scope.to_string(),
+                via: kind.via.map(str::to_string),
+                provenance: Some(edge.provenance),
+                confidence: Some(edge.confidence),
+            });
+            cx.queue.push_back((edge.from, child_depth));
+        }
+    }
+}
+
+/// Compute impact by repeatedly scanning canonical edge rows instead of querying
+/// the DuckDB cache. This is used when opening the cache skipped replay at the
+/// configured spill watermark. Matching order and resolver behavior mirror
+/// [`compute_impact`]: exact file/node rows, package exact rows, package-family
+/// rows, then importer-filtered `local:` rows.
+pub(crate) fn compute_impact_streaming(
+    start_path: &str,
+    max_depth: u32,
+    local_resolver: Option<&LocalSpecResolver>,
+    mut scan: impl FnMut(&mut dyn FnMut(Edge) -> bool) -> GraphResult<()>,
+) -> GraphResult<Vec<ImpactFile>> {
+    if max_depth == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut results = Vec::new();
+    let mut visited = HashSet::new();
+    visited.insert(start_path.to_string());
+    let mut queue = VecDeque::from([(start_path.to_string(), 0)]);
+    let mut resolver = PkgResolver::new();
+    let file_query = !start_path.starts_with("pkg:") && !start_path.starts_with("sys:");
+    let mut cx = Collector {
+        results: &mut results,
+        visited: &mut visited,
+        queue: &mut queue,
+        max_depth,
+    };
+
+    while let Some((path, depth)) = cx.queue.pop_front() {
+        if depth >= max_depth {
+            continue;
+        }
+
+        let pkg_target = if path.starts_with("pkg:") {
+            Some(path.clone())
+        } else {
+            resolver.pkg_node(&path)
+        };
+        let local_families = if path.starts_with("pkg:") {
+            Vec::new()
+        } else {
+            local_resolver
+                .map(|local| local.nodes_for(&path))
+                .unwrap_or_default()
+        };
+        let mut exact = Vec::new();
+        let mut pkg_exact = Vec::new();
+        let mut pkg_family = Vec::new();
+        let mut local = Vec::new();
+        scan(&mut |edge| {
+            if edge.to == path {
+                exact.push(edge);
+                return true;
+            }
+            if let Some(pkg) = pkg_target.as_deref() {
+                if !path.starts_with("pkg:") && edge.to == pkg {
+                    pkg_exact.push(edge);
+                    return true;
+                }
+                if edge.to.starts_with(&format!("{pkg}::"))
+                    || edge.to.starts_with(&format!("{pkg}_"))
+                {
+                    pkg_family.push(edge);
+                    return true;
+                }
+            }
+            if local_families
+                .iter()
+                .any(|(node, importers)| node == &edge.to && importers.contains(&edge.from))
+            {
+                local.push(edge);
+            }
+            true
+        })?;
+
+        let symbol_node = path.starts_with("pkg:") || path.starts_with("sys:");
+        collect_streamed(
+            exact,
+            &mut cx,
+            depth,
+            MatchKind {
+                scope: if symbol_node { SCOPE_CRATE } else { SCOPE_FILE },
+                extra: 0,
+                via: None,
+            },
+        );
+        if let Some(pkg) = pkg_target.as_deref() {
+            let crate_kind = MatchKind {
+                scope: SCOPE_CRATE,
+                extra: u32::from(file_query),
+                via: Some(pkg),
+            };
+            collect_streamed(pkg_exact, &mut cx, depth, crate_kind);
+            collect_streamed(pkg_family, &mut cx, depth, crate_kind);
+        }
+        collect_streamed(
+            local,
+            &mut cx,
+            depth,
+            MatchKind {
+                scope: SCOPE_FILE,
+                extra: 0,
+                via: None,
+            },
+        );
+    }
+
+    Ok(results)
 }
 
 /// Compute transitive impact: find all files that depend on `start_path`,

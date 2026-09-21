@@ -89,6 +89,8 @@ pub struct GraphDB {
     degraded: bool,
     /// Canonical edge source used by the degraded streaming query path.
     edges_jsonl: Option<PathBuf>,
+    /// Effective byte ceiling that caused replay to be skipped.
+    spill_watermark: Option<u64>,
 }
 
 /// Aggregate statistics computed over the `edges` table.
@@ -504,6 +506,7 @@ impl GraphDB {
 
         let mut degraded = false;
         let mut edges_jsonl = None;
+        let mut degraded_spill_watermark = None;
         // Read-through reconciliation: if a sibling edges.jsonl exists, load
         // any edges missing from the DuckDB cache. Only for on-disk DBs —
         // ":memory:" connections have no sibling file and are used in tests.
@@ -516,6 +519,7 @@ impl GraphDB {
                     .map(|metadata| metadata.len());
                 if jsonl_size.is_some_and(|size| size >= spill_watermark) {
                     degraded = true;
+                    degraded_spill_watermark = Some(spill_watermark);
                     eprintln!(
                         "warning: edges.jsonl is {} bytes, at/above spill_watermark {} bytes (DuckDB memory_limit={}); skipping full replay and serving graph queries by streaming edges.jsonl",
                         jsonl_size.unwrap_or_default(),
@@ -541,6 +545,7 @@ impl GraphDB {
             conn,
             degraded,
             edges_jsonl,
+            spill_watermark: degraded_spill_watermark,
         })
     }
 
@@ -548,6 +553,52 @@ impl GraphDB {
     /// queries by streaming the canonical `edges.jsonl` file.
     pub fn is_degraded(&self) -> bool {
         self.degraded
+    }
+
+    fn require_cached_query(&self, api: &str) -> GraphResult<()> {
+        if !self.degraded {
+            return Ok(());
+        }
+        Err(GraphError::Other(format!(
+            "graph query unavailable in degraded (spill) mode: {api}; edges.jsonl exceeds spill_watermark {} bytes",
+            self.spill_watermark.unwrap_or_default()
+        )))
+    }
+
+    /// Build only the `local:` resolver index needed to preserve impact parity.
+    /// The canonical corpus is still scanned; non-local rows are never replayed
+    /// into the skipped cache.
+    fn local_resolver_from_jsonl(&self) -> GraphResult<Option<LocalSpecResolver>> {
+        let conn = Connection::open_in_memory()?;
+        ensure_schema(&conn)?;
+        let mut stmt = conn.prepare(INSERT_EDGE_SQL)?;
+        let mut found = false;
+        let mut insert_error = None;
+        self.scan_jsonl_edges(|edge| {
+            if edge.to.starts_with("local:") {
+                found = true;
+                if let Err(error) = stmt.execute(params![
+                    edge.from,
+                    edge.to,
+                    edge.rel,
+                    edge.provenance,
+                    edge.confidence
+                ]) {
+                    insert_error = Some(error);
+                    return false;
+                }
+            }
+            true
+        })?;
+        if let Some(error) = insert_error {
+            return Err(error.into());
+        }
+        drop(stmt);
+        if found {
+            Ok(Some(LocalSpecResolver::from_edges(&conn)?))
+        } else {
+            Ok(None)
+        }
     }
 
     /// Scan valid canonical edges without materialising the corpus. Returning
@@ -603,6 +654,7 @@ impl GraphDB {
     /// Group edges by `("to", rel)` and return `(to, rel, count)` triples
     /// ordered by count descending.
     pub fn group_by_dependency(&self) -> GraphResult<Vec<(String, String, i64)>> {
+        self.require_cached_query("group_by_dependency")?;
         let mut stmt = self.conn.prepare(
             "SELECT \"to\", rel, COUNT(*) AS cnt \
              FROM edges \
@@ -628,6 +680,7 @@ impl GraphDB {
     /// The first element of the tuple is the set of distinct `from` values,
     /// the second is the set of distinct `to` values.
     pub fn distinct_files(&self) -> GraphResult<(Vec<String>, Vec<String>)> {
+        self.require_cached_query("distinct_files")?;
         let froms = {
             let mut stmt = self.conn.prepare("SELECT DISTINCT \"from\" FROM edges")?;
             let rows = stmt.query_map(params![], |row| row.get::<_, String>(0))?;
@@ -660,6 +713,7 @@ impl GraphDB {
         &self,
         rels: &[&str],
     ) -> GraphResult<Vec<(String, String, String)>> {
+        self.require_cached_query("distinct_service_edges")?;
         let placeholders = rels.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
         let sql = format!(
             "SELECT DISTINCT \"from\", \"to\", rel FROM edges WHERE rel IN ({placeholders}) \
@@ -914,6 +968,7 @@ impl GraphDB {
     /// the resolution root, so `pkg:`-resolved coverage (GAP-066) works for
     /// callers that query a graph laid out relative to their own cwd.
     pub fn untested_files(&self) -> GraphResult<Vec<String>> {
+        self.require_cached_query("untested_files")?;
         self.untested_files_at(Path::new("."))
     }
 
@@ -943,6 +998,7 @@ impl GraphDB {
     /// targets `pkg:fastapi.dependencies` does not cover
     /// `fastapi/dependencies/utils.py`.
     pub fn untested_files_at(&self, root: &Path) -> GraphResult<Vec<String>> {
+        self.require_cached_query("untested_files_at")?;
         let mut stmt = self.conn.prepare(
             "SELECT DISTINCT \"from\" FROM edges \
              WHERE rel = 'imports' \
@@ -990,6 +1046,7 @@ impl GraphDB {
     /// Delegates to [`GraphDB::module_files_at`] with the process cwd as the
     /// resolution root.
     pub fn module_files(&self, module_name: &str) -> GraphResult<ModuleStats> {
+        self.require_cached_query("module_files")?;
         self.module_files_at(Path::new("."), module_name)
     }
 
@@ -1008,6 +1065,7 @@ impl GraphDB {
     /// [`GraphDB::file_is_covered`]). `files` and `edges_count` are the
     /// unmodified file-level views of the module.
     pub fn module_files_at(&self, root: &Path, module_name: &str) -> GraphResult<ModuleStats> {
+        self.require_cached_query("module_files_at")?;
         let prefix = if module_name.ends_with('/') {
             module_name.to_string()
         } else {
@@ -1207,6 +1265,7 @@ impl GraphDB {
 
     /// Compute comprehensive [`GraphStats`] using DuckDB aggregate queries.
     pub fn stats(&self) -> GraphResult<GraphStats> {
+        self.require_cached_query("stats")?;
         let total_edges: i64 =
             self.conn
                 .query_row("SELECT COUNT(*) FROM edges", params![], |row| {
@@ -1301,6 +1360,11 @@ impl GraphDB {
         if !existing.is_empty() {
             return Ok(existing);
         }
+        if self.degraded {
+            return self
+                .require_cached_query("ensure_parsed")
+                .and(Ok(Vec::new()));
+        }
 
         // 2. Detect language from extension.
         let path = Path::new(file_path);
@@ -1382,6 +1446,11 @@ impl GraphDB {
         if self.file_in_graph(path)? {
             return self.related(path, rel_filter, direction);
         }
+        if self.degraded {
+            return self
+                .require_cached_query("related_or_parse")
+                .and(Ok(Vec::new()));
+        }
         // Cache miss → parse on-the-fly, then query.
         self.ensure_parsed(path)?;
         self.related(path, rel_filter, direction)
@@ -1434,10 +1503,25 @@ impl GraphDB {
                 )));
             }
         }
-        if !self.file_in_graph(start_path)? && !Path::new(start_path).exists() {
+        let in_graph = self.file_in_graph(start_path)?;
+        if !in_graph && !Path::new(start_path).exists() {
             return Err(GraphError::Other(format!(
                 "'{start_path}' is not in the graph (no such file and no matching graph node). {UNRESOLVABLE_TARGET_HINT}"
             )));
+        }
+        if self.degraded {
+            if !in_graph {
+                return self
+                    .require_cached_query("impact_or_parse")
+                    .and(Ok(Vec::new()));
+            }
+            let local_resolver = self.local_resolver_from_jsonl()?;
+            return impact::compute_impact_streaming(
+                start_path,
+                max_depth,
+                local_resolver.as_ref(),
+                |visit| self.scan_jsonl_edges(visit),
+            );
         }
         // Parse the start file first (no-op if already cached).
         self.ensure_parsed(start_path)?;
@@ -1449,6 +1533,7 @@ impl GraphDB {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::impact::SCOPE_FILE;
 
     fn write_go_file(dir: &Path, name: &str, content: &str) -> String {
         let path = dir.join(name);
@@ -1527,27 +1612,55 @@ mod tests {
         );
     }
 
-    #[test]
-    fn graphdb_open_degrades_to_streaming_above_spill_watermark() {
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = create_graph_path(dir.path());
+    fn impact_facts(rows: &[ImpactFile]) -> Vec<(String, String, u32, String, Option<String>)> {
+        let mut facts = rows
+            .iter()
+            .map(|row| {
+                (
+                    row.path.clone(),
+                    row.relation.clone(),
+                    row.depth,
+                    row.scope.clone(),
+                    row.via.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        facts.sort();
+        facts
+    }
+
+    fn write_spill_fixture(root: &Path, watermark: &str) -> (PathBuf, Vec<Edge>) {
+        let db_path = create_graph_path(root);
         let jsonl = db_path.parent().unwrap().join("edges.jsonl");
         std::fs::write(
-            dir.path().join(".vfs/manifest.yaml"),
-            "project:\n  name: spill-test\nperformance:\n  duckdb:\n    memory_limit: 64MB\n    spill_watermark: 1B\n",
+            root.join(".vfs/manifest.yaml"),
+            format!(
+                "project:\n  name: spill-test\nperformance:\n  duckdb:\n    memory_limit: 64MB\n    spill_watermark: {watermark}\n"
+            ),
         )
         .unwrap();
-        let expected = [
+        let edges = vec![
             Edge::new("src/main.rs", "pkg:serde", "imports"),
-            Edge::new("src/main.rs", "src/lib.rs", "imports"),
+            Edge::new("src/main.rs", "src/dependent.rs", "imports"),
+            Edge::new("src/dependent.rs", "src/lib.rs", "imports"),
+            Edge::new("tests/lib_test.rs", "src/lib.rs", "tested_by"),
+            Edge::new("src/rpc.rs", "service:payments", "calls_service"),
         ];
-        let content = expected
+        let content = edges
             .iter()
             .map(|edge| serde_json::to_string(edge).unwrap())
             .collect::<Vec<_>>()
             .join("\n")
             + "\n";
-        std::fs::write(&jsonl, content).unwrap();
+        std::fs::write(jsonl, content).unwrap();
+        (db_path, edges)
+    }
+
+    #[test]
+    fn graphdb_open_degrades_to_streaming_above_spill_watermark() {
+        let dir = tempfile::tempdir().unwrap();
+        let (db_path, expected) = write_spill_fixture(dir.path(), "1B");
+        let jsonl = db_path.parent().unwrap().join("edges.jsonl");
 
         let db = GraphDB::open(db_path.to_str().unwrap()).unwrap();
         assert!(
@@ -1565,25 +1678,88 @@ mod tests {
         assert_eq!(cached, 0, "degraded open must leave graph.db as-is");
 
         let related = db.related("src/main.rs", None, Direction::Forward).unwrap();
-        assert_eq!(related, expected, "streaming JSONL must answer correctly");
+        assert_eq!(
+            related,
+            expected[..2],
+            "streaming JSONL must answer correctly"
+        );
+
+        let impact = db
+            .impact_or_parse("src/lib.rs", 8)
+            .expect("degraded impact must stream the canonical JSONL");
+        assert_eq!(
+            impact_facts(&impact),
+            vec![
+                (
+                    "src/dependent.rs".to_string(),
+                    "imports".to_string(),
+                    1,
+                    SCOPE_FILE.to_string(),
+                    None,
+                ),
+                (
+                    "src/main.rs".to_string(),
+                    "imports".to_string(),
+                    2,
+                    SCOPE_FILE.to_string(),
+                    None,
+                ),
+                (
+                    "tests/lib_test.rs".to_string(),
+                    "tested_by".to_string(),
+                    1,
+                    SCOPE_FILE.to_string(),
+                    None,
+                ),
+            ],
+            "impact must not read the intentionally empty DuckDB cache"
+        );
+
+        let expected_error = |api: &str| {
+            format!(
+                "graph error: graph query unavailable in degraded (spill) mode: {api}; edges.jsonl exceeds spill_watermark 1 bytes"
+            )
+        };
+        assert_eq!(
+            db.group_by_dependency().unwrap_err().to_string(),
+            expected_error("group_by_dependency")
+        );
+        assert_eq!(
+            db.distinct_files().unwrap_err().to_string(),
+            expected_error("distinct_files")
+        );
+        assert_eq!(
+            db.distinct_service_edges(&["calls_service"])
+                .unwrap_err()
+                .to_string(),
+            expected_error("distinct_service_edges")
+        );
+        assert_eq!(
+            db.untested_files().unwrap_err().to_string(),
+            expected_error("untested_files")
+        );
+        assert_eq!(
+            db.untested_files_at(dir.path()).unwrap_err().to_string(),
+            expected_error("untested_files_at")
+        );
+        assert_eq!(
+            db.module_files("src").unwrap_err().to_string(),
+            expected_error("module_files")
+        );
+        assert_eq!(
+            db.module_files_at(dir.path(), "src")
+                .unwrap_err()
+                .to_string(),
+            expected_error("module_files_at")
+        );
+        assert_eq!(db.stats().unwrap_err().to_string(), expected_error("stats"));
     }
 
     #[test]
     fn graphdb_open_replays_below_spill_watermark() {
         let dir = tempfile::tempdir().unwrap();
-        let db_path = create_graph_path(dir.path());
+        let (db_path, edges) = write_spill_fixture(dir.path(), "1MB");
         let jsonl = db_path.parent().unwrap().join("edges.jsonl");
-        std::fs::write(
-            dir.path().join(".vfs/manifest.yaml"),
-            "project:\n  name: replay-test\nperformance:\n  duckdb:\n    memory_limit: 64MB\n    spill_watermark: 1MB\n",
-        )
-        .unwrap();
-        let edge = Edge::new("src/main.rs", "pkg:serde", "imports");
-        std::fs::write(
-            &jsonl,
-            format!("{}\n", serde_json::to_string(&edge).unwrap()),
-        )
-        .unwrap();
 
         let db = GraphDB::open(db_path.to_str().unwrap()).unwrap();
         assert!(!db.is_degraded(), "small corpora must keep the DuckDB path");
@@ -1591,10 +1767,41 @@ mod tests {
             reconcile_stamp_path(&jsonl).exists(),
             "a successful replay must write its stamp"
         );
-        assert_eq!(db.count_edges().unwrap(), 1);
+        assert_eq!(db.count_edges().unwrap(), edges.len() as i64);
         assert_eq!(
             db.related("src/main.rs", None, Direction::Forward).unwrap(),
-            vec![edge]
+            edges[..2]
+        );
+
+        let impact = db
+            .impact_or_parse("src/lib.rs", 8)
+            .expect("non-degraded impact must use the replayed DuckDB cache");
+        assert_eq!(
+            impact_facts(&impact),
+            vec![
+                (
+                    "src/dependent.rs".to_string(),
+                    "imports".to_string(),
+                    1,
+                    SCOPE_FILE.to_string(),
+                    None,
+                ),
+                (
+                    "src/main.rs".to_string(),
+                    "imports".to_string(),
+                    2,
+                    SCOPE_FILE.to_string(),
+                    None,
+                ),
+                (
+                    "tests/lib_test.rs".to_string(),
+                    "tested_by".to_string(),
+                    1,
+                    SCOPE_FILE.to_string(),
+                    None,
+                ),
+            ],
+            "DuckDB control must match the degraded streaming answer"
         );
     }
 
