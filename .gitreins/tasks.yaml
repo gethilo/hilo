@@ -1365,3 +1365,21 @@ tasks:
   status: complete
   created_at: '2026-09-20T12:23:12.101336+00:00'
   completed_at: '2026-09-20T12:23:15.610508+00:00'
+- id: GAP-092
+  title: 'DuckDB reconcile: bound memory via chunked replay + apply manifest memory_limit/threads'
+  criteria:
+  - '1) reconcile_edges_from_jsonl and insert_edges_into commit in bounded chunks
+    (constant chunk size, COMMIT between chunks), not one transaction per file; stale
+    ''batches of 512'' docstring corrected. 2) GraphDB::open applies manifest performance.duckdb.memory_limit
+    + threads (discovering root/.vfs/manifest.yaml from the db path); missing/malformed
+    manifest falls back to built-in defaults (512MB/4) gracefully. 3) Unit tests prove
+    knobs visible via current_setting after open, defaults with no manifest, chunked
+    reconcile of 5003 lines (dupes+malformed) is correct, idempotent, stamp written
+    only after full replay. 4) Live measurement in commit body: 155K-edge cold reconcile
+    peak RSS under 1.5GB (was 18.8GB observed), 20K under 800MB (was 2945MB), cold/warm
+    ratio under 20x (was 56x). 5) Gates green (fmt, clippy -D warnings, test -p hilo_graph
+    --lib, test -p hilo-cli); exactly ONE commit ''Addresses GAP-092'' with Co-authored-by:
+    Alexis Okuwa trailer; only hilo-graph/hilo-core files; no push.'
+  status: complete
+  created_at: '2026-09-21T01:09:28.056615+00:00'
+  completed_at: '2026-09-21T02:29:31.832949+00:00'
