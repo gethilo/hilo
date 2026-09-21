@@ -854,6 +854,10 @@ pub struct DuckDbPerf {
     pub threads: u32,
     #[serde(default = "default_duckdb_memory")]
     pub memory_limit: String,
+    /// `edges.jsonl` byte size at which replay is skipped and queries stream
+    /// from JSONL. When unset, this defaults to [`Self::memory_limit`].
+    #[serde(default)]
+    pub spill_watermark: Option<String>,
 }
 
 impl Default for DuckDbPerf {
@@ -861,6 +865,7 @@ impl Default for DuckDbPerf {
         Self {
             threads: default_duckdb_threads(),
             memory_limit: default_duckdb_memory(),
+            spill_watermark: None,
         }
     }
 }

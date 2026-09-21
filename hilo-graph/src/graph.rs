@@ -85,6 +85,10 @@ impl Direction {
 /// Manages the DuckDB graph database at `.vfs/graph/graph.db`.
 pub struct GraphDB {
     conn: Connection,
+    /// True when replay was skipped to preserve the configured memory ceiling.
+    degraded: bool,
+    /// Canonical edge source used by the degraded streaming query path.
+    edges_jsonl: Option<PathBuf>,
 }
 
 /// Aggregate statistics computed over the `edges` table.
@@ -370,10 +374,81 @@ fn duckdb_perf_for_path(db_path: &Path) -> DuckDbPerf {
         .and_then(Path::parent)
         .map(|vfs_dir| vfs_dir.join("manifest.yaml"));
 
-    manifest_path
-        .and_then(|path| Manifest::from_file(&path.to_string_lossy()).ok())
-        .map(|manifest| manifest.performance.duckdb)
-        .unwrap_or_default()
+    let Some(path) = manifest_path else {
+        return DuckDbPerf::default();
+    };
+    if !path.exists() {
+        return DuckDbPerf::default();
+    }
+    match Manifest::from_file(&path.to_string_lossy()) {
+        Ok(manifest) => manifest.performance.duckdb,
+        Err(error) => {
+            eprintln!(
+                "warning: failed to parse {} ({error}); using default DuckDB performance settings",
+                path.display()
+            );
+            DuckDbPerf::default()
+        }
+    }
+}
+
+/// Parse the byte-size syntax accepted by the DuckDB memory settings.
+fn parse_byte_size(value: &str) -> Option<u64> {
+    let compact = value.trim().replace(' ', "").to_ascii_uppercase();
+    let number_end = compact
+        .find(|ch: char| !ch.is_ascii_digit() && ch != '.')
+        .unwrap_or(compact.len());
+    if number_end == 0 {
+        return None;
+    }
+    let amount: f64 = compact[..number_end].parse().ok()?;
+    let multiplier = match &compact[number_end..] {
+        "" | "B" => 1_u64,
+        "KB" => 1_000,
+        "KIB" => 1_024,
+        "MB" => 1_000_000,
+        "MIB" => 1_048_576,
+        "GB" => 1_000_000_000,
+        "GIB" => 1_073_741_824,
+        "TB" => 1_000_000_000_000,
+        "TIB" => 1_099_511_627_776,
+        _ => return None,
+    };
+    let bytes = amount * multiplier as f64;
+    (amount.is_finite() && amount > 0.0 && bytes <= u64::MAX as f64).then_some(bytes as u64)
+}
+
+/// Resolve malformed values before applying them, and derive the JSONL spill
+/// watermark. An omitted or malformed watermark falls back to memory_limit.
+fn resolved_duckdb_perf(mut perf: DuckDbPerf) -> (DuckDbPerf, u64) {
+    let default = DuckDbPerf::default();
+    let memory_bytes = match parse_byte_size(&perf.memory_limit) {
+        Some(bytes) => bytes,
+        None => {
+            eprintln!(
+                "warning: invalid DuckDB memory_limit '{}'; using default {}",
+                perf.memory_limit, default.memory_limit
+            );
+            perf.memory_limit = default.memory_limit;
+            parse_byte_size(&perf.memory_limit).expect("default DuckDB memory limit must be valid")
+        }
+    };
+
+    let spill_watermark = match perf.spill_watermark.clone() {
+        None => memory_bytes,
+        Some(value) => match parse_byte_size(&value) {
+            Some(bytes) => bytes,
+            None => {
+                eprintln!(
+                    "warning: invalid DuckDB spill_watermark '{value}'; using memory_limit {}",
+                    perf.memory_limit
+                );
+                perf.spill_watermark = None;
+                memory_bytes
+            }
+        },
+    };
+    (perf, spill_watermark)
 }
 
 fn apply_duckdb_setting(conn: &Connection, name: &str, sql: &str) {
@@ -385,8 +460,7 @@ fn apply_duckdb_setting(conn: &Connection, name: &str, sql: &str) {
     }
 }
 
-fn configure_disk_connection(conn: &Connection, db_path: &Path) {
-    let perf = duckdb_perf_for_path(db_path);
+fn configure_disk_connection(conn: &Connection, perf: &DuckDbPerf) {
     let memory_limit = perf.memory_limit.replace('\'', "''");
     apply_duckdb_setting(
         conn,
@@ -415,35 +489,88 @@ impl GraphDB {
     /// JIT-001 write-through are still visible to queries after the next open.
     /// Malformed lines in `edges.jsonl` are silently skipped.
     pub fn open(path: &str) -> GraphResult<Self> {
+        let mut disk_perf = None;
         let conn = if path == ":memory:" {
             Connection::open_in_memory()?
         } else {
+            let (perf, spill_watermark) =
+                resolved_duckdb_perf(duckdb_perf_for_path(Path::new(path)));
             let conn = Connection::open(path)?;
-            configure_disk_connection(&conn, Path::new(path));
+            configure_disk_connection(&conn, &perf);
+            disk_perf = Some((perf, spill_watermark));
             conn
         };
         ensure_schema(&conn)?;
 
+        let mut degraded = false;
+        let mut edges_jsonl = None;
         // Read-through reconciliation: if a sibling edges.jsonl exists, load
         // any edges missing from the DuckDB cache. Only for on-disk DBs —
         // ":memory:" connections have no sibling file and are used in tests.
-        if path != ":memory:" {
+        if let Some((perf, spill_watermark)) = disk_perf {
             let jsonl_path = Path::new(path).parent().map(|dir| dir.join("edges.jsonl"));
             if let Some(jsonl) = jsonl_path {
-                // PERF-001: skip the full edges.jsonl replay when a previous
-                // successful replay stamped this exact file (fingerprint
-                // match). Any writer that appends/rewrites edges.jsonl (JIT-001
-                // write-through, parse-and-diff, graph warm, another process)
-                // changes the mtime/size -> mismatch -> full reconcile runs.
-                // reconcile_edges_from_jsonl returns Ok(0) if the file is
-                // missing — safe no-op for fresh projects.
-                if reconcile_needed(&jsonl) {
-                    reconcile_edges_from_jsonl(&conn, &jsonl)?;
+                edges_jsonl = Some(jsonl.clone());
+                let jsonl_size = std::fs::metadata(&jsonl)
+                    .ok()
+                    .map(|metadata| metadata.len());
+                if jsonl_size.is_some_and(|size| size >= spill_watermark) {
+                    degraded = true;
+                    eprintln!(
+                        "warning: edges.jsonl is {} bytes, at/above spill_watermark {} bytes (DuckDB memory_limit={}); skipping full replay and serving graph queries by streaming edges.jsonl",
+                        jsonl_size.unwrap_or_default(),
+                        spill_watermark,
+                        perf.memory_limit
+                    );
+                } else {
+                    // PERF-001: skip the full edges.jsonl replay when a previous
+                    // successful replay stamped this exact file (fingerprint
+                    // match). Any writer that appends/rewrites edges.jsonl (JIT-001
+                    // write-through, parse-and-diff, graph warm, another process)
+                    // changes the mtime/size -> mismatch -> full reconcile runs.
+                    // reconcile_edges_from_jsonl returns Ok(0) if the file is
+                    // missing — safe no-op for fresh projects.
+                    if reconcile_needed(&jsonl) {
+                        reconcile_edges_from_jsonl(&conn, &jsonl)?;
+                    }
                 }
             }
         }
 
-        Ok(GraphDB { conn })
+        Ok(GraphDB {
+            conn,
+            degraded,
+            edges_jsonl,
+        })
+    }
+
+    /// Whether this disk-backed connection skipped replay and serves graph
+    /// queries by streaming the canonical `edges.jsonl` file.
+    pub fn is_degraded(&self) -> bool {
+        self.degraded
+    }
+
+    /// Scan valid canonical edges without materialising the corpus. Returning
+    /// `false` from `visit` stops the scan early.
+    fn scan_jsonl_edges(&self, mut visit: impl FnMut(Edge) -> bool) -> GraphResult<()> {
+        let path = self.edges_jsonl.as_deref().ok_or_else(|| {
+            GraphError::Other("degraded graph has no edges.jsonl path".to_string())
+        })?;
+        let reader = BufReader::new(std::fs::File::open(path)?);
+        for line in reader.lines() {
+            let line = line?;
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let Ok(edge) = serde_json::from_str::<Edge>(trimmed) else {
+                continue;
+            };
+            if !visit(edge) {
+                break;
+            }
+        }
+        Ok(())
     }
 
     /// Insert multiple edges into the database using a prepared statement.
@@ -454,8 +581,17 @@ impl GraphDB {
         insert_edges_into(&self.conn, edges)
     }
 
-    /// Return the total number of rows in `edges` (`SELECT COUNT(*) FROM edges`).
+    /// Return the total number of unique graph edges.
     pub fn count_edges(&self) -> GraphResult<i64> {
+        if self.degraded {
+            let mut seen = HashSet::new();
+            self.scan_jsonl_edges(|edge| {
+                seen.insert((edge.from, edge.to, edge.rel, edge.provenance));
+                true
+            })?;
+            return Ok(seen.len() as i64);
+        }
+
         let count = self
             .conn
             .query_row("SELECT COUNT(*) FROM edges", params![], |row| {
@@ -546,6 +682,46 @@ impl GraphDB {
         Ok(out)
     }
 
+    /// Query the canonical JSONL source in degraded mode. Only matching rows
+    /// are retained, so memory scales with the answer rather than the corpus.
+    fn related_from_jsonl(
+        &self,
+        path: &str,
+        rel_filter: Option<&str>,
+        direction: Direction,
+    ) -> GraphResult<Vec<Edge>> {
+        let mut targets = vec![path.to_string()];
+        if direction == Direction::Reverse {
+            if let Some(pkg) = PkgResolver::new().pkg_node(path) {
+                targets.push(pkg);
+            }
+        }
+
+        let mut edges = Vec::new();
+        let mut seen = HashSet::new();
+        self.scan_jsonl_edges(|edge| {
+            let endpoint = match direction {
+                Direction::Forward => &edge.from,
+                Direction::Reverse => &edge.to,
+            };
+            let matches = targets.iter().any(|target| target == endpoint)
+                && rel_filter.is_none_or(|rel| rel == edge.rel);
+            if matches {
+                let key = (
+                    edge.from.clone(),
+                    edge.to.clone(),
+                    edge.rel.clone(),
+                    edge.provenance.clone(),
+                );
+                if seen.insert(key) {
+                    edges.push(edge);
+                }
+            }
+            true
+        })?;
+        Ok(edges)
+    }
+
     /// Query edges for a file path, optionally filtered by relation type and
     /// direction.
     ///
@@ -563,6 +739,10 @@ impl GraphDB {
         rel_filter: Option<&str>,
         direction: Direction,
     ) -> GraphResult<Vec<Edge>> {
+        if self.degraded {
+            return self.related_from_jsonl(path, rel_filter, direction);
+        }
+
         let column = match direction {
             Direction::Forward => "\"from\"",
             Direction::Reverse => "\"to\"",
@@ -676,8 +856,17 @@ impl GraphDB {
         Ok(edges)
     }
 
-    /// Check whether a file path exists in the `edges` table (as `from` or `to`).
+    /// Check whether a file path exists in the graph (as `from` or `to`).
     pub fn file_in_graph(&self, path: &str) -> GraphResult<bool> {
+        if self.degraded {
+            let mut found = false;
+            self.scan_jsonl_edges(|edge| {
+                found = edge.from == path || edge.to == path;
+                !found
+            })?;
+            return Ok(found);
+        }
+
         let count: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM edges WHERE \"from\" = ? OR \"to\" = ?",
             params![path, path],
@@ -1335,6 +1524,77 @@ mod tests {
         assert_eq!(
             current_setting(db.conn(), "memory_limit"),
             normalized_memory_setting("512MB")
+        );
+    }
+
+    #[test]
+    fn graphdb_open_degrades_to_streaming_above_spill_watermark() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = create_graph_path(dir.path());
+        let jsonl = db_path.parent().unwrap().join("edges.jsonl");
+        std::fs::write(
+            dir.path().join(".vfs/manifest.yaml"),
+            "project:\n  name: spill-test\nperformance:\n  duckdb:\n    memory_limit: 64MB\n    spill_watermark: 1B\n",
+        )
+        .unwrap();
+        let expected = [
+            Edge::new("src/main.rs", "pkg:serde", "imports"),
+            Edge::new("src/main.rs", "src/lib.rs", "imports"),
+        ];
+        let content = expected
+            .iter()
+            .map(|edge| serde_json::to_string(edge).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        std::fs::write(&jsonl, content).unwrap();
+
+        let db = GraphDB::open(db_path.to_str().unwrap()).unwrap();
+        assert!(
+            db.is_degraded(),
+            "the watermark must select JSONL streaming"
+        );
+        assert!(
+            !reconcile_stamp_path(&jsonl).exists(),
+            "a skipped replay must not claim a successful reconciliation"
+        );
+        let cached: i64 = db
+            .conn()
+            .query_row("SELECT COUNT(*) FROM edges", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(cached, 0, "degraded open must leave graph.db as-is");
+
+        let related = db.related("src/main.rs", None, Direction::Forward).unwrap();
+        assert_eq!(related, expected, "streaming JSONL must answer correctly");
+    }
+
+    #[test]
+    fn graphdb_open_replays_below_spill_watermark() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = create_graph_path(dir.path());
+        let jsonl = db_path.parent().unwrap().join("edges.jsonl");
+        std::fs::write(
+            dir.path().join(".vfs/manifest.yaml"),
+            "project:\n  name: replay-test\nperformance:\n  duckdb:\n    memory_limit: 64MB\n    spill_watermark: 1MB\n",
+        )
+        .unwrap();
+        let edge = Edge::new("src/main.rs", "pkg:serde", "imports");
+        std::fs::write(
+            &jsonl,
+            format!("{}\n", serde_json::to_string(&edge).unwrap()),
+        )
+        .unwrap();
+
+        let db = GraphDB::open(db_path.to_str().unwrap()).unwrap();
+        assert!(!db.is_degraded(), "small corpora must keep the DuckDB path");
+        assert!(
+            reconcile_stamp_path(&jsonl).exists(),
+            "a successful replay must write its stamp"
+        );
+        assert_eq!(db.count_edges().unwrap(), 1);
+        assert_eq!(
+            db.related("src/main.rs", None, Direction::Forward).unwrap(),
+            vec![edge]
         );
     }
 
