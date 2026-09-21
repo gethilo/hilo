@@ -891,7 +891,15 @@ pub fn reconcile_edges_from_jsonl(conn: &Connection, edges_jsonl: &Path) -> Grap
     reconcile_edges_from_jsonl_with_chunk_size(conn, edges_jsonl, RECONCILE_CHUNK_ROWS)
 }
 
-fn reconcile_edges_from_jsonl_with_chunk_size(
+/// [`reconcile_edges_from_jsonl`] with an explicit transaction size.
+///
+/// Identical in every other respect — same parse, same `INSERT OR IGNORE`,
+/// same stamp-after-success rule — so this is the seam that prices the
+/// throughput/peak-memory trade [`RECONCILE_CHUNK_ROWS`] makes. The shipped
+/// default is deliberately NOT parameterised by env or config: a chunk size
+/// that varies by environment makes replay memory untestable. Callers that
+/// need a different size (benchmarks, the PERF-006 sweep) pass it explicitly.
+pub fn reconcile_edges_from_jsonl_with_chunk_size(
     conn: &Connection,
     edges_jsonl: &Path,
     chunk_size: usize,

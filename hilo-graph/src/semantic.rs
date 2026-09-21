@@ -255,6 +255,15 @@ impl TfIdfIndex {
         let (froms, tos) = db.distinct_files().unwrap_or((Vec::new(), Vec::new()));
         let mut all_files: HashSet<String> = froms.into_iter().collect();
         all_files.extend(tos);
+        // GAP-091: raw relative-import specifiers (`pkg:.config`,
+        // `pkg:..json.provider`, `pkg:.`) are import STRINGS, not documents.
+        // Corpora warmed by a pre-GAP-091 binary still carry them (parse-cache
+        // hits re-append cached legacy lines verbatim), so the corpus is
+        // filtered here rather than only at parse time. Without symbols and
+        // without a resolvable file they outranked the real module file for
+        // its own name (bake-off wave 6: `pkg:..config` 0.0313 vs
+        // `src/flask/config.py` 0.0308).
+        all_files.retain(|p| !is_relative_specifier_node(p));
 
         // Sort for determinism.
         let mut documents: Vec<String> = all_files.into_iter().collect();
@@ -488,6 +497,19 @@ fn build_fused(
 
 // ──────────────────────────── Public search API ────────────────────────────
 
+/// Whether `path` is a raw relative-import specifier node (GAP-091): a `pkg:`
+/// node whose module text begins with the leading dots Python relative
+/// imports are written with (`pkg:.config`, `pkg:..json.provider`, bare
+/// `pkg:.` / `pkg:..`). These are import strings, never documents — no file
+/// resolves to them and no file can be opened through them.
+///
+/// Non-`pkg:` paths are never specifiers, and `pkg:` nodes with an absolute
+/// module (`pkg:flask.config`) or a symbol expansion (`pkg:crate::x`) don't
+/// start with the dot, so the check is a strict subset of the `pkg:` family.
+pub fn is_relative_specifier_node(path: &str) -> bool {
+    path.starts_with("pkg:.")
+}
+
 /// Run semantic search against the graph.
 ///
 /// Builds a TF-IDF index from the graph's file paths, runs both TF-IDF
@@ -660,6 +682,14 @@ pub fn search_with_symbols(
             // Malformed `pkg:{` pseudo-nodes (legacy garbage from
             // unresolvable multi-name use statements, GAP-035) are not real
             // search targets (GAP-038).
+            continue;
+        }
+        if is_relative_specifier_node(&path) {
+            // Raw relative-import specifiers (GAP-091) name no openable
+            // file. Dropped here too so a corpus written before the parse
+            // fix cannot surface them from the fused list even if a future
+            // index source re-admits them; running before truncation means
+            // they never consume result budget.
             continue;
         }
         if path.starts_with("local:") {
@@ -1032,6 +1062,93 @@ mod tests {
         assert!(
             !results.iter().any(|r| r.file_path.starts_with("pkg:{")),
             "malformed pkg:{{ pseudo-nodes must be excluded, got {:?}",
+            results.iter().map(|r| &r.file_path).collect::<Vec<_>>()
+        );
+    }
+
+    // ── GAP-091: relative-import specifier nodes are corpus pollution ──
+
+    /// A legacy-shaped graph: the raw `pkg:`-relative specifiers GAP-076
+    /// used to emit (`pkg:.config`, `pkg:..json`) are ALREADY in the edge
+    /// store alongside the resolved nodes. Query-time exclusion must keep
+    /// them out of search even before the corpus is re-warmed, because a
+    /// parse-cache hit re-warm re-appends cached legacy lines verbatim.
+    fn gap091_legacy_db() -> GraphDB {
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[
+            edge("src/flask/config.py", "pkg:flask.sansio.app", "imports"),
+            edge("src/flask/config.py", "pkg:.sansio.app", "imports"),
+            edge("src/flask/__init__.py", "pkg:flask.config", "imports"),
+            edge("src/flask/__init__.py", "pkg:.config", "imports"),
+            edge("src/flask/sansio/app.py", "pkg:..config", "imports"),
+            edge("src/flask/globals.py", "pkg:..config", "imports"),
+            edge("src/flask/app.py", "pkg:.", "imports"),
+        ])
+        .unwrap();
+        db
+    }
+
+    #[test]
+    fn search_ranks_real_module_file_above_any_relative_specifier_node() {
+        // The bake-off observation, as an assertion: for the query "config"
+        // the real file must lead, and every `pkg:.`-relative specifier node
+        // must be excluded outright. The stub extractor mirrors what the
+        // CLI's symbol-indexed default does (GAP-079: definition names are
+        // what let a real file out-score specifier strings that tie it on
+        // path tokens alone; without symbols the absolute `pkg:flask.config`
+        // legitimately ties the file and wins the alphabetical tie-break).
+        let db = gap091_legacy_db();
+        let opts = SearchOpts {
+            limit: 10,
+            ..Default::default()
+        };
+        let symbols = |path: &str| {
+            if path == "src/flask/config.py" {
+                vec!["Config".to_string()]
+            } else {
+                Vec::new()
+            }
+        };
+        let results = search_with_symbols(&db, "config", &opts, Some(&symbols)).unwrap();
+        assert!(!results.is_empty(), "the real config.py must still surface");
+        assert_eq!(
+            results[0].file_path,
+            "src/flask/config.py",
+            "the real file must lead its own module-name query, got: {:?}",
+            results.iter().map(|r| &r.file_path).collect::<Vec<_>>()
+        );
+        assert!(
+            results.iter().all(|r| !r.file_path.starts_with("pkg:.")
+                && !r.file_path.starts_with("pkg:..")
+                && r.file_path != "pkg:."),
+            "no pkg:.-relative specifier node may appear in results, got: {:?}",
+            results.iter().map(|r| &r.file_path).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn search_excludes_unresolvable_relative_specifier_entirely() {
+        // `pkg:.sansio.app` names no openable file and resolves to nothing
+        // the resolved node does not already carry — it must be dropped, not
+        // demoted, and it must not consume result budget.
+        let db = gap091_legacy_db();
+        let opts = SearchOpts {
+            limit: 50,
+            ..Default::default()
+        };
+        let results = search(&db, "sansio app", &opts).unwrap();
+        assert!(
+            results.iter().all(|r| !r.file_path.starts_with("pkg:.")
+                && !r.file_path.starts_with("pkg:..")
+                && r.file_path != "pkg:."),
+            "relative specifier nodes must be excluded entirely, got: {:?}",
+            results.iter().map(|r| &r.file_path).collect::<Vec<_>>()
+        );
+        assert!(
+            results
+                .iter()
+                .any(|r| r.file_path == "src/flask/sansio/app.py"),
+            "the real file must be unaffected, got: {:?}",
             results.iter().map(|r| &r.file_path).collect::<Vec<_>>()
         );
     }

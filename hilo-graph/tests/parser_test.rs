@@ -78,11 +78,14 @@ import (
     assert!(edges.iter().all(|e| e.rel == "imports"));
 }
 
-// ── Python relative imports (GAP-076) ───────────────────────────────
+// ── Python relative imports (GAP-076 / GAP-091) ─────────────────────
 //
-// A relative import must emit BOTH nodes: the raw one as written
-// (`pkg:.mod`) and the resolved absolute module (`pkg:pkg.mod`) that
-// `PkgResolver::pkg_node` produces for the target file. Only then does
+// A relative import emits exactly ONE node: the resolved absolute module
+// (`pkg:pkg.mod`) that `PkgResolver::pkg_node` produces for the target
+// file. GAP-076 originally kept the raw specifier as written (`pkg:.mod`)
+// too, but that raw string is a pseudo-node no consumer can open or
+// resolve — it pollutes the search/understand corpus (GAP-091) — so the
+// parser now drops it. The resolved node is what lets
 // `hilo graph impact <file>` find the files that import it.
 
 #[test]
@@ -106,8 +109,8 @@ fn python_relative_import_emits_resolved_absolute_node() {
         .map(|e| e.to.as_str())
         .collect();
     assert!(
-        tos.contains(&"pkg:.mod"),
-        "raw node must be kept, got {tos:?}"
+        !tos.iter().any(|t| t.starts_with("pkg:.")),
+        "raw relative specifier must be dropped (GAP-091), got {tos:?}"
     );
     assert!(
         tos.contains(&"pkg:pkg.mod"),
@@ -124,8 +127,8 @@ fn python_relative_import_emits_resolved_absolute_node() {
         .map(|e| e.to.as_str())
         .collect();
     assert!(
-        tos.contains(&"pkg:..mod"),
-        "raw node must be kept, got {tos:?}"
+        !tos.iter().any(|t| t.starts_with("pkg:.")),
+        "raw relative specifier must be dropped (GAP-091), got {tos:?}"
     );
     assert!(
         tos.contains(&"pkg:pkg.mod"),
@@ -141,7 +144,10 @@ fn python_relative_import_emits_resolved_absolute_node() {
         .filter(|e| e.rel == "imports")
         .map(|e| e.to.as_str())
         .collect();
-    assert!(tos.contains(&"pkg:."), "raw node must be kept, got {tos:?}");
+    assert!(
+        !tos.iter().any(|t| t.starts_with("pkg:.")),
+        "raw relative specifier must be dropped (GAP-091), got {tos:?}"
+    );
     assert!(
         tos.contains(&"pkg:pkg.sub"),
         "resolved package node missing, got {tos:?}"
@@ -149,25 +155,22 @@ fn python_relative_import_emits_resolved_absolute_node() {
 }
 
 #[test]
-fn python_relative_import_in_standalone_file_emits_only_raw_node() {
+fn python_relative_import_in_standalone_file_is_dropped() {
     let dir = tempfile::tempdir().unwrap();
     // No `__init__.py` anywhere: the file is not a member of a package, so
-    // there is no absolute module to resolve the dots against.
+    // the dots cannot be resolved to an absolute module — and the raw
+    // specifier must not ship either (GAP-091): it names no file and no
+    // module, only the corpus it pollutes.
     let script = write_py(dir.path(), "script.py", "from .mod import Thing\n");
 
     let mut parser = Parser::for_language(Language::Python).unwrap();
     let edges = parser
         .parse_imports(&script, "from .mod import Thing\n")
         .unwrap();
-    let tos: Vec<&str> = edges
-        .iter()
-        .filter(|e| e.rel == "imports")
-        .map(|e| e.to.as_str())
-        .collect();
-    assert_eq!(
-        tos,
-        vec!["pkg:.mod"],
-        "expected only the raw node, got {tos:?}"
+    assert!(
+        edges.is_empty(),
+        "unresolvable relative import must emit nothing, got: {:?}",
+        edges.iter().map(|e| e.to.clone()).collect::<Vec<_>>()
     );
 }
 
@@ -221,8 +224,8 @@ fn python_relative_import_in_namespace_package_resolves_against_nearest_package(
         .map(|e| e.to.as_str())
         .collect();
     assert!(
-        tos.contains(&"pkg:..config"),
-        "raw node must be kept, got {tos:?}"
+        !tos.iter().any(|t| t.starts_with("pkg:.")),
+        "raw relative specifier must be dropped (GAP-091), got {tos:?}"
     );
     assert!(
         tos.contains(&"pkg:pkg.config"),
@@ -245,9 +248,10 @@ fn python_relative_import_in_namespace_package_resolves_against_nearest_package(
 }
 
 #[test]
-fn python_relative_import_without_any_package_ancestor_emits_only_raw_node() {
+fn python_relative_import_without_any_package_ancestor_emits_nothing() {
     // `ns/mod.py` with no `__init__.py` anywhere up the chain: there is no
-    // enclosing package to resolve against, so nothing extra is emitted.
+    // enclosing package to resolve against, so the import yields no node at
+    // all — the raw specifier names neither a file nor a module (GAP-091).
     let dir = tempfile::tempdir().unwrap();
     let mod_py = write_py(dir.path(), "ns/mod.py", "from ..config import Config\n");
 
@@ -255,15 +259,10 @@ fn python_relative_import_without_any_package_ancestor_emits_only_raw_node() {
     let edges = parser
         .parse_imports(&mod_py, "from ..config import Config\n")
         .unwrap();
-    let tos: Vec<&str> = edges
-        .iter()
-        .filter(|e| e.rel == "imports")
-        .map(|e| e.to.as_str())
-        .collect();
-    assert_eq!(
-        tos,
-        vec!["pkg:..config"],
-        "expected only the raw node, got {tos:?}"
+    assert!(
+        edges.is_empty(),
+        "unresolvable relative import must emit nothing, got: {:?}",
+        edges.iter().map(|e| e.to.clone()).collect::<Vec<_>>()
     );
 }
 
@@ -271,6 +270,9 @@ fn python_relative_import_without_any_package_ancestor_emits_only_raw_node() {
 fn python_relative_import_matches_flask_corpus_shape() {
     // The worked examples from the flask corpus; every resolved node here
     // must be one `python_module_for_file` also produces for the target.
+    //
+    // GAP-091: the raw column is what the parser must NOT emit anymore —
+    // each raw specifier is asserted absent, the resolved node present.
     //
     // The fixture mirrors UPSTREAM flask exactly: `src/flask/sansio/` has no
     // `__init__.py` (PEP 420 namespace package, `git ls-files
@@ -335,7 +337,10 @@ fn python_relative_import_matches_flask_corpus_shape() {
             .filter(|e| e.rel == "imports")
             .map(|e| e.to.as_str())
             .collect();
-        assert!(tos.contains(&raw), "{file}: raw {raw} missing, got {tos:?}");
+        assert!(
+            !tos.contains(&raw),
+            "{file}: raw {raw} must be dropped (GAP-091), got {tos:?}"
+        );
         assert!(
             tos.contains(&resolved),
             "{file}: resolved {resolved} missing, got {tos:?}"

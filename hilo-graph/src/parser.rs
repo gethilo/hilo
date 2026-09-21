@@ -380,26 +380,27 @@ fn extract_python_imports(
                 .unwrap_or("")
                 .trim_matches('"');
             if !module.is_empty() {
-                let raw_node = format!("pkg:{module}");
-                paths.push(raw_node.clone());
-                // GAP-076: keep the raw node (other consumers key on it) but
-                // ALSO emit the resolved absolute module node, so a relative
-                // import meets the node `PkgResolver::pkg_node` produces for
-                // the target file. Without this, `from .config import X` in
-                // `flask/__init__.py` writes `pkg:.config` while the file
-                // `flask/config.py` resolves to `pkg:flask.config` and the two
-                // never meet (0 edges → "No dependents found").
+                // GAP-091: a relative import ships ONLY its resolved absolute
+                // module node. GAP-076 also kept the raw specifier as written
+                // (`pkg:.config`, `pkg:..json.provider`), but that string is a
+                // pseudo-node no consumer can open or resolve: it entered the
+                // search/understand corpus as a first-class document,
+                // outranked the real `src/flask/config.py` for its own module
+                // name, and spent the understand() MAP budget on '(no
+                // symbols extracted)' anchor lines. Nothing keys on the raw
+                // form — impact recall is carried entirely by the resolved
+                // node (GAP-076's other half, unchanged). Absolute imports
+                // and every other language are untouched.
                 if module.starts_with('.') {
                     if let Some(importing) = ctx.module.as_deref() {
                         if let Some(resolved) =
                             resolve_python_relative_module(module, importing, ctx.is_init)
                         {
-                            let resolved_node = format!("pkg:{resolved}");
-                            if resolved_node != raw_node {
-                                paths.push(resolved_node);
-                            }
+                            paths.push(format!("pkg:{resolved}"));
                         }
                     }
+                } else {
+                    paths.push(format!("pkg:{module}"));
                 }
             }
             return;
