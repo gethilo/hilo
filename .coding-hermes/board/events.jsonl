@@ -608,3 +608,4 @@
 {"id": 489, "timestamp": "2026-09-21 19:56:23", "event_type": "task_created", "task_id": "RELEASE-001", "actor": "foreman", "detail": "{\"id\":\"RELEASE-001\",\"status\":\"pending\"}"}
 {"id": 490, "timestamp": "2026-09-21 15:25:10", "event_type": "bankai-close", "task_id": "GAP-091", "actor": "bankai-dispatcher", "detail": "{\"commit\": \"716f4f0\", \"row\": \"GAP-091\", \"verified\": \"integration battery on merged tree\"}"}
 {"id": 491, "timestamp": "2026-09-21 15:25:10", "event_type": "bankai-close", "task_id": "PERF-006", "actor": "bankai-dispatcher", "detail": "{\"commit\": \"8c7d642\", \"row\": \"PERF-006\", \"verified\": \"integration battery on merged tree\"}"}
+{"id": 492, "timestamp": "2026-09-21 15:25:31", "event_type": "task_created", "task_id": "PERF-007", "actor": "bankai-dispatcher", "detail": "{\"id\": \"PERF-007\", \"status\": \"pending\", \"from\": \"PERF-006 Criterion sweep\"}"}
