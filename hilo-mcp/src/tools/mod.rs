@@ -893,127 +893,119 @@ fn resolve_path_mcp(arguments: &serde_json::Value) -> McpResult<serde_json::Valu
     let path = arguments["path"]
         .as_str()
         .ok_or_else(|| McpError::Protocol("missing path".into()))?;
-    let manifest = load_manifest()?;
-    match hilo_core::virtual_dir::resolve_path(&manifest, path) {
-        Some(r) => Ok(serde_json::to_value(r)?),
-        None => Ok(serde_json::json!({"error":"not found","path":path})),
-    }
+    let resolved = resolve_backend(path)?;
+    Ok(serde_json::json!({
+        "real_path": resolved.real_path,
+        "backend": resolved.backend,
+        "cached": resolved.cached,
+        "sync_status": resolved.sync_status,
+        "remote_url": resolved.remote_url,
+    }))
 }
 
 // ---------------------------------------------------------------------------
 // Backend tools
 // ---------------------------------------------------------------------------
 
-/// Helper: resolve a path through the manifest if available, otherwise
-/// fall back to a simple local-filesystem check.
-fn resolve_backend(path: &str) -> McpResult<hilo_core::virtual_dir::ResolvedPath> {
-    // Try loading the manifest first.
-    if let Ok(manifest) = load_manifest() {
-        if let Some(r) = hilo_core::virtual_dir::resolve_path(&manifest, path) {
-            return Ok(r);
-        }
-    }
+#[derive(Debug)]
+struct BackendResolution {
+    real_path: String,
+    backend: String,
+    cached: bool,
+    sync_status: String,
+    remote_url: Option<String>,
+    cache_path: Option<String>,
+    managed: bool,
+}
 
-    // Fallback: resolve against the current working directory.
-    // If path is already absolute, use it directly.
-    let p = Path::new(path);
-    let resolved = if p.is_absolute() {
-        p.to_path_buf()
+fn mount_remote_url(mount: &hilo_backends::MountEntry) -> Option<String> {
+    if mount.kind == "s3" {
+        mount.bucket.as_ref().map(|bucket| {
+            let prefix = mount
+                .prefix
+                .as_deref()
+                .unwrap_or("")
+                .trim_start_matches('/');
+            format!("s3://{bucket}/{prefix}")
+        })
     } else {
-        let cwd = std::env::current_dir().map_err(McpError::Io)?;
-        cwd.join(p)
+        mount.remote.clone()
+    }
+}
+
+/// Resolve ownership from the canonical `.vfs/backends/mounts.yaml` store.
+/// No network client is constructed for this read-only status operation.
+fn resolve_backend(path: &str) -> McpResult<BackendResolution> {
+    let cwd = std::env::current_dir().map_err(McpError::Io)?;
+    let mounts_path = cwd.join(".vfs/backends/mounts.yaml");
+    let mount = if mounts_path.is_file() {
+        let entries = hilo_backends::read_mount_entries(&mounts_path)
+            .map_err(|error| McpError::Protocol(error.to_string()))?;
+        hilo_backends::mount_for_path(&entries, path).cloned()
+    } else {
+        None
     };
-    let exists = resolved.exists();
-    Ok(hilo_core::virtual_dir::ResolvedPath {
-        real_path: resolved.to_string_lossy().to_string(),
-        backend: "local".to_string(),
-        cached: exists,
-        sync_status: if exists {
-            "synced".to_string()
-        } else {
-            "not found on disk".to_string()
-        },
-    })
+
+    let requested = Path::new(path);
+    let real_path = if mount.is_some() {
+        cwd.join(path.trim_start_matches('/'))
+    } else if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        cwd.join(requested)
+    };
+    let cached = real_path.exists();
+
+    if let Some(mount) = mount {
+        let remote_url = mount_remote_url(&mount);
+        Ok(BackendResolution {
+            real_path: real_path.to_string_lossy().into_owned(),
+            backend: mount.kind,
+            cached,
+            sync_status: "unknown (no sync timestamp recorded)".into(),
+            cache_path: cached.then(|| real_path.to_string_lossy().into_owned()),
+            remote_url,
+            managed: true,
+        })
+    } else {
+        Ok(BackendResolution {
+            real_path: real_path.to_string_lossy().into_owned(),
+            backend: "local-only".into(),
+            cached,
+            sync_status: if cached {
+                "not applicable (unmanaged local path)".into()
+            } else {
+                "not found on disk (unmanaged path)".into()
+            },
+            cache_path: None,
+            remote_url: None,
+            managed: false,
+        })
+    }
 }
 
 /// `vfs_backend_status` — return backend-level details for a file.
-///
-/// Resolves the path to its real storage location and returns information
-/// about which backend owns it, whether it's cached, the remote URL (if
-/// applicable), and the last sync state.
 fn backend_status(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
     let path = arguments["path"]
         .as_str()
         .ok_or_else(|| McpError::Protocol("missing 'path' argument".into()))?;
-
     let resolved = resolve_backend(path)?;
-
-    // Build remote_url and cache_path based on backend type.
-    let (remote_url, cache_path) = match resolved.backend.as_str() {
-        "s3" => {
-            // Try to get bucket/prefix from the manifest for a richer URL.
-            let url = if let Ok(manifest) = load_manifest() {
-                manifest
-                    .backends
-                    .s3
-                    .iter()
-                    .find(|s3| path.starts_with(&s3.at))
-                    .map(|s3| format!("s3://{}/{}", s3.bucket, s3.prefix.as_deref().unwrap_or("")))
-            } else {
-                None
-            };
-            (
-                url,
-                if resolved.cached {
-                    Some(resolved.real_path.clone())
-                } else {
-                    None
-                },
-            )
-        }
-        "git" => {
-            let url = if let Ok(manifest) = load_manifest() {
-                manifest
-                    .backends
-                    .remote
-                    .iter()
-                    .find(|remote| path.starts_with(&remote.at))
-                    .map(|r| r.url.clone())
-            } else {
-                None
-            };
-            (
-                url,
-                if resolved.cached {
-                    Some(resolved.real_path.clone())
-                } else {
-                    None
-                },
-            )
-        }
-        _ => {
-            // Local backend — no remote URL, no cache path.
-            (None, None)
-        }
-    };
 
     Ok(serde_json::json!({
         "backend": resolved.backend,
         "cache_hit": resolved.cached,
-        "cache_path": cache_path,
-        "remote_url": remote_url,
+        "cache_path": resolved.cache_path,
+        "remote_url": resolved.remote_url,
         "last_synced": resolved.sync_status,
+        "managed": resolved.managed,
     }))
 }
 
-/// `vfs_sync_backend` — sync the backend for a file.
+/// `vfs_sync_backend` — reject unimplemented syncs rather than fabricate success.
 ///
-/// For local backends, returns synced_files = 1 (always in sync).
-/// For S3/git backends, reports the current cache state.
-/// Ignore-aware (spec §10): paths excluded by the workspace ignore rules or
-/// classified ephemeral (without an explicit `user.vfs.sync = upstream`
-/// override) are local-only — they report `skipped_ignored` instead of a
-/// transfer result.
+/// Ignore-aware paths still report an intentional skip. Every other path is
+/// directed to the real CLI sync engine until MCP owns an executable sync
+/// implementation.
 fn sync_backend(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
     let path = arguments["path"]
         .as_str()
@@ -1028,36 +1020,14 @@ fn sync_backend(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
     }
 
     let resolved = resolve_backend(path)?;
-
-    let (synced_files, errors): (u32, Vec<String>) = match resolved.backend.as_str() {
-        "local" => {
-            if resolved.cached {
-                (1, vec![])
-            } else {
-                (0, vec![format!("file not found: {}", path)])
-            }
-        }
-        "s3" | "git" => {
-            if resolved.cached {
-                (1, vec![])
-            } else {
-                (
-                    0,
-                    vec![format!(
-                        "{} backend not synced: file not cached locally",
-                        resolved.backend
-                    )],
-                )
-            }
-        }
-        other => (0, vec![format!("unknown backend type: {}", other)]),
-    };
-
-    Ok(serde_json::json!({
-        "synced_files": synced_files,
-        "errors": errors,
-        "skipped_ignored": 0,
-    }))
+    let target = resolved
+        .remote_url
+        .as_deref()
+        .unwrap_or("unmanaged local storage");
+    Err(McpError::Protocol(format!(
+        "backend sync is not supported by this MCP surface for '{}' (backend {}, origin {}); use 'hilo backend sync'",
+        path, resolved.backend, target
+    )))
 }
 
 /// Returns `Some(n)` when `path` is excluded from sync (ignored by the

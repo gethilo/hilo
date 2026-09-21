@@ -1,9 +1,9 @@
 [Error]
-enum HiloError {
-    "InvalidInput",
-    "NotFound",
-    "BackendUnavailable",
-    "InternalError",
+interface HiloError {
+    InvalidInput(string message);
+    NotFound(string path);
+    BackendUnavailable(string message);
+    InternalError(string message);
 };
 
 dictionary MetadataResult {
@@ -85,12 +85,9 @@ dictionary DirectoryListing {
     u32 total;
 };
 
-namespace hilo {
+interface HiloHandle {
     [Throws=HiloError]
-    string? vfs_get_metadata([ByRef] string path, [ByRef] string key);
-
-    [Throws=HiloError]
-    SetMetadataResult vfs_set_metadata([ByRef] string path, [ByRef] string key, [ByRef] string value);
+    constructor(string root);
 
     [Throws=HiloError]
     GraphRelatedResult vfs_graph_related([ByRef] string path);
@@ -109,4 +106,12 @@ namespace hilo {
 
     [Throws=HiloError]
     DirectoryListing vfs_list_directory([ByRef] string path);
+};
+
+namespace hilo {
+    [Throws=HiloError]
+    string? vfs_get_metadata([ByRef] string path, [ByRef] string key);
+
+    [Throws=HiloError]
+    SetMetadataResult vfs_set_metadata([ByRef] string path, [ByRef] string key, [ByRef] string value);
 };

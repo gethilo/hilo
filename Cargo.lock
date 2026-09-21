@@ -2280,6 +2280,7 @@ dependencies = [
  "hilo_graph",
  "hilo_metadata",
  "serde",
+ "tempfile",
  "thiserror 2.0.19",
  "uniffi",
  "uniffi_build",
