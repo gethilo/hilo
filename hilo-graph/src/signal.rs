@@ -242,12 +242,17 @@ fn discover_anchors(db: &GraphDB, task: &str, seed_limit: usize) -> Vec<String> 
         return Vec::new();
     }
 
-    // Collect all file paths from the graph.
+    // Collect all file paths from the graph. GAP-091: raw relative-import
+    // specifiers (`pkg:.config`, `pkg:..json.provider`, bare `pkg:.`) are
+    // import strings — they can never open a file or extract symbols, so as
+    // anchors they rendered as '(no symbols extracted)' lines and spent the
+    // MAP budget. Excluded from anchor discovery entirely; corpora warmed by
+    // a pre-GAP-091 binary still carry them (parse-cache hits re-append
+    // cached legacy lines), so this is filtered at query time too.
     let (froms, tos) = db.distinct_files().unwrap_or((Vec::new(), Vec::new()));
     let mut all_files: HashSet<String> = froms.into_iter().collect();
     all_files.extend(tos);
-
-    // Score each file by graded task-token matches.
+    all_files.retain(|p| !crate::semantic::is_relative_specifier_node(p));
     let mut scored: Vec<(String, u64)> = all_files
         .into_iter()
         .map(|path| {
@@ -383,6 +388,15 @@ fn traverse_and_score(
                 } else {
                     edge.from.clone()
                 };
+
+                // GAP-091: a raw relative-import specifier neighbor
+                // (`pkg:.config`) is an import string, not a file — it can
+                // neither be read for symbols nor traversed meaningfully
+                // (its only edges point back into the same importers).
+                // Skipped without consuming a visited slot or budget.
+                if crate::semantic::is_relative_specifier_node(&neighbor) {
+                    continue;
+                }
 
                 if visited.insert(neighbor.clone()) {
                     let prov = Provenance::parse(&edge.provenance).unwrap_or(Provenance::AstExact);
@@ -1942,6 +1956,65 @@ mod tests {
         assert!(
             first_entry.starts_with(anchor_line),
             "anchor must be the first MAP entry, got {first_entry:?}"
+        );
+    }
+
+    #[test]
+    fn understand_map_carries_zero_relative_specifier_anchors() {
+        // GAP-091 regression, in the LEGACY-corpus shape: the raw relative
+        // specifiers GAP-076 used to emit (`pkg:.config`, `pkg:..json`, …)
+        // can still sit in a warmed edge store (parse-cache-hit rewarms
+        // re-append cached legacy lines verbatim). They name no file a
+        // source reader can open, so they render as anchor lines with "(no
+        // symbols extracted)" and spend the MAP budget on import strings.
+        // Every tier of understand() must exclude them.
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[
+            edge("src/flask/app.py", "src/flask/config.py", "imports"),
+            edge("src/flask/config.py", "pkg:flask.sansio.app", "imports"),
+            edge("src/flask/config.py", "pkg:.sansio.app", "imports"),
+            edge("src/flask/__init__.py", "pkg:flask.config", "imports"),
+            edge("src/flask/__init__.py", "pkg:.config", "imports"),
+            edge("src/flask/sansio/app.py", "pkg:..config", "imports"),
+            edge("src/flask/globals.py", "pkg:..json.provider", "imports"),
+            edge("src/flask/app.py", "pkg:.", "imports"),
+            edge("src/flask/app.py", "pkg:..", "imports"),
+        ])
+        .unwrap();
+
+        let result = understand(
+            &db,
+            "how does the app factory wire config",
+            &SignalOpts::default(),
+        )
+        .unwrap();
+
+        let map = result
+            .text
+            .split("## MAP")
+            .nth(1)
+            .and_then(|rest| rest.split("## SIGNATURES").next())
+            .expect("MAP tier must exist");
+        for line in map.lines() {
+            assert!(
+                !line.trim_start().starts_with("pkg:."),
+                "no pkg:.-relative node may anchor the MAP tier, got line: {line:?}\n{map}"
+            );
+        }
+        // The real files are untouched by the exclusion.
+        assert!(
+            result.anchors.iter().any(|a| a == "src/flask/config.py"),
+            "the real config.py must still anchor, got {:?}",
+            result.anchors
+        );
+        // Machine-readable file list under the same rule (it feeds the same
+        // anchors and the same tiers).
+        assert!(
+            result.files.iter().all(|f| !f.path.starts_with("pkg:.")
+                && !f.path.starts_with("pkg:..")
+                && f.path != "pkg:."),
+            "no relative specifier node may survive into files, got: {:?}",
+            result.files.iter().map(|f| &f.path).collect::<Vec<_>>()
         );
     }
 
