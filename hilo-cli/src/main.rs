@@ -7,6 +7,40 @@ use clap::{Parser, Subcommand};
 use commands::plugin::PluginCommand;
 use commands::{backend, classify, graph, ignore, init, meta, mount, plugin, serve, workspace};
 
+/// Shared sync-direction vocabulary (DF-WARPFS-12): `hilo workspace sync`
+/// and `hilo backend sync` speak the same --push/--pull/--both flags, and
+/// the resolved direction is printed on every run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SyncDirectionArg {
+    Push,
+    Pull,
+    Both,
+}
+
+impl SyncDirectionArg {
+    /// The exact string printed on the run header / plan lines.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            SyncDirectionArg::Push => "push",
+            SyncDirectionArg::Pull => "pull",
+            SyncDirectionArg::Both => "two-way",
+        }
+    }
+}
+
+/// Flag resolution: --push / --pull / --both (default two-way). `_both` is
+/// the explicit spelling of the default and carries no extra state — the
+/// fallback branch serves both `--both` and no-flag-at-all.
+pub(crate) fn sync_direction(push: bool, pull: bool, _both: bool) -> SyncDirectionArg {
+    if push {
+        SyncDirectionArg::Push
+    } else if pull {
+        SyncDirectionArg::Pull
+    } else {
+        SyncDirectionArg::Both
+    }
+}
+
 /// Hilo command-line interface.
 #[derive(Parser)]
 #[command(name = "hilo", about = "Hilo CLI", version)]
@@ -293,6 +327,20 @@ struct WorkspaceSyncArgs {
     /// AWS region (default: us-east-1).
     #[arg(long, default_value = "us-east-1")]
     region: String,
+    /// Explicit S3-compatible endpoint URL (MinIO et al.). Beats the
+    /// AWS_ENDPOINT_URL environment variable; when omitted, the resolved
+    /// endpoint is disclosed on the run header (DF-WARPFS-12).
+    #[arg(long)]
+    endpoint: Option<String>,
+    /// Push local changes to the backend
+    #[arg(long, conflicts_with_all = ["pull", "both"])]
+    push: bool,
+    /// Pull remote changes into the workspace
+    #[arg(long, conflicts_with_all = ["push", "both"])]
+    pull: bool,
+    /// Two-way sync (default)
+    #[arg(long, conflicts_with_all = ["push", "pull"])]
+    both: bool,
     /// Print the sync plan without transferring any files.
     #[arg(long)]
     dry_run: bool,
@@ -424,6 +472,8 @@ fn main() {
             &args.at,
             args.ignore.as_deref(),
             &args.region,
+            args.endpoint.as_deref(),
+            sync_direction(args.push, args.pull, args.both),
             args.dry_run,
         ),
         Commands::Workspace(WorkspaceCommand::Ephemeral(args)) => {

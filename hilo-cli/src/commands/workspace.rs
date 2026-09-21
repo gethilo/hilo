@@ -4,10 +4,12 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use hilo_backends::{EphemeralMatcher, IgnoreMatcher, S3Client, SyncEngine};
+use hilo_backends::{EphemeralMatcher, IgnoreMatcher, S3Client, S3Endpoint, SyncEngine};
 use hilo_core::workspace::WorkspaceManifest;
 use hilo_fuse::permissions::PermissionEngine;
 use hilo_fuse::{daemon, workspace_mount, workspace_mount::WorkspaceMount, FuseConfig};
+
+use crate::SyncDirectionArg;
 
 /// Mount all repos and backends declared in the manifest.
 pub fn run_workspace_mount(manifest_path: &str, mount_point: &str) -> Result<()> {
@@ -69,19 +71,26 @@ pub fn run_workspace_unmount(mount_point: &str) -> Result<()> {
     Ok(())
 }
 
-/// Two-way sync a local directory against an S3 prefix.
+/// Sync a local directory against an S3 prefix (DF-WARPFS-12).
 ///
-/// Non-ignored files are mirrored in both directions (last writer wins by
-/// mtime vs LastModified); files matched by the ignore file (git-ignore
-/// style, defaults to `<at>/.hiloignore`) stay local-only and are never
-/// transferred. `.vfs/` metadata and the ignore files themselves are never
-/// transferred either way.
+/// Non-ignored files are mirrored between local and remote; files matched by
+/// the ignore file (git-ignore style, defaults to `<at>/.hiloignore`) stay
+/// local-only and are never transferred. `.vfs/` metadata and the ignore
+/// files themselves are never transferred either way.
+///
+/// The run header always names the resolved endpoint, bucket and direction:
+/// `--endpoint` (explicit, beats the environment) or the `AWS_ENDPOINT_URL`
+/// environment variable selects an S3-compatible endpoint; with neither,
+/// the client uses the ambient AWS config chain — and says so.
+#[allow(clippy::too_many_arguments)]
 pub fn run_workspace_sync(
     bucket: &str,
     prefix: &str,
     at: &str,
     ignore_file: Option<&str>,
     region: &str,
+    endpoint: Option<&str>,
+    direction: SyncDirectionArg,
     dry_run: bool,
 ) -> Result<()> {
     if bucket.is_empty() {
@@ -107,9 +116,26 @@ pub fn run_workspace_sync(
         .context("failed to create tokio runtime")?;
 
     rt.block_on(async move {
-        let client = S3Client::new(region, &cache_dir, 0, true)
+        // DF-WARPFS-12: an explicit --endpoint beats AWS_ENDPOINT_URL;
+        // otherwise resolve from the environment. Either way the resolved
+        // endpoint is DISCLOSED on the header — never a silent default.
+        let resolved = match endpoint {
+            Some(ep) if !ep.is_empty() => S3Endpoint::Url(ep.to_string()),
+            _ => S3Endpoint::from_env(),
+        };
+        let client = S3Client::with_endpoint(&resolved, region, &cache_dir, 0, true)
             .await
             .map_err(|e| anyhow::anyhow!("s3 client init failed: {e}"))?;
+        println!(
+            "sync {} s3://{}/{} <-> {} [bucket={} endpoint={} region={}]",
+            direction.label(),
+            bucket,
+            prefix.trim_matches('/'),
+            local_dir.display(),
+            bucket,
+            client.endpoint.display(),
+            region,
+        );
         let engine = SyncEngine::new(
             client,
             bucket.to_string(),
@@ -119,23 +145,12 @@ pub fn run_workspace_sync(
         );
 
         let plan = if dry_run {
-            println!(
-                "dry-run: sync plan for s3://{}/{} <-> {}",
-                bucket,
-                prefix.trim_matches('/'),
-                local_dir.display()
-            );
+            println!("dry-run: sync plan follows");
             engine
                 .plan()
                 .await
                 .map_err(|e| anyhow::anyhow!("sync plan failed: {e}"))?
         } else {
-            println!(
-                "syncing s3://{}/{} <-> {}",
-                bucket,
-                prefix.trim_matches('/'),
-                local_dir.display()
-            );
             engine
                 .sync()
                 .await

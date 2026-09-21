@@ -228,8 +228,22 @@ and pull).
 
 ## More commands
 
-- `hilo backend mount` — mount a virtual backend (S3, git, local)
-- `hilo backend list` — list mounted backends
+Backends and sync: `hilo backend mount|list|sync|setup` is the canonical,
+§9-registered surface — `mount` registers the backend in
+`.vfs/backends/mounts.yaml`, `list` reads that same file, and `sync` runs
+against every registered mount. `hilo workspace mount` mounts the sources
+declared in `.vfs/manifest.yaml`, and `hilo workspace sync` syncs one
+explicit bucket/prefix directory without requiring a registered mount (both
+directions are supported with the same `--push`/`--pull`/`--both` flags as
+`hilo backend sync`). Every sync run prints the resolved endpoint and
+bucket in its plan header; prefer an explicit `--endpoint` on a mount (or a
+sync run) over the `AWS_ENDPOINT_URL` environment variable, which is only
+disclosed, never silently consumed.
+
+- `hilo backend mount` — mount a virtual backend (S3, gdrive, onedrive,
+  dropbox, external; legacy worktree mount: git)
+- `hilo backend list` — list registered backends (from
+  `.vfs/backends/mounts.yaml`)
 - `hilo workspace mount` — mount all repos and backends from the manifest
 - `hilo workspace unmount` — unmount a workspace
 - `hilo plugin load` — load a WASM plugin into the runtime

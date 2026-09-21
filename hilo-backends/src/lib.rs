@@ -24,7 +24,7 @@ pub use backend::{
 pub use ephemeral::{EphemeralClass, EphemeralEntry, EphemeralError, EphemeralMatcher};
 pub use external::ExternalToolDriver;
 pub use git::{GitBackend, GitBackendConfig, GitError, GitResult};
-pub use s3::{S3Client, S3Driver, S3Error, S3ObjectMeta, S3Result, WriteResult};
+pub use s3::{S3Client, S3Driver, S3Endpoint, S3Error, S3ObjectMeta, S3Result, WriteResult};
 pub use sync::{
     IgnoreDecision, IgnoreMatcher, IgnoreSource, LocalFile, RemoteObject, SyncEngine, SyncPlan,
 };
