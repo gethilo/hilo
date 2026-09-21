@@ -434,6 +434,217 @@ fn classify_dry_run_with_source_file() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+// ─────────────────── backend list / mount (DF-WARPFS-11) ───────────────────
+
+// DF-WARPFS-11: `hilo backend mount` (the §9 flag-rich form) registers the
+// mount in `.vfs/backends/mounts.yaml`; `hilo backend list` must read that
+// SAME canonical store and name the mount in one run. Regression: list read
+// `.vfs/manifest.yaml` and printed "No backends configured in manifest."
+// after a successful mount.
+#[test]
+fn backend_list_reads_s9_mounts_yaml() {
+    let dir = unique_tempdir("backend-list");
+    init_project(&dir);
+
+    let out = run_hilo_ok(
+        &dir,
+        &[
+            "backend",
+            "mount",
+            "--type",
+            "s3",
+            "--bucket",
+            "round-trip-bucket",
+            "--prefix",
+            "dog/",
+            "--at",
+            "/s3data",
+            "--tool",
+            "native",
+        ],
+    );
+    assert!(out.contains("mounted s3"), "mount output: {out}");
+
+    let list = run_hilo_ok(&dir, &["backend", "list"]);
+    for needle in [
+        "s3data",            // mount name
+        "round-trip-bucket", // bucket
+        "dog/",              // prefix
+        "/s3data",           // mount point
+        "tool=native",       // resolved tool
+        "mode=mirror",       // resolved mode
+    ] {
+        assert!(
+            list.contains(needle),
+            "list output {list:?} missing {needle:?}"
+        );
+    }
+    assert!(
+        !list.contains("No backends configured"),
+        "list must not report the stale manifest message: {list}"
+    );
+}
+
+// An initialized workspace with no mounts lists empty without requiring a
+// manifest — the message reflects the mounts.yaml store, not manifest.yaml.
+#[test]
+fn backend_list_empty_workspace_reports_no_mounts() {
+    let dir = unique_tempdir("backend-list-empty");
+    init_project(&dir);
+    let list = run_hilo_ok(&dir, &["backend", "list"]);
+    assert!(
+        list.contains("No backends mounted"),
+        "expected the no-mounts message, got: {list}"
+    );
+}
+
+// ─────────────── backend/workspace sync disclosure (DF-WARPFS-12) ───────────────
+
+// DF-WARPFS-12: the plan header on every sync run names the resolved
+// endpoint and bucket — "which store am I writing to" is never a guess.
+// The explicit `--endpoint` flag is echoed verbatim and beats the env.
+#[test]
+fn workspace_sync_prints_explicit_endpoint_in_plan_header() {
+    let dir = unique_tempdir("ws-sync-endpoint");
+    let ws = dir.join("ws");
+    fs::create_dir_all(&ws).unwrap();
+
+    let mut cmd = hilo_cmd();
+    cmd.args([
+        "workspace",
+        "sync",
+        "--bucket",
+        "proof-bucket",
+        "--at",
+        ".",
+        "--endpoint",
+        "http://127.0.0.1:1",
+    ])
+    .current_dir(&ws)
+    .env_remove("AWS_ENDPOINT_URL");
+    let out = run_hilo_with_retry(&mut cmd);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("endpoint=http://127.0.0.1:1"),
+        "must print the explicit endpoint, got: {stdout}"
+    );
+    assert!(stdout.contains("bucket=proof-bucket"), "got: {stdout}");
+}
+
+// DF-WARPFS-12 (the sharp one): with AWS_ENDPOINT_URL unset the client
+// resolves the ambient AWS config chain — the CLI must SAY so instead of
+// silently planning against production.
+#[test]
+fn workspace_sync_discloses_default_chain_when_env_unset() {
+    let dir = unique_tempdir("ws-sync-default-chain");
+    let ws = dir.join("ws");
+    fs::create_dir_all(&ws).unwrap();
+
+    let mut cmd = hilo_cmd();
+    cmd.args(["workspace", "sync", "--bucket", "chain-bucket", "--at", "."])
+        .current_dir(&ws)
+        .env_remove("AWS_ENDPOINT_URL");
+    let out = run_hilo_with_retry(&mut cmd);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("endpoint=default AWS config chain"),
+        "must disclose the default-chain resolution, got: {stdout}"
+    );
+    assert!(stdout.contains("bucket=chain-bucket"), "got: {stdout}");
+}
+
+// DF-WARPFS-12 (consolidation): workspace sync accepts the same
+// --pull/--push/--both vocabulary as backend sync (they were different
+// programs with different flags), and every run still discloses the store.
+#[test]
+fn workspace_sync_accepts_direction_flags() {
+    let dir = unique_tempdir("ws-sync-direction");
+    let ws = dir.join("ws");
+    fs::create_dir_all(&ws).unwrap();
+
+    for (flag, label) in [
+        ("--both", "two-way"),
+        ("--pull", "pull"),
+        ("--push", "push"),
+    ] {
+        let mut cmd = hilo_cmd();
+        cmd.args([
+            "workspace",
+            "sync",
+            "--bucket",
+            "flags-bucket",
+            "--at",
+            ".",
+            flag,
+            "--endpoint",
+            "http://127.0.0.1:1",
+        ])
+        .current_dir(&ws)
+        .env_remove("AWS_ENDPOINT_URL");
+        let out = run_hilo_with_retry(&mut cmd);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            stdout.contains(&format!("sync {label} ")),
+            "run with {flag} must name sync direction '{label}', got: {stdout}"
+        );
+        assert!(
+            stdout.contains("endpoint=http://127.0.0.1:1"),
+            "{flag}: endpoint must be disclosed: {stdout}"
+        );
+    }
+}
+
+// DF-WARPFS-12: `hilo backend sync` plan lines name the resolved endpoint
+// and bucket. Mount with an explicit --endpoint (persisted into
+// mounts.yaml), then sync with the env UNSET: the printed endpoint must be
+// the one the client was constructed with — if the entry's endpoint failed
+// to persist, the driver would silently resolve the ambient AWS chain
+// instead and this assertion fails.
+#[test]
+fn backend_sync_plan_line_prints_mounted_endpoint_and_bucket() {
+    let dir = unique_tempdir("backend-sync-endpoint");
+    init_project(&dir);
+    run_hilo_ok(
+        &dir,
+        &[
+            "backend",
+            "mount",
+            "--type",
+            "s3",
+            "--bucket",
+            "disclose-bucket",
+            "--prefix",
+            "p/",
+            "--at",
+            "/s3data",
+            "--tool",
+            "native",
+            "--endpoint",
+            "http://127.0.0.1:1",
+        ],
+    );
+
+    let mut cmd = hilo_cmd();
+    cmd.args(["backend", "sync", "--push"])
+        .current_dir(&dir)
+        .env_remove("AWS_ENDPOINT_URL");
+    let out = run_hilo_with_retry(&mut cmd);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // The target disclosure prints BEFORE any remote call, so it appears
+    // even though planning against the dead endpoint fails afterwards.
+    assert!(stdout.contains("sync target s3data:"), "got: {stdout}");
+    assert!(
+        stdout.contains("endpoint=http://127.0.0.1:1"),
+        "target line must carry the mount's endpoint, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("bucket=disclose-bucket"),
+        "target line must carry the bucket, got: {stdout}"
+    );
+}
+
+// ─────────────────────────── graph warm ───────────────────────────
+
 #[test]
 fn graph_warm_reports_exclusions_on_normal_and_cached_runs() {
     let dir = unique_tempdir("warm-exclusions");

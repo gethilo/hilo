@@ -47,6 +47,13 @@ pub struct MountArgs {
     /// AWS region
     #[arg(long, default_value = "us-east-1")]
     pub region: String,
+    /// Explicit S3-compatible endpoint URL (MinIO et al.). When set, the
+    /// driver connects THERE with static creds and path-style addressing,
+    /// ignoring AWS_ENDPOINT_URL; otherwise the endpoint is resolved from
+    /// the environment at sync time and disclosed on every plan line
+    /// (DF-WARPFS-12).
+    #[arg(long)]
+    pub endpoint: Option<String>,
     /// External tool remote ("remote:path" or tool remote) — required for
     /// gdrive/onedrive/dropbox/external
     #[arg(long)]
@@ -184,6 +191,7 @@ fn run_mount_new(args: &MountArgs) -> Result<(), BackendError> {
         bucket: args.bucket.clone(),
         prefix: args.prefix.clone(),
         region: Some(args.region.clone()),
+        endpoint: args.endpoint.clone().filter(|e| !e.is_empty()),
         remote: args.remote.clone(),
         tool,
         mode,
@@ -210,67 +218,61 @@ fn run_mount_new(args: &MountArgs) -> Result<(), BackendError> {
     Ok(())
 }
 
+/// List every mount registered in `.vfs/backends/mounts.yaml` — the same
+/// canonical §9 store `hilo backend mount` writes and `hilo backend sync`
+/// reads (DF-WARPFS-11). Reading any other file here is what made a
+/// successful mount invisible to `list`.
 pub fn run_list() -> Result<()> {
-    // Phase 3: read manifest backends and print them.
-    // For now, read from .vfs/manifest.yaml if present.
-    let manifest_path = std::path::Path::new(".vfs/manifest.yaml");
-    if !manifest_path.exists() {
-        println!("No mounted backends. Run 'hilo init' first.");
+    let mounts_path = Path::new(MOUNTS_YAML);
+    if !mounts_path.exists() {
+        println!("No backends mounted. Run 'hilo backend mount' first.");
         return Ok(());
     }
 
-    match std::fs::read_to_string(manifest_path) {
-        Ok(contents) => match serde_yaml::from_str::<serde_yaml::Value>(&contents) {
-            Ok(manifest) => {
-                let backends = manifest.get("backends").cloned().unwrap_or_default();
-                let s3_backends = backends.get("s3");
-                let remote_backends = backends.get("remote");
-                let local_backends = backends.get("local");
+    let text = match std::fs::read_to_string(mounts_path) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("error: cannot read {}: {e}", mounts_path.display());
+            std::process::exit(1);
+        }
+    };
+    let entries: Vec<MountEntry> = match serde_yaml::from_str(&text) {
+        Ok(entries) => entries,
+        Err(e) => {
+            eprintln!("error: bad {}: {e}", mounts_path.display());
+            std::process::exit(2);
+        }
+    };
 
-                let mut found = false;
-
-                if let Some(s3_list) = s3_backends.and_then(|v| v.as_sequence()) {
-                    for s3 in s3_list {
-                        let bucket = s3.get("bucket").and_then(|v| v.as_str()).unwrap_or("?");
-                        let prefix = s3.get("prefix").and_then(|v| v.as_str()).unwrap_or("");
-                        let at = s3.get("at").and_then(|v| v.as_str()).unwrap_or("?");
-                        let region = s3.get("region").and_then(|v| v.as_str()).unwrap_or("?");
-                        let writable = s3
-                            .get("writable")
-                            .and_then(|v| v.as_bool())
-                            .unwrap_or(false);
-                        println!(
-                            "s3  s3://{}/{}  {}  region={}, rw={}, status=configured",
-                            bucket, prefix, at, region, writable
-                        );
-                        found = true;
-                    }
-                }
-                if let Some(remote_list) = remote_backends.and_then(|v| v.as_sequence()) {
-                    for r in remote_list {
-                        let url = r.get("url").and_then(|v| v.as_str()).unwrap_or("?");
-                        let at = r.get("at").and_then(|v| v.as_str()).unwrap_or("?");
-                        println!("git {}  {}  status=configured", url, at);
-                        found = true;
-                    }
-                }
-                if let Some(local_list) = local_backends.and_then(|v| v.as_sequence()) {
-                    for l in local_list {
-                        let path = l.get("path").and_then(|v| v.as_str()).unwrap_or("?");
-                        let at = l.get("at").and_then(|v| v.as_str()).unwrap_or("?");
-                        println!("local  {}  {}  status=configured", path, at);
-                        found = true;
-                    }
-                }
-                if !found {
-                    println!("No backends configured in manifest.");
-                }
-            }
-            Err(e) => println!("warning: could not parse manifest: {}", e),
-        },
-        Err(e) => println!("warning: could not read manifest: {}", e),
+    let mut found = false;
+    for entry in &entries {
+        println!(
+            "{}  {}  at={}  name={}  tool={}  mode={}  status=configured",
+            entry.kind,
+            mount_entry_target(entry),
+            entry.at.as_deref().unwrap_or("?"),
+            entry.name,
+            entry.tool.as_deref().unwrap_or("auto"),
+            entry.mode.as_deref().unwrap_or("mirror"),
+        );
+        found = true;
+    }
+    if !found {
+        println!("No backends mounted.");
     }
     Ok(())
+}
+
+/// Human-readable remote target for one mounts.yaml entry (list output).
+fn mount_entry_target(entry: &MountEntry) -> String {
+    match entry.kind.as_str() {
+        "s3" => format!(
+            "s3://{}/{}",
+            entry.bucket.as_deref().unwrap_or("?"),
+            entry.prefix.as_deref().unwrap_or("")
+        ),
+        _ => entry.remote.clone().unwrap_or_else(|| "?".into()),
+    }
 }
 
 /// Spec §9 sync: plan + execute a sync against every mounted backend.
@@ -332,6 +334,15 @@ pub fn run_sync(args: &SyncArgs) -> Result<()> {
         })?;
         let ephemeral = EphemeralMatcher::load(&root, None)
             .map_err(|e| anyhow::anyhow!("failed to load ephemeral rules for {name}: {e}"))?;
+
+        // DF-WARPFS-12: name the store BEFORE any remote call — the user
+        // must see where this sync writes even when planning fails.
+        println!(
+            "sync target {name}: bucket={} endpoint={} region={}",
+            entry.bucket.as_deref().unwrap_or("-"),
+            backend.endpoint(),
+            entry.region.as_deref().unwrap_or("-"),
+        );
 
         let mut plan = match hilo_backends::planner::plan_sync(
             backend.as_ref(),
@@ -626,6 +637,7 @@ fn append_mount(path: &Path, cfg: &BackendConfig, at: &str) -> Result<(), Backen
         bucket: cfg.bucket.clone(),
         prefix: cfg.prefix.clone(),
         region: cfg.region.clone(),
+        endpoint: cfg.endpoint.clone(),
         remote: cfg.remote.clone(),
         tool: Some(tool_name(cfg.tool).to_string()),
         mode: Some(mode_name(cfg.mode).to_string()),

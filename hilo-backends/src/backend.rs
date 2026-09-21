@@ -76,6 +76,12 @@ pub struct BackendConfig {
     /// S3 key prefix.
     pub prefix: Option<String>,
     pub region: Option<String>,
+    /// Explicit S3-compatible endpoint URL (MinIO et al.). When set, the S3
+    /// driver connects THERE with static creds + path-style addressing and
+    /// `AWS_ENDPOINT_URL` is ignored; when None, the endpoint is resolved
+    /// from the environment at client construction (DF-WARPFS-12).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
     /// External tool remote (`"remote:path"`) or gdrive folder id.
     pub remote: Option<String>,
     #[serde(default)]
@@ -147,6 +153,13 @@ pub trait Backend: Send + Sync {
 
     /// Recursive listing (list + descend); used by plan_sync and stream mount.
     fn walk(&self, prefix: &str) -> Result<Vec<BackendEntry>, BackendError>;
+
+    /// The endpoint this backend resolves to, for plan-header disclosure
+    /// (DF-WARPFS-12). Only S3 talks to a configurable endpoint; every other
+    /// driver runs locally or via an external CLI with its own config.
+    fn endpoint(&self) -> String {
+        "default AWS config chain".to_string()
+    }
 }
 
 /// Reject unsafe keys: empty, absolute, or containing `..` traversal.
@@ -464,6 +477,7 @@ impl BackendRegistry {
                 bucket: entry.bucket,
                 prefix: entry.prefix,
                 region: entry.region,
+                endpoint: entry.endpoint,
                 remote: entry.remote,
                 tool,
                 mode: match entry.mode.as_deref() {
@@ -501,6 +515,10 @@ pub struct MountEntry {
     pub prefix: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub region: Option<String>,
+    /// Explicit S3-compatible endpoint URL (DF-WARPFS-12); None = resolved
+    /// from the environment at driver construction.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub remote: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -768,6 +786,7 @@ mod tests {
             bucket: Some("my-bucket".into()),
             prefix: Some("workspace/".into()),
             region: None,
+            endpoint: None,
             remote: None,
             tool: Some("native".into()),
             mode: Some("mirror".into()),

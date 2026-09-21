@@ -355,6 +355,7 @@ mod tests {
             bucket: None,
             prefix: Some(backend.path().to_string_lossy().into_owned()),
             region: None,
+            endpoint: None,
             remote: None,
             tool: None,
             mode: None,

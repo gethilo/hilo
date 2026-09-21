@@ -108,6 +108,40 @@ pub struct S3ObjectMeta {
     pub last_modified_unix: u64,
 }
 
+/// Which endpoint an [`S3Client`] was constructed against, resolved once at
+/// construction time and carried on the client (DF-WARPFS-12).
+///
+/// The CLI prints this on every sync plan header so "which store am I
+/// writing to" is never a guess: with `AWS_ENDPOINT_URL` unset the AWS
+/// config chain silently resolves the operator's ambient (possibly
+/// production) endpoint — the old client gave no way to tell.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum S3Endpoint {
+    /// An explicit endpoint URL (flag/config field, or `AWS_ENDPOINT_URL`).
+    Url(String),
+    /// No endpoint anywhere: the client uses the ambient AWS config chain.
+    DefaultChain,
+}
+
+impl S3Endpoint {
+    /// The exact string the CLI prints in plan headers.
+    pub fn display(&self) -> &str {
+        match self {
+            S3Endpoint::Url(u) => u.as_str(),
+            S3Endpoint::DefaultChain => "default AWS config chain",
+        }
+    }
+
+    /// Resolve from the environment: `AWS_ENDPOINT_URL` (non-empty) wins,
+    /// anything else falls back to the default AWS config chain.
+    pub fn from_env() -> Self {
+        match std::env::var("AWS_ENDPOINT_URL") {
+            Ok(ep) if !ep.is_empty() => S3Endpoint::Url(ep),
+            _ => S3Endpoint::DefaultChain,
+        }
+    }
+}
+
 /// Entry in .vfs/blobs/index.jsonl tracking an uploaded blob.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct BlobEntry {
@@ -123,6 +157,10 @@ pub struct S3Client {
     cache_dir: PathBuf,
     ttl_seconds: u32,
     pub writable: bool,
+    /// The endpoint this client was constructed against, resolved once at
+    /// construction (DF-WARPFS-12). Surfaced on plan headers so a sync run
+    /// always names the store it is about to write.
+    pub endpoint: S3Endpoint,
 }
 
 impl S3Client {
@@ -133,27 +171,49 @@ impl S3Client {
     /// If AWS_ENDPOINT_URL is set (S3-compatible endpoint such as MinIO),
     /// the client is configured explicitly for that endpoint with static
     /// credentials from AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY and
-    /// path-style addressing, which MinIO requires.
+    /// path-style addressing, which MinIO requires. Otherwise the ambient
+    /// AWS config chain is used. The resolved endpoint is recorded on the
+    /// client ([`S3Client::endpoint`]) for disclosure.
     pub async fn new(
         region: &str,
         cache_dir: &Path,
         ttl_seconds: u32,
         writable: bool,
     ) -> S3Result<Self> {
-        let client = if let Ok(endpoint) = std::env::var("AWS_ENDPOINT_URL") {
-            if endpoint.is_empty() {
-                Self::default_client(region).await
-            } else {
-                Self::endpoint_client(region, &endpoint)
-            }
-        } else {
-            Self::default_client(region).await
+        Self::with_endpoint(
+            &S3Endpoint::from_env(),
+            region,
+            cache_dir,
+            ttl_seconds,
+            writable,
+        )
+        .await
+    }
+
+    /// Create a client bound to an EXPLICIT endpoint decision
+    /// (DF-WARPFS-12). `S3Endpoint::Url(u)` configures that endpoint with
+    /// static credentials and path-style addressing (MinIO et al.),
+    /// bypassing the environment; `S3Endpoint::DefaultChain` is the ambient
+    /// AWS config chain. The explicit flag/config field beats
+    /// `AWS_ENDPOINT_URL` — a destructive path should not depend on an
+    /// env-only switch.
+    pub async fn with_endpoint(
+        endpoint: &S3Endpoint,
+        region: &str,
+        cache_dir: &Path,
+        ttl_seconds: u32,
+        writable: bool,
+    ) -> S3Result<Self> {
+        let client = match endpoint {
+            S3Endpoint::Url(u) if !u.is_empty() => Self::endpoint_client(region, u),
+            _ => Self::default_client(region).await,
         };
         Ok(Self {
             client,
             cache_dir: cache_dir.to_path_buf(),
             ttl_seconds,
             writable,
+            endpoint: endpoint.clone(),
         })
     }
 
@@ -531,6 +591,70 @@ mod tests {
         ));
     }
 
+    // DF-WARPFS-12: the resolved endpoint is recorded on the client and the
+    // explicit decision beats AWS_ENDPOINT_URL. One test holds the env lock
+    // for the whole body — sibling tests in this binary also build clients.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn s3_endpoint_display_and_env_resolution() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // explicit URL wins over the env
+        std::env::set_var("AWS_ENDPOINT_URL", "http://env-endpoint:9000");
+        assert_eq!(
+            S3Endpoint::from_env(),
+            S3Endpoint::Url("http://env-endpoint:9000".into())
+        );
+        // empty env var = absent, falls to the default chain
+        std::env::set_var("AWS_ENDPOINT_URL", "");
+        assert_eq!(S3Endpoint::from_env(), S3Endpoint::DefaultChain);
+        std::env::remove_var("AWS_ENDPOINT_URL");
+        assert_eq!(S3Endpoint::from_env(), S3Endpoint::DefaultChain);
+
+        // display strings are the exact plan-header disclosure strings
+        assert_eq!(
+            S3Endpoint::Url("http://minio:9000".into()).display(),
+            "http://minio:9000"
+        );
+        assert_eq!(
+            S3Endpoint::DefaultChain.display(),
+            "default AWS config chain"
+        );
+    }
+
+    // The client actually CONSTRUCTS for the explicit endpoint (static-cred,
+    // path-style client — not the ambient chain) and records exactly what it
+    // was given; `new` records the env resolution.
+    // Holding the std-Mutex env lock across the awaits is the POINT: the env
+    // must stay pinned for the whole construction body, and these tests run
+    // on their own single-threaded runtime, so no other task can observe the
+    // held guard.
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn client_records_endpoint_it_was_constructed_with() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("AWS_ENDPOINT_URL", "http://env-endpoint:9000");
+        let explicit = S3Client::with_endpoint(
+            &S3Endpoint::Url("http://explicit:9000".into()),
+            "us-east-1",
+            &tmp.path().join("c1"),
+            0,
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            explicit.endpoint,
+            S3Endpoint::Url("http://explicit:9000".into())
+        );
+        std::env::remove_var("AWS_ENDPOINT_URL");
+        let env_client = S3Client::new("us-east-1", &tmp.path().join("c2"), 0, true)
+            .await
+            .unwrap();
+        assert_eq!(env_client.endpoint, S3Endpoint::DefaultChain);
+    }
+
     // Test: cache path computation
     fn cache_path(bucket: &str, key: &str) -> PathBuf {
         Path::new("/tmp/test-cache")
@@ -801,6 +925,9 @@ pub struct S3Driver {
     /// Key prefix; all trait keys are relative to it.
     prefix: String,
     mode: crate::backend::SyncMode,
+    /// The endpoint this driver's client was constructed against
+    /// (DF-WARPFS-12 disclosure string for plan headers).
+    endpoint_display: String,
 }
 
 impl std::fmt::Debug for S3Driver {
@@ -825,14 +952,30 @@ impl S3Driver {
             .enable_all()
             .build()
             .map_err(|e| crate::backend::BackendError::BucketError(e.to_string()))?;
-        let client = runtime.block_on(S3Client::new(&region, &cache_dir, 0, true))?;
+        // DF-WARPFS-12: an explicit config endpoint beats AWS_ENDPOINT_URL;
+        // without one, resolve from the environment and DISCLOSE what was
+        // resolved (default-chain = the operator's ambient AWS config).
+        let endpoint = match cfg.endpoint.as_deref() {
+            Some(ep) if !ep.is_empty() => S3Endpoint::Url(ep.to_string()),
+            _ => S3Endpoint::from_env(),
+        };
+        let endpoint_display = endpoint.display().to_string();
+        let client = runtime.block_on(S3Client::with_endpoint(
+            &endpoint, &region, &cache_dir, 0, true,
+        ))?;
         Ok(Self {
             runtime,
             client,
             bucket,
             prefix,
             mode: cfg.mode,
+            endpoint_display,
         })
+    }
+
+    /// The resolved endpoint this driver writes to (plan-header disclosure).
+    pub fn endpoint(&self) -> &str {
+        &self.endpoint_display
     }
 
     fn full_key(&self, key: &str) -> String {
@@ -874,6 +1017,10 @@ impl crate::backend::Backend for S3Driver {
 
     fn name(&self) -> &str {
         "s3"
+    }
+
+    fn endpoint(&self) -> String {
+        self.endpoint_display.clone()
     }
 
     fn list(&self, prefix: &str) -> Result<Vec<BackendEntry>, BackendError> {
