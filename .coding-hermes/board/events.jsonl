@@ -605,3 +605,4 @@
 {"id": 486, "timestamp": "2026-09-21 14:43:32", "event_type": "bankai-close", "task_id": "DF-WARPFS-13", "actor": "bankai-dispatcher", "detail": "{\"commit\": \"3376340\", \"row\": \"DF-WARPFS-13\", \"verified\": \"integration battery on merged tree\"}"}
 {"id": 487, "timestamp": "2026-09-21 14:43:32", "event_type": "bankai-close", "task_id": "DF-WARPFS-17", "actor": "bankai-dispatcher", "detail": "{\"commit\": \"3376340\", \"row\": \"DF-WARPFS-17\", \"verified\": \"integration battery on merged tree\"}"}
 {"id": 488, "timestamp": "2026-09-21 14:43:33", "event_type": "bankai-close", "task_id": "GAP-094", "actor": "bankai-dispatcher", "detail": "{\"commit\": \"52bf01c\", \"row\": \"GAP-094\", \"verified\": \"integration battery on merged tree\"}"}
+{"id": 489, "timestamp": "2026-09-21 19:56:23", "event_type": "task_created", "task_id": "RELEASE-001", "actor": "foreman", "detail": "{\"id\":\"RELEASE-001\",\"status\":\"pending\"}"}
