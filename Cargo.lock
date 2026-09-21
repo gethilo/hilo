@@ -2310,6 +2310,7 @@ version = "0.3.0"
 dependencies = [
  "criterion",
  "duckdb",
+ "hilo_core",
  "hilo_metadata",
  "serde",
  "serde_json",

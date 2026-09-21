@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use duckdb::{params, Connection};
+use hilo_core::manifest::{DuckDbPerf, Manifest};
 use hilo_metadata::inventory::Edge;
 
 use crate::error::{GraphError, GraphResult};
@@ -202,6 +203,59 @@ fn migrate_schema(conn: &Connection) -> GraphResult<()> {
     Ok(())
 }
 
+/// Default number of edges committed per replay/insert transaction.
+///
+/// DuckDB retains unique-index and payload deltas until commit, so bounding
+/// each transaction prevents cold-cache replay memory from growing with the
+/// full `edges.jsonl` corpus.
+pub const RECONCILE_CHUNK_ROWS: usize = 2_048;
+
+const INSERT_EDGE_SQL: &str =
+    "INSERT OR IGNORE INTO edges (\"from\", \"to\", rel, provenance, confidence) VALUES (?, ?, ?, ?, ?)";
+
+/// Insert owned edges in bounded transactions, returning the number of rows
+/// executed (including duplicates ignored by `INSERT OR IGNORE`).
+fn insert_edges_in_chunks<I>(conn: &Connection, edges: I, chunk_size: usize) -> GraphResult<usize>
+where
+    I: IntoIterator<Item = Edge>,
+{
+    assert!(chunk_size > 0, "chunk_size must be positive");
+    let mut edges = edges.into_iter();
+    let mut processed = 0;
+
+    loop {
+        let chunk: Vec<Edge> = edges.by_ref().take(chunk_size).collect();
+        if chunk.is_empty() {
+            return Ok(processed);
+        }
+
+        conn.execute_batch("BEGIN TRANSACTION")?;
+        let insert_result = (|| -> GraphResult<()> {
+            let mut stmt = conn.prepare(INSERT_EDGE_SQL)?;
+            for edge in &chunk {
+                stmt.execute(params![
+                    edge.from,
+                    edge.to,
+                    edge.rel,
+                    edge.provenance,
+                    edge.confidence
+                ])?;
+            }
+            Ok(())
+        })();
+
+        if let Err(error) = insert_result {
+            let _ = conn.execute_batch("ROLLBACK");
+            return Err(error);
+        }
+        if let Err(error) = conn.execute_batch("COMMIT") {
+            let _ = conn.execute_batch("ROLLBACK");
+            return Err(error.into());
+        }
+        processed += chunk.len();
+    }
+}
+
 /// Insert edges into a raw DuckDB connection (INSERT OR IGNORE, idempotent).
 ///
 /// Ensures the schema exists first (idempotent `CREATE TABLE IF NOT EXISTS`
@@ -210,22 +264,9 @@ fn migrate_schema(conn: &Connection) -> GraphResult<()> {
 /// `GraphDB::open`).
 pub fn insert_edges_into(conn: &Connection, edges: &[Edge]) -> GraphResult<()> {
     ensure_schema(conn)?;
-    // PERF-002: single transaction + prepared statement — the row-by-row
-    // version made `graph warm` pay ~1ms per edge even on full cache hits.
-    let mut stmt = conn.prepare(
-        "INSERT OR IGNORE INTO edges (\"from\", \"to\", rel, provenance, confidence) VALUES (?, ?, ?, ?, ?)",
-    )?;
-    conn.execute_batch("BEGIN TRANSACTION")?;
-    for edge in edges {
-        stmt.execute(params![
-            edge.from,
-            edge.to,
-            edge.rel,
-            edge.provenance,
-            edge.confidence
-        ])?;
-    }
-    conn.execute_batch("COMMIT")?;
+    // PERF-002: prepared inserts committed in bounded chunks avoid both the
+    // old ~1ms-per-edge autocommit cost and an unbounded transaction delta.
+    insert_edges_in_chunks(conn, edges.iter().cloned(), RECONCILE_CHUNK_ROWS)?;
     Ok(())
 }
 
@@ -274,9 +315,9 @@ fn reconcile_needed(edges_jsonl: &Path) -> bool {
 ///
 /// Reads every non-empty line from `edges_jsonl`, deserialises each as an
 /// [`Edge`] (via serde, which fills `provenance`/`confidence` defaults for
-/// old-format lines), and inserts via [`insert_edges_into`] in batches of 512.
-/// Malformed lines are silently skipped — a corrupt line does not abort the
-/// whole reconcile.
+/// old-format lines), and commits prepared inserts in bounded
+/// [`RECONCILE_CHUNK_ROWS`] transactions. Malformed lines are silently skipped
+/// — a corrupt line does not abort the whole reconcile.
 ///
 /// Returns the number of edges **successfully parsed and inserted** (including
 /// duplicates that were ignored by `INSERT OR IGNORE`). This is the count of
@@ -286,67 +327,78 @@ fn reconcile_needed(edges_jsonl: &Path) -> bool {
 /// - Idempotent: calling twice inserts the same edges, `INSERT OR IGNORE` +
 ///   unique index ensures no duplicates.
 pub fn reconcile_edges_from_jsonl(conn: &Connection, edges_jsonl: &Path) -> GraphResult<usize> {
+    reconcile_edges_from_jsonl_with_chunk_size(conn, edges_jsonl, RECONCILE_CHUNK_ROWS)
+}
+
+fn reconcile_edges_from_jsonl_with_chunk_size(
+    conn: &Connection,
+    edges_jsonl: &Path,
+    chunk_size: usize,
+) -> GraphResult<usize> {
     if !edges_jsonl.exists() {
         return Ok(0);
     }
 
     let file = std::fs::File::open(edges_jsonl)?;
     let reader = BufReader::new(file);
+    let edges = reader.lines().filter_map(|line| {
+        let line = line.ok()?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        serde_json::from_str::<Edge>(trimmed).ok()
+    });
 
-    // PERF-001: one prepared statement inside a single transaction. The old
-    // path re-ran ensure_schema and issued one un-prepared execute per row
-    // (~1.6 ms/row on DuckDB — ~12 s for tokio's 7.4k edges). Transaction +
-    // prepared execute is orders of magnitude cheaper, which keeps a full
-    // replay affordable whenever the stamp gate in `open()` does miss.
+    // PERF-001/GAP-092: prepared inserts retain the old replay throughput,
+    // while one commit per bounded chunk prevents transaction/index memory
+    // from scaling with the entire file when the stamp gate misses.
     ensure_schema(conn)?;
-    conn.execute_batch("BEGIN TRANSACTION")?;
+    let processed = insert_edges_in_chunks(conn, edges, chunk_size)?;
 
-    let replay = (|| -> GraphResult<usize> {
-        let mut stmt = conn.prepare(
-            "INSERT OR IGNORE INTO edges (\"from\", \"to\", rel, provenance, confidence) VALUES (?, ?, ?, ?, ?)",
-        )?;
-        let mut count: usize = 0;
-        for line in reader.lines() {
-            let line = match line {
-                Ok(l) => l,
-                Err(_) => continue, // skip unreadable lines
-            };
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            match serde_json::from_str::<Edge>(trimmed) {
-                Ok(edge) => {
-                    stmt.execute(params![
-                        edge.from,
-                        edge.to,
-                        edge.rel,
-                        edge.provenance,
-                        edge.confidence
-                    ])?;
-                    count += 1;
-                }
-                Err(_) => continue, // skip malformed JSON lines
-            }
-        }
-        Ok(count)
-    })();
-
-    match replay {
-        Ok(count) => {
-            conn.execute_batch("COMMIT")?;
-            // Stamp AFTER a successful full replay so the next open() can
-            // trust the cache without touching edges.jsonl.
-            if let Some(fp) = jsonl_fingerprint(edges_jsonl) {
-                let _ = std::fs::write(reconcile_stamp_path(edges_jsonl), fp);
-            }
-            Ok(count)
-        }
-        Err(e) => {
-            let _ = conn.execute_batch("ROLLBACK");
-            Err(e)
-        }
+    // Stamp AFTER a successful full replay so the next open() can trust the
+    // cache without touching edges.jsonl. A failed chunk returns above.
+    if let Some(fp) = jsonl_fingerprint(edges_jsonl) {
+        let _ = std::fs::write(reconcile_stamp_path(edges_jsonl), fp);
     }
+    Ok(processed)
+}
+
+fn duckdb_perf_for_path(db_path: &Path) -> DuckDbPerf {
+    let manifest_path = db_path
+        .parent()
+        .and_then(Path::parent)
+        .map(|vfs_dir| vfs_dir.join("manifest.yaml"));
+
+    manifest_path
+        .and_then(|path| Manifest::from_file(&path.to_string_lossy()).ok())
+        .map(|manifest| manifest.performance.duckdb)
+        .unwrap_or_default()
+}
+
+fn apply_duckdb_setting(conn: &Connection, name: &str, sql: &str) {
+    if let Err(error) = conn.execute_batch(sql) {
+        eprintln!(
+            "warning: failed to apply DuckDB {name}: {}",
+            error.to_string().replace('\n', " ")
+        );
+    }
+}
+
+fn configure_disk_connection(conn: &Connection, db_path: &Path) {
+    let perf = duckdb_perf_for_path(db_path);
+    let memory_limit = perf.memory_limit.replace('\'', "''");
+    apply_duckdb_setting(
+        conn,
+        "memory_limit",
+        &format!("SET memory_limit='{memory_limit}'"),
+    );
+    apply_duckdb_setting(conn, "threads", &format!("SET threads={}", perf.threads));
+    apply_duckdb_setting(
+        conn,
+        "preserve_insertion_order",
+        "SET preserve_insertion_order=false",
+    );
 }
 
 impl GraphDB {
@@ -366,7 +418,9 @@ impl GraphDB {
         let conn = if path == ":memory:" {
             Connection::open_in_memory()?
         } else {
-            Connection::open(path)?
+            let conn = Connection::open(path)?;
+            configure_disk_connection(&conn, Path::new(path));
+            conn
         };
         ensure_schema(&conn)?;
 
@@ -1213,6 +1267,77 @@ mod tests {
         path.to_string_lossy().into_owned()
     }
 
+    fn current_setting(conn: &Connection, name: &str) -> String {
+        conn.query_row(
+            &format!("SELECT CAST(current_setting('{name}') AS VARCHAR)"),
+            [],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
+    fn normalized_memory_setting(value: &str) -> String {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(&format!("SET memory_limit='{}'", value.replace('\'', "''")))
+            .unwrap();
+        current_setting(&conn, "memory_limit")
+    }
+
+    fn create_graph_path(root: &Path) -> PathBuf {
+        let graph_dir = root.join(".vfs/graph");
+        std::fs::create_dir_all(&graph_dir).unwrap();
+        graph_dir.join("graph.db")
+    }
+
+    #[test]
+    fn graphdb_open_applies_manifest_duckdb_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = create_graph_path(dir.path());
+        std::fs::write(
+            dir.path().join(".vfs/manifest.yaml"),
+            "project:\n  name: knob-test\nperformance:\n  duckdb:\n    memory_limit: 1GB\n    threads: 2\n",
+        )
+        .unwrap();
+
+        let db = GraphDB::open(db_path.to_str().unwrap()).unwrap();
+        assert_eq!(current_setting(db.conn(), "threads"), "2");
+        assert_eq!(
+            current_setting(db.conn(), "memory_limit"),
+            normalized_memory_setting("1GB")
+        );
+        assert_eq!(
+            current_setting(db.conn(), "preserve_insertion_order"),
+            "false"
+        );
+    }
+
+    #[test]
+    fn graphdb_open_without_manifest_uses_duckdb_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = create_graph_path(dir.path());
+
+        let db = GraphDB::open(db_path.to_str().unwrap()).unwrap();
+        assert_eq!(current_setting(db.conn(), "threads"), "4");
+        assert_eq!(
+            current_setting(db.conn(), "memory_limit"),
+            normalized_memory_setting("512MB")
+        );
+    }
+
+    #[test]
+    fn graphdb_open_with_malformed_manifest_uses_duckdb_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = create_graph_path(dir.path());
+        std::fs::write(dir.path().join(".vfs/manifest.yaml"), "not: [valid\n").unwrap();
+
+        let db = GraphDB::open(db_path.to_str().unwrap()).unwrap();
+        assert_eq!(current_setting(db.conn(), "threads"), "4");
+        assert_eq!(
+            current_setting(db.conn(), "memory_limit"),
+            normalized_memory_setting("512MB")
+        );
+    }
+
     #[test]
     fn perf004_non_indexable_extension_rejected_in_impact() {
         let dir = tempfile::tempdir().unwrap();
@@ -1820,6 +1945,118 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM edges", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 2, "only 2 valid edges should be in the DB");
+    }
+
+    #[test]
+    fn reconcile_tiny_chunks_preserve_counts_content_and_idempotency() {
+        let dir = tempfile::tempdir().unwrap();
+        let jsonl = dir.path().join("edges.jsonl");
+        let first = serde_json::to_string(&Edge::new("a.go", "b.go", "imports")).unwrap();
+        let second = serde_json::to_string(&Edge::new("c.go", "d.go", "tested_by")).unwrap();
+        std::fs::write(
+            &jsonl,
+            format!("{first}\nnot json\n{second}\n{first}\n   \n"),
+        )
+        .unwrap();
+
+        let conn = Connection::open_in_memory().unwrap();
+        let processed = reconcile_edges_from_jsonl_with_chunk_size(&conn, &jsonl, 2).unwrap();
+        assert_eq!(
+            processed, 3,
+            "the duplicate is processed while malformed and blank lines are skipped"
+        );
+
+        let mut stmt = conn
+            .prepare("SELECT \"from\", \"to\", rel FROM edges ORDER BY \"from\", \"to\", rel")
+            .unwrap();
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                ("a.go".into(), "b.go".into(), "imports".into()),
+                ("c.go".into(), "d.go".into(), "tested_by".into())
+            ]
+        );
+
+        let processed_again = reconcile_edges_from_jsonl_with_chunk_size(&conn, &jsonl, 2).unwrap();
+        assert_eq!(processed_again, 3);
+        let row_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM edges", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(row_count, 2, "a second replay must not duplicate rows");
+    }
+
+    #[test]
+    fn reconcile_5003_lines_uses_default_chunks_and_stamps_only_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let jsonl = dir.path().join("edges.jsonl");
+        let mut lines: Vec<String> = (0..5_000)
+            .map(|i| {
+                serde_json::to_string(&Edge::new(
+                    format!("src/file_{i}.rs"),
+                    format!("pkg:dep_{i}"),
+                    "imports",
+                ))
+                .unwrap()
+            })
+            .collect();
+        lines.push(lines[0].clone());
+        lines.push("not json".into());
+        lines.push("{\"from\":\"missing required fields\"}".into());
+        assert_eq!(lines.len(), 5_003);
+        std::fs::write(&jsonl, lines.join("\n") + "\n").unwrap();
+
+        let stamp = reconcile_stamp_path(&jsonl);
+        let broken = Connection::open_in_memory().unwrap();
+        broken
+            .execute_batch(
+                "CREATE TABLE edges (\
+                    \"from\" TEXT NOT NULL,\
+                    \"to\" TEXT NOT NULL,\
+                    rel TEXT NOT NULL CHECK (rel = 'never'),\
+                    provenance TEXT NOT NULL DEFAULT 'ast_exact',\
+                    confidence REAL NOT NULL DEFAULT 1.0\
+                 )",
+            )
+            .unwrap();
+        assert!(reconcile_edges_from_jsonl(&broken, &jsonl).is_err());
+        assert!(
+            !stamp.exists(),
+            "a failed replay must never write the reconcile stamp"
+        );
+
+        let conn = Connection::open_in_memory().unwrap();
+        let processed = reconcile_edges_from_jsonl(&conn, &jsonl).unwrap();
+        assert_eq!(
+            processed, 5_001,
+            "5000 unique + one duplicate are processed"
+        );
+        let row_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM edges", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(row_count, 5_000);
+        assert_eq!(
+            std::fs::read_to_string(&stamp).unwrap(),
+            jsonl_fingerprint(&jsonl).unwrap(),
+            "the stamp is written only after the full successful replay"
+        );
+
+        let processed_again = reconcile_edges_from_jsonl(&conn, &jsonl).unwrap();
+        assert_eq!(processed_again, 5_001);
+        let row_count_again: i64 = conn
+            .query_row("SELECT COUNT(*) FROM edges", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(row_count_again, 5_000, "default replay must be idempotent");
     }
 
     #[test]
