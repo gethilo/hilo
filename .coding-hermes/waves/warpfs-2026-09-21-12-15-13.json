@@ -1,0 +1,32 @@
+{
+  "scheduler_tick": "warpfs-2026-09-21-12-15-13",
+  "wave_budget": 7,
+  "workers": [
+    {
+      "task_ids": ["GAP-093", "GAP-095"],
+      "reason": "board review_notes mandate one change set (ceiling + behavior at ceiling); not independent",
+      "worktree": "/home/kara/worktrees/warpfs-GAP-093",
+      "branch": "wt/GAP-093",
+      "base_sha": "d1b0a14",
+      "model": "gpt-5.6-sol",
+      "provider": "openai-codex",
+      "lane_verified": "probe 20260921_072358_1280c6 answered on openai-codex, no fallback line",
+      "brief": "/tmp/gap093-brief.txt"
+    }
+  ],
+  "foreman_direct": [
+    {
+      "task_ids": ["QA-WARPFS-12"],
+      "reason": "trivial one-file compose image repoint; live docker verification required",
+      "red_proof": "docker compose pull minio -> pull access denied (reproduced this tick)",
+      "fix": "quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772"
+    }
+  ],
+  "not_dispatched": [
+    {
+      "task_id": "GAP-091",
+      "reason": "P2 resolution-semantics change on shared resolution.rs; needs full additivity corpus battery, does not fit tail-end wave slot"
+    }
+  ],
+  "merge_gate": "git merge-base --is-ancestor d1b0a14 master before ff-merge; then scoped gates + full battery on integration tree"
+}

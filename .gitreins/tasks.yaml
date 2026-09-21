@@ -1383,3 +1383,35 @@ tasks:
   status: complete
   created_at: '2026-09-21T01:09:28.056615+00:00'
   completed_at: '2026-09-21T02:29:31.832949+00:00'
+- id: qa-warpfs-12-minio-quay
+  title: docker-compose minio image pullable on clean machine
+  criteria:
+  - docker-compose.yml references an image that pulls without auth, and docker compose
+    up -d reaches healthy state
+  status: complete
+  created_at: '2026-09-21T12:27:59.381266+00:00'
+  completed_at: '2026-09-21T13:11:51.092162+00:00'
+- id: warpfs-gap093-ceiling
+  title: Memory ceiling enforced for graph replay (GAP-093)
+  criteria:
+  - 'hilo graph on a corpus whose edges.jsonl exceeds the configured DuckDB memory_limit
+    must not grow unbounded or die: replay is skipped at the watermark, ONE stderr
+    warning names the limit and the spill behavior, GraphDB::is_degraded() reports
+    the state, and the reconcile stamp is NOT written (a skipped replay must not claim
+    success). Verified by cargo test -p hilo_graph --lib (260 passed) and the degrade/control
+    regression pair.'
+  status: complete
+  created_at: '2026-09-21T13:51:08.513222+00:00'
+  completed_at: '2026-09-21T14:38:55.038206+00:00'
+- id: warpfs-gap095-spill
+  title: 'Spill to JSONL at the ceiling: queries stay correct (GAP-095)'
+  criteria:
+  - 'On a degraded (replay-skipped) connection graph.db may be empty/partial, so no
+    query may return a silently empty or short answer: impact streams the canonical
+    edges.jsonl and returns the same dependents as the DuckDB cache (regression test
+    asserts cache COUNT(*) == 0 while impact still returns the expected dependents),
+    and remaining cache-only APIs fail loud with a named error instead of an empty
+    result.'
+  status: complete
+  created_at: '2026-09-21T13:51:08.729841+00:00'
+  completed_at: '2026-09-21T14:29:17.190133+00:00'
