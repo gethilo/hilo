@@ -889,6 +889,7 @@ mod tests {
                 bucket: Some(name.into()),
                 prefix: None,
                 region: None,
+                endpoint: None,
                 remote: None,
                 tool: None,
                 mode: None,
