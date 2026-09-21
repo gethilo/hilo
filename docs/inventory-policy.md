@@ -43,10 +43,10 @@ gitignored:
 
 | File | Role |
 |------|------|
-| `graph.db` | DuckDB query cache, loaded from edges.jsonl at open time; reloaded/reconciled against the JSONL whenever the stamp (mtime+size) says the JSONL moved. A missing graph.db is not an error — commands rebuild it. |
+| `graph.db` | DuckDB query cache, loaded from edges.jsonl at open time; reloaded/reconciled against the JSONL whenever the stamp (mtime+size) says the JSONL moved, and since GAP-094 resumed from the checkpoint offset rather than replayed from byte 0. A missing graph.db is not an error — commands rebuild it. |
 | `.parse_cache.json` | Per-file parse cache (content hash + mtime), the PERF-002 incremental-warm state. |
 | `.last_warm` | mtime marker that scopes `warm --changed`. |
-| `.last_reconcile` | PERF-001 fingerprint stamp (mtime+size of edges.jsonl) letting read-only opens skip cache re-validation. |
+| `.last_reconcile` | PERF-001 fingerprint stamp (mtime+size of edges.jsonl) letting read-only opens skip cache re-validation; since GAP-094 also a checkpoint — consumed byte offset, a digest of that prefix, and whether the ingest reached EOF (`v2:` line). A stopped-at-budget checkpoint is a resume point, never a claim that the cache is fresh. |
 
 None of these are ever committed. If a `warm` (or any command) shows changes
 in these files in `git status`, they are noise from a stale gitignore, not

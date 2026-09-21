@@ -353,6 +353,9 @@ performance:
   duckdb:
     threads: 4
     memory_limit: 512MB
+    # GAP-094: wall-clock cap (ms) for a reconcile run inside a request path
+    # (e.g. a `hilo serve --mcp` tool call). 0 = unbounded for this project.
+    reconcile_budget_ms: 2000
   triggers:
     debounce_default: 500ms
     max_concurrent: 8

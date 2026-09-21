@@ -858,6 +858,15 @@ pub struct DuckDbPerf {
     /// from JSONL. When unset, this defaults to [`Self::memory_limit`].
     #[serde(default)]
     pub spill_watermark: Option<String>,
+    /// Wall-clock budget, in milliseconds, for a DuckDB cache reconcile that
+    /// runs inside a request path (GAP-094: `hilo serve --mcp` tool calls and
+    /// other long-lived embedders). A request that hits the budget stops
+    /// ingesting, answers from `edges.jsonl`, and resumes from the checkpoint
+    /// on the next open. `0` disables the cap for this project; when the key is
+    /// absent the entry point's own default applies (the one-shot CLI leaves it
+    /// unbounded, GAP-093).
+    #[serde(default)]
+    pub reconcile_budget_ms: Option<u64>,
 }
 
 impl Default for DuckDbPerf {
@@ -866,6 +875,7 @@ impl Default for DuckDbPerf {
             threads: default_duckdb_threads(),
             memory_limit: default_duckdb_memory(),
             spill_watermark: None,
+            reconcile_budget_ms: None,
         }
     }
 }

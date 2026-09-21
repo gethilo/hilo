@@ -15,14 +15,29 @@ use crate::tools;
 ///
 /// `rate_limit_rps` is the maximum requests per second. 0 disables rate limiting.
 /// Blocks until stdin reaches EOF (client disconnects).
+///
+/// GAP-094: every tool call opens the graph (`GraphDB::open`), so a
+/// fingerprint miss used to replay the whole `edges.jsonl` inside the call —
+/// measured at a single 207.2 s call. This server is the long-lived process the
+/// hazard belongs to, so it arms the request-path reconcile budget: a call may
+/// replay for [`hilo_graph::DEFAULT_REQUEST_PATH_RECONCILE_BUDGET_MS`], then it
+/// answers from `edges.jsonl` and the next call resumes the checkpoint. A
+/// project can override the cap (or set `0` for unbounded) in its manifest's
+/// `performance.duckdb.reconcile_budget_ms`.
 pub fn run(rate_limit_rps: u32) -> McpResult<()> {
+    hilo_graph::set_request_path_reconcile_budget_ms(
+        hilo_graph::DEFAULT_REQUEST_PATH_RECONCILE_BUDGET_MS,
+    );
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     let reader = BufReader::new(stdin.lock());
     let mut writer = stdout.lock();
     let mut limiter = RateLimiter::new(rate_limit_rps);
 
-    info!("MCP server started (rate_limit_rps={rate_limit_rps})");
+    info!(
+        "MCP server started (rate_limit_rps={rate_limit_rps}, reconcile_budget_ms={})",
+        hilo_graph::request_path_reconcile_budget_ms()
+    );
 
     for line_result in reader.lines() {
         let line = line_result?;

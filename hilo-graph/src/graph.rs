@@ -4,9 +4,10 @@
 //! storage and querying.
 
 use std::collections::{HashMap, HashSet};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant, SystemTime};
 
 use duckdb::{params, Connection};
 use hilo_core::manifest::{DuckDbPerf, Manifest};
@@ -85,12 +86,16 @@ impl Direction {
 /// Manages the DuckDB graph database at `.vfs/graph/graph.db`.
 pub struct GraphDB {
     conn: Connection,
-    /// True when replay was skipped to preserve the configured memory ceiling.
+    /// True when replay was skipped or stopped short, so queries must not
+    /// trust the DuckDB cache as the whole graph.
     degraded: bool,
     /// Canonical edge source used by the degraded streaming query path.
     edges_jsonl: Option<PathBuf>,
-    /// Effective byte ceiling that caused replay to be skipped.
-    spill_watermark: Option<u64>,
+    /// Why the connection is degraded ([`GraphDB::is_degraded`]) — the spill
+    /// watermark (GAP-093/095) or a request-path budget (GAP-094).
+    degraded_reason: Option<DegradedReason>,
+    /// What this open did to the cache ([`GraphDB::reconcile_report`]).
+    reconcile: Option<ReconcileReport>,
 }
 
 /// Aggregate statistics computed over the `edges` table.
@@ -216,6 +221,11 @@ fn migrate_schema(conn: &Connection) -> GraphResult<()> {
 /// full `edges.jsonl` corpus.
 pub const RECONCILE_CHUNK_ROWS: usize = 2_048;
 
+/// Read block used by the checkpoint ingest and by the prefix digest
+/// (GAP-094). 64 KiB keeps the sequential read of a consumed prefix at memory
+/// bandwidth without buffering the corpus.
+const READ_BLOCK_BYTES: usize = 64 * 1024;
+
 const INSERT_EDGE_SQL: &str =
     "INSERT OR IGNORE INTO edges (\"from\", \"to\", rel, provenance, confidence) VALUES (?, ?, ?, ?, ?)";
 
@@ -234,32 +244,42 @@ where
         if chunk.is_empty() {
             return Ok(processed);
         }
-
-        conn.execute_batch("BEGIN TRANSACTION")?;
-        let insert_result = (|| -> GraphResult<()> {
-            let mut stmt = conn.prepare(INSERT_EDGE_SQL)?;
-            for edge in &chunk {
-                stmt.execute(params![
-                    edge.from,
-                    edge.to,
-                    edge.rel,
-                    edge.provenance,
-                    edge.confidence
-                ])?;
-            }
-            Ok(())
-        })();
-
-        if let Err(error) = insert_result {
-            let _ = conn.execute_batch("ROLLBACK");
-            return Err(error);
-        }
-        if let Err(error) = conn.execute_batch("COMMIT") {
-            let _ = conn.execute_batch("ROLLBACK");
-            return Err(error.into());
-        }
+        insert_edge_chunk(conn, &chunk)?;
         processed += chunk.len();
     }
+}
+
+/// Insert one bounded batch of edges in a single transaction.
+///
+/// PERF-002/GAP-092: prepared inserts committed in bounded chunks avoid both
+/// the old ~1ms-per-edge autocommit cost and an unbounded transaction delta.
+/// Shared by the bulk insert path and the GAP-094 checkpointed ingest, which
+/// commits a partial batch when its request budget runs out.
+fn insert_edge_chunk(conn: &Connection, chunk: &[Edge]) -> GraphResult<()> {
+    conn.execute_batch("BEGIN TRANSACTION")?;
+    let insert_result = (|| -> GraphResult<()> {
+        let mut stmt = conn.prepare(INSERT_EDGE_SQL)?;
+        for edge in chunk {
+            stmt.execute(params![
+                edge.from,
+                edge.to,
+                edge.rel,
+                edge.provenance,
+                edge.confidence
+            ])?;
+        }
+        Ok(())
+    })();
+
+    if let Err(error) = insert_result {
+        let _ = conn.execute_batch("ROLLBACK");
+        return Err(error);
+    }
+    if let Err(error) = conn.execute_batch("COMMIT") {
+        let _ = conn.execute_batch("ROLLBACK");
+        return Err(error.into());
+    }
+    Ok(())
 }
 
 /// Insert edges into a raw DuckDB connection (INSERT OR IGNORE, idempotent).
@@ -283,6 +303,14 @@ pub fn insert_edges_into(conn: &Connection, edges: &[Edge]) -> GraphResult<()> {
 /// from exactly this file. (PERF-001: stamp-only, no row-count parity —
 /// verifying counts would require re-reading the file and defeat the gate.)
 fn jsonl_fingerprint(edges_jsonl: &Path) -> Option<String> {
+    let (nanos, size) = jsonl_stat(edges_jsonl)?;
+    Some(format!("{nanos}:{size}"))
+}
+
+/// `(mtime-nanos, len)` of `edges.jsonl` — the two fields the fingerprint is
+/// built from, kept separate so the GAP-094 checkpoint line can carry both
+/// without a nested separator.
+fn jsonl_stat(edges_jsonl: &Path) -> Option<(u128, u64)> {
     let md = std::fs::metadata(edges_jsonl).ok()?;
     let nanos = md
         .modified()
@@ -290,7 +318,7 @@ fn jsonl_fingerprint(edges_jsonl: &Path) -> Option<String> {
         .duration_since(SystemTime::UNIX_EPOCH)
         .ok()?
         .as_nanos();
-    Some(format!("{}:{}", nanos, md.len()))
+    Some((nanos, md.len()))
 }
 
 /// Path of the reconcile stamp next to a graph DB / edges.jsonl pair.
@@ -302,19 +330,541 @@ fn reconcile_stamp_path(graph_dir_file: &Path) -> PathBuf {
         .join(".last_reconcile")
 }
 
-/// True when the DuckDB cache must be reconciled from `edges.jsonl`.
+// ─────────────────────────────────────────────────────────────────────────
+// GAP-094 — the resident process's request path
+//
+// `GraphDB::open` is called per request by `hilo serve --mcp` (8 tool call
+// sites in hilo-mcp) and by long-lived embedders. A fingerprint miss used to
+// mean "replay the whole corpus, inside this request": measured at a single
+// 207.2 s tool call and a 47 MB RSS climb on top of live state, with no
+// timeout and no way for the client to tell a slow query from a replay.
+//
+// Three things changed here:
+//   1. the stamp became a *checkpoint* (byte offset + prefix digest), so an
+//      append-only writer's change costs the delta, not the corpus;
+//   2. a request-path budget bounds the replay a single open may run, with
+//      the remainder recorded as a resume point for the next open;
+//   3. what happened is reported (`ReconcileReport` + a loud stderr line), so
+//      the client sees the reason instead of a silent block.
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Default wall-clock budget, in milliseconds, for a reconcile that runs
+/// inside a long-lived process's request path (an MCP tool call, a FUSE-mount
+/// query): 2 s of replay per request, after which the request answers from the
+/// canonical `edges.jsonl` stream and the *next* open resumes the checkpoint.
+pub const DEFAULT_REQUEST_PATH_RECONCILE_BUDGET_MS: u64 = 2_000;
+
+/// Sentinel budget meaning "no cap". This is the one-shot CLI shape
+/// (GAP-093): the process pays the replay once and exits, so the kernel
+/// reclaims everything and there is no resident state to protect.
+pub const UNBOUNDED_RECONCILE_BUDGET_MS: u64 = u64::MAX;
+
+/// Process-wide default budget for request-path reconciles. Armed by the
+/// resident entry points (`hilo serve --mcp`); a one-shot CLI process leaves
+/// it unbounded, and a project's `performance.duckdb.reconcile_budget_ms`
+/// overrides it either way.
+static REQUEST_PATH_RECONCILE_BUDGET_MS: AtomicU64 = AtomicU64::new(UNBOUNDED_RECONCILE_BUDGET_MS);
+
+/// Arm (or clear) the process-wide request-path reconcile budget.
 ///
-/// Skipped (cache trusted) only when a stamp from a previous *successful full
-/// replay* matches the current fingerprint. Missing/unreadable stamp ->
-/// reconcile (first run, legacy cache, post-`graph clean`).
-fn reconcile_needed(edges_jsonl: &Path) -> bool {
-    let Some(fp) = jsonl_fingerprint(edges_jsonl) else {
-        return false; // no edges.jsonl -> open()'s reconcile no-ops anyway
-    };
-    match std::fs::read_to_string(reconcile_stamp_path(edges_jsonl)) {
-        Ok(stamped) => stamped.trim() != fp,
-        Err(_) => true,
+/// Call this once, before serving requests, in any process that keeps a graph
+/// under request-driven opens. [`UNBOUNDED_RECONCILE_BUDGET_MS`] restores the
+/// one-shot CLI behaviour.
+pub fn set_request_path_reconcile_budget_ms(budget_ms: u64) {
+    REQUEST_PATH_RECONCILE_BUDGET_MS.store(budget_ms, Ordering::Relaxed);
+}
+
+/// The process-wide request-path reconcile budget (see
+/// [`set_request_path_reconcile_budget_ms`]).
+pub fn request_path_reconcile_budget_ms() -> u64 {
+    REQUEST_PATH_RECONCILE_BUDGET_MS.load(Ordering::Relaxed)
+}
+
+/// Effective budget for one open: a project's explicit `reconcile_budget_ms`
+/// wins (with `0` meaning "unbounded for this project"), otherwise the value
+/// the entry point supplied.
+fn resolve_budget_ms(manifest_budget_ms: Option<u64>, requested_ms: u64) -> u64 {
+    match manifest_budget_ms {
+        Some(0) => UNBOUNDED_RECONCILE_BUDGET_MS,
+        Some(ms) => ms,
+        None => requested_ms,
     }
+}
+
+/// Incremental FNV-1a (64-bit) digest of the consumed prefix of a file.
+///
+/// The checkpoint is an on-disk artifact read by *other* processes and by
+/// later builds of this binary, so the digest must be a fixed,
+/// toolchain-independent function of the bytes — `DefaultHasher` is only
+/// documented as stable within one process, not across releases. FNV-1a is
+/// dependency-free and never changes.
+struct PrefixHasher {
+    state: u64,
+}
+
+impl PrefixHasher {
+    const OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+
+    fn new() -> Self {
+        Self {
+            state: Self::OFFSET_BASIS,
+        }
+    }
+
+    fn update(&mut self, bytes: &[u8]) {
+        let mut state = self.state;
+        for byte in bytes {
+            state ^= u64::from(*byte);
+            state = state.wrapping_mul(Self::PRIME);
+        }
+        self.state = state;
+    }
+
+    fn finish(&self) -> u64 {
+        self.state
+    }
+}
+
+/// Digest the first `len` bytes of `path` into `hasher`, returning the bytes
+/// actually read (fewer than `len` when the file shrank under us).
+fn hash_prefix_into(hasher: &mut PrefixHasher, path: &Path, len: u64) -> GraphResult<u64> {
+    let mut file = std::fs::File::open(path)?;
+    let mut remaining = len;
+    let mut read_total = 0_u64;
+    let mut buf = vec![0_u8; READ_BLOCK_BYTES];
+    while remaining > 0 {
+        let want = remaining.min(buf.len() as u64) as usize;
+        let read = file.read(&mut buf[..want])?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buf[..read]);
+        read_total += read as u64;
+        remaining -= read as u64;
+    }
+    Ok(read_total)
+}
+
+/// Digest of `path[..len]`, read in [`READ_BLOCK_BYTES`] blocks.
+fn hash_prefix(path: &Path, len: u64) -> GraphResult<(u64, u64)> {
+    let mut hasher = PrefixHasher::new();
+    let bytes = hash_prefix_into(&mut hasher, path, len)?;
+    Ok((hasher.finish(), bytes))
+}
+
+/// Reconcile checkpoint written next to `edges.jsonl` as `.last_reconcile`.
+///
+/// v2 line: `v2:<mtime-nanos>:<size>:<consumed>:<prefix-hash>:<complete>`
+///
+/// * `<consumed>` — byte offset just past the last line whose edge was
+///   committed to `graph.db`. Every byte below it has been handled (parsed, or
+///   skipped as blank/malformed), so an ingest may resume there.
+/// * `<prefix-hash>` — [`PrefixHasher`] digest of `edges.jsonl[..consumed]`.
+///   This is what makes resuming *safe*: edges JSONL is append-only by design
+///   (AGENTS.md design rule 3), and if a writer rewrote any consumed byte the
+///   digest changes, so the open falls back to a full replay instead of
+///   ingesting a delta on top of rows that no longer match the file.
+/// * `<complete>` — 1 when the ingest reached EOF (the cache holds every row
+///   of `edges.jsonl`), 0 when it stopped at the request budget. Only a
+///   complete checkpoint may be trusted as "no reconcile needed"; an
+///   incomplete one is a resume point.
+///
+/// A legacy PERF-001 stamp (`<mtime-nanos>:<size>`) still answers "is the
+/// cache fresh?" — `fingerprint` is that same string — but carries no
+/// checkpoint, so a mismatch on one full-replays.
+///
+/// Precondition of any checkpoint, inherited from PERF-001 and not verified
+/// here: the DuckDB file next to the stamp still holds what the previous
+/// ingest put there. Deleting `graph.db` by hand while leaving
+/// `.last_reconcile` in place is outside the contract; `hilo graph clean`
+/// drops `edges.jsonl` with it, which invalidates the stamp on its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReconcileStamp {
+    fingerprint: String,
+    consumed: u64,
+    prefix_hash: u64,
+    complete: bool,
+}
+
+impl ReconcileStamp {
+    fn encode(&self) -> String {
+        format!(
+            "v2:{}:{}:{:016x}:{}",
+            self.fingerprint,
+            self.consumed,
+            self.prefix_hash,
+            u8::from(self.complete)
+        )
+    }
+
+    fn decode(line: &str) -> Option<Self> {
+        let fields: Vec<&str> = line.split(':').collect();
+        if fields.len() != 6 || fields[0] != "v2" {
+            return None;
+        }
+        Some(Self {
+            fingerprint: format!("{}:{}", fields[1], fields[2]),
+            consumed: fields[3].parse().ok()?,
+            prefix_hash: u64::from_str_radix(fields[4], 16).ok()?,
+            complete: match fields[5] {
+                "0" => false,
+                "1" => true,
+                _ => return None,
+            },
+        })
+    }
+}
+
+/// Read the checkpoint line next to `edges.jsonl`, if any.
+fn read_stamp_line(edges_jsonl: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(reconcile_stamp_path(edges_jsonl)).ok()?;
+    Some(text.trim().to_string())
+}
+
+/// Read the checkpoint next to `edges.jsonl`, if the stamp is a v2 line.
+#[cfg(test)]
+fn read_stamp(edges_jsonl: &Path) -> Option<ReconcileStamp> {
+    ReconcileStamp::decode(&read_stamp_line(edges_jsonl)?)
+}
+
+/// Record the checkpoint an ingest reached.
+///
+/// `complete` is `false` when the ingest stopped at the request budget: the
+/// line still records the resume point, it just must not be read as "the cache
+/// is fresh".
+fn write_stamp(edges_jsonl: &Path, consumed: u64, prefix_hash: u64, complete: bool) {
+    let Some(fingerprint) = jsonl_fingerprint(edges_jsonl) else {
+        return;
+    };
+    let stamp = ReconcileStamp {
+        fingerprint,
+        consumed,
+        prefix_hash,
+        complete,
+    };
+    let _ = std::fs::write(reconcile_stamp_path(edges_jsonl), stamp.encode());
+}
+
+/// What an open must do to make the DuckDB cache agree with `edges.jsonl`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReconcileMode {
+    /// The checkpoint's fingerprint matches the file: the cache is trusted and
+    /// nothing is read.
+    Skipped,
+    /// Only the bytes appended since the checkpoint are ingested.
+    Delta,
+    /// The whole file is replayed — no usable checkpoint (first run, legacy
+    /// stamp, truncated/rewritten file).
+    Full,
+}
+
+/// The reconcile an open decided to run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReconcilePlan {
+    Skip,
+    Ingest { from: u64, mode: ReconcileMode },
+}
+
+impl ReconcilePlan {
+    fn ingest(from: u64) -> Self {
+        Self::Ingest {
+            // `from == 0` reuses nothing, so it is reported as a full replay
+            // and can never be mistaken for reuse of already-cached rows.
+            mode: if from == 0 {
+                ReconcileMode::Full
+            } else {
+                ReconcileMode::Delta
+            },
+            from,
+        }
+    }
+}
+
+/// Decide the reconcile for one open, priming `hasher` with the bytes it
+/// verified so a delta ingest can extend the digest to its own end.
+///
+/// Order is the point (GAP-094):
+/// 1. fingerprint match against a *complete* checkpoint → `Skip`; nothing is
+///    read at all, which is the warm path the row measured as flat.
+/// 2. a checkpoint whose consumed prefix still digests to its recorded value →
+///    `Delta` from that offset, so a resident process pays for what changed
+///    instead of re-inserting the corpus on every write (the cost the row
+///    isolated to the new-row insert path, 20k rows → 2.9 GB).
+/// 3. anything else → `Full` from byte 0.
+fn plan_reconcile(edges_jsonl: &Path, hasher: &mut PrefixHasher) -> GraphResult<ReconcilePlan> {
+    let Some((_, size)) = jsonl_stat(edges_jsonl) else {
+        // No edges.jsonl: the ingest no-ops anyway (fresh project).
+        return Ok(ReconcilePlan::Skip);
+    };
+    let Some(line) = read_stamp_line(edges_jsonl) else {
+        // No stamp at all: nothing to resume from.
+        return Ok(ReconcilePlan::ingest(0));
+    };
+    let fingerprint = jsonl_fingerprint(edges_jsonl);
+
+    // Legacy PERF-001 stamp (`<mtime-nanos>:<size>`, no checkpoint): it still
+    // answers "is this file fresh?", which is all it ever promised.
+    let Some(stamp) = ReconcileStamp::decode(&line) else {
+        return Ok(match fingerprint {
+            Some(fingerprint) if fingerprint == line => ReconcilePlan::Skip,
+            _ => ReconcilePlan::ingest(0),
+        });
+    };
+
+    let fresh = fingerprint.is_some_and(|fp| fp == stamp.fingerprint);
+    if fresh && stamp.complete {
+        return Ok(ReconcilePlan::Skip);
+    }
+
+    // A checkpoint is a resume point only while the bytes it claims are still
+    // there. An append keeps the prefix identical; a rewrite or a truncation
+    // digests differently and falls through to a full replay.
+    if stamp.consumed > 0 && stamp.consumed <= size {
+        let verified = hash_prefix_into(hasher, edges_jsonl, stamp.consumed)?;
+        // A short read (file truncated under us) verifies nothing.
+        if verified == stamp.consumed && hasher.finish() == stamp.prefix_hash {
+            return Ok(ReconcilePlan::ingest(stamp.consumed));
+        }
+    }
+
+    *hasher = PrefixHasher::new();
+    Ok(ReconcilePlan::ingest(0))
+}
+
+/// What one `GraphDB::open` did to the DuckDB cache.
+///
+/// GAP-094 surfaced this because the resident failure mode was silence: a tool
+/// call blocked for 207 s and the client could not tell a slow query from a
+/// graph replay. `rows_processed` / `consumed` / `exhausted` make the call
+/// answerable — "this request replayed N rows, reached M of T bytes, and
+/// stopped at the budget".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReconcileReport {
+    /// Which plan ran (see [`ReconcileMode`]).
+    pub mode: ReconcileMode,
+    /// Lines parsed and executed by this open (duplicates included).
+    pub rows_processed: usize,
+    /// Byte offset the ingest started at.
+    pub resume_from: u64,
+    /// Byte offset the ingest reached.
+    pub consumed: u64,
+    /// `edges.jsonl` size when the open started (raised to `consumed` if the
+    /// file grew while the ingest ran).
+    pub total_bytes: u64,
+    /// Bytes digested to prove the checkpoint's prefix was intact.
+    pub bytes_verified: u64,
+    /// Budget for this open ([`UNBOUNDED_RECONCILE_BUDGET_MS`] when uncapped).
+    pub budget_ms: u64,
+    /// True when the ingest stopped because the budget ran out.
+    pub exhausted: bool,
+    /// Wall clock spent planning + ingesting.
+    pub elapsed_ms: u64,
+}
+
+/// Why an open serves queries from `edges.jsonl` instead of the cache.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DegradedReason {
+    /// GAP-093/095 — `edges.jsonl` is at/above the configured watermark, so no
+    /// replay is attempted for it.
+    SpillWatermark { bytes: u64, watermark: u64 },
+    /// GAP-094 — the request-path reconcile stopped at its budget with the
+    /// cache still incomplete.
+    ReconcileBudget {
+        budget_ms: u64,
+        consumed: u64,
+        total: u64,
+    },
+}
+
+impl DegradedReason {
+    /// Mode name used in the loud query error.
+    fn mode(&self) -> &'static str {
+        match self {
+            Self::SpillWatermark { .. } => "spill",
+            Self::ReconcileBudget { .. } => "reconcile-budget",
+        }
+    }
+
+    /// Cause plus the action that clears it.
+    fn detail(&self) -> String {
+        match self {
+            Self::SpillWatermark { watermark, .. } => {
+                format!("edges.jsonl exceeds spill_watermark {watermark} bytes")
+            }
+            Self::ReconcileBudget {
+                budget_ms,
+                consumed,
+                total,
+            } => format!(
+                "request-path reconcile hit its {budget_ms}ms budget at {consumed}/{total} bytes; \
+                 the next open resumes from the checkpoint, or run `hilo graph warm` to rebuild \
+                 the cache eagerly"
+            ),
+        }
+    }
+}
+
+/// Result of one ingest pass over `edges.jsonl`.
+struct IngestOutcome {
+    /// Lines parsed + executed; malformed and blank lines are skipped but still
+    /// consume bytes (and still advance the checkpoint).
+    rows: usize,
+    /// Byte offset reached — always a line boundary, so it is a valid resume
+    /// point.
+    consumed: u64,
+    /// True when the budget stopped the pass before EOF.
+    exhausted: bool,
+    /// Digest of `edges.jsonl[..consumed]`, the value the checkpoint records.
+    prefix_hash: u64,
+}
+
+/// Insert the rows of `chunk` a deadline still allows, in one transaction.
+///
+/// The deadline is re-checked before **every row**, so a budget-stopped
+/// request overshoots by at most one row insert. Checking it only once per
+/// chunk is not enough: the read-ahead buffer can hold up to
+/// [`RECONCILE_CHUNK_ROWS`] rows, and executing those as one transaction is
+/// exactly the unbounded-insert shape GAP-094 exists to remove.
+///
+/// Returns `(rows inserted, stopped)`; `committed` advances to the offset of
+/// the last row actually inserted, so a resume point is always a row boundary
+/// and never claims bytes that were not executed.
+fn insert_edge_chunk_until(
+    conn: &Connection,
+    chunk: &[(Edge, u64)],
+    deadline: Option<Instant>,
+    committed: &mut u64,
+) -> GraphResult<(usize, bool)> {
+    let mut inserted = 0_usize;
+    conn.execute_batch("BEGIN TRANSACTION")?;
+    let result = (|| -> GraphResult<()> {
+        let mut stmt = conn.prepare(INSERT_EDGE_SQL)?;
+        for (edge, offset) in chunk {
+            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                break;
+            }
+            stmt.execute(params![
+                edge.from,
+                edge.to,
+                edge.rel,
+                edge.provenance,
+                edge.confidence
+            ])?;
+            inserted += 1;
+            *committed = *offset;
+        }
+        Ok(())
+    })();
+
+    if let Err(error) = result {
+        let _ = conn.execute_batch("ROLLBACK");
+        return Err(error);
+    }
+    if let Err(error) = conn.execute_batch("COMMIT") {
+        let _ = conn.execute_batch("ROLLBACK");
+        return Err(error.into());
+    }
+    Ok((inserted, inserted < chunk.len()))
+}
+
+/// Ingest `edges.jsonl` from `from` to EOF in bounded transactions, stopping
+/// when `budget` runs out.
+///
+/// `hasher` must already hold `edges_jsonl[..from]` (see [`plan_reconcile`]);
+/// it is extended with every byte this pass consumes. When the pass stops
+/// early the digest is recomputed over exactly the committed prefix, because
+/// the hasher has by then consumed bytes that were never committed.
+fn ingest_edges(
+    conn: &Connection,
+    edges_jsonl: &Path,
+    from: u64,
+    chunk_size: usize,
+    budget: Option<Duration>,
+    hasher: &mut PrefixHasher,
+) -> GraphResult<IngestOutcome> {
+    assert!(chunk_size > 0, "chunk_size must be positive");
+    let deadline = budget.map(|budget| Instant::now() + budget);
+
+    let mut file = std::fs::File::open(edges_jsonl)?;
+    if from > 0 {
+        file.seek(SeekFrom::Start(from))?;
+    }
+    let mut reader = BufReader::with_capacity(READ_BLOCK_BYTES, file);
+
+    let mut read_offset = from;
+    let mut committed = from;
+    let mut rows = 0_usize;
+    let mut exhausted = false;
+    let mut pending: Vec<(Edge, u64)> = Vec::with_capacity(chunk_size);
+    let mut line = Vec::with_capacity(READ_BLOCK_BYTES);
+
+    loop {
+        // Checked per line: one request may never run an unbounded number of
+        // inserts, which is what produced the measured 207.2 s tool call.
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            exhausted = true;
+            break;
+        }
+
+        line.clear();
+        let read = reader.read_until(b'\n', &mut line)?;
+        if read == 0 {
+            break;
+        }
+        read_offset += read as u64;
+        hasher.update(&line);
+        // `from_utf8` + serde skip malformed lines exactly as the replay did,
+        // but the bytes are consumed either way or the checkpoint could never
+        // advance past them.
+        if let Ok(text) = std::str::from_utf8(&line) {
+            if let Ok(edge) = serde_json::from_str::<Edge>(text.trim()) {
+                pending.push((edge, read_offset));
+            }
+        }
+        if pending.len() >= chunk_size {
+            let (inserted, stopped) =
+                insert_edge_chunk_until(conn, &pending, deadline, &mut committed)?;
+            rows += inserted;
+            pending.clear();
+            if stopped {
+                exhausted = true;
+                break;
+            }
+        }
+    }
+
+    if !pending.is_empty() {
+        let (inserted, stopped) =
+            insert_edge_chunk_until(conn, &pending, deadline, &mut committed)?;
+        rows += inserted;
+        if stopped {
+            exhausted = true;
+        }
+    }
+
+    if !exhausted {
+        // The pass reached EOF, so every byte up to it has been handled: rows
+        // executed, blank/malformed lines skipped. Checkpointing at EOF (and
+        // not at the last parsed row) keeps trailing malformed lines from
+        // being re-read on every subsequent open.
+        committed = read_offset;
+    }
+
+    let prefix_hash = if exhausted {
+        hash_prefix(edges_jsonl, committed)?.0
+    } else {
+        // The pass read to EOF, so the primed hasher covers exactly
+        // `edges_jsonl[..committed]`.
+        hasher.finish()
+    };
+
+    Ok(IngestOutcome {
+        rows,
+        consumed: committed,
+        exhausted,
+        prefix_hash,
+    })
 }
 
 /// Reconcile the DuckDB cache from the canonical `edges.jsonl` file.
@@ -328,6 +878,11 @@ fn reconcile_needed(edges_jsonl: &Path) -> bool {
 /// Returns the number of edges **successfully parsed and inserted** (including
 /// duplicates that were ignored by `INSERT OR IGNORE`). This is the count of
 /// lines processed, not the count of *new* rows added.
+///
+/// Uncapped (the one-shot CLI shape): this entry point always replays from byte
+/// 0 to EOF. A caller that must bound the work a single request may run uses
+/// [`GraphDB::open_with_budget_ms`], which ingests only the checkpoint delta
+/// and stops at a wall-clock budget (GAP-094).
 ///
 /// - Missing file → `Ok(0)` (no-op, fresh project — not an error).
 /// - Idempotent: calling twice inserts the same edges, `INSERT OR IGNORE` +
@@ -345,29 +900,24 @@ fn reconcile_edges_from_jsonl_with_chunk_size(
         return Ok(0);
     }
 
-    let file = std::fs::File::open(edges_jsonl)?;
-    let reader = BufReader::new(file);
-    let edges = reader.lines().filter_map(|line| {
-        let line = line.ok()?;
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            return None;
-        }
-        serde_json::from_str::<Edge>(trimmed).ok()
-    });
-
-    // PERF-001/GAP-092: prepared inserts retain the old replay throughput,
-    // while one commit per bounded chunk prevents transaction/index memory
-    // from scaling with the entire file when the stamp gate misses.
+    // PERF-001/GAP-092/GAP-094: prepared inserts retain the old replay
+    // throughput, one commit per bounded chunk prevents transaction/index
+    // memory from scaling with the file, and `None` here means "no budget" —
+    // the one-shot caller owns the whole replay.
     ensure_schema(conn)?;
-    let processed = insert_edges_in_chunks(conn, edges, chunk_size)?;
+    let outcome = ingest_edges(
+        conn,
+        edges_jsonl,
+        0,
+        chunk_size,
+        None,
+        &mut PrefixHasher::new(),
+    )?;
 
     // Stamp AFTER a successful full replay so the next open() can trust the
     // cache without touching edges.jsonl. A failed chunk returns above.
-    if let Some(fp) = jsonl_fingerprint(edges_jsonl) {
-        let _ = std::fs::write(reconcile_stamp_path(edges_jsonl), fp);
-    }
-    Ok(processed)
+    write_stamp(edges_jsonl, outcome.consumed, outcome.prefix_hash, true);
+    Ok(outcome.rows)
 }
 
 fn duckdb_perf_for_path(db_path: &Path) -> DuckDbPerf {
@@ -490,7 +1040,29 @@ impl GraphDB {
     /// that edges appended to `edges.jsonl` by a process or binary without
     /// JIT-001 write-through are still visible to queries after the next open.
     /// Malformed lines in `edges.jsonl` are silently skipped.
+    ///
+    /// The reconcile is capped by the process-wide request-path budget
+    /// ([`set_request_path_reconcile_budget_ms`]), which the resident entry
+    /// points arm and a one-shot CLI leaves unbounded (GAP-094/GAP-093). Use
+    /// [`Self::open_with_budget_ms`] to state the cap for one caller.
     pub fn open(path: &str) -> GraphResult<Self> {
+        Self::open_with_budget_ms(path, request_path_reconcile_budget_ms())
+    }
+
+    /// [`Self::open`] with an explicit reconcile budget.
+    ///
+    /// `budget_ms` bounds the wall clock one open may spend replaying
+    /// `edges.jsonl` into the cache; [`UNBOUNDED_RECONCILE_BUDGET_MS`] means no
+    /// cap (the one-shot CLI shape, GAP-093). A project's
+    /// `performance.duckdb.reconcile_budget_ms` wins over it, with `0` meaning
+    /// unbounded for that project.
+    ///
+    /// When the budget runs out the open returns a **usable but degraded**
+    /// handle: queries that need the whole cache fail loudly naming the budget,
+    /// queries with a streaming path answer from `edges.jsonl`, and the
+    /// checkpoint records where to resume — so the next open continues instead
+    /// of replaying the corpus again (GAP-094).
+    pub fn open_with_budget_ms(path: &str, budget_ms: u64) -> GraphResult<Self> {
         let mut disk_perf = None;
         let conn = if path == ":memory:" {
             Connection::open_in_memory()?
@@ -505,8 +1077,9 @@ impl GraphDB {
         ensure_schema(&conn)?;
 
         let mut degraded = false;
+        let mut degraded_reason = None;
+        let mut reconcile = None;
         let mut edges_jsonl = None;
-        let mut degraded_spill_watermark = None;
         // Read-through reconciliation: if a sibling edges.jsonl exists, load
         // any edges missing from the DuckDB cache. Only for on-disk DBs —
         // ":memory:" connections have no sibling file and are used in tests.
@@ -519,7 +1092,10 @@ impl GraphDB {
                     .map(|metadata| metadata.len());
                 if jsonl_size.is_some_and(|size| size >= spill_watermark) {
                     degraded = true;
-                    degraded_spill_watermark = Some(spill_watermark);
+                    degraded_reason = Some(DegradedReason::SpillWatermark {
+                        bytes: jsonl_size.unwrap_or_default(),
+                        watermark: spill_watermark,
+                    });
                     eprintln!(
                         "warning: edges.jsonl is {} bytes, at/above spill_watermark {} bytes (DuckDB memory_limit={}); skipping full replay and serving graph queries by streaming edges.jsonl",
                         jsonl_size.unwrap_or_default(),
@@ -527,15 +1103,73 @@ impl GraphDB {
                         perf.memory_limit
                     );
                 } else {
-                    // PERF-001: skip the full edges.jsonl replay when a previous
-                    // successful replay stamped this exact file (fingerprint
-                    // match). Any writer that appends/rewrites edges.jsonl (JIT-001
-                    // write-through, parse-and-diff, graph warm, another process)
-                    // changes the mtime/size -> mismatch -> full reconcile runs.
-                    // reconcile_edges_from_jsonl returns Ok(0) if the file is
-                    // missing — safe no-op for fresh projects.
-                    if reconcile_needed(&jsonl) {
-                        reconcile_edges_from_jsonl(&conn, &jsonl)?;
+                    let budget_ms = resolve_budget_ms(perf.reconcile_budget_ms, budget_ms);
+                    let budget = (budget_ms != UNBOUNDED_RECONCILE_BUDGET_MS)
+                        .then(|| Duration::from_millis(budget_ms));
+                    let started = Instant::now();
+                    let opened_bytes = jsonl_size.unwrap_or_default();
+                    // PERF-001/GAP-094: skip the replay when the checkpoint
+                    // says the cache already holds this exact file; otherwise
+                    // ingest from the checkpoint, not from byte 0.
+                    let mut hasher = PrefixHasher::new();
+                    match plan_reconcile(&jsonl, &mut hasher)? {
+                        ReconcilePlan::Skip => {
+                            reconcile = Some(ReconcileReport {
+                                mode: ReconcileMode::Skipped,
+                                rows_processed: 0,
+                                resume_from: opened_bytes,
+                                consumed: opened_bytes,
+                                total_bytes: opened_bytes,
+                                bytes_verified: 0,
+                                budget_ms,
+                                exhausted: false,
+                                elapsed_ms: started.elapsed().as_millis() as u64,
+                            });
+                        }
+                        ReconcilePlan::Ingest { from, mode } => {
+                            let outcome = ingest_edges(
+                                &conn,
+                                &jsonl,
+                                from,
+                                RECONCILE_CHUNK_ROWS,
+                                budget,
+                                &mut hasher,
+                            )?;
+                            let total_bytes = opened_bytes.max(outcome.consumed);
+                            // The checkpoint is written on both paths: a
+                            // budget-stopped pass still knows exactly which
+                            // bytes it committed, and `complete` keeps the next
+                            // open from mistaking it for a fresh cache.
+                            write_stamp(
+                                &jsonl,
+                                outcome.consumed,
+                                outcome.prefix_hash,
+                                !outcome.exhausted,
+                            );
+                            if outcome.exhausted {
+                                degraded = true;
+                                degraded_reason = Some(DegradedReason::ReconcileBudget {
+                                    budget_ms,
+                                    consumed: outcome.consumed,
+                                    total: total_bytes,
+                                });
+                                eprintln!(
+                                    "warning: graph reconcile hit its {budget_ms}ms request-path budget at {}/{} bytes ({} rows replayed); answering this request's cache-only queries with an error and streaming the rest from edges.jsonl, resuming from the checkpoint on the next open",
+                                    outcome.consumed, total_bytes, outcome.rows
+                                );
+                            }
+                            reconcile = Some(ReconcileReport {
+                                mode,
+                                rows_processed: outcome.rows,
+                                resume_from: from,
+                                consumed: outcome.consumed,
+                                total_bytes,
+                                bytes_verified: from,
+                                budget_ms,
+                                exhausted: outcome.exhausted,
+                                elapsed_ms: started.elapsed().as_millis() as u64,
+                            });
+                        }
                     }
                 }
             }
@@ -544,24 +1178,42 @@ impl GraphDB {
         Ok(GraphDB {
             conn,
             degraded,
+            degraded_reason,
+            reconcile,
             edges_jsonl,
-            spill_watermark: degraded_spill_watermark,
         })
     }
 
-    /// Whether this disk-backed connection skipped replay and serves graph
-    /// queries by streaming the canonical `edges.jsonl` file.
+    /// Whether this disk-backed connection skipped or truncated the DuckDB
+    /// replay, and therefore serves at least part of the graph by streaming
+    /// the canonical `edges.jsonl` file.
     pub fn is_degraded(&self) -> bool {
         self.degraded
+    }
+
+    /// Why this connection is degraded, when it is (GAP-093/095/094).
+    pub fn degraded_reason(&self) -> Option<&DegradedReason> {
+        self.degraded_reason.as_ref()
+    }
+
+    /// What this open did to the DuckDB cache — `None` for `:memory:` opens.
+    pub fn reconcile_report(&self) -> Option<&ReconcileReport> {
+        self.reconcile.as_ref()
     }
 
     fn require_cached_query(&self, api: &str) -> GraphResult<()> {
         if !self.degraded {
             return Ok(());
         }
+        let Some(reason) = self.degraded_reason.as_ref() else {
+            return Err(GraphError::Other(format!(
+                "graph query unavailable in degraded mode: {api}"
+            )));
+        };
         Err(GraphError::Other(format!(
-            "graph query unavailable in degraded (spill) mode: {api}; edges.jsonl exceeds spill_watermark {} bytes",
-            self.spill_watermark.unwrap_or_default()
+            "graph query unavailable in degraded ({}) mode: {api}; {}",
+            reason.mode(),
+            reason.detail()
         )))
     }
 
@@ -1563,6 +2215,40 @@ mod tests {
         graph_dir.join("graph.db")
     }
 
+    /// The reconcile plan an open would run for `jsonl` (GAP-094).
+    fn plan_of(jsonl: &Path) -> ReconcilePlan {
+        super::plan_reconcile(jsonl, &mut PrefixHasher::new()).unwrap()
+    }
+
+    /// One canonical `edges.jsonl` line for edge `i` of a synthetic corpus.
+    fn edge_line(i: usize) -> String {
+        serde_json::to_string(&Edge::new(
+            format!("src/file_{i}.rs"),
+            format!("pkg:dep_{i}"),
+            "imports",
+        ))
+        .unwrap()
+    }
+
+    /// Write `count` distinct edges as `<root>/.vfs/graph/edges.jsonl`;
+    /// returns the corpus root's db path, the JSONL path and the lines.
+    fn write_edge_corpus(root: &Path, count: usize) -> (PathBuf, PathBuf, Vec<String>) {
+        let db_path = create_graph_path(root);
+        let jsonl = db_path.parent().unwrap().join("edges.jsonl");
+        let lines: Vec<String> = (0..count).map(edge_line).collect();
+        std::fs::write(&jsonl, lines.join("\n") + "\n").unwrap();
+        (db_path, jsonl, lines)
+    }
+
+    /// Append whole lines to `path` (the append-only writer shape every
+    /// checkpoint in GAP-094 assumes).
+    fn append_lines(path: &Path, lines: &[String]) {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+        file.write_all((lines.join("\n") + "\n").as_bytes())
+            .unwrap();
+    }
+
     #[test]
     fn graphdb_open_applies_manifest_duckdb_settings() {
         let dir = tempfile::tempdir().unwrap();
@@ -2324,7 +3010,7 @@ mod tests {
     fn reconcile_writes_stamp_and_open_skips_replay_when_fresh() {
         // PERF-001: after a successful reconcile, a stamp file records the
         // edges.jsonl fingerprint; the next open() must NOT re-replay
-        // (observable: the stamp exists, and reconcile_needed() flips false).
+        // (observable: the stamp exists, and the plan is Skip).
         let dir = std::env::temp_dir().join(format!("hilo_perf001_a_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -2344,7 +3030,7 @@ mod tests {
         let stamp = dir.join(".last_reconcile");
         assert!(stamp.exists(), "stamp must be written after full replay");
         // Fingerprint unchanged -> gate says no reconcile needed.
-        assert!(!super::reconcile_needed(&jsonl));
+        assert_eq!(plan_of(&jsonl), ReconcilePlan::Skip);
 
         // Touching edges.jsonl (content change) flips the gate.
         std::fs::write(
@@ -2353,7 +3039,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            super::reconcile_needed(&jsonl),
+            matches!(plan_of(&jsonl), ReconcilePlan::Ingest { .. }),
             "changed jsonl must invalidate stamp"
         );
 
@@ -2362,7 +3048,7 @@ mod tests {
             let db = GraphDB::open(db_path.to_str().unwrap()).unwrap();
             assert_eq!(db.count_edges().unwrap(), 2);
         }
-        assert!(!super::reconcile_needed(&jsonl));
+        assert_eq!(plan_of(&jsonl), ReconcilePlan::Skip);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2378,7 +3064,10 @@ mod tests {
             "{\"from\":\"a.rs\",\"to\":\"pkg:x\",\"rel\":\"imports\"}\n",
         )
         .unwrap();
-        assert!(super::reconcile_needed(&jsonl), "no stamp -> reconcile");
+        assert!(
+            matches!(plan_of(&jsonl), ReconcilePlan::Ingest { .. }),
+            "no stamp -> reconcile"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -2512,10 +3201,20 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM edges", [], |row| row.get(0))
             .unwrap();
         assert_eq!(row_count, 5_000);
+        let written = read_stamp(&jsonl).expect("the stamp must parse as a v2 checkpoint");
         assert_eq!(
-            std::fs::read_to_string(&stamp).unwrap(),
+            written.fingerprint,
             jsonl_fingerprint(&jsonl).unwrap(),
             "the stamp is written only after the full successful replay"
+        );
+        assert_eq!(
+            written.consumed,
+            std::fs::metadata(&jsonl).unwrap().len(),
+            "a completed replay must checkpoint at EOF"
+        );
+        assert!(
+            written.complete,
+            "a completed replay must record a complete checkpoint"
         );
 
         let processed_again = reconcile_edges_from_jsonl(&conn, &jsonl).unwrap();
@@ -2524,6 +3223,349 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM edges", [], |row| row.get(0))
             .unwrap();
         assert_eq!(row_count_again, 5_000, "default replay must be idempotent");
+    }
+
+    // ── GAP-094: the resident process's request path ──────────────────
+    //
+    // The hazard is a long-lived server (`hilo serve --mcp`) whose per-call
+    // `GraphDB::open` replays the whole corpus inside the request. Every test
+    // below drives `open_with_budget_ms`, the same entry point the MCP server
+    // reaches through `open` once it arms the process budget.
+
+    /// The row's experiment-2 shape: a mid-session append of a *copy* of
+    /// `edges.jsonl` (all duplicate rows) plus a few new ones. The open must
+    /// execute the delta, not the corpus.
+    #[test]
+    fn gap094_midsession_append_executes_only_the_appended_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let (db_path, jsonl, lines) = write_edge_corpus(dir.path(), 400);
+        let db_path_str = db_path.to_str().unwrap();
+
+        let first =
+            GraphDB::open_with_budget_ms(db_path_str, UNBOUNDED_RECONCILE_BUDGET_MS).unwrap();
+        let report = first
+            .reconcile_report()
+            .expect("a disk open must report")
+            .clone();
+        assert_eq!(report.mode, ReconcileMode::Full);
+        assert_eq!(report.rows_processed, lines.len());
+        assert_eq!(report.consumed, std::fs::metadata(&jsonl).unwrap().len());
+        assert!(!first.is_degraded());
+        drop(first);
+
+        // Mid-session change: the corpus file grows while the server is up.
+        let mut appended: Vec<String> = lines.clone();
+        appended.extend([edge_line(900), edge_line(901), edge_line(902)]);
+        append_lines(&jsonl, &appended);
+
+        let second =
+            GraphDB::open_with_budget_ms(db_path_str, UNBOUNDED_RECONCILE_BUDGET_MS).unwrap();
+        let report = second.reconcile_report().unwrap();
+        assert_eq!(
+            report.mode,
+            ReconcileMode::Delta,
+            "an append-only change must resume the checkpoint, not replay: {report:?}"
+        );
+        assert_eq!(
+            report.resume_from,
+            std::fs::metadata(&jsonl).unwrap().len() - appended_total_bytes(&appended),
+            "the delta must start at the checkpoint the previous open recorded"
+        );
+        assert_eq!(
+            report.rows_processed,
+            appended.len(),
+            "only the appended rows may be executed: {report:?}"
+        );
+        assert!(!second.is_degraded());
+        assert_eq!(second.count_edges().unwrap(), (lines.len() + 3) as i64);
+
+        // Control: the unchanged full-replay entry point over the same file
+        // executes every line — the cost this open avoided. Without it the
+        // assertion above could pass by measuring nothing.
+        let control = Connection::open_in_memory().unwrap();
+        let control_rows = reconcile_edges_from_jsonl(&control, &jsonl).unwrap();
+        assert_eq!(
+            control_rows,
+            lines.len() + appended.len(),
+            "the control must process the whole file"
+        );
+        assert!(
+            report.rows_processed < control_rows,
+            "the checkpoint ingest must execute strictly fewer rows than a replay: {} vs {control_rows}",
+            report.rows_processed
+        );
+    }
+
+    /// Byte length of a line block as written by [`append_lines`].
+    fn appended_total_bytes(lines: &[String]) -> u64 {
+        (lines.join("\n").len() + 1) as u64
+    }
+
+    /// A request that hits its budget must stop, report, degrade, answer from
+    /// the canonical stream — and the *next* request must resume the
+    /// checkpoint rather than start over.
+    #[test]
+    fn gap094_budget_bounds_one_request_and_the_next_open_resumes() {
+        let dir = tempfile::tempdir().unwrap();
+        let (db_path, jsonl, first_lines) = write_edge_corpus(dir.path(), 200);
+        let db_path_str = db_path.to_str().unwrap();
+
+        // Phase 1 — a complete ingest of the first 200 rows.
+        let db = GraphDB::open_with_budget_ms(db_path_str, UNBOUNDED_RECONCILE_BUDGET_MS).unwrap();
+        let complete = db.reconcile_report().unwrap().clone();
+        assert_eq!(complete.mode, ReconcileMode::Full);
+        assert_eq!(complete.rows_processed, first_lines.len());
+        assert_eq!(db.count_edges().unwrap(), 200);
+        let checkpointed = std::fs::metadata(&jsonl).unwrap().len();
+        drop(db);
+
+        // Phase 2 — a mid-session append of 100 rows.
+        let more: Vec<String> = (200..300).map(edge_line).collect();
+        append_lines(&jsonl, &more);
+        let total = std::fs::metadata(&jsonl).unwrap().len();
+
+        // Phase 3 — a 0ms budget stops before the first insert. The request
+        // still answers, and it reports exactly where it stopped.
+        let bounded = GraphDB::open_with_budget_ms(db_path_str, 0).unwrap();
+        let report = bounded.reconcile_report().unwrap();
+        assert!(report.exhausted, "a 0ms budget must stop the ingest");
+        assert_eq!(report.mode, ReconcileMode::Delta);
+        assert_eq!(
+            report.resume_from, checkpointed,
+            "the request must resume at the checkpoint, never at byte 0"
+        );
+        assert_eq!(
+            report.rows_processed, 0,
+            "no insert may run once the budget is spent: {report:?}"
+        );
+        assert_eq!(report.consumed, checkpointed);
+        assert_eq!(report.total_bytes, total);
+        assert_eq!(report.budget_ms, 0);
+        assert!(bounded.is_degraded());
+        assert_eq!(
+            bounded.degraded_reason(),
+            Some(&DegradedReason::ReconcileBudget {
+                budget_ms: 0,
+                consumed: checkpointed,
+                total,
+            })
+        );
+        let err = bounded.stats().unwrap_err().to_string();
+        assert!(
+            err.contains("degraded (reconcile-budget) mode: stats"),
+            "a cache-only query must fail loudly naming the budget: {err}"
+        );
+        assert!(
+            err.contains(&format!("0ms budget at {checkpointed}/{total} bytes")),
+            "the error must name where the ingest stopped: {err}"
+        );
+        // The degraded answer is the *correct* answer, not an empty one.
+        assert_eq!(bounded.count_edges().unwrap(), 300);
+        let checkpoint = read_stamp(&jsonl).expect("a stopped ingest must still checkpoint");
+        assert!(
+            !checkpoint.complete,
+            "a stopped ingest must not claim a fresh cache"
+        );
+        assert_eq!(
+            checkpoint.consumed, checkpointed,
+            "the checkpoint must not advance past committed rows"
+        );
+        drop(bounded);
+
+        // Phase 4 — the next request finishes the job by executing the delta.
+        let resumed =
+            GraphDB::open_with_budget_ms(db_path_str, UNBOUNDED_RECONCILE_BUDGET_MS).unwrap();
+        let report = resumed.reconcile_report().unwrap();
+        assert_eq!(report.mode, ReconcileMode::Delta);
+        assert_eq!(
+            report.rows_processed,
+            more.len(),
+            "the resume must execute the appended rows only: {report:?}"
+        );
+        assert!(!resumed.is_degraded());
+        assert_eq!(resumed.count_edges().unwrap(), 300);
+        let checkpoint = read_stamp(&jsonl).unwrap();
+        assert!(checkpoint.complete);
+        assert_eq!(checkpoint.consumed, total);
+    }
+
+    /// A checkpoint is only a resume point while the bytes it claims are still
+    /// there: a rewritten (or truncated) file must full-replay, or the cache
+    /// would keep rows the canonical file no longer holds.
+    #[test]
+    fn gap094_rewritten_or_truncated_file_full_replays() {
+        let dir = tempfile::tempdir().unwrap();
+        let (db_path, jsonl, lines) = write_edge_corpus(dir.path(), 120);
+        let db_path_str = db_path.to_str().unwrap();
+        let db = GraphDB::open_with_budget_ms(db_path_str, UNBOUNDED_RECONCILE_BUDGET_MS).unwrap();
+        assert_eq!(db.reconcile_report().unwrap().mode, ReconcileMode::Full);
+        drop(db);
+
+        // Rewrite the head AND grow the file: a naive "size grew -> delta"
+        // rule would accept this and never see the edited row.
+        let mut rewritten = lines.clone();
+        rewritten[0] =
+            serde_json::to_string(&Edge::new("src/file_0.rs", "pkg:edited", "imports")).unwrap();
+        rewritten.extend(lines[1..10].iter().cloned());
+        std::fs::write(&jsonl, rewritten.join("\n") + "\n").unwrap();
+        assert_eq!(
+            plan_of(&jsonl),
+            ReconcilePlan::ingest(0),
+            "a changed consumed prefix must invalidate the checkpoint"
+        );
+
+        let db = GraphDB::open_with_budget_ms(db_path_str, UNBOUNDED_RECONCILE_BUDGET_MS).unwrap();
+        let report = db.reconcile_report().unwrap();
+        assert_eq!(report.mode, ReconcileMode::Full);
+        assert_eq!(report.rows_processed, rewritten.len());
+        let related = db
+            .related("src/file_0.rs", None, Direction::Forward)
+            .unwrap();
+        assert!(
+            related.iter().any(|edge| edge.to == "pkg:edited"),
+            "the replay must reflect the rewritten row: {related:?}"
+        );
+        drop(db);
+
+        // Truncation is the same class: a shorter file re-verifies as a
+        // different prefix (or none at all) and re-replays.
+        let truncated = lines[..10].join("\n") + "\n";
+        std::fs::write(&jsonl, truncated).unwrap();
+        assert_eq!(plan_of(&jsonl), ReconcilePlan::ingest(0));
+    }
+
+    /// A legacy PERF-001 stamp still answers "is this file fresh?" — but it
+    /// carries no offset, so a stale one must never be treated as a delta.
+    #[test]
+    fn gap094_legacy_stamp_is_trusted_when_fresh_and_replays_when_stale() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_db_path, jsonl, _lines) = write_edge_corpus(dir.path(), 5);
+
+        std::fs::write(
+            reconcile_stamp_path(&jsonl),
+            jsonl_fingerprint(&jsonl).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            plan_of(&jsonl),
+            ReconcilePlan::Skip,
+            "a fresh legacy stamp must still skip the replay"
+        );
+
+        std::fs::write(reconcile_stamp_path(&jsonl), "1:2").unwrap();
+        assert_eq!(
+            plan_of(&jsonl),
+            ReconcilePlan::ingest(0),
+            "a stale legacy stamp has no checkpoint to resume from"
+        );
+    }
+
+    /// Regression for the bound itself: the read-ahead chunk must not be
+    /// executed wholesale once the budget is spent.
+    ///
+    /// Pinning this needs a corpus larger than one chunk and a budget that
+    /// expires *inside* the first chunk's insert. A single-transaction chunk
+    /// insert overshot by the whole chunk — measured as a 12.3 s cold call
+    /// under a 2 s budget on a loaded debug build — so both the open's wall
+    /// clock and the offset the checkpoint records expose it.
+    #[test]
+    fn gap094_budget_stops_inside_a_chunk_not_at_the_chunk_end() {
+        let rows = RECONCILE_CHUNK_ROWS + 500;
+        let dir = tempfile::tempdir().unwrap();
+        let (db_path, jsonl, lines) = write_edge_corpus(dir.path(), rows);
+        let db_path_str = db_path.to_str().unwrap();
+        let budget_ms = 500;
+
+        let db = GraphDB::open_with_budget_ms(db_path_str, budget_ms).unwrap();
+        let report = db.reconcile_report().unwrap().clone();
+        assert!(
+            report.exhausted,
+            "a {budget_ms}ms budget must stop: {report:?}"
+        );
+        assert!(
+            report.rows_processed > 0,
+            "the budget must still commit what it managed: {report:?}"
+        );
+        assert!(
+            report.rows_processed < rows,
+            "the budget must stop before the corpus is done: {report:?}"
+        );
+        assert!(
+            report.elapsed_ms < budget_ms * 3 + 500,
+            "an open must return near its budget, not after the whole chunk: {report:?}"
+        );
+        // The checkpoint is the offset of the last row actually executed —
+        // never past it ("rows committed" and "bytes claimed" must agree).
+        let expected_consumed: u64 = lines[..report.rows_processed]
+            .iter()
+            .map(|line| line.len() as u64 + 1)
+            .sum();
+        assert_eq!(
+            report.consumed, expected_consumed,
+            "the resume point must be exactly the last committed row's end: {report:?}"
+        );
+        assert_eq!(read_stamp(&jsonl).unwrap().consumed, expected_consumed);
+        drop(db);
+
+        // Resume: the un-executed remainder only, and every row ends up cached.
+        let resumed =
+            GraphDB::open_with_budget_ms(db_path_str, UNBOUNDED_RECONCILE_BUDGET_MS).unwrap();
+        let report = resumed.reconcile_report().unwrap();
+        assert_eq!(report.mode, ReconcileMode::Delta);
+        assert!(!report.exhausted);
+        assert_eq!(resumed.count_edges().unwrap(), rows as i64);
+    }
+
+    /// The manifest knob resolves as documented: an explicit per-project value
+    /// wins, and `0` opts that project out of any cap.
+    #[test]
+    fn gap094_manifest_budget_resolution_and_opt_out() {
+        assert_eq!(resolve_budget_ms(None, 2_000), 2_000);
+        assert_eq!(resolve_budget_ms(Some(1), 2_000), 1);
+        assert_eq!(
+            resolve_budget_ms(Some(0), 2_000),
+            UNBOUNDED_RECONCILE_BUDGET_MS
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = create_graph_path(dir.path());
+        write_edge_corpus(dir.path(), 50);
+        std::fs::write(
+            dir.path().join(".vfs/manifest.yaml"),
+            "project:\n  name: budget-opt-out\nperformance:\n  duckdb:\n    reconcile_budget_ms: 0\n",
+        )
+        .unwrap();
+        assert_eq!(
+            duckdb_perf_for_path(&db_path).reconcile_budget_ms,
+            Some(0),
+            "the key must be read through the real manifest path"
+        );
+
+        // A 1ms request budget in a project that opted out of the cap.
+        let db = GraphDB::open_with_budget_ms(db_path.to_str().unwrap(), 1).unwrap();
+        let report = db.reconcile_report().unwrap();
+        assert!(
+            !report.exhausted,
+            "a project's opt-out must win over the resident default: {report:?}"
+        );
+        assert_eq!(report.budget_ms, UNBOUNDED_RECONCILE_BUDGET_MS);
+        assert_eq!(db.count_edges().unwrap(), 50);
+    }
+
+    /// Nothing is capped until a resident entry point says so: the one-shot
+    /// CLI shape (GAP-093) stays unbounded.
+    #[test]
+    fn gap094_request_path_budget_defaults_to_unbounded_and_round_trips() {
+        let previous = super::request_path_reconcile_budget_ms();
+        assert_eq!(
+            previous, UNBOUNDED_RECONCILE_BUDGET_MS,
+            "no resident entry point has armed a budget in this process"
+        );
+        // A value no concurrently running test's small corpus can trip.
+        super::set_request_path_reconcile_budget_ms(60_000);
+        assert_eq!(super::request_path_reconcile_budget_ms(), 60_000);
+        super::set_request_path_reconcile_budget_ms(previous);
+        assert_eq!(super::request_path_reconcile_budget_ms(), previous);
     }
 
     #[test]

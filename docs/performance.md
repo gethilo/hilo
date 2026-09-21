@@ -17,6 +17,21 @@ trust a fresh cache and skip straight to the query. Any writer that
 appends edges (write-through triggers, `graph warm`, external processes)
 changes the file and the stamp invalidates — correctness preserved.
 
+Since GAP-094 the same stamp is a **checkpoint** (`v2:<mtime>:<size>:<consumed
+bytes>:<prefix digest>:<complete>`), so an append costs the appended rows
+instead of the corpus, and a long-lived process can bound the replay a single
+request may run:
+
+- `hilo serve --mcp` arms a 2 s request-path reconcile budget
+  (`DEFAULT_REQUEST_PATH_RECONCILE_BUDGET_MS`). A request that spends it stops
+  ingesting, answers from `edges.jsonl`, and logs the budget it hit; queries
+  that need the whole cache fail loudly naming it. The next request resumes
+  from the checkpoint, so repeated requests converge on a complete cache
+  without any single call being unbounded.
+- A project overrides the cap with `performance.duckdb.reconcile_budget_ms`
+  (`0` = unbounded). The one-shot CLI leaves it unbounded: it pays the replay
+  once and exits, so the kernel reclaims the memory.
+
 | Command (tokio, 793 files) | Before | After | Speedup |
 |---|---:|---:|---:|
 | `hilo graph stats` | 12.70 s | **0.03 s** | 497x |
@@ -89,11 +104,15 @@ cache. Three mechanisms keep them consistent:
 1. **Write-through (JIT-001)** — graph-writing operations append to the
    JSONL and update the DuckDB cache in the same operation.
 2. **Read-through reconcile (JIT-002)** — any open() that finds the
-   cache behind the JSONL replays the missing edges (single prepared
-   statement inside one transaction since PERF-001).
-3. **Fingerprint stamp (PERF-001)** — a cache validated against the
-   exact current `edges.jsonl` skips re-validation entirely; the stamp
-   lives in `.vfs/graph/.last_reconcile` and is rebuildable.
+   cache behind the JSONL ingests the missing edges (prepared inserts
+   committed in bounded chunks since PERF-002/GAP-092), starting at the
+   checkpoint offset rather than byte 0 since GAP-094.
+3. **Fingerprint + checkpoint (PERF-001, GAP-094)** — a cache validated
+   against the exact current `edges.jsonl` skips re-validation entirely; the
+   stamp lives in `.vfs/graph/.last_reconcile` and is rebuildable. It also
+   records the byte offset reached and a digest of that prefix, which is what
+   lets an append resume instead of replay — and what makes that resume safe
+   (a rewritten or truncated file digests differently and re-replays).
 
 A missing `graph.db` is no longer an error: with an `edges.jsonl`
 present, commands rebuild the cache automatically (previously
