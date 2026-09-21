@@ -4,6 +4,8 @@ All notable changes to Hilo are documented in this file.
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-09-21
+
 ### Added
 
 - **`hilo ignore check <PATH>`** — diagnostic for ignore decisions: prints
@@ -23,6 +25,15 @@ All notable changes to Hilo are documented in this file.
   the shared ignore format (S3 today; Google Drive / OneDrive / Dropbox
   backends reuse it).
 
+- **`hilo graph clean`** — purge the cached dependency graph (edges.jsonl,
+  graph.db, `.last_warm`) so the next `hilo graph warm` rebuilds from scratch;
+  stale edges from renamed/moved files no longer accumulate
+- **`hilo mount --daemon`** — background FUSE mounting: the CLI re-execs and
+  detaches, returning immediately; unmount with `fusermount -u`
+- **Git and local backend mount types** — `hilo backend mount --type git`
+  (clone/pull a repository) and `--type local` (disk passthrough) are now
+  wired end-to-end
+
 ### Changed
 
 - **Tracked inventory policy documented (INV-001)** — docs/inventory-policy.md
@@ -35,21 +46,6 @@ All notable changes to Hilo are documented in this file.
   README (hooks table + quickstart note) and docs/performance.md point at
   it; the append-only/idempotency contract is pinned by a `hilo-cli` warm
   regression test.
-
-## [0.3.0] — 2026-08-17
-
-### Added
-
-- **`hilo graph clean`** — purge the cached dependency graph (edges.jsonl,
-  graph.db, `.last_warm`) so the next `hilo graph warm` rebuilds from scratch;
-  stale edges from renamed/moved files no longer accumulate
-- **`hilo mount --daemon`** — background FUSE mounting: the CLI re-execs and
-  detaches, returning immediately; unmount with `fusermount -u`
-- **Git and local backend mount types** — `hilo backend mount --type git`
-  (clone/pull a repository) and `--type local` (disk passthrough) are now
-  wired end-to-end
-
-### Changed
 
 - **Actionable git-backend mount errors** — bad repository URLs now produce a
   clear error message and a non-zero exit instead of a silent failure
