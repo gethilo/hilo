@@ -326,3 +326,42 @@ left behind: docs/dogfood/2026-09-20-run8-backends-ffi-integration.md,
 docs/dogfood/diagnostics.md Run 8 section, skills/hilo-usage/SKILL.md
 backends+FFI section, rows DF-WARPFS-9..17 (events 446-454) + the audit event
 455, this entry.
+
+---
+
+## 2026-09-22 (warpfs-dogfood tick 2026-09-22-19-02-14) — run 9, git backend + plugin surface at v0.3.0
+
+verdict: 🔴 DOES-NOT-DELIVER (for the backend surface the CLI advertises; CLI/graph/MCP core remains shippable per runs 1–8)
+promise: angle chosen by the skill's stale-surface rule — runs 1-8 covered
+CLI/graph/MCP/FUSE/S3-FFI but never the git backend door the help text
+advertises, nor `hilo plugin`. HEAD tested: 917a991 (v0.3.0, release build).
+consumer pass: scratch workspace + bare remote (file://) — `backend mount
+--type git` (documented form) exits 0 printing `mounted git … at code
+(worktree code)` and persists NOTHING (no dir, no mounts.yaml, no error);
+with `--tool native` the validator rejects: `unknown backend type: git
+(expected s3|gdrive|onedrive|dropbox|external)`. `--type local` same. S3
+control probe: default form also persists nothing (silent success); only
+`--tool native` persists, `backend list` still blind (DF-WARPFS-11 live),
+first sync fails opaque `aws sdk error: s3: aws error: service error`
+(DF-WARPFS-10 live). `hilo plugin load` accepted a 9-byte TEXT file and
+printed fabricated metadata (hooks:1) while creating nothing. `serve --mcp`
+starts outside any project contrary to cli-reference and serves 17 tools
+over an empty graph.
+time-to-first-success: NEVER on the run-9 surface (git mount dead end);
+~4 min on the graph side (init+warm+stats on fresh corpora, all healthy).
+friction count: 6 blocking-or-honesty (19/20/21/22/24 + serve-refusal false)
+friction count: +docs family (DF-WARPFS-23).
+closed-not-done audit: DF-WARPFS-9/10/11/17 marked complete reproduce LIVE
+at 917a991 — DF-WARPFS-21 files the audit + a read-back closure gate.
+perf (Step 2b, hyperfine/usr-time, release build): stats 30ms ±6.6,
+impact 17ms ±1.9 (4-file corpus, n=20); warm 3.48s / peak RSS 211MB and
+stats 47MB peak on hilo's own 107-file tree (GAP-092..095 ceilings hold in
+real use); binary startup 5.2ms despite 1.4GB binary. NO PERF ROW — nothing
+slow enough to feel; the backend headline op is broken, not slow.
+install leg: bunker-qa battery LAUNCHED on agent 043574ed @ bunker-las-02
+(launch/collect split; result recorded at collect time).
+rows: DF-WARPFS-19..24 appended + verified (board 179 rows, 0 bad lines,
+events 494-499).
+left behind: docs/dogfood/2026-09-22-run9-git-backend-plugins.md,
+docs/dogfood/diagnostics.md Run 9 section, skills/hilo-usage/SKILL.md
+run-9 section, rows, this entry.

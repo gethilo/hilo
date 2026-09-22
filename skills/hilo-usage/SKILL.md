@@ -215,3 +215,40 @@ handshake.
 **Testing this surface cheaply:** a throwaway `moto_server` (S3-compatible) plus
 the AWS CLI gives you an independent ground truth to diff every "sync complete"
 line against — that comparison produced three of run 8's findings.
+
+## Git & local backends DO NOT EXIST behind the CLI; plugin load lies (run 9, 2026-09-22)
+
+**Never mount `--type git` or `--type local` — there is nothing there.**
+The help text advertises both ("Manage virtual backends (S3, git, local)";
+`--url … required for --type git`), but at v0.3.0:
+
+- The documented form (`--type git --url URL --at code`, no `--tool`) exits 0,
+  prints `mounted git … at code (worktree code)`, and **persists nothing** —
+  no directory, no `.vfs/backends/mounts.yaml`, no error. Same silent no-op
+  for `--type local`.
+- Adding any explicit `--tool native` (or `--mode mirror`, `--poll-secs`) is
+  what reaches the config validator, which **rejects both types**:
+  `unknown backend type: git (expected s3|gdrive|onedrive|dropbox|external)`.
+- `hilo backend setup` lists only the five live types — git/local are absent
+  from setup, from `docs/hilo-backends.md` (zero mentions of git), and from
+  the compatibility matrix. If you need remote code: clone it yourself and
+  run the normal graph workflow on the clone.
+
+**The one-command honesty check for ANY backend mount:** after the mount
+reports success, `cat .vfs/backends/mounts.yaml`. File exists → real
+registration (then read that file directly, because `backend list` is still
+blind — D3). File missing → you hit the silent path; nothing was mounted.
+
+**`hilo plugin load` is theater.** It accepted a 9-byte plain-text file,
+printed `loaded plugin: fake / hooks: 1 / edge_types: ["tested_by"]`, and
+created nothing (`.vfs/plugins/` never appears; `plugin list` finds nothing).
+There is no example `.wasm` in the repo and no CLI docs — `docs/hilo-plugins.md`
+covers only the Rust API. Do not build on `hilo plugin` until load validates
+the WASM magic and persists a real artifact you can `ls`.
+
+**`hilo serve --mcp` no longer refuses to run outside a project** (the
+cli-reference.md claim is false at 0.3.0): it starts anywhere and serves all
+17 tools over an empty graph, so a mis-rooted server answers every structural
+question with zeros instead of an error. Pin the server's CWD to an
+initialized project yourself, and treat empty graph answers as suspect until
+`hilo graph stats` in the same directory shows edges.

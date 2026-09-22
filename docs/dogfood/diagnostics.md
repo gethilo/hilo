@@ -562,3 +562,67 @@ keep local; remote newer → download and overwrite local). No conflict artifact
 is produced because none is promised. Recorded here so a future run does not
 file it as data loss — but note the local edit is genuinely unrecoverable once
 overwritten, which is worth knowing before putting a directory under sync.
+
+## Run 9 (2026-09-22) — git backend + plugins: how the doors are wired, and where they silently open onto nothing
+
+### How the backend mount path is layered (and why the bug hides there)
+
+`hilo backend mount` has two code paths that disagree:
+
+1. **The default/auto path** (no `--tool`, or `--tool auto`): prints
+   `mounted <kind> … at <path>`, returns 0, writes nothing. For `--type git`
+   and `--type local` this is the *only* path a docs-following user takes,
+   and it is a no-op dressed as success.
+2. **The explicit-tool path** (`--tool native|rclone|…`): runs the config
+   validator first, and the validator's type whitelist is
+   `s3|gdrive|onedrive|dropbox|external` — git and local are hard-rejected
+   with `unknown backend type`.
+
+So the validator that knows git doesn't exist is only reachable through the
+flag the user was never told to pass. The diagnosis recipe that found it in
+one step: after a mount reports success, `cat .vfs/backends/mounts.yaml`.
+Exists → the mount really persisted. Missing → you are on the silent path.
+That single check separates "mounted" from "claimed mounted" — use it before
+any other debugging, and re-check `backend list` even when the file exists
+(DF-WARPFS-11: list reads the wrong manifest and still reports none).
+
+### The two run-8 defects that reproduce at v0.3.0, mechanism unchanged
+
+- **`backend list` blindness**: mount persists to
+  `.vfs/backends/mounts.yaml`; list reads `.vfs/manifest.yaml`. Verified
+  identical at HEAD 917a991 with an S3 `--tool native` mount on disk.
+- **Opaque S3 sync errors**: `aws sdk error: s3: aws error: service error`
+  on first `backend sync --pull/--push` against a nonexistent bucket. The
+  underlying cause (run 8): the SDK error is mapped to NotFound by
+  string-matching the Display text, so everything that doesn't match becomes
+  the opaque form with no code, no endpoint, no hint. Run-8's discriminator
+  (pre-create the remote key, the identical command then succeeds) still
+  applies.
+
+### Plugin surface: trust nothing until a byte-level check exists
+
+`hilo plugin load <file>` parsed a 9-byte text file as a plugin and
+announced hooks/edge_types for it. Until load-time validates the WASM magic
+(`\0asm`) and reports a real parse failure, "loaded plugin: X" carries no
+information — and `plugin list` reading `.vfs/plugins/` (never created by
+load) means there is no persistence probe either. The only honest check
+today: `ls .vfs/plugins/` after a load. If it is empty, nothing happened.
+
+### Memory ceiling: verified working in real use (GAP-092..095 hold)
+
+The v0.3.0 RAM work was re-verified behaviorally, not by test names:
+`hilo graph warm` over hilo's own 107-file source tree peaked at 211 MB RSS
+(`/usr/bin/time -v`), `graph stats` at 47 MB, on a machine with no per-op
+limits. Edge counts matched (870 distinct/1,062 raw). Nothing regressed.
+
+### Session recipe for backend probing (the one that worked)
+
+```bash
+hilo backend mount --type git --url <URL> --at code && cat .vfs/backends/mounts.yaml   # expect: missing
+hilo backend mount --type s3 --bucket B --prefix P --at s3 --tool native && cat .vfs/backends/mounts.yaml  # exists
+hilo backend list                                                                       # still blind
+```
+
+`backend setup` (flag form: `--type s3`, never positional) is the one
+backend UX that tells the truth about the five live types — worth extending
+to git/local the day they become real.
