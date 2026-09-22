@@ -35,13 +35,38 @@ fn test_registry_discover_empty_dir() {
 fn test_registry_discover_wasm_files() {
     let dir = std::env::temp_dir().join("hilo_plugins_test");
     let _ = std::fs::create_dir_all(&dir);
-    std::fs::write(dir.join("scanner.wasm"), b"mock wasm").unwrap();
-    std::fs::write(dir.join("linter.wasm"), b"mock wasm").unwrap();
+    // Valid wasm headers (judge verdict 7c6abf73: discover must be honest).
+    std::fs::write(dir.join("scanner.wasm"), b"\0asm\x01\x00\x00\x00").unwrap();
+    std::fs::write(dir.join("linter.wasm"), b"\0asm\x01\x00\x00\x00").unwrap();
     let manifests = PluginRegistry::discover(&dir).unwrap();
     assert_eq!(manifests.len(), 2);
     let names: Vec<&str> = manifests.iter().map(|m| m.name.as_str()).collect();
     assert!(names.contains(&"scanner"));
     assert!(names.contains(&"linter"));
+    // No fabricated metadata: empty hooks, empty edge_types, unknown version.
+    for m in &manifests {
+        assert!(
+            m.hooks.is_empty(),
+            "discover fabricated hooks for {}",
+            m.name
+        );
+        assert!(m.edge_types.is_empty());
+        assert_eq!(m.version, "?", "discover fabricated a version");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_registry_discover_skips_invalid_wasm() {
+    let dir = std::env::temp_dir().join("hilo_plugins_invalid_test");
+    let _ = std::fs::create_dir_all(&dir);
+    std::fs::write(dir.join("good.wasm"), b"\0asm\x01\x00\x00\x00").unwrap();
+    std::fs::write(dir.join("garbage.wasm"), b"not wasm at all").unwrap();
+    std::fs::write(dir.join("badver.wasm"), b"\0asm\x09\x00\x00\x00").unwrap();
+    let manifests = PluginRegistry::discover(&dir).unwrap();
+    assert_eq!(manifests.len(), 1, "invalid files must be skipped");
+    assert_eq!(manifests[0].name, "good");
+    assert!(manifests[0].hooks.is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
 

@@ -3060,8 +3060,12 @@ fn plugin_load_valid_header_persists_and_lists() {
     );
     let list_out = String::from_utf8_lossy(&listing.stdout);
     assert!(
-        list_out.contains("x v"),
-        "plugin list must show the persisted plugin x, got: {list_out}"
+        list_out.contains("x v?") && list_out.contains("0 hooks"),
+        "plugin list must show x with unknown version and NO fabricated hooks, got: {list_out}"
+    );
+    assert!(
+        !list_out.contains("1 hooks") && !list_out.contains("file_write"),
+        "plugin list must not fabricate metadata for a bare module, got: {list_out}"
     );
     let _ = fs::remove_dir_all(&dir);
 }
