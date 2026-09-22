@@ -216,35 +216,30 @@ handshake.
 the AWS CLI gives you an independent ground truth to diff every "sync complete"
 line against — that comparison produced three of run 8's findings.
 
-## Git & local backends DO NOT EXIST behind the CLI; plugin load lies (run 9, 2026-09-22)
+## Backend/plugin surface honesty (run 9 findings FIXED 2026-09-22; was "git/local don't exist + plugin load lies")
 
-**Never mount `--type git` or `--type local` — there is nothing there.**
-The help text advertises both ("Manage virtual backends (S3, git, local)";
-`--url … required for --type git`), but at v0.3.0:
-
-- The documented form (`--type git --url URL --at code`, no `--tool`) exits 0,
-  prints `mounted git … at code (worktree code)`, and **persists nothing** —
-  no directory, no `.vfs/backends/mounts.yaml`, no error. Same silent no-op
-  for `--type local`.
-- Adding any explicit `--tool native` (or `--mode mirror`, `--poll-secs`) is
-  what reaches the config validator, which **rejects both types**:
-  `unknown backend type: git (expected s3|gdrive|onedrive|dropbox|external)`.
-- `hilo backend setup` lists only the five live types — git/local are absent
-  from setup, from `docs/hilo-backends.md` (zero mentions of git), and from
-  the compatibility matrix. If you need remote code: clone it yourself and
-  run the normal graph workflow on the clone.
+**Backend mount types are exactly s3|gdrive|onedrive|dropbox|external.**
+`--type git` / `--type local` are REJECTED honestly since fix 2ba3969
+(2026-09-22, DF-WARPFS-19): exit 2, `unknown backend type: git (expected
+s3|gdrive|onedrive|dropbox|external)`, nothing on stdout, nothing persisted.
+Run-9's silent-success clone-into-`~/.hilo/worktrees` path is gone. If you
+need remote code: clone it yourself and run the normal graph workflow on the
+clone.
 
 **The one-command honesty check for ANY backend mount:** after the mount
 reports success, `cat .vfs/backends/mounts.yaml`. File exists → real
-registration (then read that file directly, because `backend list` is still
-blind — D3). File missing → you hit the silent path; nothing was mounted.
+registration, and `backend list` reads it (the run-8-era "list is blind"
+defect is fixed — verified 2026-09-22). File missing → you hit a silent
+path; nothing was mounted.
 
-**`hilo plugin load` is theater.** It accepted a 9-byte plain-text file,
-printed `loaded plugin: fake / hooks: 1 / edge_types: ["tested_by"]`, and
-created nothing (`.vfs/plugins/` never appears; `plugin list` finds nothing).
-There is no example `.wasm` in the repo and no CLI docs — `docs/hilo-plugins.md`
-covers only the Rust API. Do not build on `hilo plugin` until load validates
-the WASM magic and persists a real artifact you can `ls`.
+**`hilo plugin load` is honest since e113f59 + 2de2af2 (2026-09-22,
+DF-WARPFS-22/26):** non-wasm files are rejected with a `\0asm` magic /
+version error naming the byte offset; a valid-header module loads with
+truthful `hooks: 0 / edge_types: []` (no fabricated metadata anywhere —
+`plugin list` derives the same way, skips invalid files, shows version `?`);
+the load PERSISTS to `.vfs/plugins/<name>.wasm` where `plugin list` finds
+it. Still missing: a checked-in example `.wasm` and a CLI section in
+`docs/hilo-plugins.md` (tracked as DF-WARPFS-27).
 
 **`hilo serve --mcp` no longer refuses to run outside a project** (the
 cli-reference.md claim is false at 0.3.0): it starts anywhere and serves all
