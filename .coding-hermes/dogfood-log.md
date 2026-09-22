@@ -358,8 +358,18 @@ impact 17ms ±1.9 (4-file corpus, n=20); warm 3.48s / peak RSS 211MB and
 stats 47MB peak on hilo's own 107-file tree (GAP-092..095 ceilings hold in
 real use); binary startup 5.2ms despite 1.4GB binary. NO PERF ROW — nothing
 slow enough to feel; the backend headline op is broken, not slow.
-install leg: bunker-qa battery LAUNCHED on agent 043574ed @ bunker-las-02
-(launch/collect split; result recorded at collect time).
+install leg: bunker-qa battery RAN on agent 043574ed @ bunker-las-02 (launch
+19:09:36Z, collected+destroyed same session; 17 evidence rows). NOT a silent
+pass, NOT a full pass: fresh-install = ENV-BLOCKED (bare las-02 agent image
+has no pkg-config/libssl headers, agent is non-root so the README's documented
+`sudo apt install ...` line cannot run; openssl-sys build died in build
+script — graded ENV-BLOCKED by the harness, a server-image variance vs the
+las-03 image where the 09-20/09-11 legs passed) — the README's install path
+was NOT exercised end-to-end on a bare box this run; ci-pass OK (act 1 job
+green: workspace build + clippy + tests inside a provisioned container);
+chaos-shutdown/disconnect OK; upgrade UNVERIFIED (tar-sync carries no git
+history, harness limitation); chaos-resource ENV-BLOCKED; docker-deploy
+compose up OK but probe 000. Details → DF-WARPFS-25.
 rows: DF-WARPFS-19..24 appended + verified (board 179 rows, 0 bad lines,
 events 494-499).
 left behind: docs/dogfood/2026-09-22-run9-git-backend-plugins.md,
