@@ -1,4 +1,9 @@
-use hilo_plugins::{HostFunctions, PluginRegistry, PluginRuntime};
+use hilo_plugins::{HookConfig, HostFunctions, PluginInstance, PluginRegistry, PluginRuntime};
+
+/// A minimal valid wasm module header: `\0asm` magic + version 1 (DF-WARPFS-22).
+fn valid_wasm_header() -> Vec<u8> {
+    b"\0asm\x01\x00\x00\x00".to_vec()
+}
 
 #[test]
 fn test_host_function_call() {
@@ -46,11 +51,70 @@ fn test_runtime_load_plugin() {
     let dir = std::env::temp_dir().join("hilo_runtime_test");
     let _ = std::fs::create_dir_all(&dir);
     let wasm_path = dir.join("test_plugin.wasm");
-    std::fs::write(&wasm_path, b"").unwrap();
+    std::fs::write(&wasm_path, valid_wasm_header()).unwrap();
     let result = rt.load_plugin(&wasm_path);
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), "test_plugin");
     assert_eq!(rt.plugins.len(), 1);
+    // DF-WARPFS-22: honest defaults — no fabricated hooks or edge types.
+    assert!(
+        rt.plugins[0].hooks.is_empty(),
+        "hooks must not be fabricated"
+    );
+    assert!(
+        rt.plugins[0].edge_types.is_empty(),
+        "edge_types must not be fabricated"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_runtime_rejects_non_wasm_bytes() {
+    let mut rt = PluginRuntime::new();
+    let dir = std::env::temp_dir().join("hilo_nonwasm_test");
+    let _ = std::fs::create_dir_all(&dir);
+    let wasm_path = dir.join("fake.wasm");
+    std::fs::write(&wasm_path, b"not wasm").unwrap();
+    let result = rt.load_plugin(&wasm_path);
+    let err = result.expect_err("non-wasm bytes must be rejected");
+    assert!(
+        err.contains("magic"),
+        "rejection must name the missing wasm magic: {err}"
+    );
+    assert!(
+        rt.plugins.is_empty(),
+        "nothing may be registered on rejection"
+    );
+
+    // Shorter than a header is also rejected (no magic possible).
+    let short_path = dir.join("short.wasm");
+    std::fs::write(&short_path, b"\0asm").unwrap();
+    let result = rt.load_plugin(&short_path);
+    assert!(
+        result
+            .expect_err("sub-header file must be rejected")
+            .contains("magic"),
+        "short-file rejection must name the missing magic"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_runtime_rejects_bad_wasm_version() {
+    let mut rt = PluginRuntime::new();
+    let dir = std::env::temp_dir().join("hilo_badversion_test");
+    let _ = std::fs::create_dir_all(&dir);
+    let wasm_path = dir.join("future.wasm");
+    let mut bytes = b"\0asm".to_vec();
+    bytes.extend_from_slice(&[0x02, 0x00, 0x00, 0x00]); // version 2, unsupported
+    std::fs::write(&wasm_path, bytes).unwrap();
+    let result = rt.load_plugin(&wasm_path);
+    let err = result.expect_err("bad version must be rejected");
+    assert!(
+        err.contains("unsupported version at bytes 4-8"),
+        "unexpected rejection: {err}"
+    );
+    assert!(rt.plugins.is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -113,8 +177,8 @@ fn test_runtime_unload_plugin() {
     let dir = std::env::temp_dir().join("hilo_unload_test");
     let _ = std::fs::create_dir_all(&dir);
 
-    std::fs::write(dir.join("alpha.wasm"), b"").unwrap();
-    std::fs::write(dir.join("beta.wasm"), b"").unwrap();
+    std::fs::write(dir.join("alpha.wasm"), valid_wasm_header()).unwrap();
+    std::fs::write(dir.join("beta.wasm"), valid_wasm_header()).unwrap();
     rt.load_plugin(&dir.join("alpha.wasm")).unwrap();
     rt.load_plugin(&dir.join("beta.wasm")).unwrap();
     assert_eq!(rt.plugins.len(), 2);
@@ -135,11 +199,26 @@ fn test_runtime_dispatch_hook() {
     let dir = std::env::temp_dir().join("hilo_dispatch_test");
     let _ = std::fs::create_dir_all(&dir);
 
-    std::fs::write(dir.join("scanner.wasm"), b"").unwrap();
+    std::fs::write(dir.join("scanner.wasm"), valid_wasm_header()).unwrap();
     rt.load_plugin(&dir.join("scanner.wasm")).unwrap();
 
-    // dispatch_hook for file_write — the loaded plugin has edge_type "tested_by"
-    // and a file_write hook, so we expect AddEdge + Warning.
+    // DF-WARPFS-22: an honestly-loaded module declares no hooks, so dispatch
+    // must produce nothing — fabricated defaults are gone.
+    assert!(
+        rt.dispatch_hook("file_write", "main.rs", "file content")
+            .is_empty(),
+        "a loaded plugin without declared hooks must not dispatch results"
+    );
+
+    // The dispatch pipeline itself (priority ordering, AddEdge + Warning
+    // simulation) is exercised with an instance that declares the hook.
+    rt.plugins[0].hooks = vec![HookConfig {
+        on: "file_write".into(),
+        priority: 0,
+        languages: vec![],
+    }];
+    rt.plugins[0].edge_types = vec!["tested_by".into()];
+
     let results = rt.dispatch_hook("file_write", "main.rs", "file content");
 
     assert!(
@@ -166,6 +245,26 @@ fn test_runtime_dispatch_hook() {
     assert!(no_results.is_empty());
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_plugin_instance_fields_are_honored() {
+    // Sanity: a hand-declared instance (what future hook discovery will
+    // build) keeps its own hooks/edge_types through the runtime.
+    let mut rt = PluginRuntime::new();
+    let instance = PluginInstance {
+        name: "manual".into(),
+        wasm_path: std::path::PathBuf::from("manual.wasm"),
+        hooks: vec![HookConfig {
+            on: "file_read".into(),
+            priority: 3,
+            languages: vec![],
+        }],
+        edge_types: vec!["documented_by".into()],
+        metadata_namespaces: vec!["user.vfs.doc".into()],
+    };
+    rt.plugins.push(instance);
+    assert!(!rt.dispatch_hook("file_read", "a.rs", "").is_empty());
 }
 
 #[test]

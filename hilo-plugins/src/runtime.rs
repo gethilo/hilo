@@ -5,14 +5,15 @@
 // daemon calls dispatch_hook with the event name and file path. The runtime
 // finds matching plugins (sorted by priority) and returns HookResults.
 //
-// In the full extism integration, dispatch_hook would call into each plugin's
-// .wasm module. For v1, we simulate execution: plugins with edge_types
-// containing "tested_by" produce AddEdge results, and all matching plugins
-// produce a Warning result. This lets us test the dispatch pipeline without
-// real .wasm modules.
+// Loading is honest about what a module provides (DF-WARPFS-22): a file is
+// only accepted when it carries the real wasm header (\0asm + version 1),
+// and loaded instances register NO hooks or edge types until real hook
+// discovery exists — an honest 0 beats a fabricated 1. Instances that DO
+// declare hooks/edge_types (built by future discovery or tests) drive
+// dispatch_hook's simulated execution below.
 
 use crate::host_functions::HostFunctions;
-use crate::{HookConfig, HookResult, PluginInstance};
+use crate::{HookResult, PluginInstance};
 use std::path::Path;
 
 pub struct PluginRuntime {
@@ -36,15 +37,35 @@ impl PluginRuntime {
 
     /// Load a .wasm plugin from disk.
     ///
-    /// Reads the wasm bytes, then creates a PluginInstance with default hook
-    /// configuration. For real .wasm files the extism Plugin would be created
-    /// here; for test stubs (empty / mock bytes) we still register the instance
-    /// so the dispatch pipeline can be exercised.
+    /// Reads the wasm bytes and validates the module header (DF-WARPFS-22):
+    /// the file must start with the `\0asm` magic at byte 0 and carry
+    /// wasm version 1 at bytes 4..8. Anything else — including text with a
+    /// .wasm extension — is rejected before any instance is registered.
+    /// This is a header check only; full section parsing is a future slice.
     ///
-    /// Returns the plugin name on success.
+    /// The registered PluginInstance carries NO fabricated metadata: hooks
+    /// and edge_types stay empty until real hook discovery lands.
+    ///
+    /// Returns the plugin name (file stem) on success.
     pub fn load_plugin(&mut self, wasm_path: &Path) -> Result<String, String> {
-        let _wasm_bytes = std::fs::read(wasm_path)
+        let wasm_bytes = std::fs::read(wasm_path)
             .map_err(|e| format!("failed to read plugin file {}: {}", wasm_path.display(), e))?;
+
+        const WASM_MAGIC: [u8; 4] = [0x00, b'a', b's', b'm'];
+        const WASM_VERSION_1: [u8; 4] = [0x01, 0x00, 0x00, 0x00];
+        if wasm_bytes.len() < 8 || !wasm_bytes.starts_with(&WASM_MAGIC) {
+            return Err(format!(
+                "invalid wasm module {}: missing \\0asm magic at byte 0 (file is {} bytes)",
+                wasm_path.display(),
+                wasm_bytes.len()
+            ));
+        }
+        if wasm_bytes[4..8] != WASM_VERSION_1 {
+            return Err(format!(
+                "invalid wasm module {}: unsupported version at bytes 4-8",
+                wasm_path.display()
+            ));
+        }
 
         let name = wasm_path
             .file_stem()
@@ -52,18 +73,14 @@ impl PluginRuntime {
             .unwrap_or("unknown")
             .to_string();
 
-        // Create a plugin instance with default configuration.
-        // Real extism::Plugin::new would be called here for valid wasm;
-        // for v1 we register the instance metadata so dispatch works.
+        // Honest defaults (DF-WARPFS-22): no fabricated hooks or edge
+        // types. Real extism::Plugin::new + hook discovery is a future
+        // slice; until then a loaded module declares nothing.
         let instance = PluginInstance {
             name: name.clone(),
             wasm_path: wasm_path.to_path_buf(),
-            hooks: vec![HookConfig {
-                on: "file_write".into(),
-                priority: 0,
-                languages: vec![],
-            }],
-            edge_types: vec!["tested_by".into()],
+            hooks: vec![],
+            edge_types: vec![],
             metadata_namespaces: vec![],
         };
 

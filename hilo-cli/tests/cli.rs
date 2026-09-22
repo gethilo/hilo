@@ -2982,6 +2982,90 @@ fn graph_stats_does_not_panic_when_stdout_closes_early() {
 
 // ─────────────────── spawn-retry helper (INT-GITREINS-004) ───────────────────
 
+// ─────────────────────── plugin load/list (DF-WARPFS-22) ───────────────────────
+
+/// DF-WARPFS-22: a text file masquerading as .wasm must be rejected and must
+/// not be persisted. The old binary loaded it, printed fabricated metadata
+/// (hooks: 1, edge_types: ["tested_by"]) and registered nothing anywhere.
+#[test]
+fn plugin_load_rejects_non_wasm_file() {
+    let dir = unique_tempdir("plugin-load-text");
+    init_project(&dir);
+    let fake = dir.join("fake.wasm");
+    fs::write(&fake, b"not wasm").expect("failed to write fake.wasm");
+
+    let output = run_hilo_with_retry(
+        hilo_cmd()
+            .args(["plugin", "load", fake.to_str().expect("utf8 tempdir path")])
+            .current_dir(&dir),
+    );
+
+    assert!(
+        !output.status.success(),
+        "text file must not load as a plugin"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("magic"),
+        "rejection must name the missing wasm magic: {stderr}"
+    );
+    assert!(
+        !dir.join(".vfs/plugins/fake.wasm").exists(),
+        "a rejected load must not persist the file into .vfs/plugins"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// DF-WARPFS-22: a valid-header module loads, persists into .vfs/plugins/,
+/// and `hilo plugin list` sees it by name. No fabricated hook counts.
+#[test]
+fn plugin_load_valid_header_persists_and_lists() {
+    let dir = unique_tempdir("plugin-load-valid");
+    init_project(&dir);
+    let good = dir.join("x.wasm");
+    fs::write(&good, b"\0asm\x01\x00\x00\x00").expect("failed to write x.wasm");
+
+    let output = run_hilo_with_retry(
+        hilo_cmd()
+            .args(["plugin", "load", good.to_str().expect("utf8 tempdir path")])
+            .current_dir(&dir),
+    );
+
+    assert!(
+        output.status.success(),
+        "valid-header plugin failed to load: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("persisted to: .vfs/plugins/x.wasm"),
+        "expected persistence line, got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("hooks: 1"),
+        "loaded plugin must not fabricate hooks, got: {stdout}"
+    );
+
+    let persisted = dir.join(".vfs").join("plugins").join("x.wasm");
+    assert!(
+        persisted.exists(),
+        "plugin was not persisted to .vfs/plugins/x.wasm"
+    );
+
+    let listing = run_hilo_with_retry(hilo_cmd().args(["plugin", "list"]).current_dir(&dir));
+    assert!(
+        listing.status.success(),
+        "plugin list failed: {}",
+        String::from_utf8_lossy(&listing.stderr)
+    );
+    let list_out = String::from_utf8_lossy(&listing.stdout);
+    assert!(
+        list_out.contains("x v"),
+        "plugin list must show the persisted plugin x, got: {list_out}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Unit-ish tests for the concurrent-relink casualty classifier. These run
 /// entirely in-process (no binary spawn), so they pass even while a
 /// concurrent `cargo build` holds `target/debug/hilo` mid-relink.

@@ -1,6 +1,6 @@
 //! `hilo plugin` — load and list wasm plugins from .vfs/plugins/.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Subcommand;
 use hilo_plugins::{PluginRegistry, PluginRuntime};
 use std::path::Path;
@@ -51,6 +51,20 @@ pub fn run_plugin_load(wasm_path: &str) -> Result<()> {
             .map(|p| &p.edge_types)
             .unwrap_or(&vec![])
     );
+
+    // DF-WARPFS-22: persist the plugin so `hilo plugin list` (which scans
+    // .vfs/plugins/) actually sees what was loaded — a load that registers
+    // nothing on disk is a silent no-op.
+    let plugins_dir = Path::new(".vfs").join("plugins");
+    std::fs::create_dir_all(&plugins_dir)
+        .with_context(|| format!("failed to create {}", plugins_dir.display()))?;
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| anyhow::anyhow!("plugin path has no file name: {}", wasm_path))?;
+    let dest = plugins_dir.join(file_name);
+    std::fs::copy(path, &dest)
+        .with_context(|| format!("failed to persist plugin to {}", dest.display()))?;
+    println!("persisted to: {}", dest.display());
 
     Ok(())
 }
