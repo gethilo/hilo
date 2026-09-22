@@ -118,3 +118,49 @@ does-not-deliver for the surface, not for the project.
 - `docs/dogfood/diagnostics.md` Run 9 section
 - `skills/hilo-usage/SKILL.md` git-backend/plugins field notes
 - board rows DF-WARPFS-19..24 + dogfood-log.md entry
+
+## Addendum (2026-09-22 late, item 46/47): re-runnable closure probes at 2b26d3f
+
+Every "fixed" claim below is a command a second person can re-run. Both
+binaries needed: the old artifact (`/home/kara/.cargo/bin/hilo.bak-20260922`,
+built 2026-09-11) and a HEAD build. Run each inside a scratch dir that had
+`hilo init`.
+
+1. DF-WARPFS-19 (dead git mount) — old vs new:
+
+       $ hilo-old backend mount --type git --url https://github.com/octocat/Hello-World.git --at ./mnt
+       mounted git https://github.com/octocat/Hello-World.git at ./mnt (worktree ./mnt)   # exit 0, .vfs/backends/mounts.yaml NEVER written
+       $ hilo-new backend mount --type git --url https://github.com/octocat/Hello-World.git --at ./mnt
+       error: invalid config: unknown backend type: git (expected s3|gdrive|onedrive|dropbox|external)   # exit 2, nothing written
+
+2. DF-WARPFS-22 (fake.wasm) — `printf 'not wasm at all' > fake.wasm; hilo plugin load fake.wasm`:
+   old exits 0 printing fabricated `hooks: 1` / `edge_types: ["tested_by"]`
+   and registers nothing (`plugin list` empty); new exits 1 with
+   `invalid wasm module ... missing \0asm magic at byte 0 (file is 15 bytes)`.
+   A valid-header file (`printf '\0asm\x01\0\0\0' > x.wasm`) loads with
+   honest `hooks: 0`, persists to `.vfs/plugins/x.wasm`, and lists as
+   `x v? — 0 hooks, 0 edge types`.
+
+3. DF-WARPFS-20 mount half (silent s3 default form) — NOT live at HEAD:
+
+       $ hilo-new backend mount --type s3 --bucket dogfood-probe-bucket --prefix probe --at s3code
+       mounted s3 s3://dogfood-probe-bucket/probe at s3code (tool=native, mode=mirror)   # exit 0
+       $ cat .vfs/backends/mounts.yaml   # correct entry present
+       $ hilo-new backend list           # shows the configured mount
+
+   (row stays pending only for the sync-error-quality clause)
+
+4. DF-WARPFS-23 serve-refusal — `cd /tmp && hilo-new serve --mcp`:
+   `error: no Hilo project found in /tmp/...: expected manifest.yaml or
+   .vfs/manifest.yaml; run `hilo init` first` (exit 1). The old claim was
+   false at 0.3.0; fixed behavior needs a HEAD build.
+
+Provenance note: fixes 1–2 are observable only on a rebuilt artifact — the
+11-day-old binary reports the same `hilo 0.3.0` string as the 0.3.0 release.
+From 7026bd9 the artifact identifies itself:
+
+    $ hilo --version
+    hilo 0.3.1-dev
+    build: v0.3.0-14-g2b26d3f
+    built: 2026-09-22T23:19:30Z
+
