@@ -302,6 +302,19 @@ pub fn call_tool(name: &str, arguments: &serde_json::Value) -> McpResult<serde_j
 /// Default path to the DuckDB graph database (relative to CWD).
 const GRAPH_DB_PATH: &str = ".vfs/graph/graph.db";
 
+/// Whether any on-disk graph data exists for the current workspace.
+///
+/// True when the DuckDB cache exists OR a sibling `edges.jsonl` does. The
+/// graph tools use this to decide between "genuinely no graph yet" (all-zero
+/// / empty answers) and "cache absent but data available" — in the latter
+/// case [`hilo_graph::GraphDB::open`] reconciles `edges.jsonl` into a fresh
+/// cache, so answering zeros would silently report an empty graph
+/// (GAP-096).
+fn graph_data_present() -> bool {
+    const EDGES_JSONL_PATH: &str = ".vfs/graph/edges.jsonl";
+    Path::new(GRAPH_DB_PATH).exists() || Path::new(EDGES_JSONL_PATH).exists()
+}
+
 /// Resolution root for `pkg:`-node coverage lookups (GAP-066).
 ///
 /// Graph edge paths and [`GRAPH_DB_PATH`] are both relative to the process
@@ -553,10 +566,14 @@ fn graph_related(arguments: &serde_json::Value) -> McpResult<serde_json::Value> 
 
 /// `vfs_graph_stats` — aggregate statistics about the dependency graph.
 ///
-/// When no graph database exists yet (common in a fresh project) we return
-/// an all-zeros stats object instead of an error.
+/// When no graph data exists yet (neither the DuckDB cache nor a sibling
+/// `edges.jsonl` — common in a fresh project) we return an all-zeros stats
+/// object instead of an error. When the cache is absent but `edges.jsonl`
+/// exists, `GraphDB::open` reconciles it first, so the answer reflects the
+/// real edge set (GAP-096: this used to answer zeros and silently disagree
+/// with the CLI on the same corpus).
 fn graph_stats(_arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
-    if !Path::new(GRAPH_DB_PATH).exists() {
+    if !graph_data_present() {
         return Ok(serde_json::json!({
             "total_edges": 0,
             "total_files": 0,
@@ -579,7 +596,7 @@ fn graph_stats(_arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
 ///
 /// When no graph database exists, returns an empty list.
 fn graph_untested(_arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
-    if !Path::new(GRAPH_DB_PATH).exists() {
+    if !graph_data_present() {
         return Ok(serde_json::json!({
             "files": [],
             "total": 0
@@ -612,7 +629,7 @@ fn graph_module(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
         return Err(McpError::Protocol("'module_name' must not be empty".into()));
     }
 
-    if !Path::new(GRAPH_DB_PATH).exists() {
+    if !graph_data_present() {
         return Ok(serde_json::json!({
             "module": module_name,
             "files": [],
@@ -684,7 +701,7 @@ fn graph_understand(arguments: &serde_json::Value) -> McpResult<serde_json::Valu
     let db_parent = Path::new(GRAPH_DB_PATH).parent().unwrap_or(Path::new("."));
     std::fs::create_dir_all(db_parent).ok();
 
-    if !Path::new(GRAPH_DB_PATH).exists() {
+    if !graph_data_present() {
         return Ok(serde_json::json!({
             "text": format!("No graph database found at {GRAPH_DB_PATH}. Run `hilo graph warm` first."),
             "files": [],
@@ -726,7 +743,7 @@ fn graph_search(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
     let db_parent = Path::new(GRAPH_DB_PATH).parent().unwrap_or(Path::new("."));
     std::fs::create_dir_all(db_parent).ok();
 
-    if !Path::new(GRAPH_DB_PATH).exists() {
+    if !graph_data_present() {
         return Ok(serde_json::json!({
             "results": [],
             "total": 0,
@@ -829,7 +846,7 @@ fn rule_check(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
 
     // Open the graph database.  If it doesn't exist, return empty results
     // rather than an error — the graph just hasn't been populated yet.
-    if !Path::new(GRAPH_DB_PATH).exists() {
+    if !graph_data_present() {
         return Ok(serde_json::json!({
             "rule": rule.name,
             "description": rule.description,

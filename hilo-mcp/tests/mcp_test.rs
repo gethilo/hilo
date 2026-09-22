@@ -510,6 +510,54 @@ fn test_graph_stats_empty() {
 }
 
 // -------------------------------------------------------------------------
+// vfs_graph_stats — GAP-096: cache absent but edges.jsonl present
+// -------------------------------------------------------------------------
+
+/// A corpus with `edges.jsonl` but no `graph.db` must reconcile on first
+/// use, not answer an empty graph (GAP-096). The one-shot CLI on the same
+/// corpus answers the real edge count; the resident MCP tool must agree.
+#[test]
+fn test_graph_stats_reconciles_edges_jsonl_when_db_absent() {
+    use std::fs;
+
+    let _fx = CwdGraphFixture::new();
+
+    // Fresh-corpus shape: data exists, the DuckDB cache does not.
+    fs::write(
+        ".vfs/graph/edges.jsonl",
+        concat!(
+            r#"{"from":"src/gap096_a.rs","to":"src/gap096_b.rs","rel":"imports","provenance":"ast_exact","confidence":1.0}"#,
+            "\n",
+            r#"{"from":"src/gap096_test.rs","to":"src/gap096_a.rs","rel":"tested_by","provenance":"heuristic","confidence":0.8}"#,
+            "\n"
+        ),
+    )
+    .unwrap();
+    assert!(!std::path::Path::new(".vfs/graph/graph.db").exists());
+
+    let req = r#"{"jsonrpc":"2.0","id":46,"method":"tools/call","params":{"name":"vfs_graph_stats","arguments":{}}}"#;
+    let resp = rpc(req);
+    assert!(
+        resp.get("error").is_none(),
+        "stats on an edges.jsonl-only corpus must not error: {resp}"
+    );
+
+    let text = resp["result"]["content"][0]["text"]
+        .as_str()
+        .expect("content[0].text should be a string");
+    let stats: serde_json::Value =
+        serde_json::from_str(text).expect("tool output should be valid JSON");
+
+    assert_eq!(
+        stats["total_edges"], 2,
+        "edges.jsonl must be reconciled into the answer, not silently dropped: {stats}"
+    );
+
+    // The reconcile is write-through: the cache now exists for later calls.
+    assert!(std::path::Path::new(".vfs/graph/graph.db").exists());
+}
+
+// -------------------------------------------------------------------------
 // Unknown method
 // -------------------------------------------------------------------------
 
