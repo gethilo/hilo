@@ -306,9 +306,9 @@ that can only answer from an empty graph.
 
 ## `hilo backend`
 
-Manage virtual backends (S3, git, local) and backend-backed workspaces
-(S3/GDrive/OneDrive/Dropbox/external via sync tools, spec
-`specs/backend-backed-workspace-spec.md` §9).
+Manage virtual backends (S3, gdrive, onedrive, dropbox, external) and
+backend-backed workspaces via sync tools
+(spec `specs/backend-backed-workspace-spec.md` §9).
 
 ### `mount`
 
@@ -343,8 +343,11 @@ hilo backend mount --type gdrive --remote "gdrive:workspace" --at /mnt/vfs/gd \
 `--tool auto` resolution: s3 → native engine; gdrive/onedrive/dropbox →
 the matching official CLI if installed, else `rclone`, else the mount fails
 with a "required tool not found" error. A successful mount writes the entry
-to `.vfs/backends/mounts.yaml` (spec §11.3); the legacy s3/git/local surface
-is unchanged.
+to `.vfs/backends/mounts.yaml` (spec §11.3). The legacy `git`/`local` mount
+types are NOT supported: `hilo backend mount --type git|local` fails with
+`unknown backend type` (exit 2, nothing written); they were removed
+2026-09-22 (DF-WARPFS-19) because they printed success while cloning into
+`~/.hilo/worktrees`, invisible to `list`/`sync`.
 
 ### `list`
 

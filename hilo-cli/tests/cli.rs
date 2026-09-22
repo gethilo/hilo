@@ -2571,6 +2571,85 @@ fn backend_mount_missing_tool_exits_4() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// DF-WARPFS-19: the legacy `git` mount door must fail honestly. It used to
+/// print success while cloning into ~/.hilo/worktrees — persisted nowhere the
+/// §9 surface (`list`/`sync`) could see.
+#[test]
+fn backend_mount_git_type_rejected() {
+    let dir = unique_tempdir("backend-mount-git");
+    init_project(&dir);
+    let output = run_hilo_with_retry(
+        hilo_cmd()
+            .args([
+                "backend",
+                "mount",
+                "--type",
+                "git",
+                "--url",
+                "file:///tmp/hilo-test-never-cloned.git",
+                "--at",
+                "code",
+            ])
+            .current_dir(&dir),
+    );
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "git mount must exit 2 (InvalidConfig), got {:?}",
+        output.status.code()
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unknown backend type"),
+        "expected unknown-backend-type message, got: {stderr}"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("mounted"),
+        "rejected mount must print nothing on stdout, got: {stdout}"
+    );
+    assert!(
+        !dir.join(".vfs/backends/mounts.yaml").exists(),
+        "mounts.yaml must not be written for a rejected type"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// DF-WARPFS-19: same honesty contract for the removed `local` mount type.
+#[test]
+fn backend_mount_local_type_rejected() {
+    let dir = unique_tempdir("backend-mount-local");
+    init_project(&dir);
+    let output = run_hilo_with_retry(
+        hilo_cmd()
+            .args(["backend", "mount", "--type", "local", "--at", "code"])
+            .current_dir(&dir),
+    );
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "local mount must exit 2 (InvalidConfig), got {:?}",
+        output.status.code()
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unknown backend type"),
+        "expected unknown-backend-type message, got: {stderr}"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("mounted"),
+        "rejected mount must print nothing on stdout, got: {stdout}"
+    );
+    assert!(
+        !dir.join(".vfs/backends/mounts.yaml").exists(),
+        "mounts.yaml must not be written for a rejected type"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn backend_sync_local_pushes_pulls_and_filters() {
     let dir = unique_tempdir("backend-sync");

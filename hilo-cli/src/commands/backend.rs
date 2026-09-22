@@ -1,4 +1,5 @@
-//! `hilo backend mount/list/sync/setup` — virtual backends (S3, git, local)
+//! `hilo backend mount/list/sync/setup` — virtual backends (S3, gdrive,
+//! onedrive, dropbox, external)
 //! plus the spec §9 CLI surface for backend-backed workspaces
 //! (specs/backend-backed-workspace-spec.md §9).
 
@@ -29,7 +30,6 @@ pub enum BackendCommand {
 #[derive(Args)]
 pub struct MountArgs {
     /// Backend type: "s3", "gdrive", "onedrive", "dropbox", "external"
-    /// (legacy worktree mount: "git"; "local" is no longer accepted)
     #[arg(long)]
     pub r#type: String,
     /// S3 bucket name
@@ -38,10 +38,10 @@ pub struct MountArgs {
     /// S3 key prefix
     #[arg(long)]
     pub prefix: Option<String>,
-    /// Git repository URL (required for --type git)
+    /// Remote URL (used by --type external and custom endpoints)
     #[arg(long)]
     pub url: Option<String>,
-    /// Mount point (virtual path) — for --type local, the real path to mount
+    /// Mount point (virtual path)
     #[arg(long)]
     pub at: String,
     /// AWS region
@@ -98,64 +98,20 @@ pub struct SetupArgs {
     pub r#type: Option<String>,
 }
 
-/// Mount dispatch (DF-WARPFS-9): the plain documented form
-/// (`hilo backend mount --type s3 --bucket B --at P`) must register the
-/// mount, so every §9-routable type (s3, gdrive, onedrive, dropbox,
-/// external — and any request carrying `--remote`) goes through
-/// `run_mount_new`, which writes `.vfs/backends/mounts.yaml`. Only the
-/// genuinely legacy surfaces (git/local worktree mounts) keep their old
-/// path. Anything else fails loudly instead of printing success for a
-/// silent no-op.
+/// Mount dispatch (DF-WARPFS-9/19): every request goes through the §9
+/// surface (`run_mount_new`), which registers the mount in
+/// `.vfs/backends/mounts.yaml`. The legacy git/local worktree doors were
+/// removed (2026-09-22, DF-WARPFS-19): they printed success while cloning
+/// into ~/.hilo/worktrees, invisible to `list`/`sync`. Any type outside
+/// s3|gdrive|onedrive|dropbox|external now fails with the same
+/// `unknown backend type` InvalidConfig error (exit 2, nothing on stdout).
 pub fn run_mount(args: &MountArgs) -> Result<()> {
-    let kind = args.r#type.as_str();
-    let new_surface = matches!(kind, "s3" | "gdrive" | "onedrive" | "dropbox" | "external")
-        || args.remote.is_some();
-    if !new_surface {
-        return run_mount_legacy(args);
-    }
     match run_mount_new(args) {
         Ok(()) => Ok(()),
         Err(e) => {
             eprintln!("error: {e}");
             std::process::exit(exit_code(&e));
         }
-    }
-}
-
-/// Legacy mount surface: git/local worktree mounts. These kinds have no §9
-/// registry entry, so they keep their direct behavior and output.
-fn run_mount_legacy(args: &MountArgs) -> Result<()> {
-    match args.r#type.as_str() {
-        "git" => {
-            let url = args.url.as_deref().unwrap_or("");
-            if url.is_empty() {
-                anyhow::bail!("--url is required for git backend");
-            }
-            let backend =
-                hilo_backends::git::GitBackend::mount(hilo_backends::git::GitBackendConfig {
-                    url: url.to_string(),
-                    ref_name: "main".to_string(),
-                    at: args.at.clone(),
-                    writable: false,
-                    auto_pull_secs: None,
-                    cache_dir: None,
-                })
-                .map_err(|e| {
-                    anyhow::anyhow!(
-                        "failed to mount git backend from {url}: {e} — hint: the repository may be private, may not exist, or the URL may be wrong; check the URL and your credentials"
-                    )
-                })?;
-            println!(
-                "mounted git {} at {} (worktree {})",
-                url,
-                args.at,
-                backend.mount_point()
-            );
-            Ok(())
-        }
-        other => anyhow::bail!(
-            "unsupported backend type: {other} (supported: s3|gdrive|onedrive|dropbox|external; legacy worktree mount: git)"
-        ),
     }
 }
 

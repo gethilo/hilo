@@ -241,7 +241,8 @@ sync run) over the `AWS_ENDPOINT_URL` environment variable, which is only
 disclosed, never silently consumed.
 
 - `hilo backend mount` — mount a virtual backend (S3, gdrive, onedrive,
-  dropbox, external; legacy worktree mount: git)
+  dropbox, external; the `git`/`local` types are not supported and fail
+  with `unknown backend type`)
 - `hilo backend list` — list registered backends (from
   `.vfs/backends/mounts.yaml`)
 - `hilo workspace mount` — mount all repos and backends from the manifest
