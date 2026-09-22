@@ -1,6 +1,8 @@
 # hilo-backends — Storage Backends
 
-Virtual storage backends for Git, S3, and local paths. Handles caching, write-through, and auto-pull. All backends implement a common resolution interface.
+Storage backends for S3, plus in-process Git and local-path resolution. Handles caching, write-through, and auto-pull. All backends implement a common resolution interface.
+
+**CLI note (DF-WARPFS-19, 2026-09-22):** `hilo backend mount` accepts `s3`, `gdrive`, `onedrive`, `dropbox`, and `external` only. The `git`/`local` mount types are NOT supported through the CLI — they printed success while cloning into `~/.hilo/worktrees`, persisted nowhere `hilo backend list`/`sync` reads, and now fail with `unknown backend type` (exit 2, nothing written). The `GitBackend` types below remain public **library** APIs; they are not reachable from the mount command.
 
 **Crate:** `hilo-backends`  
 **Public modules:** 3

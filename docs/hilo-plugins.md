@@ -1,6 +1,8 @@
 # hilo-plugins — WASM Plugin System
 
-Extism-based WASM plugin runtime. Plugins are `.wasm` modules loaded from `.vfs/plugins/`. Written in any language with an Extism PDK (Rust, Go, Python, JS, C, Zig). Hot-loaded on manifest change. Sandboxed — no filesystem access except host functions.
+WASM plugin runtime built on the Extism runtime types. Plugins are `.wasm` modules loaded from `.vfs/plugins/`. Written in any language with an Extism PDK (Rust, Go, Python, JS, C, Zig).
+
+**Status (2026-09-22, DF-WARPFS-22):** header validation and honest metadata are live — a module is accepted only when it carries the `\0asm` magic and version 1, and loaded instances report `0 hooks, 0 edge types` until real hook discovery exists. NOT yet implemented: real wasm execution (`PluginRuntime::dispatch_hook` currently *simulates* results from declared hooks — a plugin declaring `tested_by` yields a canned `AddEdge`), inotify hot-load on manifest change, and host-function registration as callable `extism::Function` instances (see `host_functions.rs`). Sandboxing is inherited from Extism once execution lands.
 
 **Crate:** `hilo-plugins`  
 **Public modules:** 3
@@ -72,8 +74,8 @@ for manifest in manifests {
     let mut runtime = PluginRuntime::new();
     runtime.load(&instance)?;
 
-    // Call a plugin hook
-    let results = runtime.dispatch_hook("on_file_parse", source_bytes)?;
+    // Call a plugin hook (simulated execution for now — see status note above)
+    let results = runtime.dispatch_hook("on_file_parse", "src/lib.rs", source_bytes);
     for result in results {
         match result {
             HookResult::AddEdge { from, to, relation } => {
