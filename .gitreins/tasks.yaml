@@ -1415,3 +1415,13 @@ tasks:
   status: complete
   created_at: '2026-09-21T13:51:08.729841+00:00'
   completed_at: '2026-09-21T14:29:17.190133+00:00'
+- id: warpfs-release001
+  title: "Cut v0.3.0 \u2014 first formal release"
+  criteria:
+  - git ls-remote --tags origin lists v0.3.0; gh release view v0.3.0 --repo gethilo/hilo
+    returns a Release object; CHANGELOG.md carries a [0.3.0] section dated 2026-09-21
+    containing the workspace-sync entries with an empty [Unreleased] re-opened above
+    it; hilo --version prints 0.3.0
+  status: complete
+  created_at: '2026-09-21T23:41:09.297571+00:00'
+  completed_at: '2026-09-22T00:07:02.605479+00:00'
