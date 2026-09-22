@@ -3127,3 +3127,27 @@ mod relink_classifier {
         ));
     }
 }
+
+/// Item 47: `hilo --version` must identify its own provenance. The build
+/// stamp (git describe + build time) is baked by hilo-cli/build.rs and
+/// printed as extra lines after the crate version.
+#[test]
+fn version_includes_build_provenance() {
+    let out = run_hilo_with_retry(hilo_cmd().arg("--version"));
+    assert!(out.status.success(), "--version must exit 0");
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !s.contains("unknown"),
+        "build stamp fell back to 'unknown' inside a git checkout: {s}"
+    );
+    let lines: Vec<&str> = s.lines().collect();
+    assert!(
+        lines.len() >= 2 && lines[1].starts_with("build: "),
+        "expected a 'build: <describe>' line after the version, got: {s}"
+    );
+    let third = lines.get(2).copied().unwrap_or("");
+    assert!(
+        third.starts_with("built: ") && third.ends_with('Z'),
+        "expected a 'built: <iso8601Z>' line, got: {s}"
+    );
+}

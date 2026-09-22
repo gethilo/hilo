@@ -42,8 +42,21 @@ pub(crate) fn sync_direction(push: bool, pull: bool, _both: bool) -> SyncDirecti
 }
 
 /// Hilo command-line interface.
+/// Provenance for `hilo --version` (item 47): the crate number alone made an
+/// 11-day-old artifact indistinguishable from a HEAD build, so a fleet could
+/// test the wrong binary. The extra lines are baked by hilo-cli/build.rs
+/// (git describe + UTC build time; "unknown" outside a git checkout).
 #[derive(Parser)]
 #[command(name = "hilo", about = "Hilo CLI", version)]
+#[command(
+    long_version = concat!(
+        env!("CARGO_PKG_VERSION"),
+        "\nbuild: ",
+        env!("HILO_BUILD_DESCRIBE"),
+        "\nbuilt: ",
+        env!("HILO_BUILD_TIME_UTC")
+    )
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

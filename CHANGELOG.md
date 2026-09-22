@@ -4,6 +4,26 @@ All notable changes to Hilo are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`--type git` / `--type local` backend mounts removed** (DF-WARPFS-19):
+  they printed success while cloning into `~/.hilo/worktrees`, persisted
+  nowhere `hilo backend list`/`sync` reads. Every unsupported type now fails
+  with `unknown backend type` (exit 2, nothing written).
+- **`hilo plugin load` validates the wasm header** (DF-WARPFS-22): a text
+  file named `*.wasm` is rejected naming the missing `\0asm` magic instead of
+  printing fabricated hooks; loaded modules persist to `.vfs/plugins/` and
+  report honest `0 hooks, 0 edge types`; `plugin list` derives metadata the
+  same honest way.
+
+### Changed
+
+- **`hilo --version` now includes build provenance** (git describe + UTC
+  build time, baked by `hilo-cli/build.rs`). A rebuilt binary is no longer
+  indistinguishable from an 11-day-old one.
+- Workspace version is `0.3.1-dev` while HEAD sits between the `v0.3.0` tag
+  and the next release cut.
+
 ## [0.3.0] — 2026-09-21
 
 ### Added

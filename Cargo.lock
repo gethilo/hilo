@@ -2212,7 +2212,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hilo-cli"
-version = "0.3.0"
+version = "0.3.1-dev"
 dependencies = [
  "anyhow",
  "clap",
@@ -2238,7 +2238,7 @@ dependencies = [
 
 [[package]]
 name = "hilo_backends"
-version = "0.3.0"
+version = "0.3.1-dev"
 dependencies = [
  "aws-config",
  "aws-sdk-s3",
@@ -2259,7 +2259,7 @@ dependencies = [
 
 [[package]]
 name = "hilo_core"
-version = "0.3.0"
+version = "0.3.1-dev"
 dependencies = [
  "filetime",
  "git2",
@@ -2273,7 +2273,7 @@ dependencies = [
 
 [[package]]
 name = "hilo_ffi"
-version = "0.3.0"
+version = "0.3.1-dev"
 dependencies = [
  "hilo_backends",
  "hilo_core",
@@ -2288,7 +2288,7 @@ dependencies = [
 
 [[package]]
 name = "hilo_fuse"
-version = "0.3.0"
+version = "0.3.1-dev"
 dependencies = [
  "anyhow",
  "criterion",
@@ -2307,7 +2307,7 @@ dependencies = [
 
 [[package]]
 name = "hilo_graph"
-version = "0.3.0"
+version = "0.3.1-dev"
 dependencies = [
  "criterion",
  "duckdb",
@@ -2348,7 +2348,7 @@ dependencies = [
 
 [[package]]
 name = "hilo_mcp"
-version = "0.3.0"
+version = "0.3.1-dev"
 dependencies = [
  "hilo_backends",
  "hilo_core",
@@ -2363,7 +2363,7 @@ dependencies = [
 
 [[package]]
 name = "hilo_metadata"
-version = "0.3.0"
+version = "0.3.1-dev"
 dependencies = [
  "serde",
  "serde_json",
@@ -2375,7 +2375,7 @@ dependencies = [
 
 [[package]]
 name = "hilo_permissions"
-version = "0.3.0"
+version = "0.3.1-dev"
 dependencies = [
  "glob",
  "serde",
@@ -2385,7 +2385,7 @@ dependencies = [
 
 [[package]]
 name = "hilo_plugins"
-version = "0.3.0"
+version = "0.3.1-dev"
 dependencies = [
  "extism",
  "serde",
@@ -2394,7 +2394,7 @@ dependencies = [
 
 [[package]]
 name = "hilo_triggers"
-version = "0.3.0"
+version = "0.3.1-dev"
 dependencies = [
  "duckdb",
  "hilo_backends",
