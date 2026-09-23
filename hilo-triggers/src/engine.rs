@@ -9,6 +9,8 @@ use crate::{Debouncer, EventType, FileEvent, TriggerAction, TriggerConfig};
 use inotify::{EventMask, Inotify, WatchDescriptor, WatchMask};
 use std::collections::HashMap;
 use std::io;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -45,7 +47,18 @@ pub struct TriggerEngine {
     /// S3 bucket name used by the `upload-to-backend` builtin.
     s3_bucket: Option<String>,
     /// Flag to signal graceful shutdown. Set by `shutdown()`, checked by `run()`.
+    /// Normally engine-owned; when the engine runs on its own OS thread (mount
+    /// --daemon) the owner can hand its own flag in via `with_shutdown_flag`,
+    /// so the flag is set the instant the FUSE session ends — no waiting on
+    /// the 50ms run() poll. DF-WARPFS-32.
     shutdown_flag: Arc<AtomicBool>,
+    /// Optional mountpoint supervisor (DF-WARPFS-32): a daemon whose FUSE
+    /// session ended without `shutdown()` being called (e.g. an external
+    /// `fusermount3 -u`) must still exit on its own instead of keeping the
+    /// DuckDB handle and inotify fd alive. When `Some`, `run()` checks
+    /// [`Self::is_still_mounted`] every loop iteration and exits when the
+    /// mountpoint is gone.
+    supervised_mount: Option<PathBuf>,
     /// Spec §7.1 backend sync hook (shared with the flush/poll tasks).
     sync_hook: Option<Arc<Mutex<SyncHook>>>,
     /// Handles to the sync-hook background tasks (detached; kept for clarity).
@@ -90,9 +103,47 @@ impl TriggerEngine {
             s3_client,
             s3_bucket,
             shutdown_flag: Arc::new(AtomicBool::new(false)),
+            supervised_mount: None,
             sync_hook: None,
             sync_tasks: Vec::new(),
         }
+    }
+
+    /// Replace the engine's shutdown flag (DF-WARPFS-32).
+    ///
+    /// The mount command runs the engine on its own OS thread and needs the
+    /// flag to be set the instant the FUSE session ends — `handle.join()`
+    /// then completes without waiting on the engine's own 50ms run() poll.
+    /// The flag is shared BEFORE the engine starts; the engine has not been
+    /// run yet, so no event races the hand-over.
+    pub fn with_shutdown_flag(mut self, flag: Arc<AtomicBool>) -> Self {
+        self.shutdown_flag = flag;
+        self
+    }
+
+    /// Make the engine exit on its own when `mount_point` is no longer a
+    /// mount (DF-WARPFS-32 supervisor). A daemon whose FUSE session ended
+    /// without `shutdown()` being called — external `fusermount3 -u`,
+    /// a session error — must not keep the DuckDB handle and inotify fd
+    /// alive. Call before [`Self::run`]; checked every loop iteration.
+    pub fn supervise_mountpoint(&mut self, mount_point: &Path) {
+        self.supervised_mount = Some(mount_point.to_path_buf());
+    }
+
+    /// True while `path` still sits on a different device than its parent
+    /// (i.e. it is a live mount). A gone/unmounted directory falls back to
+    /// the parent's device — the same heuristic `mountpoint(1)` uses.
+    /// Non-existent paths are treated as unmounted.
+    fn is_still_mounted(path: &Path) -> bool {
+        let (Some(mount_dev), Some(parent_dev)) = (
+            std::fs::metadata(path).ok().map(|m| m.dev()),
+            std::fs::metadata(path.parent().unwrap_or(path))
+                .ok()
+                .map(|m| m.dev()),
+        ) else {
+            return false;
+        };
+        mount_dev != parent_dev
     }
 
     /// Enable the spec §7.1 backend sync hook: spawns the settle-flush loop
@@ -145,9 +196,22 @@ impl TriggerEngine {
         let mut buffer = [0u8; 4096];
 
         loop {
-            // Check shutdown flag before blocking on read_events.
+            // Check shutdown flag (DF-WARPFS-32: shares the flag with the FUSE
+            // session owner) and the mountpoint supervisor before blocking on
+            // read_events. When the mount is gone without a shutdown() call,
+            // exit instead of outliving the mountpoint with the DuckDB handle
+            // and inotify fd alive.
             if self.shutdown_flag.load(Ordering::Relaxed) {
                 break Ok(());
+            }
+            if let Some(m) = &self.supervised_mount {
+                if !Self::is_still_mounted(m) {
+                    info!(
+                        "[trigger-engine] mountpoint {} is gone — stopping event loop",
+                        m.display()
+                    );
+                    break Ok(());
+                }
             }
 
             // Read raw events (blocking — inotify fd is in blocking mode).
@@ -395,7 +459,14 @@ impl TriggerEngine {
         }
         self.watches.clear();
 
-        info!("[trigger-engine] shutdown requested");
+        // DF-WARPFS-32: drop the DuckDB handle NOW. The FUSE session has
+        // ended and nothing else in this process needs the graph connection —
+        // keeping it (even briefly after the flag) holds the write lock that
+        // blocks `hilo graph stats/impact/understand` until the process dies.
+        self.db_conn = None;
+        self.ast_cache.clear();
+
+        info!("[trigger-engine] shutdown requested — graph DB handle released");
     }
 }
 
@@ -1354,6 +1425,77 @@ mod tests {
             .await
             .expect("run should observe a shutdown requested before it starts")
             .expect("shutdown should exit the watcher loop cleanly");
+    }
+
+    // ── DF-WARPFS-32: trigger engine cleanup with the FUSE session ────────
+
+    /// The mount process must release the DuckDB handle when the FUSE session
+    /// ends. This is the regression test for the graph.db lock leak: before
+    /// the fix, the engine kept its read-write connection (and the daemon kept
+    /// running) after unmount, blocking every `hilo graph stats/impact`
+    /// call with "Conflicting lock is held".
+    #[test]
+    fn test_shutdown_releases_graph_db_handle() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("graph.db");
+        let conn = duckdb::Connection::open(&db_path).unwrap();
+        let mut engine = TriggerEngine::new(vec![], 500, Some(conn), None, None, None);
+
+        assert!(
+            engine.db_conn.is_some(),
+            "engine should hold the DB handle while running"
+        );
+
+        engine.shutdown();
+
+        assert!(
+            engine.db_conn.is_none(),
+            "shutdown must drop the DuckDB handle so hilo graph stats can acquire the lock"
+        );
+    }
+
+    /// `with_shutdown_flag` hands the engine an external flag (the mount
+    /// thread's). The flag replaces the engine's internal one, so the mount
+    /// can stop the engine the instant the FUSE session ends — without
+    /// waiting on the engine's own poll. Setting the flag before `run`
+    /// proves the external flag is actually consulted.
+    #[tokio::test]
+    async fn test_with_shutdown_flag_external_flag_stops_run() {
+        use std::sync::Arc;
+
+        // Set BEFORE run — simulates the FUSE session already having ended.
+        let flag = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let mut engine =
+            TriggerEngine::new(vec![], 500, None, None, None, None).with_shutdown_flag(flag);
+
+        tokio::time::timeout(Duration::from_secs(1), engine.run())
+            .await
+            .expect("run must observe the external shutdown flag")
+            .expect("clean exit");
+    }
+
+    /// The mountpoint supervisor (DF-WARPFS-32): a daemon whose mountpoint is
+    /// gone — external `fusermount3 -u`, a session error — must exit on its
+    /// own instead of keeping the DuckDB handle and inotify fd alive. A
+    /// non-existent path is treated as unmounted, so a supervised `run()`
+    /// must return without any signal.
+    #[tokio::test]
+    async fn test_supervise_mountpoint_exits_when_mount_gone() {
+        let mut engine = TriggerEngine::new(vec![], 500, None, None, None, None);
+        engine.supervise_mountpoint(Path::new("/nonexistent-hilo-supervisor-probe"));
+
+        tokio::time::timeout(Duration::from_secs(1), engine.run())
+            .await
+            .expect("the mountpoint supervisor must stop the loop when the mount is gone")
+            .expect("clean exit");
+    }
+
+    /// The supervisor heuristic: a non-existent path is not a mount.
+    #[test]
+    fn test_is_still_mounted_false_for_missing_path() {
+        assert!(!TriggerEngine::is_still_mounted(Path::new(
+            "/nonexistent-hilo-mount-probe"
+        )));
     }
 
     // ── max_concurrent semaphore enforcement ────────────────────────────

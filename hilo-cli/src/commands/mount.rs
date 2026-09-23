@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
@@ -33,6 +34,12 @@ const DAEMON_CHILD_ENV: &str = "HILO_MOUNT_DAEMONIZED";
 /// engine runs in its own tokio runtime on a dedicated OS thread so it
 /// does not interfere with the FUSE event loop.
 ///
+/// DF-WARPFS-32: the engine's threads and its DuckDB handle die WITH the
+/// mount. A shared shutdown flag is set the instant `daemon::mount` returns
+/// (external `fusermount3 -u` included), the engine's own supervisor exits
+/// on a missing mountpoint, and the trigger thread is joined before the
+/// process exits — the graph.db write lock never outlives the mount.
+///
 /// On `SIGINT` / `SIGTERM` the mount is cleaned up via `daemon::unmount`.
 pub fn run_mount(mount_point: &str, triggers: bool, allow_other: bool, daemon: bool) -> Result<()> {
     // DF-WARPFS-29: the trigger engine logs fires/failures via `tracing`,
@@ -59,11 +66,21 @@ pub fn run_mount(mount_point: &str, triggers: bool, allow_other: bool, daemon: b
     let current_dir =
         std::env::current_dir().context("failed to determine the current directory")?;
 
+    // DF-WARPFS-32: shared shutdown flag for the trigger engine. Created
+    // BEFORE the engine thread spawns and handed in via
+    // `with_shutdown_flag`, so the moment the FUSE session ends the flag is
+    // set and `handle.join()` completes without waiting on the engine's own
+    // 50ms run() poll. The engine's inotify watchers and DuckDB handle are
+    // released inside the thread by `shutdown()`; dropping the flag here
+    // (after the join) is the final ownership release of the DB connection.
+    let shutdown_flag = Arc::new(AtomicBool::new(false));
+
     let trigger_handle = if triggers {
         let watch_dir = current_dir.clone();
         let mount_pt = mount_point.to_owned();
+        let flag = shutdown_flag.clone();
         Some(std::thread::spawn(move || {
-            start_trigger_engine(&watch_dir, &mount_pt);
+            start_trigger_engine(&watch_dir, &mount_pt, flag);
         }))
     } else {
         None
@@ -135,8 +152,19 @@ pub fn run_mount(mount_point: &str, triggers: bool, allow_other: bool, daemon: b
 
     daemon::mount(fs, &config).context("FUSE mount failed")?;
 
+    // DF-WARPFS-32: the FUSE session has ended (external `fusermount3 -u`,
+    // `daemon::unmount`, or a session error). Signal the trigger engine
+    // thread and join it: shutdown() drops the engine's DuckDB handle and
+    // inotify watches immediately, so the graph.db write lock is released
+    // here — a subsequent `hilo graph stats` succeeds without waiting for
+    // the daemon process to die. The engine's own mountpoint supervisor
+    // covers the unmount races; the join is bounded because run() polls the
+    // flag every loop iteration (or exits instantly on a missing mount).
     if let Some(handle) = trigger_handle {
-        let _ = handle.join();
+        shutdown_flag.store(true, Ordering::Relaxed);
+        if handle.join().is_err() {
+            eprintln!("[hilo mount] trigger engine thread panicked during shutdown");
+        }
     }
 
     Ok(())
@@ -256,7 +284,11 @@ fn build_daemon_command(mount_point: &str, triggers: bool, allow_other: bool) ->
 }
 
 /// Start the trigger engine in a dedicated tokio runtime.
-fn start_trigger_engine(watch_dir: &Path, mount_desc: &str) {
+///
+/// `shutdown_flag` is the DF-WARPFS-32 hand-over: the mount thread holds the
+/// other Arc and sets it the instant the FUSE session ends, so the engine
+/// knows to drop its DuckDB handle and inotify watchers and exit.
+fn start_trigger_engine(watch_dir: &Path, mount_desc: &str, shutdown_flag: Arc<AtomicBool>) {
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_time()
         .build()
@@ -268,10 +300,10 @@ fn start_trigger_engine(watch_dir: &Path, mount_desc: &str) {
         }
     };
 
-    rt.block_on(run_trigger_engine(watch_dir, mount_desc));
+    rt.block_on(run_trigger_engine(watch_dir, mount_desc, shutdown_flag));
 }
 
-async fn run_trigger_engine(watch_dir: &Path, mount_desc: &str) {
+async fn run_trigger_engine(watch_dir: &Path, mount_desc: &str, shutdown_flag: Arc<AtomicBool>) {
     let watch_dir = watch_dir.to_path_buf();
     let triggers = load_triggers(&watch_dir);
     eprintln!(
@@ -303,6 +335,13 @@ async fn run_trigger_engine(watch_dir: &Path, mount_desc: &str) {
 
     let trigger_count = triggers.len();
     let mut engine = TriggerEngine::new(triggers, 500, db_conn, project_root, None, None);
+    // DF-WARPFS-32: bind the engine to the mount lifecycle — the shared
+    // shutdown flag (set by the mount thread when the FUSE session ends) and
+    // the mountpoint supervisor (the engine exits on its own if the mount is
+    // gone without a signal). Both make the engine's threads and its DuckDB
+    // handle die with the mount instead of outliving it.
+    engine = engine.with_shutdown_flag(shutdown_flag);
+    engine.supervise_mountpoint(Path::new(mount_desc));
 
     // Spec §7.1: when the workspace has mounted backends, enable the sync
     // hook — inotify changes push to the backend (ignore-aware, batch-settled)
