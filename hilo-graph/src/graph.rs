@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
-use duckdb::{params, Connection};
+use duckdb::{params, AccessMode, Config as DuckDbConfig, Connection};
 use hilo_core::manifest::{DuckDbPerf, Manifest};
 use hilo_metadata::inventory::Edge;
 
@@ -86,6 +86,10 @@ impl Direction {
 /// Manages the DuckDB graph database at `.vfs/graph/graph.db`.
 pub struct GraphDB {
     conn: Connection,
+    /// DF-WARPFS-33: true when this handle is READ_ONLY (DuckDB shared
+    /// lock). Write paths (reconcile ingest, JIT edge inserts) must not run
+    /// against it; query paths are identical.
+    read_only: bool,
     /// True when replay was skipped or stopped short, so queries must not
     /// trust the DuckDB cache as the whole graph.
     degraded: bool,
@@ -358,6 +362,30 @@ pub const DEFAULT_REQUEST_PATH_RECONCILE_BUDGET_MS: u64 = 2_000;
 /// (GAP-093): the process pays the replay once and exits, so the kernel
 /// reclaims everything and there is no resident state to protect.
 pub const UNBOUNDED_RECONCILE_BUDGET_MS: u64 = u64::MAX;
+
+/// How a [`GraphDB`] open intends to use the DuckDB file (DF-WARPFS-33).
+///
+/// `ReadOnly` maps to DuckDB's `access_mode = READ_ONLY`, which takes the
+/// database file's shared lock instead of the exclusive lock a read-write
+/// handle takes — the property concurrent query commands need to
+/// coexist. `ReadWrite` is the historical (and only writer-safe) mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GraphAccess {
+    /// Query-only open: DuckDB `access_mode = READ_ONLY`.
+    ReadOnly,
+    /// Historical open: creates the DB if missing, takes the exclusive
+    /// DuckDB file lock. Required for warm/clean/sync and for any open
+    /// that may JIT-parse edges into the cache (DF-WARPFS-33 keeps the
+    /// write path exactly as before).
+    ReadWrite,
+}
+
+/// How long one read-only open retry sleeps before re-attempting the
+/// DuckDB open after a `Conflicting lock` (DF-WARPFS-33): 5 attempts x
+/// 500 ms = up to ~2.5 s of waiting, which covers a `warm` finishing its
+/// final checkpoint write without making agents fail loudly.
+const READ_ONLY_LOCK_RETRY_ATTEMPTS: u32 = 5;
+const READ_ONLY_LOCK_RETRY_BACKOFF_MS: u64 = 500;
 
 /// Process-wide default budget for request-path reconciles. Armed by the
 /// resident entry points (`hilo serve --mcp`); a one-shot CLI process leaves
@@ -1020,6 +1048,89 @@ fn apply_duckdb_setting(conn: &Connection, name: &str, sql: &str) {
     }
 }
 
+/// Open one on-disk DuckDB connection in the requested access mode
+/// (DF-WARPFS-33).
+///
+/// `GraphAccess::ReadWrite` is the historical `Connection::open` shape: DuckDB
+/// creates the file if missing and takes the database's EXCLUSIVE lock, so two
+/// concurrent read-write opens conflict (`IO Error: Could not set lock on file
+/// ... Conflicting lock is held in .hilo (PID ...)`).
+///
+/// `GraphAccess::ReadOnly` opens with `access_mode = READ_ONLY`, which takes
+/// the shared lock and lets any number of concurrent readers coexist — the
+/// property 8-parallel-`hilo graph` fan-outs need. DuckDB still refuses a
+/// READ_ONLY open while another process holds a READ_WRITE handle, so a query
+/// racing an active `warm`/write-through can still hit `Conflicting lock`;
+/// those attempts are retried with a short backoff before the error (with the
+/// holder PID kept) is surfaced.
+fn open_disk_connection(path: &str, access: GraphAccess) -> GraphResult<Connection> {
+    match access {
+        GraphAccess::ReadWrite => Ok(Connection::open(path)?),
+        GraphAccess::ReadOnly => {
+            // The file must exist for a READ_ONLY open (DuckDB errors with
+            // `Cannot open ... as read-only` otherwise); every read-only call
+            // site resolves the path first and a missing file is answered
+            // before we get here.
+            let mut attempt = 1u32;
+            loop {
+                let cfg = DuckDbConfig::default().access_mode(AccessMode::ReadOnly)?;
+                match Connection::open_with_flags(path, cfg) {
+                    Ok(conn) => return Ok(conn),
+                    Err(err) if is_conflicting_lock_error(&err) => {
+                        if attempt >= READ_ONLY_LOCK_RETRY_ATTEMPTS {
+                            return Err(GraphError::Other(format!(
+                                "graph database is locked after {attempt} attempts over ~{}ms: {err}; another hilo command or mount may hold it — retry shortly, or run `hilo graph clean` if the holder is stale",
+                                READ_ONLY_LOCK_RETRY_ATTEMPTS as u64
+                                    * READ_ONLY_LOCK_RETRY_BACKOFF_MS
+                            )));
+                        }
+                        attempt += 1;
+                        std::thread::sleep(Duration::from_millis(READ_ONLY_LOCK_RETRY_BACKOFF_MS));
+                    }
+                    Err(err) => return Err(err.into()),
+                }
+            }
+        }
+    }
+}
+
+/// Would a READ_ONLY open of `path` serve queries without writing the DuckDB
+/// cache (DF-WARPFS-33)?
+///
+/// True when the DB file exists AND the reconcile an open would run touches
+/// no rows: the checkpoint stamp is fresh (`plan_reconcile` -> `Skip`), or
+/// `edges.jsonl` is at/above the spill watermark (that open degrades to
+/// streaming and skips the replay — also write-free). Anything else (no DB
+/// file, stale or absent stamp) means the reconcile must INSERT, which a
+/// read-only handle cannot do — the caller falls back to the historical
+/// read-write open.
+fn ro_open_hot(path: &str, spill_watermark: u64) -> bool {
+    if !Path::new(path).exists() {
+        return false;
+    }
+    let Some(jsonl) = Path::new(path).parent().map(|dir| dir.join("edges.jsonl")) else {
+        return false;
+    };
+    match plan_reconcile(&jsonl, &mut PrefixHasher::new()) {
+        Ok(ReconcilePlan::Skip) => true,
+        Ok(ReconcilePlan::Ingest { .. }) => {
+            jsonl_stat(&jsonl).is_some_and(|(_, size)| size >= spill_watermark)
+        }
+        Err(_) => false,
+    }
+}
+
+/// Does this DuckDB open error name the file-lock conflict class
+/// (DF-WARPFS-33)?
+///
+/// Matched on the stable substrings DuckDB puts in the message (`IO Error` +
+/// `Conflicting lock is held`) rather than the whole sentence, so a future
+/// DuckDB that rewords the tail (paths, holder PIDs) still classifies.
+fn is_conflicting_lock_error(err: &duckdb::Error) -> bool {
+    let text = err.to_string();
+    text.contains("IO Error") && text.contains("Conflicting lock")
+}
+
 fn configure_disk_connection(conn: &Connection, perf: &DuckDbPerf) {
     let memory_limit = perf.memory_limit.replace('\'', "''");
     apply_duckdb_setting(
@@ -1053,8 +1164,45 @@ impl GraphDB {
     /// ([`set_request_path_reconcile_budget_ms`]), which the resident entry
     /// points arm and a one-shot CLI leaves unbounded (GAP-094/GAP-093). Use
     /// [`Self::open_with_budget_ms`] to state the cap for one caller.
+    ///
+    /// Opens in [`GraphAccess::ReadWrite`] — the historical shape. Query-only
+    /// callers (DF-WARPFS-33) must use [`Self::open_read_only`] so concurrent
+    /// readers do not serialize against DuckDB's single-writer file lock.
     pub fn open(path: &str) -> GraphResult<Self> {
         Self::open_with_budget_ms(path, request_path_reconcile_budget_ms())
+    }
+
+    /// Open a graph database for a READ-ONLY command path (DF-WARPFS-33).
+    ///
+    /// Query commands (`stats`, `impact`, `related`, `understand`, `search`,
+    /// `module`, `untested`, and the MCP tools behind them) never write the
+    /// DuckDB cache *by intent*, but every one of them used to open a
+    /// read-write handle, and DuckDB takes an exclusive file lock for a
+    /// read-write open. Two concurrent commands — an MCP server and a CLI, or
+    /// two agents — therefore raced on `graph.db` and all but one exited 1
+    /// with `Conflicting lock is held` (measured: 7 of 8 parallel
+    /// `hilo graph` invocations failed).
+    ///
+    /// A read-only open takes DuckDB's shared lock, so any number of readers
+    /// (plus zero or one writer *in another process using read-write*) can
+    /// coexist... with one DuckDB caveat: DuckDB still refuses a READ_ONLY
+    /// open while another process holds a READ_WRITE handle on the same file,
+    /// so a query racing a `warm` (or an FUSE write-through) can still lose
+    /// the lock race. That case retries with backoff before surfacing the
+    /// final error, which keeps the holder PID and names the shared remedy.
+    ///
+    /// Everything else behaves exactly like [`Self::open`]: the read-through
+    /// reconciliation contract (GAP-092/093/094) is unchanged — a read-only
+    /// open that finds a stale cache still replays `edges.jsonl` into it, and
+    /// PERF-001/GAP-092 stamp/chunking semantics are untouched. The only
+    /// difference is the DuckDB handle itself: no schema writes and no
+    /// exclusive lock are taken when the cache is already fresh.
+    pub fn open_read_only(path: &str) -> GraphResult<Self> {
+        Self::open_with_options(
+            path,
+            request_path_reconcile_budget_ms(),
+            GraphAccess::ReadOnly,
+        )
     }
 
     /// [`Self::open`] with an explicit reconcile budget.
@@ -1071,18 +1219,45 @@ impl GraphDB {
     /// checkpoint records where to resume — so the next open continues instead
     /// of replaying the corpus again (GAP-094).
     pub fn open_with_budget_ms(path: &str, budget_ms: u64) -> GraphResult<Self> {
+        Self::open_with_options(path, budget_ms, GraphAccess::ReadWrite)
+    }
+
+    /// [`Self::open_with_budget_ms`] with an explicit access mode
+    /// (DF-WARPFS-33). All open modes share the reconcile behavior; only the
+    /// DuckDB handle's access mode and lock behavior differ.
+    pub fn open_with_options(path: &str, budget_ms: u64, access: GraphAccess) -> GraphResult<Self> {
         let mut disk_perf = None;
+        let mut resolved = access; // DF-WARPFS-33: the mode the handle REALLY opened with
         let conn = if path == ":memory:" {
             Connection::open_in_memory()?
         } else {
             let (perf, spill_watermark) =
                 resolved_duckdb_perf(duckdb_perf_for_path(Path::new(path)));
-            let conn = Connection::open(path)?;
+            // DF-WARPFS-33: a query-only open takes DuckDB's SHARED lock only
+            // when the cache needs no replay (the hot path the measured 7/8
+            // fan-out failure lives on). When the cache is missing or stale
+            // the read-through reconcile must INSERT, which a read-only
+            // handle cannot do — the open falls back to the historical
+            // read-write mode, serialized only when real rebuild work
+            // exists (the AC3 cold path keeps full parity).
+            let ro_hot = access == GraphAccess::ReadOnly && ro_open_hot(path, spill_watermark);
+            resolved = if ro_hot {
+                GraphAccess::ReadOnly
+            } else {
+                GraphAccess::ReadWrite
+            };
+            let conn = open_disk_connection(path, resolved)?;
             configure_disk_connection(&conn, &perf);
             disk_perf = Some((perf, spill_watermark));
             conn
         };
-        ensure_schema(&conn)?;
+        // Schema creation/migration is a write: run it only when the handle
+        // REALLY opened read-write (a caller-intent ReadOnly open whose
+        // cache was cold fell back to ReadWrite and must build the schema;
+        // a hot read-only handle must not touch it).
+        if path == ":memory:" || !matches!(resolved, GraphAccess::ReadOnly) {
+            ensure_schema(&conn)?;
+        }
 
         let mut degraded = false;
         let mut degraded_reason = None;
@@ -1185,6 +1360,7 @@ impl GraphDB {
 
         Ok(GraphDB {
             conn,
+            read_only: resolved == GraphAccess::ReadOnly,
             degraded,
             degraded_reason,
             reconcile,
@@ -2048,7 +2224,13 @@ impl GraphDB {
             .map_err(|e| GraphError::Other(format!("parse error in {file_path}: {e}")))?;
 
         // 5. Insert into DuckDB cache (INSERT OR IGNORE → idempotent).
-        if !edges.is_empty() {
+        // DF-WARPFS-33: a read-only handle holds DuckDB's SHARED lock and
+        // must never write it. The parse itself already answered the caller
+        // (JIT contract: the RETURNED edges ARE the answer); the edge rows
+        // stay visible through edges.jsonl/streaming paths and are persisted
+        // by the next read-write open (warm or a writer's open), whose
+        // reconcile replays the jsonl — so no cache write is stranded.
+        if !edges.is_empty() && !self.read_only {
             self.insert_edges(&edges)?;
         }
 
@@ -4215,5 +4397,134 @@ mod tests {
             vec!["src/orphan.ts".to_string()],
             "only the file with no covering edge stays listed, got: {untested:?}"
         );
+    }
+
+    // ── DF-WARPFS-33: concurrent open / read-only mode ─────────────────────
+
+    #[test]
+    fn open_read_only_reuses_existing_cache_without_writer() {
+        // A read-only open must answer queries from an existing fresh cache
+        // exactly like a read-write open (the warm path built it).
+        let dir = std::env::temp_dir().join(format!("hilo_df33_ro_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let jsonl = dir.join("edges.jsonl");
+        std::fs::write(
+            &jsonl,
+            "{\"from\":\"a.rs\",\"to\":\"pkg:x\",\"rel\":\"imports\"}\n",
+        )
+        .unwrap();
+        {
+            let db = GraphDB::open(dir.join("graph.db").to_str().unwrap()).unwrap();
+            assert_eq!(db.count_edges().unwrap(), 1);
+        }
+        let db = GraphDB::open_read_only(dir.join("graph.db").to_str().unwrap()).unwrap();
+        assert_eq!(db.count_edges().unwrap(), 1);
+        let stats = db.stats().unwrap();
+        assert_eq!(stats.total_edges, 1);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn open_read_only_missing_db_falls_back_and_reconciles() {
+        // AC3 shape: delete graph.db, keep edges.jsonl, open read-only —
+        // DuckDB cannot open a missing file READ_ONLY, so the open falls
+        // back to the read-write mode and the read-through reconcile
+        // rebuilds the cache (all edges present). Contract: the cold path
+        // keeps full parity; only the HOT path (fresh stamp) is read-only.
+        let dir = std::env::temp_dir().join(format!("hilo_df33_cold_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let jsonl = dir.join("edges.jsonl");
+        std::fs::write(
+            &jsonl,
+            "{\"from\":\"a.rs\",\"to\":\"b.rs\",\"rel\":\"imports\"}\n{\"from\":\"b.rs\",\"to\":\"pkg:x\",\"rel\":\"imports\"}\n",
+        )
+        .unwrap();
+        let db = GraphDB::open_read_only(dir.join("graph.db").to_str().unwrap()).unwrap();
+        assert_eq!(
+            db.count_edges().unwrap(),
+            2,
+            "cold open must reconcile from edges.jsonl (via the read-write fallback)"
+        );
+        assert!(!db.read_only, "cold open downgrades to a read-write handle");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn ro_open_hot_fresh_stamp_true_missing_db_false() {
+        // The mode-selection predicate itself: fresh stamp -> hot (RO), no
+        // file -> not hot (RW fallback), stale stamp -> not hot.
+        let dir = std::env::temp_dir().join(format!("hilo_df33_hot_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("graph.db");
+        let jsonl = dir.join("edges.jsonl");
+        std::fs::write(
+            &jsonl,
+            "{\"from\":\"a.rs\",\"to\":\"pkg:x\",\"rel\":\"imports\"}\n",
+        )
+        .unwrap();
+        assert!(
+            !ro_open_hot(db_path.to_str().unwrap(), 1024),
+            "missing db file is never hot"
+        );
+        {
+            let db = GraphDB::open(db_path.to_str().unwrap()).unwrap();
+            assert_eq!(db.count_edges().unwrap(), 1);
+        }
+        assert!(
+            ro_open_hot(db_path.to_str().unwrap(), 1024),
+            "stamped fresh cache is hot: a read-only open needs no write"
+        );
+        // Growing edges.jsonl past the spill watermark also reads hot (the
+        // open degrades to streaming, no replay write).
+        std::fs::write(&jsonl, "x".repeat(2048)).unwrap();
+        // The fingerprint changed -> a full replay would be planned, but the
+        // watermark path degrades instead — still write-free.
+        assert!(ro_open_hot(db_path.to_str().unwrap(), 1024));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn read_only_open_does_not_take_exclusive_lock_between_processes() {
+        // The DF-WARPFS-33 defect: two concurrent opens of the same graph.db
+        // used to conflict. With the read-only mode, TWO SEPARATE PROCESSES
+        // can hold the DuckDB file simultaneously. In-process we prove the
+        // mechanism: open one read-only handle, keep it alive, open a second
+        // one from a spawned process via the CLI-shaped path (a second
+        // in-process handle would hit duckdb-rs's same-file instance cache
+        // and prove nothing about the FILE lock).
+        let dir = std::env::temp_dir().join(format!("hilo_df33_xproc_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let jsonl = dir.join("edges.jsonl");
+        std::fs::write(
+            &jsonl,
+            "{\"from\":\"a.rs\",\"to\":\"pkg:x\",\"rel\":\"imports\"}\n",
+        )
+        .unwrap();
+        let db_path = dir.join("graph.db");
+        {
+            let db = GraphDB::open(db_path.to_str().unwrap()).unwrap();
+            assert_eq!(db.count_edges().unwrap(), 1);
+        }
+        // Warm cache, stamped: a read-only open takes the SHARED lock.
+        let holder = GraphDB::open_read_only(db_path.to_str().unwrap()).unwrap();
+        // Second read-only handle, same process (the instance cache makes
+        // this trivially succeed in-process; the cross-process proof is the
+        // integration fan-out in scripts/df-warpfs-33-fanout.sh). The core
+        // contract here: the FIRST read-only handle does not block a second.
+        let second = GraphDB::open_read_only(db_path.to_str().unwrap())
+            .expect("concurrent read-only opens must coexist");
+        assert_eq!(second.count_edges().unwrap(), 1);
+        assert_eq!(
+            holder.count_edges().unwrap(),
+            1,
+            "first read-only handle stays usable while the second is open"
+        );
+        drop(second);
+        drop(db_path);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
