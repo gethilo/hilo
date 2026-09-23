@@ -21,19 +21,30 @@
 //! and an `__init__.py` is the package itself (`pkg:fastapi`). See
 //! [`python_module_for_file`].
 //!
-//! TypeScript/JavaScript sources resolve BACKWARDS through `local:` nodes
-//! (GAP-069): the JS/TS parser keeps relative specifiers verbatim
-//! (`classify_js`), so one target file is named by MANY `local:` nodes —
-//! one per (importer directory, specifier) pair. A per-file walk like the
-//! `pkg:` resolvers cannot invert that; [`LocalSpecResolver`] instead
-//! builds a reverse index from the edge rows themselves, resolving every
-//! `local:` specifier against its own importer's directory.
-//!
-//! Resolution is query-time only: the canonical `edges.jsonl` and the
-//! DuckDB cache are untouched. Files that belong to no package (or are not
-//! files at all — `pkg:`/`sys:`/`std:`/`external:` symbol nodes) resolve to
-//! `None`.
-
+/// TypeScript/JavaScript sources resolve BACKWARDS through `local:` nodes
+/// (GAP-069): the JS/TS parser keeps relative specifiers verbatim
+/// (`classify_js`), so one target file is named by MANY `local:` nodes —
+/// one per (importer directory, specifier) pair. A per-file walk like the
+/// `pkg:` resolvers cannot invert that; [`LocalSpecResolver`] instead
+/// builds a reverse index from the edge rows themselves, resolving every
+/// `local:` specifier against its own importer's directory.
+///
+/// Java sources resolve to their fully-qualified class name (DF-WARPFS-34):
+/// the Java parser emits `pkg:<FQCN>` edges for `import` statements
+/// (including JDK packages, which are also `pkg:` nodes), so a `.java` file
+/// must resolve to the class it *declares* —
+/// `gson/src/main/java/com/google/gson/Gson.java` is
+/// `pkg:com.google.gson.Gson`. The FQCN is derived from the `package`
+/// declaration in the file itself when it has one (authoritative, works
+/// under any layout), falling back to the Maven/Gradle source-root walk
+/// (`src/main/java`, `src/test/java`, `src/it/java`, ...) and then to a
+/// plain directory-path walk for simple `<root>/pkg/path/Class.java`
+/// layouts. See [`java_class_for_file`].
+///
+/// Resolution is query-time only: the canonical `edges.jsonl` and the
+/// DuckDB cache are untouched. Files that belong to no package (or are not
+/// files at all — `pkg:`/`sys:`/`std:`/`external:` symbol nodes) resolve to
+/// `None`.
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Component, Path, PathBuf};
 
@@ -57,6 +68,10 @@ pub struct PkgResolver {
     /// the same reason: a `.py` path resolves through the `__init__.py`
     /// package walk, never through Cargo or Go.
     py_cache: HashMap<PathBuf, Option<String>>,
+    /// Java class nodes (`pkg:<FQCN>`), cached separately for the same
+    /// reason: a `.java` path resolves through the package-declaration /
+    /// source-root walk, never through Cargo, Go, or Python.
+    java_cache: HashMap<PathBuf, Option<String>>,
 }
 
 impl PkgResolver {
@@ -81,6 +96,13 @@ impl PkgResolver {
     /// (that would match crate-level edges the parser never emitted for it).
     /// A standalone `.py` file outside any package resolves to `None`.
     ///
+    /// `.java` sources resolve through the package-declaration /
+    /// source-root walk only (DF-WARPFS-34): the Java parser emits
+    /// `pkg:<FQCN>` edges, so a Java file must never fall back to the
+    /// enclosing Cargo crate (that would match crate-level edges the
+    /// parser never emitted for it). A `.java` file with no derivable
+    /// package resolves to `None`.
+    ///
     /// Symbol-node paths (`pkg:...`, `sys:...`, `std:...`, `external:...`)
     /// are not files and always resolve to `None` — they must never trigger
     /// a filesystem walk (a path like `pkg:globset` would otherwise be
@@ -94,6 +116,9 @@ impl PkgResolver {
         }
         if path.ends_with(".py") {
             return self.py_pkg_node(path);
+        }
+        if path.ends_with(".java") {
+            return self.java_pkg_node(path);
         }
         self.crate_name(path).map(|name| format!("pkg:{name}"))
     }
@@ -132,6 +157,26 @@ impl PkgResolver {
         }
         let node = python_module_for_file(&p).map(|module| format!("pkg:{module}"));
         self.py_cache.insert(p, node.clone());
+        node
+    }
+
+    /// Resolve a `.java` path to its `pkg:<fully-qualified class name>` node
+    /// (DF-WARPFS-34), if the file's package can be derived.
+    ///
+    /// Non-Java paths and symbol nodes return `None` without touching the
+    /// filesystem; a `.java` file whose package cannot be derived (no
+    /// `package` declaration and no recognizable source-root/directory
+    /// structure) also returns `None`.
+    fn java_pkg_node(&mut self, path: &str) -> Option<String> {
+        if is_symbol_node(path) || !path.ends_with(".java") {
+            return None;
+        }
+        let p = PathBuf::from(path);
+        if let Some(hit) = self.java_cache.get(&p) {
+            return hit.clone();
+        }
+        let node = java_class_for_file(&p).map(|fqcn| format!("pkg:{fqcn}"));
+        self.java_cache.insert(p, node.clone());
         node
     }
 
@@ -354,6 +399,209 @@ pub fn python_module_for_file(file: &Path) -> Option<String> {
     parts.extend(namespace);
     parts.push(stem.to_string());
     Some(parts.join("."))
+}
+
+// ── Java file → fully-qualified class resolution (DF-WARPFS-34) ─────
+
+/// Derive the fully-qualified class name for `file` (DF-WARPFS-34).
+///
+/// The Java parser emits `pkg:<FQCN>` edges for `import` statements, so a
+/// `.java` file must resolve to the `pkg:<FQCN>` node of the class it
+/// declares — `gson/src/main/java/com/google/gson/Gson.java` is
+/// `pkg:com.google.gson.Gson`. Resolution tries, in order:
+///
+/// 1. **The `package` declaration in the file itself** (authoritative):
+///    read the first non-comment, non-blank source line that starts with
+///    `package` and take the dotted name before the `;`. Works under any
+///    layout and any relative-path form, and never depends on the walk
+///    finding a source root — `Gson.java` under `com/google/gson/` with
+///    `package com.google.gson;` resolves identically no matter where the
+///    source root sits.
+/// 2. **The Maven/Gradle source-root walk**: a path segment `java` whose
+///    enclosing directory is a recognized source root (`src/main/java`,
+///    `src/test/java`, `src/it/java`, `src/e2e/java`, ... — any
+///    `src/<flavor>/java`) anchors the package: everything below it is
+///    dotted into the FQCN prefix, plus the file stem as the class name.
+/// 3. **Plain directory walk** for simple `<root>/pkg/path/Class.java`
+///    layouts: every directory from the repo-reachable top down to the
+///    file's own directory contributes, in order, plus the file stem. The
+///    walk never crosses above the given path's own top — a host-side
+///    prefix (tempdir names, the home directory) can never leak into the
+///    name, mirroring the Python resolver's no-leak rule.
+///
+/// Returns `None` when no package can be derived at all (no declaration
+/// and the path has no package-shaped directory chain above it).
+pub fn java_class_for_file(file: &Path) -> Option<String> {
+    let stem = file.file_stem()?.to_str()?;
+    if stem.is_empty() {
+        return None;
+    }
+    // 1. The `package` declaration is authoritative when present: it names
+    //    the file's own package regardless of layout or path form.
+    if let Ok(source) = std::fs::read_to_string(file) {
+        if let Some(pkg) = java_package_decl(&source) {
+            return Some(format!("{pkg}.{stem}"));
+        }
+    }
+    // 2/3. No declaration (or unreadable file): derive the package from the
+    //    directory chain above the file.
+    let dir = file.parent()?;
+    java_fqcn_from_dirs(dir, stem)
+}
+
+/// Extract the dotted package name from a Java source's `package`
+/// declaration, skipping blank lines, `//` and `/*` comment regions, and
+/// any license header. Returns `None` when the file declares no package
+/// (default package) or the declaration is malformed.
+fn java_package_decl(source: &str) -> Option<String> {
+    let mut in_block_comment = false;
+    for line in source.lines() {
+        let mut rest = line.trim();
+        // Peel block-comment state line by line (no nesting in Java).
+        while in_block_comment {
+            match rest.find("*/") {
+                Some(end) => {
+                    rest = rest[end + 2..].trim();
+                    in_block_comment = false;
+                }
+                None => {
+                    rest = "";
+                    break;
+                }
+            }
+        }
+        if rest.is_empty() {
+            continue;
+        }
+        // A line may OPEN a block comment; content before `/*` still counts.
+        let before_comment = match rest.find("/*") {
+            Some(start) => {
+                // Unterminated opener swallows the rest of the line.
+                let head = &rest[..start];
+                in_block_comment = !rest[start + 2..].contains("*/");
+                head
+            }
+            None => rest,
+        };
+        // Line comments cut the remainder.
+        let code = before_comment.split("//").next().unwrap_or("").trim();
+        if code.is_empty() {
+            continue;
+        }
+        let Some(mut after) = code.strip_prefix("package") else {
+            // Not a package line. The declaration, when present, precedes
+            // every type declaration — but class/interface/enum/import
+            // lines all END the search: a file whose first code statement
+            // is anything else has no package declaration we can trust
+            // (annotations like `@Test` are skipped, they are not types).
+            if is_java_type_decl(code) {
+                return None;
+            }
+            continue;
+        };
+        // `packagefoo` is not a package line: the keyword must be followed
+        // by whitespace before the name.
+        if !after.starts_with(|c: char| c.is_whitespace()) {
+            continue;
+        }
+        after = after.trim();
+        // Strip a trailing `;` and anything after it (rare malformed).
+        let name = after.split(';').next()?.trim();
+        if name.is_empty()
+            || !name.split('.').all(|part| {
+                !part.is_empty()
+                    && part
+                        .chars()
+                        .all(|c| c.is_alphanumeric() || c == '_' || c == '$')
+                    && part.chars().next().is_some_and(|c| !c.is_ascii_digit())
+            })
+        {
+            return None;
+        }
+        return Some(name.to_string());
+    }
+    None
+}
+
+/// Whether `code` (a trimmed, comment-stripped source line) starts a type
+/// declaration — the point after which a `package` declaration can no
+/// longer appear. Annotation lines (`@Override`, ...) and `import`s are
+/// not type declarations and are skipped.
+fn is_java_type_decl(code: &str) -> bool {
+    for keyword in [
+        "import",
+        "public",
+        "final",
+        "abstract",
+        "class",
+        "interface",
+        "enum",
+        "record",
+        "@interface",
+    ] {
+        // `class Foo` matches; `classpath` must NOT match: the keyword
+        // must be followed by whitespace or a modifier boundary.
+        if let Some(after) = code.strip_prefix(keyword) {
+            if after.starts_with(|c: char| c.is_whitespace() || c == '{' || c == '@') {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Derive the FQCN package portion of `dir` (the directory holding the
+/// `.java` file), plus `stem` as the final class segment (DF-WARPFS-34).
+///
+/// Walks the directory chain (top-down) looking for a Java source root:
+///
+/// - **Maven/Gradle layout**: a `java` directory whose grandparent is
+///   `src` (`src/main/java`, `src/test/java`, `src/it/java`, ... — any
+///   single-segment flavor). Everything below the `java` root is the
+///   dotted package path; a class directly in the root is a default-
+///   package class and resolves to the bare stem.
+/// - **Simple relative layout**: no source root found and the path is
+///   RELATIVE — then the directory chain from the given path's own top
+///   down to `dir` contributes, in order. Absolute paths deliberately
+///   resolve to `None` here: with no source-root anchor there is no
+///   derivable repo root, so a host-side prefix (tempdir names, the home
+///   directory) could leak into the name — the Python resolver's no-leak
+///   rule applied at its strictest.
+///
+/// A bare filename (`Gson.java`, empty dir chain) resolves to `None`.
+fn java_fqcn_from_dirs(dir: &Path, stem: &str) -> Option<String> {
+    // Directory chain top-down: component list of `dir` in order
+    // (roots/drives contribute nothing — `file_name()` of `/` is `None`).
+    let mut chain: Vec<String> = Vec::new();
+    let mut walk = Some(dir);
+    while let Some(d) = walk {
+        if let Some(name) = d.file_name().and_then(|n| n.to_str()) {
+            chain.push(name.to_string());
+        }
+        walk = d.parent();
+    }
+    chain.reverse();
+
+    // Maven/Gradle: a `java` component whose grandparent is `src`
+    // (`.../src/<flavor>/java/...` — `java` is the source root itself).
+    // Everything after that `java` is the package path.
+    for i in 0..chain.len() {
+        if chain[i] == "java" && i >= 2 && chain[i - 2] == "src" {
+            let pkg_parts = &chain[i + 1..];
+            if pkg_parts.is_empty() {
+                // Class directly in the source root: default package.
+                return Some(stem.to_string());
+            }
+            return Some(format!("{}.{}", pkg_parts.join("."), stem));
+        }
+    }
+
+    // Plain layout, relative paths only (absolute paths have no derivable
+    // root and must not leak host components — see the doc comment).
+    if dir.is_absolute() || chain.is_empty() {
+        return None;
+    }
+    Some(format!("{}.{}", chain.join("."), stem))
 }
 
 // ── TypeScript/JavaScript `local:` reverse resolution (GAP-069) ─────
@@ -1197,7 +1445,187 @@ mod tests {
         assert_eq!(resolver.pkg_node("external:repo:app/main.py"), None);
     }
 
-    // ── PEP 420 namespace packages (GAP-082) ────────────────────────
+    // ── Java file → FQCN resolution (DF-WARPFS-34) ────────────────────
+
+    /// A Maven-shaped gson fixture: `gson/src/main/java/com/google/gson/`
+    /// holding Gson.java (with a package declaration + license header) and
+    /// a plain-layout sibling corpus `com/example/Thing.java` for the
+    /// simple-layout walk. Returns the tempdir (kept alive by the caller)
+    /// plus the gson file's relative path.
+    fn gson_fixture() -> (tempfile::TempDir, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let gson_src = "/*\n * Copyright 2008 Google Inc.\n */\n\npackage com.google.gson;\n\nimport java.util.List;\n\npublic final class Gson {\n}\n";
+        write(
+            dir.path(),
+            "gson/src/main/java/com/google/gson/Gson.java",
+            gson_src,
+        );
+        write(
+            dir.path(),
+            "gson/src/test/java/com/google/gson/GsonBuilder.java",
+            "package com.google.gson;\n\npublic class GsonBuilder {}\n",
+        );
+        // Simple layout: <root>/com/example/Thing.java with NO package
+        // declaration (default-package style file under a package path).
+        write(
+            dir.path(),
+            "plain/com/example/Thing.java",
+            "class Thing {}\n",
+        );
+        let gson = dir
+            .path()
+            .join("gson/src/main/java/com/google/gson/Gson.java")
+            .to_string_lossy()
+            .into_owned();
+        (dir, gson)
+    }
+
+    #[test]
+    fn resolves_java_file_via_package_declaration() {
+        let (_dir, gson) = gson_fixture();
+        assert_eq!(
+            java_class_for_file(Path::new(&gson)).as_deref(),
+            Some("com.google.gson.Gson"),
+            "the package declaration is authoritative regardless of layout"
+        );
+        let mut resolver = PkgResolver::new();
+        assert_eq!(
+            resolver.pkg_node(&gson).as_deref(),
+            Some("pkg:com.google.gson.Gson")
+        );
+        // Second lookup goes through the per-query cache and must agree.
+        assert_eq!(
+            resolver.pkg_node(&gson).as_deref(),
+            Some("pkg:com.google.gson.Gson")
+        );
+    }
+
+    #[test]
+    fn resolves_java_test_source_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let test = write(
+            dir.path(),
+            "proj/src/test/java/com/example/Util.java",
+            "package com.example;\n\nclass Util {}\n",
+        );
+        assert_eq!(
+            java_class_for_file(Path::new(&test)).as_deref(),
+            Some("com.example.Util"),
+            "src/test/java is a source root exactly like src/main/java"
+        );
+    }
+
+    #[test]
+    fn resolves_java_maven_layout_without_declaration_fallback() {
+        // Declaration present but the FILE was never materialized (query
+        // against an invisible filesystem): the source-root walk must
+        // still derive the FQCN from the directory chain.
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "proj/src/main/java/org/a/B.java", "");
+        // Delete it: only the path shape remains as evidence.
+        std::fs::remove_file(dir.path().join("proj/src/main/java/org/a/B.java")).unwrap();
+        assert_eq!(
+            java_class_for_file(Path::new("proj/src/main/java/org/a/B.java")).as_deref(),
+            Some("org.a.B"),
+            "src/<flavor>/java anchors the package path"
+        );
+    }
+
+    #[test]
+    fn resolves_java_plain_layout_relative_only() {
+        // Simple <root>/pkg/path layout, RELATIVE path: every directory
+        // contributes. No `src/<flavor>/java` anywhere.
+        assert_eq!(
+            java_class_for_file(Path::new("plain/com/example/Thing.java")).as_deref(),
+            Some("plain.com.example.Thing"),
+        );
+        // Absolute path with no derivable root must NOT leak host
+        // components into the name.
+        let abs = "/tmp/somehostcache/plain/com/example/Thing.java";
+        assert_eq!(java_class_for_file(Path::new(&abs)), None);
+        // A bare filename has no package chain at all.
+        assert_eq!(java_class_for_file(Path::new("Thing.java")), None);
+    }
+
+    #[test]
+    fn java_package_decl_skips_comments_and_stops_at_type_decl() {
+        // License header + annotation lines before the declaration.
+        assert_eq!(
+            java_package_decl("/* header */\n// comment\n\n@Test\npackage com.a.b;\nclass X {}")
+                .as_deref(),
+            Some("com.a.b")
+        );
+        // No declaration: first type statement ends the search.
+        assert_eq!(
+            java_package_decl("import java.util.List;\nclass X {}"),
+            None
+        );
+        // `packagename` is not a package line.
+        assert_eq!(java_package_decl("packagename;\nclass X {}"), None);
+        // A class with no declaration on disk resolves through its dirs.
+        let dir = tempfile::tempdir().unwrap();
+        let plain = write(
+            dir.path(),
+            "repo/com/example/Util.java",
+            "package com.example;\nclass Util {}\n",
+        );
+        assert_eq!(
+            java_class_for_file(Path::new(&plain)).as_deref(),
+            Some("com.example.Util")
+        );
+    }
+
+    #[test]
+    fn java_symbol_nodes_never_resolve() {
+        let mut resolver = PkgResolver::new();
+        assert_eq!(resolver.pkg_node("pkg:com.google.gson.Gson"), None);
+        assert_eq!(resolver.pkg_node("sys:java.util.List"), None);
+        assert_eq!(resolver.pkg_node("std:java.util"), None);
+        assert_eq!(
+            resolver.pkg_node("external:repo:gson/src/main/java/com/google/gson/Gson.java"),
+            None
+        );
+    }
+
+    #[test]
+    fn java_resolution_coexists_with_other_languages() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "Cargo.toml",
+            "[package]\nname = \"rustdemo\"\nversion = \"0.1.0\"\n",
+        );
+        write(dir.path(), "go.mod", "module example.com/demo\n");
+        write(dir.path(), "fastapi/__init__.py", "");
+        write(
+            dir.path(),
+            "proj/src/main/java/com/a/B.java",
+            "package com.a;\n",
+        );
+        let rs = write(dir.path(), "src/lib.rs", "pub fn f() {}\n");
+        let go = write(dir.path(), "cmd/tool/main.go", "package main\n");
+        let py = write(dir.path(), "fastapi/routing.py", "class APIRouter: ...\n");
+        let java = dir
+            .path()
+            .join("proj/src/main/java/com/a/B.java")
+            .to_string_lossy()
+            .into_owned();
+        let mut resolver = PkgResolver::new();
+        assert_eq!(resolver.pkg_node(&rs).as_deref(), Some("pkg:rustdemo"));
+        assert_eq!(
+            resolver.pkg_node(&go).as_deref(),
+            Some("pkg:example.com/demo/cmd/tool")
+        );
+        assert_eq!(
+            resolver.pkg_node(&py).as_deref(),
+            Some("pkg:fastapi.routing")
+        );
+        assert_eq!(
+            resolver.pkg_node(&java).as_deref(),
+            Some("pkg:com.a.B"),
+            "each language resolves through its own walk, never a fallback"
+        );
+    }
 
     /// Flask-shaped namespace fixture: `src/flask/` is a regular package
     /// (has `__init__.py`), `src/flask/sansio/` is a PEP 420 namespace

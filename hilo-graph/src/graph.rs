@@ -2151,8 +2151,23 @@ impl GraphDB {
             edge_types.insert(rel, cnt);
         }
 
-        // Orphans: files that appear as \"from\" but never appear as \"to\"
+        // Orphans: files that appear as "from" but never appear as "to"
         // in any edge — truly isolated source files with no incoming references.
+        //
+        // DF-WARPFS-34: the raw SQL above is a plain string comparison, so a
+        // file whose dependents all target its resolved `pkg:` node (Java
+        // FQCNs, Go import paths, Python dotted modules, Rust crates —
+        // the parser emits pkg: edges, not file→file edges) was wrongly
+        // reported as an orphan while `graph impact` (which resolves)
+        // showed 112 importers. Post-filter in Rust: a `from` is not an
+        // orphan when its resolved `pkg:` node appears among the graph's
+        // edge targets. Symbol-node targets (`pkg:...`/`sys:...`/`std:...`/
+        // `external:...`) never equal a file path, and the resolver never
+        // resolves a symbol node to a file (its own `is_symbol_node` guard),
+        // so the orphans block and the impact/related surfaces can only
+        // agree, never disagree. One resolver instance for the whole pass:
+        // each candidate costs at most one filesystem walk, and the
+        // per-language caches make repeats free.
         let mut orphan_stmt = self.conn.prepare(
             "SELECT DISTINCT e.\"from\" \
              FROM edges e \
@@ -2160,9 +2175,26 @@ impl GraphDB {
              ORDER BY e.\"from\"",
         )?;
         let orphan_rows = orphan_stmt.query_map(params![], |row| row.get::<_, String>(0))?;
-        let mut orphans = Vec::new();
+        let mut raw_orphans = Vec::new();
         for r in orphan_rows {
-            orphans.push(r?);
+            raw_orphans.push(r?);
+        }
+        let mut to_targets: HashSet<String> = HashSet::new();
+        {
+            let mut to_stmt = self.conn.prepare("SELECT DISTINCT \"to\" FROM edges")?;
+            let to_rows = to_stmt.query_map(params![], |row| row.get::<_, String>(0))?;
+            for r in to_rows {
+                to_targets.insert(r?);
+            }
+        }
+        let mut resolver = PkgResolver::new();
+        let mut orphans = Vec::new();
+        for from in raw_orphans {
+            let resolved = resolver.pkg_node(&from);
+            let covered = resolved.is_some_and(|pkg| to_targets.contains(&pkg));
+            if !covered {
+                orphans.push(from);
+            }
         }
 
         Ok(GraphStats {
