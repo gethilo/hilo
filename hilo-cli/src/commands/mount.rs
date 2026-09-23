@@ -121,11 +121,17 @@ pub fn run_mount(mount_point: &str, triggers: bool, allow_other: bool, daemon: b
         }
     };
 
-    println!(
-        "Hilo mounted at {}{}",
-        mount_point,
-        if triggers { " (triggers enabled)" } else { "" }
-    );
+    // DF-WARPFS-28: the count belongs where the user actually looks — on
+    // the stdout mount line, not only in the trigger engine's stderr.
+    let trigger_summary = if triggers {
+        format!(
+            " (triggers enabled, {} active)",
+            load_triggers(&current_dir).len()
+        )
+    } else {
+        String::new()
+    };
+    println!("Hilo mounted at {}{}", mount_point, trigger_summary);
 
     daemon::mount(fs, &config).context("FUSE mount failed")?;
 
@@ -358,6 +364,15 @@ fn load_triggers(project_dir: &Path) -> Vec<TriggerConfig> {
         let path = project_dir.join(candidate);
         if let Ok(contents) = std::fs::read_to_string(&path) {
             if let Some(configs) = parse_manifest_triggers(&contents) {
+                if configs.is_empty() {
+                    // DF-WARPFS-28: `hilo init` writes `triggers: []`, and
+                    // parse_manifest_triggers reports that as Some(vec![]),
+                    // which silently disabled every default trigger while
+                    // the mount line still claimed "(triggers enabled)".
+                    // An empty list is therefore treated the same as the
+                    // key being absent: load the default trigger set.
+                    return default_triggers();
+                }
                 return configs;
             }
         }
@@ -489,6 +504,48 @@ mod tests {
             assert_eq!(cfg.builtin.as_deref(), Some("parse-and-diff"));
             assert!(cfg.async_exec);
         }
+    }
+
+    #[test]
+    fn test_parse_manifest_triggers_empty_list_means_empty() {
+        // DF-WARPFS-28: the parse layer reports an explicit empty list as
+        // Some(vec![]); the defaults-on-empty decision lives in load_triggers.
+        let yaml = "project:\n  name: test\ntriggers: []\n";
+        let configs = parse_manifest_triggers(yaml).unwrap();
+        assert!(configs.is_empty());
+    }
+
+    #[test]
+    fn test_load_triggers_empty_manifest_list_loads_defaults() {
+        // DF-WARPFS-28 regression: `hilo init` writes `triggers: []`; a
+        // mount with --triggers must still load the default trigger set
+        // instead of silently disabling everything.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".vfs")).unwrap();
+        std::fs::write(
+            dir.path().join(".vfs/manifest.yaml"),
+            "version: 2\nproject:\n  name: test\ntriggers: []\n",
+        )
+        .unwrap();
+        let configs = load_triggers(dir.path());
+        assert_eq!(configs.len(), default_triggers().len());
+        assert_eq!(configs.len(), 9);
+    }
+
+    #[test]
+    fn test_load_triggers_nonempty_manifest_list_wins() {
+        // An explicit non-empty trigger list loads exactly that list —
+        // defaults only apply when the list is empty.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".vfs")).unwrap();
+        std::fs::write(
+            dir.path().join(".vfs/manifest.yaml"),
+            "version: 2\nproject:\n  name: test\ntriggers:\n  - name: custom-only\n    when: \"*.md\"\n    on: [write]\n    run: parse-and-diff\n",
+        )
+        .unwrap();
+        let configs = load_triggers(dir.path());
+        assert_eq!(configs.len(), 1);
+        assert_eq!(configs[0].name, "custom-only");
     }
 
     #[test]
