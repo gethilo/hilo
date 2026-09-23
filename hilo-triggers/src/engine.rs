@@ -194,23 +194,29 @@ impl TriggerEngine {
                     None => continue,
                 };
 
-                let path = PathBuf::from(&name);
+                // DF-WARPFS-29: `name` is relative to the WATCHED directory
+                // (a nested `src/` watch reports `cli.rs`, not `src/cli.rs`).
+                // Resolve the FULL path once here via the watches reverse
+                // lookup, and carry it on FileEvent. Root files keep working
+                // because the root watch joins the same name it would have
+                // carried anyway.
+                let full_path = self
+                    .watches
+                    .iter()
+                    .find(|(_, wd)| **wd == event.wd)
+                    .map(|(dir, _)| dir.join(&name))
+                    .unwrap_or_else(|| PathBuf::from(&name));
 
                 // Re-discover: a newly created DIRECTORY gets a watch so
                 // changes inside it are seen. Needed by stream mode — the
                 // placeholder tree is created after the initial recursive
                 // watch, so nested dirs (and their materialized files) would
                 // otherwise be invisible to the §7.1 sync hook.
-                if event_type == EventType::Create {
-                    let new_path = self
-                        .watches
-                        .iter()
-                        .find(|(_, wd)| **wd == event.wd)
-                        .map(|(dir, _)| dir.join(&name))
-                        .unwrap_or_else(|| path.clone());
-                    if new_path.is_dir() && !self.watches.contains_key(&new_path) {
-                        let _ = self.watch_dir(&new_path);
-                    }
+                if event_type == EventType::Create
+                    && full_path.is_dir()
+                    && !self.watches.contains_key(&full_path)
+                {
+                    let _ = self.watch_dir(&full_path);
                 }
 
                 // Build FileEvent.
@@ -220,21 +226,14 @@ impl TriggerEngine {
                     .unwrap_or(0);
 
                 let file_event = FileEvent {
-                    path: path.clone(),
+                    path: full_path.clone(),
                     event_type: event_type.clone(),
                     timestamp,
                 };
 
                 // Spec §7.1: record the change for the backend sync hook.
-                // inotify names are relative to the WATCHED directory, so
-                // reverse-lookup the watch to build the full path first.
+                // The full path was already resolved above (DF-WARPFS-29).
                 if let Some(hook) = &self.sync_hook {
-                    let full_path = self
-                        .watches
-                        .iter()
-                        .find(|(_, wd)| **wd == event.wd)
-                        .map(|(dir, _)| dir.join(&name))
-                        .unwrap_or_else(|| path.clone());
                     if let Ok(mut h) = hook.lock() {
                         h.record_event(&full_path);
                     }
@@ -245,7 +244,7 @@ impl TriggerEngine {
                 // Check each trigger config.
                 for trigger in &self.triggers {
                     // Pattern match.
-                    if !matches_pattern(&path, &trigger.watch_pattern) {
+                    if !matches_pattern(&full_path, &trigger.watch_pattern) {
                         continue;
                     }
 
@@ -255,7 +254,7 @@ impl TriggerEngine {
                     }
 
                     // Per-file debounce.
-                    if !self.debouncer.should_fire_file(&path) {
+                    if !self.debouncer.should_fire_file(&full_path) {
                         continue;
                     }
 
@@ -356,7 +355,7 @@ impl TriggerEngine {
                                 info!(
                                     "[trigger] dropped '{}' for {} (max_concurrent={} reached)",
                                     trigger.name,
-                                    path.display(),
+                                    full_path.display(),
                                     self.max_concurrent
                                 );
                                 continue;
@@ -469,24 +468,32 @@ fn parse_and_diff_sync(
     db_conn: &Option<duckdb::Connection>,
     project_root: &Option<PathBuf>,
 ) {
-    // 1. Read file content.
-    let content = match std::fs::read_to_string(&event.path) {
+    // 1. Resolve the path and read file content.
+    //
+    // DF-WARPFS-29: the event loop now delivers the FULL path (watched dir
+    // joined with the inotify name). Stay robust for root-relative names
+    // (legacy callers/tests): resolve them against project_root.
+    let resolved: PathBuf = if event.path.is_absolute() {
+        event.path.clone()
+    } else {
+        match project_root {
+            Some(root) => root.join(&event.path),
+            None => event.path.clone(),
+        }
+    };
+    let content = match std::fs::read_to_string(&resolved) {
         Ok(c) => c,
         Err(e) => {
             info!(
                 "[trigger] parse-and-diff: cannot read {}: {e}",
-                event.path.display()
+                resolved.display()
             );
             return;
         }
     };
 
     // 2. Detect language from extension.
-    let ext = event
-        .path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("");
+    let ext = resolved.extension().and_then(|e| e.to_str()).unwrap_or("");
     let lang = match hilo_graph::Language::from_extension(ext) {
         Some(l) => l,
         None => {
@@ -503,7 +510,18 @@ fn parse_and_diff_sync(
             return;
         }
     };
-    let file_path_str = event.path.display().to_string();
+    // DF-WARPFS-29: the edge label (parse_imports first arg) must be the
+    // project-relative form (src/opts.rs), matching the warm-graph
+    // convention — absolute paths from nested watches would poison
+    // edges.jsonl and never join the warm graph. Relative names (legacy
+    // form) pass through unchanged.
+    let file_path_str = match project_root {
+        Some(root) => match resolved.strip_prefix(root) {
+            Ok(rel) if !rel.as_os_str().is_empty() => rel.display().to_string(),
+            _ => resolved.display().to_string(),
+        },
+        None => resolved.display().to_string(),
+    };
     let edges = match parser.parse_imports(&file_path_str, &content) {
         Ok(e) => e,
         Err(e) => {
@@ -513,7 +531,10 @@ fn parse_and_diff_sync(
     };
 
     // 4. Diff against cache — only edges NOT already present.
-    let cache_key = event.path.clone();
+    // Cache is keyed on the RESOLVED path so nested files diff correctly
+    // across events (a bare-name key would collapse distinct nested files
+    // or miss cache hits).
+    let cache_key = resolved.clone();
     let new_edges: Vec<hilo_metadata::inventory::Edge> =
         if let Some((_, cached_edges)) = ast_cache.get(&cache_key) {
             edges
@@ -1221,6 +1242,106 @@ mod tests {
         assert!(event_match, "write event should pass if pattern matched");
     }
 
+    // ── DF-WARPFS-29: nested-file event paths ──────────────────────────
+
+    /// DF-WARPFS-29: parse-and-diff must succeed for a NESTED file when the
+    /// event carries the full path (watched dir joined with the inotify
+    /// name), and the appended edge labels must be project-relative —
+    /// matching the warm-graph convention (src/foo.rs, not an absolute or
+    /// bare-name path).
+    #[test]
+    fn test_parse_diff_nested_full_path_appends_project_relative_edge() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let src = dir.path().join("src");
+        std::fs::create_dir(&src).unwrap();
+        let nested = src.join("opts.rs");
+        std::fs::write(&nested, "use std::collections::HashMap;\nfn main() {}\n").unwrap();
+
+        let mut cache = HashMap::new();
+        let conn = duckdb::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE edges (\"from\" TEXT, \"to\" TEXT, rel TEXT, provenance TEXT NOT NULL DEFAULT 'ast_exact', confidence REAL NOT NULL DEFAULT 1.0)")
+            .unwrap();
+
+        // Event path = watched dir joined with the inotify name (the FULL
+        // path the engine now resolves — pre-fix this was the bare name).
+        let event = FileEvent {
+            path: nested.clone(),
+            event_type: EventType::Write,
+            timestamp: 0,
+        };
+        let cfg = parse_diff_cfg(None);
+
+        parse_and_diff_sync(
+            &cfg,
+            &event,
+            &mut cache,
+            &Some(conn),
+            &Some(dir.path().to_path_buf()),
+        );
+
+        let edges_path = dir.path().join(".vfs/graph/edges.jsonl");
+        let content = std::fs::read_to_string(&edges_path).unwrap();
+        assert!(
+            content.contains("src/opts.rs"),
+            "edge labels must be project-relative (src/opts.rs), got: {content}"
+        );
+        assert!(
+            !content.contains("/tmp/"),
+            "edge labels must NOT be absolute, got: {content}"
+        );
+        assert!(
+            cache.contains_key(&nested),
+            "cache must be keyed on the full nested path"
+        );
+    }
+
+    /// DF-WARPFS-29 regression: a bare inotify name (pre-fix FileEvent.path
+    /// form) still RESOLVES against project_root — the event loop now joins
+    /// the watched dir before dispatching, but parse_and_diff itself must
+    /// also stay robust if it receives a root-relative name.
+    #[test]
+    fn test_parse_diff_resolves_root_relative_name_against_project_root() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let root_file = dir.path().join("probe_root.rs");
+        std::fs::write(&root_file, "use std::collections::HashMap;\nfn main() {}\n").unwrap();
+
+        let mut cache = HashMap::new();
+        let conn = duckdb::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE edges (\"from\" TEXT, \"to\" TEXT, rel TEXT, provenance TEXT NOT NULL DEFAULT 'ast_exact', confidence REAL NOT NULL DEFAULT 1.0)")
+            .unwrap();
+
+        // Bare name, as the pre-fix event loop delivered it.
+        let event = FileEvent {
+            path: PathBuf::from("probe_root.rs"),
+            event_type: EventType::Write,
+            timestamp: 0,
+        };
+        let cfg = parse_diff_cfg(None);
+
+        parse_and_diff_sync(
+            &cfg,
+            &event,
+            &mut cache,
+            &Some(conn),
+            &Some(dir.path().to_path_buf()),
+        );
+
+        let edges_path = dir.path().join(".vfs/graph/edges.jsonl");
+        assert!(
+            edges_path.exists(),
+            "root-relative name must resolve against project_root and append edges"
+        );
+        let content = std::fs::read_to_string(&edges_path).unwrap();
+        assert!(
+            content.contains("probe_root.rs"),
+            "edge should be labeled probe_root.rs, got: {content}"
+        );
+        assert!(
+            cache.contains_key(&root_file),
+            "cache must be keyed on the RESOLVED path"
+        );
+    }
+
     // ── graceful shutdown ──────────────────────────────────────────────
 
     #[tokio::test]
@@ -1388,8 +1509,10 @@ mod tests {
         );
 
         // The edges table must exist and contain the parsed import edges.
+        // DF-WARPFS-29: the edge label is now the PROJECT-RELATIVE path
+        // ("main.go"), matching the warm-graph convention.
         let conn = conn_opt.as_ref().unwrap();
-        let go_path_str = go_file.display().to_string();
+        let go_path_str = "main.go";
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM edges WHERE \"from\" = ?",
@@ -1538,10 +1661,11 @@ mod tests {
         let other = dir.path().join("other.go");
         std::fs::write(&other, "package other\n").unwrap();
 
-        // compute_impact matches by the file_path_str (the absolute path passed
-        // to parse_and_diff_sync), so the edge's "to" column must use the same
-        // full path.
-        let go_path_str = go_file.display().to_string();
+        // compute_impact matches by the file_path_str (the label passed
+        // to parse_and_diff_sync). DF-WARPFS-29: that label is now the
+        // PROJECT-RELATIVE path ("main.go"), matching the warm-graph
+        // convention, so the edge's "to" column must use the same form.
+        let go_path_str = "main.go";
         let other_path_str = other.display().to_string();
         let conn = duckdb::Connection::open_in_memory().unwrap();
         conn.execute_batch(&format!(

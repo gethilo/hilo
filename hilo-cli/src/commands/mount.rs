@@ -35,6 +35,15 @@ const DAEMON_CHILD_ENV: &str = "HILO_MOUNT_DAEMONIZED";
 ///
 /// On `SIGINT` / `SIGTERM` the mount is cleaned up via `daemon::unmount`.
 pub fn run_mount(mount_point: &str, triggers: bool, allow_other: bool, daemon: bool) -> Result<()> {
+    // DF-WARPFS-29: the trigger engine logs fires/failures via `tracing`,
+    // which is invisible without a subscriber. Install one (stderr, human
+    // format) so `--triggers` mounts surface what is actually happening.
+    // RUST_LOG overrides the default `info` filter; serve --mcp does its own
+    // init, so this is scoped to run_mount, not main().
+    if triggers {
+        hilo_core::logging::init_logging_to(false, std::io::stderr);
+    }
+
     // Foreground parent of a `--daemon` mount: spawn the detached child and
     // return. The child (see DAEMON_CHILD_ENV) skips this branch.
     if daemon && std::env::var_os(DAEMON_CHILD_ENV).is_none() {
