@@ -871,6 +871,124 @@ mod tests {
         assert_eq!(deep[0].scope, SCOPE_CRATE);
     }
 
+    /// DF-WARPFS-34: a `.java` file must resolve to the `pkg:<FQCN>` node its
+    /// importers target. Builds a Maven-shaped gson fixture (the Java parser
+    /// emits `pkg:com.google.gson.Gson` edges, never file→file edges), then
+    /// asserts through the PUBLIC surface (`compute_impact`) that the FILE
+    /// form and the `pkg:` form return the same importer set — the file query
+    /// paying the one extra file→pkg hop that GAP-083 defines.
+    #[test]
+    fn java_file_form_impact_matches_pkg_form_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let write = |rel: &str, content: &str| {
+            let path = dir.path().join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, content).unwrap();
+            path.to_string_lossy().into_owned()
+        };
+
+        let gson = write(
+            "gson/src/main/java/com/google/gson/Gson.java",
+            "package com.google.gson;\n\npublic final class Gson {}\n",
+        );
+        let builder = write(
+            "gson/src/main/java/com/google/gson/GsonBuilder.java",
+            "package com.google.gson;\n\npublic final class GsonBuilder {}\n",
+        );
+        // Two importers of the FQCN: one main-source, one test-source.
+        let importer = write(
+            "gson/src/main/java/com/google/gson/internal/GsonHolder.java",
+            "package com.google.gson.internal;\n\nimport com.google.gson.Gson;\n\npublic final class GsonHolder {\n    Gson gson;\n}\n",
+        );
+        let test = write(
+            "gson/src/test/java/com/google/gson/GsonTest.java",
+            "package com.google.gson;\n\nimport com.google.gson.Gson;\n\npublic class GsonTest {}\n",
+        );
+
+        let conn = duckdb::Connection::open_in_memory().unwrap();
+        insert_edges_into(&conn, &[]).unwrap();
+        let parse = |path: &str| {
+            let source = std::fs::read_to_string(path).unwrap();
+            let mut parser = Parser::for_language(Language::Java).unwrap();
+            parser.parse_imports(path, &source).unwrap()
+        };
+        for path in [&gson, &builder, &importer, &test] {
+            insert_edges_into(&conn, &parse(path)).unwrap();
+        }
+
+        // The parser really did emit pkg:<FQCN> edges — without this the test
+        // would pass vacuously on an empty graph.
+        let mut stmt = conn
+            .prepare("SELECT \"from\", \"to\" FROM edges ORDER BY \"from\"")
+            .unwrap();
+        let rows: Vec<(String, String)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        let gson_edges: Vec<&(String, String)> = rows
+            .iter()
+            .filter(|(_, to)| to == "pkg:com.google.gson.Gson")
+            .collect();
+        // Each importer must contribute at least one such edge (a file whose
+        // package declaration AND import target the FQCN legitimately emits
+        // two), so the impact assertions below cannot pass on an empty graph.
+        for who in [&importer, &test] {
+            assert!(
+                gson_edges.iter().any(|(from, _)| from == who),
+                "{who} must emit a pkg:com.google.gson.Gson edge; all edges: {rows:?}"
+            );
+        }
+
+        // pkg form: the two importers at depth 1.
+        let via_pkg = compute_impact(&conn, "pkg:com.google.gson.Gson", 10).unwrap();
+        let mut pkg_paths: Vec<String> = via_pkg
+            .iter()
+            .filter(|f| f.path == importer || f.path == test)
+            .map(|f| f.path.clone())
+            .collect();
+        pkg_paths.sort();
+        assert_eq!(
+            pkg_paths,
+            vec![importer.clone(), test.clone()],
+            "pkg form must name both importers: {via_pkg:?}"
+        );
+        for row in &via_pkg {
+            assert_eq!(row.depth, 1, "pkg-form rows sit at depth 1");
+        }
+
+        // The defect: the FILE form used to answer "No dependents found".
+        let via_file = compute_impact(&conn, &gson, 10).unwrap();
+        let mut file_paths: Vec<String> = via_file
+            .iter()
+            .filter(|f| f.path == importer || f.path == test)
+            .map(|f| f.path.clone())
+            .collect();
+        file_paths.sort();
+        assert_eq!(
+            file_paths, pkg_paths,
+            "file form must return the SAME importer set as the pkg form: {via_file:?}"
+        );
+
+        // …and those rows are the deliberate crate hop (GAP-083), not a
+        // missing file-level edge: scope=crate, one depth deeper, via=pkg node.
+        for row in via_file
+            .iter()
+            .filter(|f| f.path == importer || f.path == test)
+        {
+            assert_eq!(row.scope, SCOPE_CRATE);
+            assert_eq!(row.depth, 2, "one file→pkg hop on top of the edge hop");
+            assert_eq!(row.via.as_deref(), Some("pkg:com.google.gson.Gson"));
+        }
+
+        // A depth budget of 1 cannot admit the hop — and must NOT report a
+        // bare silent success either way; the set is empty by design.
+        assert!(
+            compute_impact(&conn, &gson, 1).unwrap().is_empty(),
+            "max_depth=1 cannot fit the file→pkg hop"
+        );
+    }
+
     #[test]
     fn impact_unknown_file_without_manifest_resolves_none() {
         // A file not under any Cargo.toml must not blow up and keeps the
