@@ -578,6 +578,8 @@ pub fn run_warm_in(
     let t_db = std::time::Instant::now();
     let graph_db = cwd.join(".vfs").join("graph").join("graph.db");
     let graph_db_str = graph_db.to_str().unwrap_or(".vfs/graph/graph.db");
+    // DF-WARPFS-33: warm is the writer — it keeps the read-write open
+    // (schema create, cache populate, stamp write).
     let graph = GraphDB::open(graph_db_str).context("failed to open DuckDB graph database")?;
     if std::env::var("HILO_WARM_TIMING").is_ok() {
         eprintln!(
@@ -672,7 +674,8 @@ pub fn run_related(path: &str, relation: Option<&str>, direction: Option<&str>) 
     }
 
     let graph_db_str = graph_db.to_str().unwrap_or(".vfs/graph/graph.db");
-    let graph = GraphDB::open(graph_db_str).context("failed to open DuckDB graph database")?;
+    let graph =
+        GraphDB::open_read_only(graph_db_str).context("failed to open DuckDB graph database")?;
 
     let dir = direction
         .map(hilo_graph::Direction::parse)
@@ -768,7 +771,8 @@ pub fn run_impact(path: &str, max_depth: u32, format: Option<&str>, external: bo
     }
 
     let graph_db_str = graph_db.to_str().unwrap_or(".vfs/graph/graph.db");
-    let graph = GraphDB::open(graph_db_str).context("failed to open DuckDB graph database")?;
+    let graph =
+        GraphDB::open_read_only(graph_db_str).context("failed to open DuckDB graph database")?;
 
     let results = if external {
         // GAP-039: same node-existence check for the external path —
@@ -861,7 +865,8 @@ pub fn run_stats(limit: usize) -> Result<()> {
     };
 
     let graph_db_str = graph_db.to_str().unwrap_or(".vfs/graph/graph.db");
-    let graph = GraphDB::open(graph_db_str).context("failed to open DuckDB graph database")?;
+    let graph =
+        GraphDB::open_read_only(graph_db_str).context("failed to open DuckDB graph database")?;
     let stats = graph
         .stats()
         .context("failed to compute graph statistics")?;
@@ -2126,7 +2131,8 @@ pub fn run_understand(task: &str, budget: Option<usize>) -> Result<()> {
     };
 
     let graph_db_str = graph_db.to_str().unwrap_or(".vfs/graph/graph.db");
-    let graph = GraphDB::open(graph_db_str).context("failed to open DuckDB graph database")?;
+    let graph =
+        GraphDB::open_read_only(graph_db_str).context("failed to open DuckDB graph database")?;
 
     let mut opts = hilo_graph::signal::SignalOpts::default();
     if let Some(b) = budget {
@@ -2151,7 +2157,8 @@ pub fn run_search(query: &str, limit: Option<usize>, no_symbols: bool) -> Result
     };
 
     let graph_db_str = graph_db.to_str().unwrap_or(".vfs/graph/graph.db");
-    let graph = GraphDB::open(graph_db_str).context("failed to open DuckDB graph database")?;
+    let graph =
+        GraphDB::open_read_only(graph_db_str).context("failed to open DuckDB graph database")?;
 
     let mut opts = hilo_graph::semantic::SearchOpts::default();
     if let Some(l) = limit {
@@ -2215,7 +2222,8 @@ pub fn run_module(module_name: &str) -> Result<()> {
     };
 
     let graph_db_str = graph_db.to_str().unwrap_or(".vfs/graph/graph.db");
-    let graph = GraphDB::open(graph_db_str).context("failed to open DuckDB graph database")?;
+    let graph =
+        GraphDB::open_read_only(graph_db_str).context("failed to open DuckDB graph database")?;
 
     let stats = graph
         .module_files_at(&cwd, module_name)
@@ -2294,7 +2302,8 @@ pub fn run_untested() -> Result<()> {
     };
 
     let graph_db_str = graph_db.to_str().unwrap_or(".vfs/graph/graph.db");
-    let graph = GraphDB::open(graph_db_str).context("failed to open DuckDB graph database")?;
+    let graph =
+        GraphDB::open_read_only(graph_db_str).context("failed to open DuckDB graph database")?;
 
     let files = graph
         .untested_files_at(&cwd)
@@ -2342,7 +2351,8 @@ pub fn run_rule_check(name: &str) -> Result<()> {
     };
 
     let graph_db_str = graph_db.to_str().unwrap_or(".vfs/graph/graph.db");
-    let graph = GraphDB::open(graph_db_str).context("failed to open DuckDB graph database")?;
+    let graph =
+        GraphDB::open_read_only(graph_db_str).context("failed to open DuckDB graph database")?;
 
     match hilo_graph::RuleEngine::check(graph.conn(), &rule) {
         Ok(result) => {

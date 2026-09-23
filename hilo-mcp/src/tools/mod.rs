@@ -505,7 +505,7 @@ fn graph_related(arguments: &serde_json::Value) -> McpResult<serde_json::Value> 
     let db_parent = Path::new(GRAPH_DB_PATH).parent().unwrap_or(Path::new("."));
     std::fs::create_dir_all(db_parent).ok();
 
-    let db = hilo_graph::GraphDB::open(GRAPH_DB_PATH)?;
+    let db = hilo_graph::GraphDB::open_read_only(GRAPH_DB_PATH)?;
     let dir = hilo_graph::Direction::parse(direction);
 
     // Try exact path first, then common prefixes. A candidate that IS in the
@@ -583,7 +583,7 @@ fn graph_stats(_arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
         }));
     }
 
-    let db = hilo_graph::GraphDB::open(GRAPH_DB_PATH)?;
+    let db = hilo_graph::GraphDB::open_read_only(GRAPH_DB_PATH)?;
     let stats = db.stats()?;
     Ok(serde_json::to_value(stats)?)
 }
@@ -603,7 +603,7 @@ fn graph_untested(_arguments: &serde_json::Value) -> McpResult<serde_json::Value
         }));
     }
 
-    let db = hilo_graph::GraphDB::open(GRAPH_DB_PATH)?;
+    let db = hilo_graph::GraphDB::open_read_only(GRAPH_DB_PATH)?;
     // GAP-066: resolve covered files through their `pkg:` nodes, relative to
     // the same root the graph paths are stored against.
     let files = db.untested_files_at(&graph_root())?;
@@ -638,7 +638,7 @@ fn graph_module(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
         }));
     }
 
-    let db = hilo_graph::GraphDB::open(GRAPH_DB_PATH)?;
+    let db = hilo_graph::GraphDB::open_read_only(GRAPH_DB_PATH)?;
     let stats = db.module_files_at(&graph_root(), module_name)?;
     Ok(serde_json::to_value(stats)?)
 }
@@ -665,7 +665,7 @@ fn graph_impact(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
     let db_parent = Path::new(GRAPH_DB_PATH).parent().unwrap_or(Path::new("."));
     std::fs::create_dir_all(db_parent).ok();
 
-    let db = hilo_graph::GraphDB::open(GRAPH_DB_PATH)?;
+    let db = hilo_graph::GraphDB::open_read_only(GRAPH_DB_PATH)?;
 
     // JIT: parse start file on cache miss, then BFS over cache.
     let results = db.impact_or_parse(path_str, max_depth)?;
@@ -710,7 +710,7 @@ fn graph_understand(arguments: &serde_json::Value) -> McpResult<serde_json::Valu
         }));
     }
 
-    let db = hilo_graph::GraphDB::open(GRAPH_DB_PATH)?;
+    let db = hilo_graph::GraphDB::open_read_only(GRAPH_DB_PATH)?;
     let opts = hilo_graph::SignalOpts {
         token_budget,
         resolution,
@@ -751,7 +751,7 @@ fn graph_search(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
         }));
     }
 
-    let db = hilo_graph::GraphDB::open(GRAPH_DB_PATH)?;
+    let db = hilo_graph::GraphDB::open_read_only(GRAPH_DB_PATH)?;
     // GAP-077: MCP search indexes file-defined symbols so exact symbol
     // names surface their defining file for agents.
     let opts = hilo_graph::SearchOpts {
@@ -855,7 +855,7 @@ fn rule_check(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
         }));
     }
 
-    let db = hilo_graph::GraphDB::open(GRAPH_DB_PATH)?;
+    let db = hilo_graph::GraphDB::open_read_only(GRAPH_DB_PATH)?;
 
     match hilo_graph::RuleEngine::check(db.conn(), &rule) {
         Ok(result) => Ok(serde_json::json!({
