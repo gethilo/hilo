@@ -1,0 +1,14 @@
+{
+  "tick": "warpfs-2026-09-23-13-55-58",
+  "budget": 5,
+  "wave_size": 3,
+  "base_sha": "c5eb84a",
+  "workers": [
+    {"id": "DF-WARPFS-33", "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-33", "branch": "wt/DF-WARPFS-33", "files": ["hilo-graph/src/graph.rs"], "tags": ["duckdb", "concurrency"]},
+    {"id": "DF-WARPFS-34", "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-34", "branch": "wt/DF-WARPFS-34", "files": ["hilo-graph/src/resolution.rs", "hilo-graph/src/parser.rs"], "tags": ["graph", "java", "resolution"]},
+    {"id": "DF-WARPFS-28", "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-28", "branch": "wt/DF-WARPFS-28", "files": ["hilo-cli/src/commands/mount.rs"], "tags": ["triggers", "ux"]}
+  ],
+  "independence_check": "DF-WARPFS-33 touches graph.rs open path; DF-WARPFS-34 touches resolution.rs/parser.rs; DF-WARPFS-28 touches mount.rs — disjoint file sets, no depends_on edges between rows",
+  "merge_order": ["DF-WARPFS-33", "DF-WARPFS-34", "DF-WARPFS-28"],
+  "dispatched_at": "2026-09-23T14:05:00-05:00"
+}
