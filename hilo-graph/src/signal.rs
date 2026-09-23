@@ -563,26 +563,12 @@ fn extract_symbols_from_ast(node: tree_sitter::Node, source: &[u8], lang: Langua
             );
         }
         Language::TypeScript | Language::JavaScript => {
-            collect_symbols(
-                node,
-                source,
-                &mut symbols,
-                &[
-                    "function_declaration",
-                    "class_declaration",
-                    "abstract_class_declaration",
-                    "method_definition",
-                    "interface_declaration",
-                    "type_alias_declaration",
-                    "enum_declaration",
-                    "generator_function_declaration",
-                    // Arrow functions / function & class expressions bound to
-                    // a name (`export const x = () => {}`) — GAP-075.
-                    "lexical_declaration",
-                    "variable_declaration",
-                ],
-                extract_js_signature,
-            );
+            // Single AST-order walk (the collect_rust_symbols pattern):
+            // declaration symbols (GAP-075 shapes) AND member-assignment
+            // definitions (`res.json = function json(obj) {}`, GAP-100)
+            // interleaved by source position, so the 8-symbol MAP cap
+            // cannot truncate one definition family in favor of the other.
+            collect_js_symbols(node, source, &mut symbols);
         }
         Language::Java => {
             collect_symbols(
@@ -861,6 +847,149 @@ fn collect_symbols(
     for child in children {
         collect_symbols(child, source, symbols, kinds, extractor);
     }
+}
+
+/// Collect TS/JS symbols in AST (source) order: declaration definitions
+/// (the GAP-075 shapes, via [`extract_js_signature`]) AND member-assignment
+/// definitions (`res.json = function json(obj) {}` — GAP-100).
+///
+/// Why member assignments: Express-style modules define their API by
+/// augmenting an object (`res.json = function json(obj) {...}` in
+/// lib/response.js). The tree-sitter AST gives an `assignment_expression`
+/// whose `left` is a `member_expression` and whose `right` is a
+/// function/class-shaped value — a definition in everything but node kind.
+/// Without it, such files carry no symbol for their own API and can never
+/// match a query naming it (the `res json` recall gap the judge flagged).
+///
+/// Conservative by design — the GAP-075 lesson applied to assignments. A
+/// member assignment is a DEFINITION only when BOTH hold:
+/// - the LHS is a dotted member path rooted at the module API (`module.*`,
+///   `exports.*` — CommonJS API definitions) or has exactly two segments
+///   (`res.json` — the prototype-augmentation shape). Never a bare
+///   identifier (`json = ...` reassignment), never rooted at `this`
+///   (`this.x = fn` — a statement inside some other function body), and
+///   never a deeper path through a local (`app1.response.shout = fn` —
+///   mutation of a nested object reached via a parameter/local, not an API
+///   definition; 7 of these in one express test file flooded the index);
+/// - the RHS is function/class-shaped (`function`, `async function`,
+///   arrow, `class`, generator), mirroring the declarator rule — plain
+///   property writes (`req.headers = ...`) stay out of the index.
+///
+/// Declaration symbols keep the exact pre-GAP-100 kind list — the list is
+/// load-bearing (extract_js_signature's fallback heuristic would happily
+/// derive a garbage "symbol" from any random statement node).
+const JS_DECLARATION_KINDS: &[&str] = &[
+    "function_declaration",
+    "class_declaration",
+    "abstract_class_declaration",
+    "method_definition",
+    "interface_declaration",
+    "type_alias_declaration",
+    "enum_declaration",
+    "generator_function_declaration",
+    // Arrow functions / function & class expressions bound to
+    // a name (`export const x = () => {}`) — GAP-075.
+    "lexical_declaration",
+    "variable_declaration",
+];
+
+/// Collect TS/JS symbols in AST (source) order: declaration definitions
+/// (the GAP-075 shapes, via [`extract_js_signature`]) AND member-assignment
+/// definitions (`res.json = function json(obj) {}` — GAP-100).
+fn collect_js_symbols(node: tree_sitter::Node, source: &[u8], symbols: &mut Vec<Symbol>) {
+    match node.kind() {
+        "assignment_expression" => {
+            if let Some(sym) = extract_js_member_assignment_symbol(node, source) {
+                symbols.push(sym);
+            }
+        }
+        kind if JS_DECLARATION_KINDS.contains(&kind) => {
+            if let Some(sym) = extract_js_signature(node, source) {
+                symbols.push(sym);
+            }
+        }
+        _ => {}
+    }
+
+    let children: Vec<tree_sitter::Node> = {
+        let mut cursor = node.walk();
+        node.children(&mut cursor).collect()
+    };
+
+    for child in children {
+        collect_js_symbols(child, source, symbols);
+    }
+}
+
+/// Extract a symbol from a member-assignment definition
+/// (`obj.name = <function | class | arrow | async fn>`), or `None` when the
+/// assignment does not have the definition shape (see
+/// [`collect_js_symbols`]).
+fn extract_js_member_assignment_symbol(node: tree_sitter::Node, source: &[u8]) -> Option<Symbol> {
+    let left = node.child_by_field_name("left")?;
+    let value = node.child_by_field_name("right")?;
+
+    // LHS: a dotted member path — `res.json`, never a bare `json`
+    // reassignment, never `this.x`, never a computed `[expr]` or call
+    // `f().x` target.
+    let path = js_member_path(left, source)?;
+    // `this.x = fn` segments exactly, never a mere substring (`this.x` vs
+    // `dialog.thisElement`).
+    let root = path.split('.').next().unwrap_or_default();
+    let depth = path.split('.').count();
+    if root == "this" {
+        return None;
+    }
+    let is_module_api = matches!(root, "module" | "exports");
+    if !is_module_api && depth != 2 {
+        return None;
+    }
+
+    // RHS: function/class-shaped values only — the same callable kinds the
+    // GAP-075 declarator rule accepts (plus `function_signature` for the TS
+    // declaration form).
+    if !matches!(
+        value.kind(),
+        "function_expression"
+            | "arrow_function"
+            | "class"
+            | "generator_function"
+            | "function_signature"
+    ) {
+        return None;
+    }
+
+    let text = node.utf8_text(source).ok()?;
+    let line = node.start_position().row + 1;
+    let first_line = text.lines().next().unwrap_or(text);
+
+    Some(Symbol {
+        name: path,
+        line,
+        signature: first_line.trim().to_string(),
+    })
+}
+
+/// Flatten a `member_expression` LHS into its dotted identifier path
+/// (`res.json`), or `None` for anything that is not a pure identifier
+/// chain (bare identifiers, computed `[...]` subscripts, call results,
+/// string properties).
+fn js_member_path(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    if node.kind() == "identifier" {
+        let text = node.utf8_text(source).ok()?.trim().to_string();
+        return usable_js_name(&text).then_some(text);
+    }
+    if node.kind() != "member_expression" {
+        return None;
+    }
+    let object = node.child_by_field_name("object")?;
+    let property = node.child_by_field_name("property")?;
+    if property.kind() != "property_identifier" {
+        return None;
+    }
+    let object_path = js_member_path(object, source)?;
+    let property = property.utf8_text(source).ok()?.trim().to_string();
+    Some(format!("{object_path}.{property}"))
 }
 
 /// Collect Rust symbols in AST (source) order: top-level definitions AND
@@ -2865,5 +2994,93 @@ use crate::private::Hidden;
             "expected enum name `Color`, got: {:?}",
             symbols.iter().map(|s| &s.name).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn extract_symbols_js_member_assignment_function_has_member_path_name() {
+        // GAP-100: Express-style prototype augmentation —
+        // `res.json = function json(obj) {}` — is a definition in everything
+        // but node kind. The member path is the symbol name; its tokens
+        // (`res`, `json` after tokenize) are what lets the query "res json"
+        // find lib/response.js in the search index.
+        let src = concat!(
+            "var res = Object.create(http.ServerResponse.prototype);\n",
+            "res.status = function status(code) {\n",
+            "  this.statusCode = code;\n",
+            "  return this;\n",
+            "};\n",
+            "res.json = function json(obj) {\n",
+            "  return obj;\n",
+            "};\n",
+            "module.exports = res;\n",
+        );
+        let symbols = extract_symbols("lib/response.js", src);
+        assert_names_usable(&symbols);
+        let names: Vec<&str> = symbols.iter().map(|s| s.name.as_str()).collect();
+        assert!(
+            names.contains(&"res.json"),
+            "expected member symbol `res.json`, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"res.status"),
+            "expected member symbol `res.status`, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn extract_symbols_js_member_assignment_rejects_non_definitions() {
+        // The conservative half of GAP-100: only a dotted member path with a
+        // function/class value is a definition. Plain property writes
+        // (`req.headers = {}`, numeric/string values), identifier
+        // reassignments (`json = json.replace(...)`) and `this.x = fn`
+        // statements must NOT flood the symbol list — the GAP-075 lesson
+        // applied to assignments.
+        let src = concat!(
+            "var req = {};\n",
+            "req.headers = {};\n",
+            "req.timeout = 5000;\n",
+            "req.label = 'json';\n",
+            "var json = '[{}]';\n",
+            "json = json.replace('[', '{');\n",
+            "function handler(route) {\n",
+            "  this.route = route;\n",
+            "  return route;\n",
+            "}\n",
+        );
+        let symbols = extract_symbols("lib/req.js", src);
+        // `handler` (a real function_declaration) may appear; no
+        // assignment noise may.
+        assert!(
+            symbols.iter().all(|s| s.name == "handler"),
+            "no member-assignment noise allowed, got: {:?}",
+            symbols.iter().map(|s| &s.name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn extract_symbols_js_member_assignment_class_arrow_async_shapes() {
+        // The other accepted value shapes: class / arrow / async function
+        // member definitions collect under their member path.
+        let src = concat!(
+            "var util = require('./util');\n",
+            "util.Cache = class Cache {\n",
+            "};\n",
+            "util.transform = (value) => value;\n",
+            "util.format = async function format(spec) {\n",
+            "  return spec;\n",
+            "};\n",
+        );
+        let symbols = extract_symbols("lib/util.js", src);
+        assert_names_usable(&symbols);
+        let names: Vec<&str> = symbols.iter().map(|s| s.name.as_str()).collect();
+        for expected in ["util.Cache", "util.transform", "util.format"] {
+            assert!(
+                names.contains(&expected),
+                "expected member symbol `{expected}`, got: {:?}",
+                names
+            );
+        }
     }
 }

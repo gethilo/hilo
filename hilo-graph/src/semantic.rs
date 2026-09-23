@@ -279,7 +279,13 @@ impl TfIdfIndex {
             let mut doc_tokens = tokenize(doc_path);
             if let Some(extract) = symbol_extractor {
                 let symbols = extract(doc_path);
-                for sym in symbols {
+                // Cap the symbol enrichment at the same 8 the MAP tier
+                // applies (GAP-044): a definition-rich file (express's
+                // lib/response.js defines 20+ members) must not have its
+                // BM25 length penalty grow with its own API surface, or
+                // rework GAP-100 trades the test-file demotion for a
+                // different file outranking the definition file.
+                for sym in symbols.into_iter().take(8) {
                     doc_tokens.extend(tokenize(&sym));
                 }
             }
@@ -1304,6 +1310,82 @@ mod tests {
         assert!(
             impl_pos < first_test_pos,
             "lib/response.js must rank above every test hit, got: {:?}",
+            results.iter().map(|r| &r.file_path).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn search_real_extractor_finds_member_assignment_definition_above_tests() {
+        // GAP-100 rework (judge FAIL da8c661c): the stub above only proves
+        // the demotion half. This test exercises the REAL default symbol
+        // extractor (GAP-077 path: `search` + index_symbols + explicit root)
+        // against a fixture that actually contains
+        // `res.json = function json(obj) {}` — the member-assignment
+        // definition shape. It fails if member-assignment extraction is
+        // removed: without `res.json` in the index, lib/response.js has no
+        // `res`/`json` token overlap and never enters the fused list.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("lib")).unwrap();
+        std::fs::create_dir_all(dir.path().join("test")).unwrap();
+        std::fs::write(
+            dir.path().join("lib/response.js"),
+            concat!(
+                "'use strict';\n",
+                "var http = require('http');\n",
+                "var res = Object.create(http.ServerResponse.prototype);\n",
+                "res.status = function status(code) {\n",
+                "  this.statusCode = code;\n",
+                "  return this;\n",
+                "};\n",
+                "res.json = function json(obj) {\n",
+                "  var body = JSON.stringify(obj);\n",
+                "  return body;\n",
+                "};\n",
+                "module.exports = res;\n",
+            ),
+        )
+        .unwrap();
+        for name in ["res.json", "res.status", "res.send"] {
+            std::fs::write(
+                dir.path().join("test").join(format!("{name}.js")),
+                format!(
+                    "'use strict';\nvar request = require('supertest');\nvar res = '{name}';\n"
+                ),
+            )
+            .unwrap();
+        }
+        let db_path = dir.path().join("graph.db");
+        let db = GraphDB::open(db_path.to_str().unwrap()).unwrap();
+        db.insert_edges(&[
+            edge("lib/response.js", "pkg:express", "imports"),
+            edge("test/res.json.js", "lib/response.js", "imports"),
+            edge("test/res.status.js", "lib/response.js", "imports"),
+            edge("test/res.send.js", "lib/response.js", "imports"),
+        ])
+        .unwrap();
+
+        // The DEFAULT extractor path (search + index_symbols + root) —
+        // exactly what the CLI runs; no stub, no explicit symbol closure.
+        let opts = SearchOpts {
+            limit: 500,
+            index_symbols: true,
+            root: Some(dir.path().to_path_buf()),
+        };
+        let results = search(&db, "res json", &opts).unwrap();
+        let impl_pos = results
+            .iter()
+            .position(|r| r.file_path == "lib/response.js")
+            .expect(
+                "the real extractor must index the `res.json` member-assignment \
+                 definition so lib/response.js enters the results, got: {:?}",
+            );
+        let first_test_pos = results
+            .iter()
+            .position(|r| crate::classify::is_test_file(&r.file_path))
+            .expect("test hits must remain findable (demoted, not removed)");
+        assert!(
+            impl_pos < first_test_pos,
+            "the member-assignment definition file must outrank every test hit, got: {:?}",
             results.iter().map(|r| &r.file_path).collect::<Vec<_>>()
         );
     }
