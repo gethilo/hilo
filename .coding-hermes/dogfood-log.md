@@ -411,9 +411,17 @@ perf (Step 2b, hyperfine/usr-time, release build): stats 23.5ms ±2.5 warm
 (n=20) / ~30ms cold; mount live 0.28s (daemon return 11ms); parse-and-diff
 fires in 0.51s when it fires. NO PERF ROW — nothing slow enough to feel;
 the waits were broken functionality, not latency.
-install leg: bunker-qa launch OK (agent a8164048 @ bunker-las-02, evidence
-/tmp/bunker-qa-evidence-wf10.jsonl); collect pending at commit time — see
-the event log for the collected outcome (not silently skipped).
+install leg: bunker-qa launch OK (agent a8164048 @ bunker-las-02) →
+collect OK 17 rows, agent destroyed. NOT a silent pass, NOT a full pass:
+fresh-install = INFO ENV-BLOCKED (bare las-02 agent lacks pkg-config, build
+died in a *-sys build script, agent non-root — RECURRENCE of DF-WARPFS-25's
+server-image variance vs las-03, where the 09-20 leg passed); ci-pass OK
+(act 1 job green in a provisioned container); chaos-disconnect/shutdown OK;
+upgrade UNVERIFIED (tar-sync carries no git history, harness limitation);
+chaos-resource ENV-BLOCKED; docker-deploy compose up OK but probe 000
+(same as run 9). Installability on a bare box NOT proven this run; headline
+feature NOT exercised on the ephemeral box. Evidence:
+/tmp/bunker-qa-evidence-wf10.jsonl + board event 645.
 rows: DF-WARPFS-28..31 appended + read-back verified (board 193 rows,
 0 bad task lines; events 643-644; a sibling compaction of events.jsonl
 (101 blanks + 1 dup) landed concurrently — verified 0 unique history lost).
