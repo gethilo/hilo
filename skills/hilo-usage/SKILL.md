@@ -247,3 +247,44 @@ cli-reference.md claim is false at 0.3.0): it starts anywhere and serves all
 question with zeros instead of an error. Pin the server's CWD to an
 initialized project yourself, and treat empty graph answers as suspect until
 `hilo graph stats` in the same directory shows edges.
+
+## Run 10 (2026-09-23, triggers + permissions): what actually works
+
+**`hilo mount --triggers` is a no-op on a stock `hilo init` project** (run
+10, v0.3.0-20-g8832da0): `hilo init` writes `triggers: []`, and that empty
+list suppresses the 9 default parse-and-diff watchers — the stderr banner
+honestly says `loaded 0 triggers` while stdout prints "(triggers enabled)".
+Check the BANNER, not stdout. Even after you delete the `triggers:` key
+from `.vfs/manifest.yaml` (loads the defaults), parse-and-diff fires ONLY
+for files at the project ROOT — writes to `src/**` silently do nothing
+(FileEvent gets the bare inotify name, engine.rs:195; the directory
+reconstruction exists but never reaches the event; failures are logged via
+`info!` with no subscriber installed anywhere in hilo-cli).
+
+**The 10-second liveness canary for the trigger pipeline** (works at any
+version):
+
+```bash
+printf 'use crate::config::Config;\nfn main() {}\n' > probe_root.rs   # ROOT, not src/
+sleep 2 && grep -c probe_root .vfs/graph/edges.jsonl                   # 0 = engine dead
+```
+
+Root file fires in ~0.5 s when the engine works; nested files never fire
+(fixed-or-not, re-probe both before trusting the pipeline).
+
+**Never run `hilo graph stats`/`warm`/`understand` while a mount is up:**
+the trigger engine holds the DuckDB lock on `.vfs/graph/graph.db`, so CLI
+graph commands die with `Conflicting lock is held … PID <mount pid>`.
+Unmount (`fusermount3 -u <mnt>`), or treat every lock error as
+"something of mine still holds graph.db". Two `--triggers` mounts on one
+project fight each other the same way, and the loser runs with impact
+computation silently disabled.
+
+**Manifest `permissions.rules` currently have NO effect on any surface**
+(run 10): the FUSE engine is built from hardcoded default protections only
+(ops.rs:113; no manifest read in the mount path), the mount is read-only
+anyway (EROFS from the kernel), and hilo-mcp contains zero permission code
+despite docs/hilo-permissions.md claiming MCP enforcement. Do not promise
+path-level access control to an agent based on this manifest block; the
+only real protections today are `.vfs/**`/`.git/**` hiding via the ignore
+stack and the read-only mount itself.

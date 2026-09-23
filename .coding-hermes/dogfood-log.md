@@ -375,3 +375,48 @@ events 494-499).
 left behind: docs/dogfood/2026-09-22-run9-git-backend-plugins.md,
 docs/dogfood/diagnostics.md Run 9 section, skills/hilo-usage/SKILL.md
 run-9 section, rows, this entry.
+
+---
+
+## 2026-09-23 (coding-hermes-tools-dogfood tick 2026-09-23-07-09-38) — run 10, triggers (living map) + permissions at v0.3.0-20-g8832da0
+
+verdict: 🔴 DOES-NOT-DELIVER (for the triggers surface the flag advertises;
+⚪ UNKNOWN-VALUE for permissions — no observable user surface; CLI/graph/
+MCP/FUSE read paths remain shippable per runs 1–8, re-verified healthy)
+promise: angle chosen by the stale-surface rule — runs 1-9 covered
+CLI/graph/MCP/FUSE/backends/FFI/plugins/git-backend but never hilo-triggers
+(the "every file save triggers parse-and-diff" living map, door:
+`hilo mount --triggers`) nor hilo-permissions (manifest rules, "enforced by
+FUSE and MCP"). HEAD tested: 8832da0 (v0.3.0-20, local release 0.3.1-dev).
+consumer pass: fresh fd @ 9e8927e corpus (repo never used before);
+init+warm healthy (268 edges/23 files). Triggers: stock manifest →
+`--triggers` loads 0 triggers (banner says so, stdout still says "enabled";
+DF-WARPFS-28 — `hilo init` writes `triggers: []`, empty list suppresses the
+9 defaults). Workaround (delete the key) → defaults load, but parse-and-diff
+fires ONLY for project-ROOT files: `src/cli.rs` write 3× silent for 30s,
+root canary with imports appends 2 edges in 0.51s (DF-WARPFS-29, P0 —
+FileEvent.path is the bare inotify name, engine.rs:195; the watch-dir
+reconstruction at 203-209 never reaches the event; all failure branches
+info!() under a binary with NO log subscriber). Every trigger mount also
+holds the graph.db DuckDB lock: `graph stats` hard-fails while a mount is
+up, and a second mount's engine silently loses the lock and runs with
+impact disabled (DF-WARPFS-30). Permissions: manifest rules wired nowhere —
+FUSE engine built from hardcoded default_protections() (ops.rs:113), mount
+read-only by design, hilo-mcp has zero permission code despite the doc
+claim (DF-WARPFS-31).
+time-to-first-success: NEVER on the documented trigger workflow; the only
+firing config (defaults + root-level file) is undiscoverable.
+friction count: 4 (DF-WARPFS-28/29/30/31).
+perf (Step 2b, hyperfine/usr-time, release build): stats 23.5ms ±2.5 warm
+(n=20) / ~30ms cold; mount live 0.28s (daemon return 11ms); parse-and-diff
+fires in 0.51s when it fires. NO PERF ROW — nothing slow enough to feel;
+the waits were broken functionality, not latency.
+install leg: bunker-qa launch OK (agent a8164048 @ bunker-las-02, evidence
+/tmp/bunker-qa-evidence-wf10.jsonl); collect pending at commit time — see
+the event log for the collected outcome (not silently skipped).
+rows: DF-WARPFS-28..31 appended + read-back verified (board 193 rows,
+0 bad task lines; events 643-644; a sibling compaction of events.jsonl
+(101 blanks + 1 dup) landed concurrently — verified 0 unique history lost).
+left behind: docs/dogfood/2026-09-23-run10-triggers-permissions.md,
+docs/dogfood/diagnostics.md Run 10 section, skills/hilo-usage/SKILL.md
+run-10 section (incl. the root-canary liveness probe), rows, this entry.

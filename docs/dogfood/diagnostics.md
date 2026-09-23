@@ -626,3 +626,43 @@ hilo backend list                                                               
 `backend setup` (flag form: `--type s3`, never positional) is the one
 backend UX that tells the truth about the five live types — worth extending
 to git/local the day they become real.
+
+### Run 10 (2026-09-23): triggers — the event that never had a directory
+
+The run-10 discriminator (nested write silent, root write fires in 0.5 s)
+pins the class: **inotify `name` is relative to the WATCHED directory, not
+to the project.** Any consumer that converts it to a path without
+reconstructing the watch directory silently addresses the wrong file. The
+fix shape is not "fix parse-and-diff" — it is "reconstruct the full path
+once, in the event loop, where the watch table is in scope, and carry it on
+the FileEvent" (the reconstruction already exists at engine.rs:203-209 for
+the sync hook; it just never feeds the event). One truth at the source
+beats per-consumer patching.
+
+Three transferable lessons from the same run:
+
+1. **A pipeline whose failures all log via `info!` under a binary with no
+   subscriber has no error surface at all.** hilo-cli never installs a
+   logger, so nine distinct failure branches in parse_and_diff_sync
+   (ENOENT, unsupported ext, parser init, parse fail, append fail…) all
+   vanish. A "watching N triggers active" banner should be paired with a
+   per-fire line and an installed subscriber — the banner is a promise, the
+   log lines are its receipt.
+2. **`key: []` and key-absent must not be conflated.** `load_triggers`
+   treats a manifest `triggers: []` as "user's choice" (zero triggers)
+   while absent → defaults. Both are silent. Empty-by-manifest should
+   announce itself ("manifest disables all 9 default triggers") or fall
+   back; anything else turns the flag `--triggers` into a printed lie.
+3. **DuckDB is single-writer: exactly one process may own graph.db.** The
+   trigger engine opens it eagerly and holds it; every later CLI graph
+   command (and every second mount) then hard-fails with a lock error that
+   names the holder PID but never says "that's your mount". Ownership +
+   lazy attach + a human hint in the error is the whole fix.
+
+The testing method is the reusable part: a **root-level canary file with
+imports** (`printf 'use crate::…;' > probe_root.rs`) is a 1-second
+liveness probe for parse-and-diff — count lines in edges.jsonl before and
+after. It separates "engine dead" (no root fire) from "engine blind to
+subdirs" (root fires, nested silent) from "engine lock-starved" (banner
+shows the DB error). That probe should become a `hilo graph selfcheck`
+someday.
