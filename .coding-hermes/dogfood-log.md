@@ -428,3 +428,93 @@ rows: DF-WARPFS-28..31 appended + read-back verified (board 193 rows,
 left behind: docs/dogfood/2026-09-23-run10-triggers-permissions.md,
 docs/dogfood/diagnostics.md Run 10 section, skills/hilo-usage/SKILL.md
 run-10 section (incl. the root-canary liveness probe), rows, this entry.
+
+---
+
+## 2026-09-23 (warpfs-dogfood tick 2026-09-23-12-43-28) — run 11, Java corpus + concurrency + first FFI consumer
+
+verdict: 🟡 PROMISING-BUT-ROUGH for the Java surface (pkg-form blast radius
+EXACT 112/112; file-form silently empty and `stats` calls the same class an
+orphan) / 🔴 DOES-NOT-DELIVER for concurrent access (7 of 8 parallel graph
+commands exit 1; two MCP servers on one repo → the second agent's
+vfs_graph_stats returns -32603 lock error) / ✅ the FFI consumer path WORKS
+from Python (5/5 calls) once an undocumented library filename is fixed.
+angle: chosen by the stale-surface rule — runs 1-10 covered CLI/graph (1-6),
+FUSE (7), S3 backends + FFI ABI export (8), git backend + plugins (9),
+triggers + permissions (10). This run took (a) the first **Java** corpus in
+11 runs (docs/graph-engine.md advertises 26 languages; only Rust x2, Go,
+Python, TS/JS had been exercised), (b) **concurrency** — the real working mode
+of an "agent-first" tool, and (c) the **FFI consumer** path run 8 left at
+ABI-export only (`nm -D`).
+HEAD tested: 740f0d9 (v0.3.0-28). Binaries: release CLI `hilo 0.3.1-dev`
+(build stamp v0.3.0-14-g2b26d3f, 2026-09-22) + `target/debug/libhilo_ffi.so`
+built this run with the documented `cargo build -p hilo_ffi` (8s, warm cache).
+Corpus: google/gson depth-1 clone — 264 .java files, 243 with edges.
+consumer pass: init 12ms → warm cold 12.0s (4418 edges) → incremental 29ms;
+`graph impact pkg:com.google.gson.Gson` → 112/112 == grep truth; MCP over
+stdio (initialize 0.3.1-dev, vfs_graph_impact 112, vfs_graph_stats live); the
+post-commit hook `hilo init` installs really fires `graph warm --changed` on
+commit and appends the new edge (4418 → 4419) on Java; `meta --set/--value` +
+getfattr byte-exact round-trip; plain FUSE `--daemon` mount + `fusermount3 -u`
+clean (process exits in <4s).
+FOUND (9 rows, DF-WARPFS-32..40): DF-32 (P1) a `--triggers` mount LEAKS after
+unmount — daemon alive and graph.db locked >=26s until killed (2/2 runs),
+while a plain mount exits in <4s; DF-33 (P1) every concurrent read fails (7/8
+CLI; 2nd MCP server gets -32603) because each command opens graph.db
+read-write (hilo-graph/src/graph.rs:1080); DF-34 (P1) Java file-form id
+resolution missing — "No dependents found" for a class with 112 importers
+while the pkg form is exact, and `stats` lists that class as an ORPHAN with
+194 edges targeting it; DF-35 (P2) `graph understand` on Java emits decorator
+noise and omits the defining file (Gson.java:186 for a serializeNulls
+question); DF-36 (P2) classify puts public API classes in role=unknown and
+metrics benchmarks in entrypoint; DF-37 (P2) 1744 tested_by edges yet
+`graph module` prints Tests: 0.0%; DF-38 (P2) `hilo init` installs no
+.gitignore entries so the first commit adds a 1.3MB graph.db + parse caches
+while docs/inventory-policy.md reads as if it does; DF-39 (P2) coverage
+arithmetic contradicts itself — `module` 0.0% vs `untested`/FFI 58.02%, and
+0 of 1744 tested_by edges target a file (the number is emit-derived, not
+per-file coverage); DF-40 (P2) the documented FFI workflow stops one step
+short — bindings load `libuniffi_hilo.so` while cargo builds `libhilo_ffi.so`,
+and no doc names it.
+re-check: DF-WARPFS-28/30 re-confirmed live at this binary (no duplicate rows
+filed). DF-WARPFS-29 (fixed 2bfae82) NOT re-tested — the local CLI predates
+the fix and the tick window had no spare rebuild.
+perf (Step 2b, hyperfine, release build, warm cache): stats 19.8ms ±1.8
+(n=20), impact 34.5ms ±2.1 (n=20), understand 78.4ms ±3.1 (n=10), warm cold
+12.0s / 264 files, incremental 29ms, MCP round trip 104ms. NO PERF ROW —
+nothing slow enough that a user would notice; this run's waits were failures
+(locked DB, empty answers, a 45min release build I chose), not product latency.
+install leg: bunker-qa battery RAN on agent 8b0362e6 @ bunker-las-02 (launch
+12:59:56Z, collect + destroy same session, 17 evidence rows). NOT a silent
+pass, NOT a full pass: fresh-install = INFO ENV-BLOCKED — the bare las-02 agent
+has no pkg-config and no sudo, and the build died in openssl-sys v0.9.117's
+build script. THIRD consecutive occurrence of exactly that cell outcome (runs
+9, 10, 11), already filed as DF-WARPFS-25 (pending) — recorded as recurrence,
+not re-filed. Installability on a bare box was therefore NOT proven this run
+either; on that image the README's own `sudo apt install ...` line cannot run.
+ci-pass OK (act: 1 job green rc=0); chaos-disconnect OK (fail-fast rc=101);
+chaos-shutdown OK (SIGTERM+SIGKILL recovery clean); upgrade FAIL/UNVERIFIED
+(synced tree carries no git history — harness limitation, battery grades it
+untested); docker-deploy INFO (compose up OK, probe 000, as runs 9/10);
+chaos-resource INFO ENV-BLOCKED (same openssl-sys cause, 3G cap never
+exercised); chaos-corruption N/A (no db/state files); chaos-errorpath INFO
+(no start command detected).
+ffi leg: CONSUMER EXERCISED for the first time. Bindings generation works with
+the documented form (74496-byte hilo.py, docs' own `test -f` passes);
+`cargo build -p hilo_ffi` (documented, debug) → libhilo_ffi.so in 8s with a
+warm target/; `import hilo` then failed with `OSError: libuniffi_hilo.so:
+cannot open shared object file` until the library was copied under that name.
+After the rename all five calls succeeded against the gson graph:
+vfs_get_metadata → 'dogfood-run11' (round-trip of an xattr written by the CLI
+— cross-surface proof), HiloHandle(repo), vfs_graph_stats (243 files / 4419
+edges / tested_pct 58.02), vfs_graph_impact → 112 (== grep), vfs_graph_related
+→ 29 edges, vfs_list_directory → 21 entries. Barrier filed as DF-WARPFS-40.
+rows: DF-WARPFS-32..40 appended + read-back verified (board 193 → 202 rows,
+0 bad task lines, no duplicate ids; events 646 → 648, ids 647 and 648).
+  note: events.jsonl carries 102 pre-existing blank lines and two pre-existing
+  duplicate ids (null, 2) from a sibling compaction — NOT introduced by this
+  run (census before/after: this run added exactly two lines, ids 647/648).
+left behind: docs/dogfood/2026-09-23-run11-java-concurrency.md,
+docs/dogfood/diagnostics.md Run 11 section, skills/hilo-usage/SKILL.md run-11
+section (Java dialect row, concurrency + triggers-teardown warnings, .gitignore
+note), rows, this entry.

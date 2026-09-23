@@ -666,3 +666,52 @@ after. It separates "engine dead" (no root fire) from "engine blind to
 subdirs" (root fires, nested silent) from "engine lock-starved" (banner
 shows the DB error). That probe should become a `hilo graph selfcheck`
 someday.
+
+### Run 11 (2026-09-23): Java, concurrency, and the teardown that does not tear down
+
+**1. A single-writer database behind a read-mostly interface is a
+concurrency bug waiting for its second caller.** Hilo's graph lives in DuckDB
+and every command — including `graph stats`, which only reads — opens it with
+`Connection::open` (hilo-graph/src/graph.rs:1080), which takes the file's
+exclusive write lock. One user is fine; an agent platform is not. Measured:
+8 concurrent CLI queries → 7 fail with `Conflicting lock is held`. The same
+code shape appears in three separate run findings now (mount holds it while
+mounted, DF-WARPFS-30; two commands collide, DF-WARPFS-33; the unmounted
+process keeps it, DF-WARPFS-32). The fix is architectural, not per-site: a
+read-only open path for query-only commands, plus an owner-aware retry.
+
+**2. Ownership of the DB handle is what makes an unmount a lie.** `fusermount3 -u`
+detaches the FUSE session; it does not stop the daemon. Because the trigger
+engine owns its DB handle on a thread of its own, the process outlived the
+unmount and kept the lock for as long as it was observed (≥26 s, until killed),
+while a plain mount exited in <4 s. The design question is "who owns the
+handle and when is it dropped", and the acceptance test is a *process* check
+after unmount, not a mountpoint check — `mountpoint -q` returning false is
+exactly the state that fools the user.
+
+**3. Edge dialects are the whole product surface for blast radius, and the docs
+do not name them.** Hilo stores targets as `pkg:`, `sys:`, and `local:` nodes
+depending on the language, and resolves a bare file path to them per language.
+Java is the fourth language where that resolution is unimplemented: the
+`pkg:` form answered exactly (112/112 against grep) while the file form — the
+form the docs use everywhere (`docs/cli-reference.md:148`) — returned
+"No dependents found" for a class with 194 edges pointing at it. Worse, the
+same unresolved data made `graph stats` print that class as an *orphan*, i.e.
+the tool contradicted its own inventory in the same breath. A field that is
+silently wrong in one id dialect and exact in another needs a test that runs
+every dialect the docs advertise for every language the docs advertise —
+otherwise the language table in `docs/graph-engine.md` is a promise nobody
+checks.
+
+**4. The reusable probe for this class of defect is the two-dialect answer.**
+Query the same relationship in file form and in dialect form, and diff the
+counts against grep. On any new language corpus: one grep, two queries,
+three numbers. That is what caught this run's P1 in under a minute, and it is
+what a `hilo graph doctor` subcommand should do.
+
+**5. Signal for the "understanding" surfaces is the same trick.** For
+`graph understand`, ask a question whose answer lives in a *named* file
+("how does Gson serialize null fields" → `Gson.java:186`) and check whether
+that file reaches `## DETAIL`. Symbol extraction that returns `@Override` and
+`context)` is not a weaker answer, it is a different kind of output — and
+because the pack is formatted, it reads as an answer.

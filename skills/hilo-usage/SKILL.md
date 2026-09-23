@@ -38,10 +38,68 @@ needs the dialect form:
 | Go | `pkg:<full-import-path>/<dir>` | resolve file's dir → `pkg:<module>/<dir>` |
 | Python | `pkg:<module.dots>` | drop `.py`, slashes→dots → `pkg:<module>` |
 | TS/JS | `local:<relative-specifier>` | query the EXACT specifier: `hilo graph related 'local:./pluginContainer' --direction reverse` (each `./x` vs `../server/x` variant is a separate query — GAP-069) |
+| Java | `pkg:<fully.qualified.Class>` | drop `.java`, slashes→dots → `pkg:com.foo.Bar` (verified exact: 112/112 on gson; file-form answers empty — DF-WARPFS-34) |
 
 If a file-form answer says "No dependents found" on a non-Rust repo,
 **do not trust it** — resolve the dialect form and re-query. Empty result
 is structural, not informational (verified: file had 24 incoming edges).
+The same defect makes `graph stats`'s **Orphans** block wrong on those
+repos: gson's `Gson.java` is listed as having no incoming edges while 194
+edges target `pkg:com.google.gson.Gson` (DF-WARPFS-34).
+
+## Run 11 (2026-09-23, Java + concurrency): read this before parallel queries
+
+1. **Run ONE `hilo` graph command at a time.** Every command opens
+   `graph.db` read-write (hilo-graph/src/graph.rs:1080) and DuckDB allows a
+   single writer, so 7 of 8 parallel invocations died with
+   `Could not set lock on file … (DF-WARPFS-33)`. If you fan out queries,
+   serialize them, or expect the failures.
+2. **A `--triggers` mount leaks after unmount.** `fusermount3 -u` returns 0
+   but the daemon kept running and held the graph.db lock ≥26 s (until
+   killed) on 2/2 runs, while a plain mount exits within 4 s (DF-WARPFS-32).
+   After unmounting a trigger mount, check for a surviving
+   `hilo mount … --triggers` process and `hilo graph stats` before trusting
+   the lock is free.
+3. **Java symbol/coverage surfaces are weak:** `graph understand` symbols
+   come back as `@Override`-style fragments and the defining file is often
+   missing from the pack (DF-WARPFS-35); `classify` leaves public API classes
+   `role=unknown` while tagging `metrics/**/*Benchmark.java` as `entrypoint`
+   (DF-WARPFS-36); `module` reports `Tests: 0.0%` with 1744 `tested_by` edges
+   present (DF-WARPFS-37).
+4. **Do not `git add -A` after `hilo init`** unless you want a 1.3 MB
+   `graph.db` and the parse caches in the commit: `hilo init` writes no
+   `.gitignore` entries, although `docs/inventory-policy.md` reads as if it
+   does (DF-WARPFS-38). Add
+   `.vfs/graph/{graph.db,graph.db.wal,.parse_cache.json,.last_reconcile,.last_warm}`
+   yourself, keeping `.vfs/manifest.yaml` and `.vfs/graph/edges.jsonl` tracked.
+
+## FFI (Python) consumer — the working recipe (run 11, 2026-09-23)
+
+The FFI really works from Python; the documented flow just stops one step
+short of a loadable module (DF-WARPFS-40):
+
+```bash
+cd hilo-ffi
+mkdir -p /tmp/bind/python && rm -rf /tmp/bind/python/*
+# documented generator (the repo builds it; `cargo run -p hilo_ffi --bin uniffi-bindgen -- generate …` is the same thing)
+uniffi-bindgen generate src/hilo.udl --language python --no-format --out-dir /tmp/bind/python
+cargo build -p hilo_ffi                      # DOCUMENTED build = debug, ~8s warm; --release = 45min+ duckdb C++
+cp ../target/debug/libhilo_ffi.so /tmp/bind/python/libuniffi_hilo.so   # ← the undocumented step
+LD_LIBRARY_PATH=/tmp/bind/python python3 -c "
+import sys; sys.path.insert(0, '/tmp/bind/python'); import hilo
+h = hilo.HiloHandle('/abs/path/to/repo')      # ctor takes the repo root; no cwd dependency
+print(h.vfs_graph_stats())                    # GraphStats(total_files=…, total_edges=…, tested_pct=…)
+print(h.vfs_graph_impact('pkg:com.foo.Bar', 3).total)
+print(hilo.vfs_get_metadata('/abs/path/f.rs', 'user.vfs.role'))   # namespace fn, no handle
+"
+```
+
+Notes: the generated `hilo.py` hard-codes `libuniffi_hilo.so` **in its own
+directory** (hilo.py:449-451), so the copy is the whole trick. Verified calls:
+`vfs_get_metadata` (reads xattrs the CLI wrote — cross-surface), `HiloHandle`,
+`vfs_graph_stats`, `vfs_graph_impact` (112 == grep truth on gson),
+`vfs_graph_related` (forward edges), `vfs_list_directory`.
+
 
 ## Verified-fast paths (trust these)
 
