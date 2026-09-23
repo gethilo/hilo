@@ -715,3 +715,70 @@ what a `hilo graph doctor` subcommand should do.
 that file reaches `## DETAIL`. Symbol extraction that returns `@Override` and
 `context)` is not a weaker answer, it is a different kind of output — and
 because the pack is formatted, it reads as an answer.
+
+## Run 12 — 2026-09-23 (warpfs-dogfood, MCP server surface)
+
+**The surface nobody had driven.** Runs 1–11 never connected a real MCP
+client to the 0.3.x server (run 1 drove 6 of the 0.2.x-era 15 tools). This
+run wired a raw NDJSON JSON-RPC 2.0 client over stdio — the exact shape
+Claude Code and Hermes use — against a scratch copy of hermes-canopy.
+
+**What the server got right (and it is a lot):**
+
+- **Handshake and schema are honest now.** `serverInfo.version` reports
+  `0.3.1-dev` (run 4 recorded "serverInfo lies: 0.2.0" — fixed). `tools/list`
+  returns exactly 17 tools with real descriptive schemas, including which
+  argument is required (`path` for most, `task` for understand). My own first
+  battery failed 4 calls by guessing `file=` — the failure message
+  (`missing 'path' argument`) is actionable, and the schemas name the right
+  key. Check the schema before filing a "wrong arg name" finding: it is the
+  documented-command-form trap in MCP shape.
+- **Error messages earned their keep.** Unknown file → `-32603` listing all
+  three accepted id forms (bare path / `sys:` / `pkg:`) — DF-WARPFS-2's fix
+  works end-to-end over MCP. Unknown tool → clean `Unknown tool`. Zero
+  non-JSON stdout lines across six client sessions: the GAP-050 stdout
+  hygiene fix is real (tracing INFO goes to stderr).
+- **The agent-facing tools are fast and real.** `vfs_graph_impact`
+  internal/card/service.go depth 3 → total=27, all 27 returned, file set
+  identical to the CLI's own impact output. `vfs_graph_search` "context
+  compiler" → top hit is the real compiler file. `vfs_graph_understand`
+  "card storage and sync" → anchored on 8 real card files with tiered
+  excerpts. Stats match the CLI byte-for-byte in content. Warm battery ≈ 1 s
+  end-to-end including process spawn; in-server answers are tens of ms.
+- **Metadata survives server restart** (xattr written via MCP `vfs_set_metadata`,
+  read back through a fresh process) — same persistence guarantee run 1 proved
+  over CLI, now proven over the server surface.
+
+**But the front door is broken: `vfs_list_directory` silently returns empty.**
+`{"entries":[],"total":0}` with rc=0 on internal/card, frontend, frontend/src,
+cmd, `.`, an absolute path — 7/7 real populated directories — and even on a
+*file* path (which should be a type error, also silent-empty). This is the
+same "0 results and no error = treat as hang" class the 2026-09-20 FUSE run
+caught in readdir. Proof the capability exists in-process:
+`vfs_workspace_ephemeral` on the same tree enumerated frontend/dist files
+correctly, so path resolution and enumeration work elsewhere in the same
+server binary. The tool that orients an agent in a new repo — "what is in
+this directory?" — is the one that answers a confident zero. Filed
+DF-WARPFS-41. Until it lands: agents should use `vfs_graph_search` or
+`vfs_workspace_ephemeral` for orientation, never trust `vfs_list_directory`'s
+empty answer (skills/hilo-usage/SKILL.md updated this run).
+
+**Two more findings from the same battery:**
+
+- **stats' file census disagrees with warm's own coverage line** — warm prints
+  `705 files` (659 contribute edges + 46 no imports), stats prints
+  `Total files: 666`, same tree, same run, same edges.jsonl. 39 covered files
+  vanish between the two headline numbers. Filed DF-WARPFS-43 (two-numbers-
+  one-board law: they must agree or the difference must be visible).
+- **The MCP stdout-hygiene section of this file is stale** — it documents
+  stdout INFO as a live trap "until GAP-050 lands"; GAP-050 has landed and
+  this run measured 0 violations. Filed DF-WARPFS-42 (docs-only).
+
+**The right way over MCP today (0.3.x):** one persistent client connection
+(amortize the ~1 s spawn), `initialize` → `tools/list` → drive
+`vfs_graph_impact` / `vfs_graph_related` / `vfs_graph_search` /
+`vfs_graph_understand` / `vfs_graph_stats` / `vfs_get_metadata` /
+`vfs_set_metadata` with `path`/`task` arguments exactly as the schemas say.
+For directory orientation use `vfs_workspace_ephemeral` (works) — do not
+trust `vfs_list_directory`. Errors are informative; batch independent calls;
+the server is stateless per-process except xattrs, which persist.

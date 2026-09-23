@@ -518,3 +518,49 @@ left behind: docs/dogfood/2026-09-23-run11-java-concurrency.md,
 docs/dogfood/diagnostics.md Run 11 section, skills/hilo-usage/SKILL.md run-11
 section (Java dialect row, concurrency + triggers-teardown warnings, .gitignore
 note), rows, this entry.
+
+## 2026-09-23 — run 12 — MCP server surface — 🟡 PROMISING-BUT-ROUGH
+
+**Angle:** `hilo serve --mcp` (0.3.x, 17 tools) driven by a raw NDJSON
+JSON-RPC 2.0 stdio client — the shape Claude Code/Hermes use — against a
+scratch copy of hermes-canopy (666-file graph). First run to connect a real
+MCP client to the 0.3.x server; run 1 drove 6 of the 0.2.x-era 15 tools.
+
+**Promise vs reality:** "an agent can answer structural questions about a
+codebase it has never seen, through 17 vfs_* tools, without reading files."
+Holds for the graph tools: impact 27/27 exact (== CLI), search top hit = the
+real compiler file, understand anchored on 8 real card files, stats == CLI
+byte-for-byte, xattr writes persist across server restart, errors are
+informative (all id forms listed), stdout pure JSON-RPC across 6 sessions,
+serverInfo honest (0.3.1-dev). BUT the orientation tool
+`vfs_list_directory` silently returns {"entries":[],"total":0} on 7/7 real
+populated directories (rc=0, no error) — the "0 results and no error" hang
+class; vfs_workspace_ephemeral enumerates the same tree correctly, so the
+fix is in reach. Also: stats "Total files: 666" vs warm coverage "705
+files" on the same tree (39-file gap, DF-WARPFS-43); docs still document
+the fixed GAP-050 stdout-INFO trap as live (DF-WARPFS-42).
+
+**Time-to-first-success:** ~2 min (handshake + tools/list + first real
+impact answer). Friction: 1 (my own wrong arg name — schema-checked,
+actionable error, not filed).
+
+**Perf (hyperfine, release build, warm, n=20):** `graph stats` 19.1ms ±0.7,
+`graph impact` depth-3 39.4ms ±2.7; MCP battery (spawn+8 tools) 0.97–2.02s
+end-to-end; graph warm cold 9.06s / warm 0.09s (6593 edges, 659 files).
+NO PERF ROW — nothing slow enough that a user would notice; the numbers
+beat the README's own claims.
+
+**install leg:** bunker-qa battery on agent 87de5bfd @ bunker-las-02
+(launch 14:10Z, collect + destroy same session, agent verified gone).
+fresh-install = INFO ENV-BLOCKED 4th consecutive run (bare image lacks
+pkg-config, no sudo; build died in a *-sys script) — README's own
+`sudo apt install` path unrunnable on the QA image. Re-filed with fix
+options as DF-WARPFS-44 (root cause = DF-WARPFS-25). toolchain-bootstrap
+cells all OK (rust stable, zig cc, make, compose+buildx plugins).
+
+rows: DF-WARPFS-41..44 appended + read-back verified (board 202 → 206 rows,
+0 bad lines, each id exactly once). left behind:
+docs/dogfood/2026-09-23-run12-mcp-server.md,
+docs/dogfood/diagnostics.md Run 12 section, skills/hilo-usage/SKILL.md
+run-12 section (path/task arg names, list_directory distrust, stats-vs-warm
+count), rows, this entry.

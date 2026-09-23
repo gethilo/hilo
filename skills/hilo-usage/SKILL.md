@@ -346,3 +346,35 @@ despite docs/hilo-permissions.md claiming MCP enforcement. Do not promise
 path-level access control to an agent based on this manifest block; the
 only real protections today are `.vfs/**`/`.git/**` hiding via the ignore
 stack and the read-only mount itself.
+
+## Run 12 (2026-09-23, MCP server): read this before driving `hilo serve --mcp`
+
+**Connect as a real client:** NDJSON JSON-RPC 2.0 on stdio — `initialize`
+first, then `tools/list` (returns exactly 17 tools with real schemas), then
+`tools/call` batches. One persistent connection: spawn+handshake ≈ 1 s, but
+in-server answers are tens of ms — batching independent calls on ONE process
+is the right way (6 sessions this run, 0 protocol errors).
+
+**Argument names are `path` and `task`** (not `file`) — read the
+`inputSchema` from `tools/list` before your first battery; a wrong guess
+fails with `missing 'path' argument` (actionable, not a bug).
+
+**DO NOT TRUST `vfs_list_directory` at 0.3.x (DF-WARPFS-41):** it returns
+`{"entries":[],"total":0}` with NO error on every real populated directory
+(verified 7/7 path shapes incl. absolute, plus a file path). For directory
+orientation use `vfs_workspace_ephemeral` (enumerates correctly) or
+`vfs_graph_search`.
+
+**What works well over MCP (drive these first):** `vfs_graph_impact`
+(file form, depth 3 → 27/27 exact), `vfs_graph_search` (lexical, top hit =
+the real file), `vfs_graph_understand` (anchored on real files, tiered
+excerpts), `vfs_graph_stats` (matches CLI byte-for-byte), `vfs_get_metadata`
+/ `vfs_set_metadata` (xattrs persist across server restart). Error messages
+are good: unknown file → `-32603` listing all accepted id forms (bare /
+`sys:` / `pkg:`); unknown tool → clean error. Stdout is pure JSON-RPC (0
+violations in 6 sessions; tracing goes to stderr). `serverInfo.version` is
+honest (0.3.1-dev).
+
+**Known count mismatch (DF-WARPFS-43):** `graph stats` "Total files: 666" vs
+`graph warm` coverage "705 files" on the same tree — quote warm's coverage
+number in reports; stats under-reports by the no-imports set.
