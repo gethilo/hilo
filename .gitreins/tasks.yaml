@@ -1444,3 +1444,15 @@ tasks:
   status: complete
   created_at: '2026-09-22T20:02:36.293653+00:00'
   completed_at: '2026-09-22T21:13:25.888178+00:00'
+- id: gap-096-mcp-first-use-reconcile
+  title: MCP graph tools answer empty graph on fresh corpus instead of reconciling
+    edges.jsonl
+  criteria:
+  - On a corpus with edges.jsonl but no graph.db, vfs_graph_stats via 'hilo serve
+    --mcp' returns total_edges>0 (reconciled from edges.jsonl, matching the CLI on
+    the same corpus), not total_edges=0; the same no-data scratch (neither file present)
+    still returns the all-zeros object; cargo check -p hilo_mcp and cargo test -p
+    hilo_mcp exit 0
+  status: complete
+  created_at: '2026-09-22T23:42:04.189942+00:00'
+  completed_at: '2026-09-22T23:55:51.580160+00:00'
