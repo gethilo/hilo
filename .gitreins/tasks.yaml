@@ -1504,3 +1504,54 @@ tasks:
   status: complete
   created_at: '2026-09-23T03:36:23.301174+00:00'
   completed_at: '2026-09-23T03:37:47.403369+00:00'
+- id: DF-WARPFS-33
+  title: 'concurrency: graph query commands open graph.db read-write'
+  criteria:
+  - 8 concurrent hilo graph stats/impact invocations all exit 0 without 'Conflicting
+    lock'
+  status: complete
+  created_at: '2026-09-23T14:07:49.337891+00:00'
+  completed_at: '2026-09-23T23:04:57.640149+00:00'
+- id: DF-WARPFS-34
+  title: Java file-form id resolution missing
+  criteria:
+  - impact gson/src/main/java/com/google/gson/Gson.java returns same 112 dependents
+    as pkg form; no longer orphan in stats
+  status: complete
+  created_at: '2026-09-23T14:07:49.747676+00:00'
+  completed_at: '2026-09-23T21:59:14.107329+00:00'
+- id: DF-WARPFS-28
+  title: 'triggers: mount --triggers loads 0 triggers on stock init'
+  criteria:
+  - fresh hilo init project + mount --triggers shows 9 triggers active or loud disable
+    warning
+  status: complete
+  created_at: '2026-09-23T14:07:50.156864+00:00'
+  completed_at: '2026-09-23T23:04:58.051271+00:00'
+- id: DF-WARPFS-34b
+  title: Java file-form id resolution + a committed surface test proving file form
+    == pkg form importer set
+  criteria:
+  - 'On the gson corpus the Java parser emits pkg:<FQCN> edges for imports, so a .java
+    file must resolve to its pkg:com.google.gson.Gson node. (1) FILE FORM RESOLVES:
+    hilo graph impact <path>.java returns the SAME importer SET as hilo graph impact
+    pkg:com.google.gson.Gson -- the file query reaches it one hop deeper (depth 2,
+    scope=crate, via=pkg:com.google.gson.Gson) because the file->pkg hop consumes
+    a depth level by design (GAP-083, hilo-graph/src/impact.rs crate_rows_respect_max_depth_budget),
+    so comparing counts at the SAME --max-depth is NOT the contract; the sets at the
+    default depth must be equal once the pkg form''s self-row is excluded. Verified
+    live 2026-09-23 on /tmp/wf11/gson-corpus (hilo init + graph warm, 211 files/3734
+    edges) with the merged master binary: file form 93 rows vs pkg form 94 where the
+    extra pkg row is Gson.java itself; the 85 depth-2 rows equal grep -rl ''import
+    com.google.gson.Gson;'' src/ = 85. (2) COMMITTED SURFACE TEST: hilo-graph/src/impact.rs
+    contains the test java_file_form_impact_matches_pkg_form_set, which calls the
+    public compute_impact on a Java fixture and asserts the file-form set equals the
+    pkg-form set; it FAILS (file form []) when resolution.rs is reverted to the pre-fix
+    commit 6761693 and passes on the fix -- RED proof recorded in commit eea690a.
+    (3) NO FALSE ORPHAN: hilo graph stats no longer lists gson/src/main/java/com/google/gson/Gson.java
+    or GsonBuilder.java under Orphans (live: 0 occurrences of each; before the fix
+    both were listed). (4) SUITES: cargo test -p hilo_graph --lib = 291 passed / 0
+    failed under RUSTFLAGS=-D warnings.'
+  status: complete
+  created_at: '2026-09-23T22:36:13.765035+00:00'
+  completed_at: '2026-09-23T22:36:21.654940+00:00'
