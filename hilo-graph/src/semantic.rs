@@ -624,6 +624,12 @@ const EDGE_HIT_SCORE_PER_TOKEN: f64 = 0.01;
 /// resolves to nothing (dangling import) is dropped. All of this runs
 /// BEFORE the final `opts.limit` truncation, so dropped hits never consume
 /// result budget and expansions are truncated, not silently lost.
+///
+/// GAP-100: results are also DEMOTED, not just truncated — every file whose
+/// path matches the shared test-file conventions
+/// (`crate::classify::is_test_file`, the same predicate classify's role=test
+/// assignment uses) ranks below every implementation hit while staying
+/// findable (see [`demote_test_files`]).
 pub fn search_with_symbols(
     db: &GraphDB,
     query: &str,
@@ -755,6 +761,12 @@ pub fn search_with_symbols(
             });
         }
     }
+
+    // GAP-100: demote test/spec/bench files below every implementation hit.
+    // Ranking-only — nothing is removed (a query naming only a test file
+    // still returns it), but demoted hits may fall past `opts.limit` when
+    // implementation hits fill the budget first.
+    let mut results = demote_test_files(results);
     results.truncate(opts.limit);
 
     Ok(results)
@@ -776,6 +788,44 @@ fn lexical_result(file_path: String, query_tokens: &[String], score: f64) -> Sea
         score,
         provenance: "lexical".to_string(),
     }
+}
+
+/// GAP-100: how test files are demoted — a stable partition, not a score
+/// penalty. Every hit whose path matches the shared test-file conventions
+/// (`crate::classify::is_test_file`, the single source of truth classify's
+/// role=test assignment uses) moves below every implementation hit; the
+/// order WITHIN each group is exactly the pre-demotion order.
+///
+/// Why a partition and not a multiplier: any factor small enough to keep a
+/// token-dense `test/res.json.js` under a symbol-poor `lib/response.js`
+/// would also drag demoted LEXICAL scores under the edge-hit scores
+/// (EDGE_HIT_SCORE_PER_TOKEN), breaking the edge-hits-never-reorder
+/// invariant inside the demoted group. The partition keeps both invariants
+/// by construction:
+/// - a test edge hit can only move DOWN — never above a non-test lexical
+///   hit (constraint: test edge hits must not leapfrog implementation
+///   lexical hits), and
+/// - non-test edge hits keep their place below non-test lexical hits, so an
+///   implementation edge hit outranking a test LEXICAL hit is the GAP-100
+///   goal itself, not a violation of it.
+///
+/// Demotion is ranking-only: no hit is removed, so a query naming only a
+/// test file still returns it. Deterministic by construction — no sorting;
+/// both halves preserve construction order (fused lexical order, then edge
+/// hits folded in BTreeMap order), so the same query + graph yields
+/// byte-identical output.
+fn demote_test_files(results: Vec<SearchResult>) -> Vec<SearchResult> {
+    let mut implementation: Vec<SearchResult> = Vec::new();
+    let mut tests: Vec<SearchResult> = Vec::new();
+    for r in results {
+        if crate::classify::is_test_file(&r.file_path) {
+            tests.push(r);
+        } else {
+            implementation.push(r);
+        }
+    }
+    implementation.extend(tests);
+    implementation
 }
 
 // ──────────────────────────── Tests ────────────────────────────
@@ -1202,6 +1252,160 @@ mod tests {
         let r1 = search(&db, "auth middleware", &SearchOpts::default()).unwrap();
         let r2 = search(&db, "auth middleware", &SearchOpts::default()).unwrap();
         assert_eq!(r1, r2, "search must be deterministic");
+    }
+
+    // ── GAP-100: implementation files outrank test files ──
+
+    /// The bake-off shape: an implementation file plus a test directory
+    /// dense in the same query tokens. The test paths are token supersets
+    /// (`test` + `res` + `json` vs `lib` + `response` + `json`), so pre-fix
+    /// TF-IDF/BM25 rank the tests above the file that actually defines
+    /// `res.json` — the express `res json` failure GAP-100 fixes.
+    fn gap100_db() -> GraphDB {
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[
+            edge("lib/response.js", "pkg:express", "imports"),
+            edge("test/res.json.js", "lib/response.js", "imports"),
+            edge("test/res.attachment.js", "lib/response.js", "imports"),
+            edge("test/res.cookie.js", "lib/response.js", "imports"),
+        ])
+        .unwrap();
+        db
+    }
+
+    #[test]
+    fn search_ranks_implementation_above_test_files_for_definition_query() {
+        // The stub extractor mirrors what the CLI's symbol-indexed default
+        // does (GAP-077): `json` is the definition name that lets
+        // lib/response.js match the query at all — without it the path-only
+        // index has no token overlap (`response`/`js` tokenize apart from
+        // `res`/`json`), which is exactly why the tests swept the board.
+        let db = gap100_db();
+        let symbols = |path: &str| {
+            if path == "lib/response.js" {
+                vec!["json".to_string()]
+            } else {
+                Vec::new()
+            }
+        };
+        let opts = SearchOpts {
+            limit: 10,
+            ..Default::default()
+        };
+        let results = search_with_symbols(&db, "res json", &opts, Some(&symbols)).unwrap();
+        let impl_pos = results
+            .iter()
+            .position(|r| r.file_path == "lib/response.js")
+            .expect("the implementation file must appear in the results");
+        let first_test_pos = results
+            .iter()
+            .position(|r| crate::classify::is_test_file(&r.file_path))
+            .expect("test hits must remain findable (demoted, not removed)");
+        assert!(
+            impl_pos < first_test_pos,
+            "lib/response.js must rank above every test hit, got: {:?}",
+            results.iter().map(|r| &r.file_path).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn search_still_finds_test_file_when_query_names_only_it() {
+        // Demotion, not removal: a query whose only strong match is a test
+        // file must still return that file.
+        let db = gap100_db();
+        let results = search(&db, "res cookie", &SearchOpts::default()).unwrap();
+        assert!(
+            results.iter().any(|r| r.file_path == "test/res.cookie.js"),
+            "a query naming only a test file must still return it, got: {:?}",
+            results.iter().map(|r| &r.file_path).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn search_test_demotion_is_deterministic() {
+        let db = gap100_db();
+        let r1 = search(&db, "res json", &SearchOpts::default()).unwrap();
+        let r2 = search(&db, "res json", &SearchOpts::default()).unwrap();
+        assert_eq!(r1, r2, "test demotion must not break determinism");
+    }
+
+    #[test]
+    fn search_implementation_edge_hit_outranks_test_lexical_hit() {
+        // The documented GAP-081 × GAP-100 interaction: a caller file whose
+        // PATH carries none of the service tokens surfaces only through the
+        // edge-aware pass. When that caller is an implementation file and a
+        // test file matches the same tokens lexically, the implementation
+        // edge hit must still lead — the partition groups by role, not by
+        // score band, so the higher-scored test lexical hit lands below it.
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[
+            edge(
+                "src/billing/service.go",
+                "lib/catalogsync/client.go",
+                "service_call",
+            ),
+            edge(
+                "tests/catalog_sync_spec.rb",
+                "src/billing/service.go",
+                "imports",
+            ),
+        ])
+        .unwrap();
+        let results = search(&db, "catalog sync", &SearchOpts::default()).unwrap();
+        let impl_edge_pos = results
+            .iter()
+            .position(|r| r.file_path == "src/billing/service.go")
+            .expect("the edge-aware hit must surface the caller file");
+        let test_lexical_pos = results
+            .iter()
+            .position(|r| r.file_path == "tests/catalog_sync_spec.rb")
+            .expect("the lexically-matched test file must remain in the results");
+        assert!(
+            impl_edge_pos < test_lexical_pos,
+            "implementation edge hit must outrank the test lexical hit, got: {:?}",
+            results.iter().map(|r| &r.file_path).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn search_test_edge_hit_stays_below_implementation_hits() {
+        // The other half of the edge-hit invariant: a test file that matches
+        // ONLY through edge metadata (its path shares no query tokens) keeps
+        // its modest edge score below every implementation hit — demotion
+        // never lifts it, and its `edge:<rel>` provenance stays honest.
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[
+            edge(
+                "tests/helpers.rb",
+                "lib/catalogsync/client.go",
+                "service_call",
+            ),
+            edge(
+                "src/catalog/sync.go",
+                "lib/catalogsync/client.go",
+                "imports",
+            ),
+        ])
+        .unwrap();
+        let results = search(&db, "catalog sync", &SearchOpts::default()).unwrap();
+        let test_edge = results
+            .iter()
+            .find(|r| r.file_path == "tests/helpers.rb")
+            .expect("the edge-only test hit must remain in the results");
+        assert_eq!(test_edge.provenance, "edge:service_call");
+        let last_impl_pos = results
+            .iter()
+            .rposition(|r| !crate::classify::is_test_file(&r.file_path))
+            .expect("implementation hits must exist");
+        let test_pos = results
+            .iter()
+            .position(|r| r.file_path == "tests/helpers.rb")
+            .unwrap();
+        assert!(
+            last_impl_pos < test_pos,
+            "every implementation hit must outrank the test edge hit, got: {:?}",
+            results.iter().map(|r| &r.file_path).collect::<Vec<_>>()
+        );
     }
 
     #[test]
