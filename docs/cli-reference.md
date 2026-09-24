@@ -114,12 +114,28 @@ hilo graph stats
 # Output:
 # Total edges: 202 distinct / 292 raw (edges.jsonl)
 # Total files: 81
+# Components (6 total):
+#   src: 61 files, 180 edges
+#   docs: 12 files, 8 edges
+#   render: 4 files, 3 edges
+#   codec: 2 files, 2 edges
+#   .: 2 files, 1 edges
 # Most connected: pkg:std
 # Edge types:
 #   imports: 200
 #   tested_by: 1
 #   tests: 1
 ```
+
+The `Components` section enumerates the repository's top-level subsystems:
+one entry per top-level directory, counted by distinct files and by the
+edges whose source file lives inside it. Root-level files (no directory)
+aggregate under `.`. Graph pseudo-nodes (`pkg:`, `sys:`, `std:`,
+`external:` — resolved dependencies rather than files) never appear in the
+roster. The header always shows the full component count; the list is
+capped like the orphans list by `--limit` (default 25), with a
+`... N more components (use --limit 0 to show all)` trailer — pass
+`--limit 0` to print every component.
 
 ### `related`
 

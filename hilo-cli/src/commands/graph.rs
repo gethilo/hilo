@@ -887,6 +887,26 @@ pub fn run_stats(limit: usize) -> Result<()> {
         None => println!("Total edges: {}", stats.total_edges),
     }
     println!("Total files: {}", stats.total_files);
+    // GAP-097: the component roster — what subsystems make up this system.
+    // Capped by the same --limit rule as orphans (0 = unlimited).
+    if !stats.components.is_empty() {
+        println!("Components ({} total):", stats.components.len());
+        let shown = if limit == 0 {
+            stats.components.len()
+        } else {
+            limit.min(stats.components.len())
+        };
+        for comp in &stats.components[..shown] {
+            println!(
+                "  {}: {} files, {} edges",
+                comp.name, comp.files, comp.edges
+            );
+        }
+        let remaining = stats.components.len() - shown;
+        if remaining > 0 {
+            println!("  ... {remaining} more components (use --limit 0 to show all)");
+        }
+    }
     if let Some(ref mc) = stats.most_connected {
         println!("Most connected: {mc}");
     }
