@@ -11,7 +11,7 @@ use hilo_backends::stream::StreamPlacer;
 use hilo_backends::{BackendRegistry, EphemeralMatcher, IgnoreMatcher};
 use hilo_fuse::stream::StreamState;
 use hilo_fuse::{daemon, FuseConfig, Hilo};
-use hilo_triggers::{SyncHook, SyncHookConfig, TriggerConfig, TriggerEngine};
+use hilo_triggers::{GraphDbSource, SyncHook, SyncHookConfig, TriggerConfig, TriggerEngine};
 
 /// Environment variable set on the re-executed child of a `--daemon` mount.
 /// Lets the child run the normal blocking mount path without re-daemonizing.
@@ -312,29 +312,22 @@ async fn run_trigger_engine(watch_dir: &Path, mount_desc: &str, shutdown_flag: A
         mount_desc
     );
 
-    // Compute project root and (best-effort) open the DuckDB graph DB so the
-    // parse-and-diff builtin can compute transitive impact.
+    // Compute project root and hand the engine a LAZY graph-DB source
+    // (DF-WARPFS-30): no DuckDB connection is opened at startup — the
+    // parse-and-diff builtin opens a short-lived connection per trigger
+    // event (bounded retry, loud diagnostics on failure) and drops it
+    // before the event returns. The mount therefore holds NO DuckDB file
+    // lock between events, so `hilo graph stats/warm`, a second trigger
+    // mount, and any other graph.db user stay unblocked for the mount's
+    // whole lifetime. Write-through and impact semantics are unchanged for
+    // every event that gets a connection; a failed open is logged loudly
+    // with the reason and the event is processed WITHOUT the DB steps
+    // (never silently disabled).
     let project_root = Some(watch_dir.clone());
-    let db_conn = {
-        let db_path = watch_dir.join(".vfs/graph/graph.db");
-        if db_path.exists() {
-            match duckdb::Connection::open(&db_path) {
-                Ok(conn) => Some(conn),
-                Err(e) => {
-                    eprintln!(
-                        "[trigger-engine] cannot open graph DB at {}: {e}",
-                        db_path.display()
-                    );
-                    None
-                }
-            }
-        } else {
-            None
-        }
-    };
+    let db = GraphDbSource::Lazy(watch_dir.join(".vfs/graph/graph.db"));
 
     let trigger_count = triggers.len();
-    let mut engine = TriggerEngine::new(triggers, 500, db_conn, project_root, None, None);
+    let mut engine = TriggerEngine::new(triggers, 500, db, project_root, None, None);
     // DF-WARPFS-32: bind the engine to the mount lifecycle — the shared
     // shutdown flag (set by the mount thread when the FUSE session ends) and
     // the mountpoint supervisor (the engine exits on its own if the mount is

@@ -1,4 +1,4 @@
-use hilo_triggers::{Debouncer, EventType, TriggerConfig, TriggerEngine};
+use hilo_triggers::{Debouncer, EventType, GraphDbSource, TriggerConfig, TriggerEngine};
 use std::path::Path;
 
 #[test]
@@ -31,7 +31,7 @@ fn test_debouncer_should_fire_file() {
 #[test]
 fn test_engine_creation() {
     let cfg = TriggerConfig::default();
-    let _engine = TriggerEngine::new(vec![cfg], 500, None, None, None, None);
+    let _engine = TriggerEngine::new(vec![cfg], 500, GraphDbSource::None, None, None, None);
 }
 
 #[test]
@@ -48,12 +48,19 @@ fn test_engine_creation_with_upload_builtin() {
         builtin: Some("upload-to-backend".into()),
         ..TriggerConfig::default()
     };
-    let _engine = TriggerEngine::new(vec![cfg], 500, None, None, None, None);
+    let _engine = TriggerEngine::new(vec![cfg], 500, GraphDbSource::None, None, None, None);
 }
 
 #[test]
 fn test_engine_creation_with_s3_bucket_configured() {
     // s3_bucket can be set even without a client — constructor stores it.
     let cfg = TriggerConfig::default();
-    let _engine = TriggerEngine::new(vec![cfg], 500, None, None, None, Some("my-bucket".into()));
+    let _engine = TriggerEngine::new(
+        vec![cfg],
+        500,
+        GraphDbSource::None,
+        None,
+        None,
+        Some("my-bucket".into()),
+    );
 }

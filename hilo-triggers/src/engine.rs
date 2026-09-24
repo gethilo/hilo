@@ -19,6 +19,133 @@ use tokio::sync::Semaphore;
 use tokio::time::timeout;
 use tracing::info;
 
+/// DF-WARPFS-30: how the parse-and-diff builtin reaches the DuckDB graph
+/// cache.
+///
+/// The historical shape held a `duckdb::Connection` for the engine's whole
+/// lifetime. A read-write connection takes DuckDB's exclusive file lock, so
+/// while a trigger mount was up every `hilo graph stats`/`warm` failed with
+/// `Conflicting lock is held`, and a second trigger mount could not open the
+/// DB at all — it logged the failure and silently continued with impact
+/// computation disabled.
+///
+/// [`GraphDbSource::Lazy`] fixes both: the connection is opened per trigger
+/// event (with a bounded retry) and dropped before the event returns, so no
+/// DuckDB file lock is held between events. Write-through/impact semantics
+/// are unchanged for every event that gets a connection; when the open
+/// fails the event is processed WITHOUT the DB steps and the failure is
+/// logged loudly (`eprintln!` — the CLI installs a tracing subscriber only
+/// for `--triggers` mounts) instead of being silently disabled.
+pub enum GraphDbSource {
+    /// No graph DB access (parse-and-diff appends edges.jsonl only).
+    None,
+    /// A caller-owned connection held for the engine's lifetime. Provided
+    /// for embedders/tests that already hold a connection they want to
+    /// reuse; the mount CLI no longer uses this mode.
+    Shared(duckdb::Connection),
+    /// Open a short-lived connection at `<root>/.vfs/graph/graph.db` per
+    /// trigger event and drop it before the event returns. The default for
+    /// `hilo mount --triggers` (DF-WARPFS-30).
+    Lazy(std::path::PathBuf),
+}
+
+impl GraphDbSource {
+    /// Open the connection to use for ONE trigger event, or `None` when this
+    /// source has no DB access.
+    ///
+    /// `Shared` hands back a borrow of the standing connection; `Lazy` opens
+    /// a fresh connection (bounded retry on DuckDB's conflicting-lock error —
+    /// a concurrent `hilo graph warm` or another trigger event may briefly
+    /// hold the write lock) and the caller drops it before the event ends.
+    /// No code path may keep a `Lazy` connection alive across events: that
+    /// would resurrect the mount-lifetime lock this type exists to remove.
+    fn conn_for_event(&self) -> Option<ConnectionGuard<'_>> {
+        match self {
+            GraphDbSource::None => None,
+            GraphDbSource::Shared(conn) => Some(ConnectionGuard::Shared(conn)),
+            GraphDbSource::Lazy(db_path) => {
+                if !db_path.exists() {
+                    return None;
+                }
+                let path = db_path.display();
+                let mut attempt = 1u32;
+                loop {
+                    match duckdb::Connection::open(db_path) {
+                        Ok(conn) => return Some(ConnectionGuard::Owned(conn)),
+                        Err(e) if is_conflicting_lock_error(&e) => {
+                            if attempt >= DB_LOCK_RETRY_ATTEMPTS {
+                                eprintln!(
+                                    "[trigger-engine] parse-and-diff: graph DB at {path} is \
+                                     locked after {attempt} attempts over ~{}ms: {e} — impact \
+                                     computation and DuckDB write-through are SKIPPED for this \
+                                     event; another hilo command or trigger mount may hold it. \
+                                     Processing continues without the graph DB.",
+                                    DB_LOCK_RETRY_ATTEMPTS as u64 * DB_LOCK_RETRY_BACKOFF_MS
+                                );
+                                return None;
+                            }
+                            attempt += 1;
+                            std::thread::sleep(Duration::from_millis(DB_LOCK_RETRY_BACKOFF_MS));
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "[trigger-engine] parse-and-diff: cannot open graph DB at \
+                                 {path}: {e} — impact computation and DuckDB write-through are \
+                                 SKIPPED for this event. Processing continues without the graph \
+                                 DB."
+                            );
+                            return None;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Borrowed-or-owned connection for one trigger event (DF-WARPFS-30).
+///
+/// [`GraphDbSource::conn_for_event`] hands the event handler one of these;
+/// dropping it releases the DuckDB file lock (an owned handle closes, a
+/// shared handle just stops being borrowed).
+enum ConnectionGuard<'a> {
+    Owned(duckdb::Connection),
+    Shared(&'a duckdb::Connection),
+}
+
+impl std::ops::Deref for ConnectionGuard<'_> {
+    type Target = duckdb::Connection;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            ConnectionGuard::Owned(conn) => conn,
+            ConnectionGuard::Shared(conn) => conn,
+        }
+    }
+}
+
+/// DF-WARPFS-30: bounded retry for the transient `Conflicting lock` error a
+/// lazy open can hit while `hilo graph warm` (or another writer) holds the
+/// DuckDB file lock. Same shape as hilo-graph's read-only retry.
+const DB_LOCK_RETRY_ATTEMPTS: u32 = 5;
+/// Backoff between lazy-open retry attempts.
+const DB_LOCK_RETRY_BACKOFF_MS: u64 = 200;
+
+/// DF-WARPFS-30: how long the supervisor tolerates a not-yet-mounted
+/// mountpoint after startup, so the engine thread does not kill itself while
+/// racing the FUSE session (observed: the engine exited ~2ms after start,
+/// before fusermount registered the mount). Long enough for slow mounts,
+/// short enough that a genuinely bad mountpoint does not linger silently.
+const SUPERVISE_STARTUP_GRACE: Duration = Duration::from_secs(5);
+
+/// Does this DuckDB error mean another process holds a conflicting file
+/// lock? Mirrors `hilo_graph`'s matcher (kept local so hilo-triggers does
+/// not depend on a private graph helper).
+fn is_conflicting_lock_error(err: &duckdb::Error) -> bool {
+    let text = err.to_string();
+    text.contains("IO Error") && text.contains("Conflicting lock")
+}
+
 pub struct TriggerEngine {
     watcher: Inotify,
     debouncer: Debouncer,
@@ -38,8 +165,9 @@ pub struct TriggerEngine {
     trigger_timeout: Duration,
     /// AST cache: file path → (source_content, Vec<Edge>).
     ast_cache: HashMap<PathBuf, (String, Vec<hilo_metadata::inventory::Edge>)>,
-    /// Optional DuckDB connection for impact computation.
-    db_conn: Option<duckdb::Connection>,
+    /// How the parse-and-diff builtin reaches the DuckDB graph cache
+    /// (DF-WARPFS-30: `Lazy` by default — no standing DuckDB file lock).
+    db: GraphDbSource,
     /// Project root directory for .vfs/ paths.
     project_root: Option<PathBuf>,
     /// Optional S3 client for the `upload-to-backend` builtin.
@@ -59,6 +187,13 @@ pub struct TriggerEngine {
     /// [`Self::is_still_mounted`] every loop iteration and exits when the
     /// mountpoint is gone.
     supervised_mount: Option<PathBuf>,
+    /// DF-WARPFS-30: whether the supervised mountpoint was ever observed as
+    /// a live mount. Once true, a later "not mounted" is a REAL unmount.
+    mount_seen: bool,
+    /// DF-WARPFS-30: startup grace deadline for the supervisor — the engine
+    /// thread races the FUSE session, so the mountpoint is a plain directory
+    /// (same device as parent) until fusermount registers it.
+    mount_grace_until: Option<Instant>,
     /// Spec §7.1 backend sync hook (shared with the flush/poll tasks).
     sync_hook: Option<Arc<Mutex<SyncHook>>>,
     /// Handles to the sync-hook background tasks (detached; kept for clarity).
@@ -69,12 +204,15 @@ pub struct TriggerEngine {
 impl TriggerEngine {
     /// Create a new engine. Does NOT start watching yet.
     ///
-    /// `db_conn` and `project_root` are optional — when `Some`, the
-    /// `parse-and-diff` builtin uses them for edge append + impact computation.
+    /// `db` and `project_root` are optional inputs to the parse-and-diff
+    /// builtin's edge append + impact computation. DF-WARPFS-30: prefer
+    /// [`GraphDbSource::Lazy`] — a standing [`GraphDbSource::Shared`]
+    /// connection holds DuckDB's exclusive file lock for the engine's whole
+    /// lifetime and blocks every other `graph.db` user.
     pub fn new(
         triggers: Vec<TriggerConfig>,
         debounce_default_ms: u64,
-        db_conn: Option<duckdb::Connection>,
+        db: GraphDbSource,
         project_root: Option<PathBuf>,
         s3_client: Option<hilo_backends::S3Client>,
         s3_bucket: Option<String>,
@@ -98,12 +236,14 @@ impl TriggerEngine {
             semaphore: Arc::new(Semaphore::new(4)),
             trigger_timeout,
             ast_cache: HashMap::new(),
-            db_conn,
+            db,
             project_root,
             s3_client,
             s3_bucket,
             shutdown_flag: Arc::new(AtomicBool::new(false)),
             supervised_mount: None,
+            mount_seen: false,
+            mount_grace_until: None,
             sync_hook: None,
             sync_tasks: Vec::new(),
         }
@@ -123,11 +263,21 @@ impl TriggerEngine {
 
     /// Make the engine exit on its own when `mount_point` is no longer a
     /// mount (DF-WARPFS-32 supervisor). A daemon whose FUSE session ended
-    /// without `shutdown()` being called — external `fusermount3 -u`,
-    /// a session error — must not keep the DuckDB handle and inotify fd
+    /// without `shutdown()` being called — external `fusermount3 -u`, a
+    /// session error — must not keep the DuckDB handle and inotify fd
     /// alive. Call before [`Self::run`]; checked every loop iteration.
+    ///
+    /// DF-WARPFS-30: `run()` grants `mount_point` a STARTUP GRACE before the
+    /// mount heuristic applies: the engine thread races the FUSE session and
+    /// the mountpoint is a plain directory (same device as its parent) until
+    /// fusermount registers it — observed live as the engine killing itself
+    /// ~2ms after startup ("mountpoint is gone") BEFORE the FUSE session
+    /// began mounting. The grace lapses once the path is first seen as a
+    /// live mount; a REAL unmount afterwards is still detected immediately.
     pub fn supervise_mountpoint(&mut self, mount_point: &Path) {
         self.supervised_mount = Some(mount_point.to_path_buf());
+        self.mount_seen = false;
+        self.mount_grace_until = Some(Instant::now() + SUPERVISE_STARTUP_GRACE);
     }
 
     /// True while `path` still sits on a different device than its parent
@@ -144,6 +294,53 @@ impl TriggerEngine {
             return false;
         };
         mount_dev != parent_dev
+    }
+
+    /// DF-WARPFS-30 supervisor check with the startup grace: the mount
+    /// heuristic only fires once the grace has lapsed (or, after a first
+    /// positive, once the mount was seen live and then went missing). Keeps
+    /// DF-WARPFS-32's promise — an externally unmounted daemon still exits
+    /// on its own — without the startup self-kill race.
+    fn supervisor_should_exit(&mut self) -> bool {
+        let Some(m) = &self.supervised_mount else {
+            return false;
+        };
+        // A path that no longer EXISTS is the DF-WARPFS-32 test contract (and
+        // a deleted mountpoint): exit immediately, no grace.
+        if !m.exists() {
+            info!(
+                "[trigger-engine] mountpoint {} is gone — stopping event loop",
+                m.display()
+            );
+            return true;
+        }
+        let mounted = Self::is_still_mounted(m);
+        if mounted {
+            self.mount_seen = true;
+            return false;
+        }
+        if self.mount_seen {
+            // Was live, now gone: the real unmount case. Exit immediately.
+            info!(
+                "[trigger-engine] mountpoint {} is gone — stopping event loop",
+                m.display()
+            );
+            return true;
+        }
+        match self.mount_grace_until {
+            Some(until) if Instant::now() < until => {
+                // FUSE session has not registered the mountpoint yet.
+                false
+            }
+            _ => {
+                info!(
+                    "[trigger-engine] mountpoint {} never became a mount within the startup \
+                     grace — stopping event loop",
+                    m.display()
+                );
+                true
+            }
+        }
     }
 
     /// Enable the spec §7.1 backend sync hook: spawns the settle-flush loop
@@ -204,14 +401,11 @@ impl TriggerEngine {
             if self.shutdown_flag.load(Ordering::Relaxed) {
                 break Ok(());
             }
-            if let Some(m) = &self.supervised_mount {
-                if !Self::is_still_mounted(m) {
-                    info!(
-                        "[trigger-engine] mountpoint {} is gone — stopping event loop",
-                        m.display()
-                    );
-                    break Ok(());
-                }
+            // DF-WARPFS-30: supervisor with startup grace (replaces the old
+            // bare `is_still_mounted` check that raced the FUSE session and
+            // could kill the engine before the mount was registered).
+            if self.supervisor_should_exit() {
+                break Ok(());
             }
 
             // Read raw events (blocking — inotify fd is in blocking mode).
@@ -323,20 +517,27 @@ impl TriggerEngine {
                     }
 
                     // ── parse-and-diff builtin: handle synchronously using ──
-                    // engine's own ast_cache / db_conn / project_root.      ──
+                    // engine's own ast_cache / db source / project_root.  ──
                     // This avoids the complexity of passing &mut cache      ──
                     // through tokio::spawn for a CPU-bound, synchronous      ──
                     // operation.  Command triggers and other builtins        ──
                     // continue through the async execute_trigger path below. ──
                     if let Some(builtin) = &trigger.builtin {
                         if builtin == "parse-and-diff" {
+                            // DF-WARPFS-30: the DB connection (if any) lives
+                            // for THIS event only — a Lazy source opens it
+                            // here and it drops before the next loop
+                            // iteration, so no DuckDB file lock is held
+                            // between events.
+                            let conn = self.db.conn_for_event();
                             parse_and_diff_sync(
                                 trigger,
                                 &file_event,
                                 &mut self.ast_cache,
-                                &self.db_conn,
+                                conn.as_deref(),
                                 &self.project_root,
                             );
+                            drop(conn); // release the DuckDB file lock NOW
                             continue; // skip async execute_trigger spawn
                         }
                         if builtin == "upload-to-backend" {
@@ -459,11 +660,12 @@ impl TriggerEngine {
         }
         self.watches.clear();
 
-        // DF-WARPFS-32: drop the DuckDB handle NOW. The FUSE session has
-        // ended and nothing else in this process needs the graph connection —
-        // keeping it (even briefly after the flag) holds the write lock that
-        // blocks `hilo graph stats/impact/understand` until the process dies.
-        self.db_conn = None;
+        // DF-WARPFS-32: release any DB state the engine still holds. With
+        // DF-WARPFS-30's Lazy source there is no standing DuckDB handle at
+        // all — a Shared connection (embedder/tests) is dropped here and a
+        // Lazy path is cleared so no later event can reopen the DB after
+        // the mount has ended.
+        self.db = GraphDbSource::None;
         self.ast_cache.clear();
 
         info!("[trigger-engine] shutdown requested — graph DB handle released");
@@ -527,16 +729,25 @@ fn matches_pattern(path: &Path, pattern: &str) -> bool {
 /// 4. Diff against AST cache: only new/changed edges are appended
 /// 5. Append new edges to .vfs/graph/edges.jsonl
 /// 6. Set user.vfs.last_modified xattr
-/// 7. If db_conn is Some, compute impact via hilo_graph::impact::compute_impact()
+/// 7. If a graph DB connection is available, compute impact via
+///    hilo_graph::impact::compute_impact()
 /// 8. Set user.vfs.impact xattr on each impacted file
 /// 9. Update AST cache with new parse result
+///
+/// DF-WARPFS-30: `db_conn` is the per-event connection handed out by the
+/// engine's [`GraphDbSource`] (opened lazily, dropped right after this call
+/// returns) — the engine holds NO standing DuckDB connection between events.
+/// When `db_conn` is `None` (no DB configured, or the lazy open failed), the
+/// event is still processed — edges.jsonl is appended, xattrs are set — but
+/// the DuckDB write-through and impact steps are skipped (the lazy open
+/// failure itself is logged loudly with the reason).
 ///
 /// Errors are logged via `tracing::error!` — never panics.
 fn parse_and_diff_sync(
     cfg: &TriggerConfig,
     event: &FileEvent,
     ast_cache: &mut HashMap<PathBuf, (String, Vec<hilo_metadata::inventory::Edge>)>,
-    db_conn: &Option<duckdb::Connection>,
+    db_conn: Option<&duckdb::Connection>,
     project_root: &Option<PathBuf>,
 ) {
     // 1. Resolve the path and read file content.
@@ -1346,7 +1557,7 @@ mod tests {
             &cfg,
             &event,
             &mut cache,
-            &Some(conn),
+            Some(&conn),
             &Some(dir.path().to_path_buf()),
         );
 
@@ -1393,7 +1604,7 @@ mod tests {
             &cfg,
             &event,
             &mut cache,
-            &Some(conn),
+            Some(&conn),
             &Some(dir.path().to_path_buf()),
         );
 
@@ -1417,7 +1628,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_shutdown_before_run_exits_cleanly() {
-        let mut engine = TriggerEngine::new(vec![], 500, None, None, None, None);
+        let mut engine = TriggerEngine::new(vec![], 500, GraphDbSource::None, None, None, None);
 
         engine.shutdown();
 
@@ -1439,18 +1650,19 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("graph.db");
         let conn = duckdb::Connection::open(&db_path).unwrap();
-        let mut engine = TriggerEngine::new(vec![], 500, Some(conn), None, None, None);
+        let mut engine =
+            TriggerEngine::new(vec![], 500, GraphDbSource::Shared(conn), None, None, None);
 
         assert!(
-            engine.db_conn.is_some(),
+            matches!(engine.db, GraphDbSource::Shared(_)),
             "engine should hold the DB handle while running"
         );
 
         engine.shutdown();
 
         assert!(
-            engine.db_conn.is_none(),
-            "shutdown must drop the DuckDB handle so hilo graph stats can acquire the lock"
+            matches!(engine.db, GraphDbSource::None),
+            "shutdown must release the DuckDB handle so hilo graph stats can acquire the lock"
         );
     }
 
@@ -1465,8 +1677,8 @@ mod tests {
 
         // Set BEFORE run — simulates the FUSE session already having ended.
         let flag = Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let mut engine =
-            TriggerEngine::new(vec![], 500, None, None, None, None).with_shutdown_flag(flag);
+        let mut engine = TriggerEngine::new(vec![], 500, GraphDbSource::None, None, None, None)
+            .with_shutdown_flag(flag);
 
         tokio::time::timeout(Duration::from_secs(1), engine.run())
             .await
@@ -1481,7 +1693,7 @@ mod tests {
     /// must return without any signal.
     #[tokio::test]
     async fn test_supervise_mountpoint_exits_when_mount_gone() {
-        let mut engine = TriggerEngine::new(vec![], 500, None, None, None, None);
+        let mut engine = TriggerEngine::new(vec![], 500, GraphDbSource::None, None, None, None);
         engine.supervise_mountpoint(Path::new("/nonexistent-hilo-supervisor-probe"));
 
         tokio::time::timeout(Duration::from_secs(1), engine.run())
@@ -1498,11 +1710,94 @@ mod tests {
         )));
     }
 
+    /// DF-WARPFS-30 supervisor startup grace: the engine thread races the
+    /// FUSE session, and until fusermount registers the mount the mountpoint
+    /// is a plain directory (same device as its parent). The OLD check
+    /// treated that as "mountpoint is gone" and killed the engine ~2ms
+    /// after startup — observed live, BEFORE the FUSE session began
+    /// mounting. With the grace, a supervised engine whose mountpoint
+    /// EXISTS but is not yet a mount must stay alive: `run()` must still be
+    /// running when the probe window closes. Against the old behavior this
+    /// test fails: `run()` returned almost instantly.
+    #[tokio::test]
+    async fn test_supervise_startup_grace_keeps_engine_alive_before_mount_registers() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut engine = TriggerEngine::new(vec![], 500, GraphDbSource::None, None, None, None);
+        // The mountpoint exists as a PLAIN directory (the startup race). A
+        // watch is required so run() does not exit via the empty-watches
+        // path — the supervisor check must be what keeps the loop alive.
+        engine.supervise_mountpoint(dir.path());
+        engine.watch_dir(dir.path()).unwrap();
+
+        let probe = tokio::time::timeout(Duration::from_millis(500), engine.run()).await;
+        assert!(
+            probe.is_err(),
+            "supervisor must NOT kill the engine during the startup grace while the \
+             mountpoint exists but is not yet registered as a mount"
+        );
+    }
+
+    /// DF-WARPFS-30: the Lazy graph-DB source hands out a working
+    /// connection per event and holds NOTHING between events. Prove the
+    /// handed-out connection is real (schema ensure + query work) and that
+    /// the source itself carries no connection — the mount CLI constructs
+    /// Lazy, so no DuckDB file lock exists while the engine idles.
+    #[test]
+    fn test_lazy_source_yields_working_connection_per_event() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("graph.db");
+        // Materialize the DB file the way `hilo graph warm` does before a
+        // mount starts — the Lazy source opens an EXISTING file per event.
+        std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
+        let seed = duckdb::Connection::open(&db_path).unwrap();
+        drop(seed);
+
+        let source = GraphDbSource::Lazy(db_path.clone());
+        {
+            let guard = source
+                .conn_for_event()
+                .expect("an existing DB file must yield a connection for the event");
+            // The handed-out connection must be usable for the write-through
+            // path (insert_edges_into ensures its own schema).
+            let edge = hilo_metadata::inventory::Edge {
+                from: "a.rs".into(),
+                to: "pkg:x".into(),
+                rel: "imports".into(),
+                provenance: "ast_exact".into(),
+                confidence: 1.0,
+            };
+            hilo_graph::insert_edges_into(&guard, &[edge])
+                .expect("per-event connection must support the write-through insert");
+        }
+        // After the event's guard is dropped the connection is closed; a
+        // fresh open must see the written edge (real file-backed DB, not a
+        // cached in-memory instance).
+        let check = duckdb::Connection::open(&db_path).unwrap();
+        let count: i64 = check
+            .query_row("SELECT COUNT(*) FROM edges", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "write-through via the per-event connection landed"
+        );
+    }
+
+    /// DF-WARPFS-30: a Lazy source pointing at a DB that does not exist
+    /// yields None — events keep processing (edges.jsonl append still
+    /// happens in parse_and_diff_sync) and no spurious error is printed for
+    /// the not-yet-warmed case.
+    #[test]
+    fn test_lazy_source_missing_db_yields_none() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let source = GraphDbSource::Lazy(dir.path().join("graph.db"));
+        assert!(source.conn_for_event().is_none());
+    }
+
     // ── max_concurrent semaphore enforcement ────────────────────────────
 
     #[test]
     fn test_max_concurrent_semaphore_created() {
-        let engine = TriggerEngine::new(vec![], 500, None, None, None, None);
+        let engine = TriggerEngine::new(vec![], 500, GraphDbSource::None, None, None, None);
         // Semaphore should have capacity equal to max_concurrent.
         assert_eq!(engine.max_concurrent, 4);
         assert_eq!(engine.semaphore.available_permits(), 4);
@@ -1598,7 +1893,7 @@ mod tests {
             &cfg,
             &event,
             &mut cache,
-            &Some(conn),
+            Some(&conn),
             &Some(dir.path().to_path_buf()),
         );
 
@@ -1646,7 +1941,7 @@ mod tests {
             &cfg,
             &event,
             &mut cache,
-            &conn_opt,
+            conn_opt.as_ref(),
             &Some(dir.path().to_path_buf()),
         );
 
@@ -1687,7 +1982,7 @@ mod tests {
             &cfg,
             &event,
             &mut cache,
-            &None,
+            None,
             &Some(dir.path().to_path_buf()),
         );
 
@@ -1701,7 +1996,7 @@ mod tests {
             &cfg,
             &event,
             &mut cache,
-            &None,
+            None,
             &Some(dir.path().to_path_buf()),
         );
 
@@ -1732,7 +2027,7 @@ mod tests {
             &cfg,
             &event,
             &mut cache,
-            &None,
+            None,
             &Some(dir.path().to_path_buf()),
         );
 
@@ -1750,7 +2045,7 @@ mod tests {
             &cfg,
             &event,
             &mut cache,
-            &None,
+            None,
             &Some(dir.path().to_path_buf()),
         );
 
@@ -1782,7 +2077,7 @@ mod tests {
             &cfg,
             &event,
             &mut cache,
-            &None,
+            None,
             &Some(dir.path().to_path_buf()),
         );
 
@@ -1828,7 +2123,7 @@ mod tests {
             &cfg,
             &event,
             &mut cache,
-            &Some(conn),
+            Some(&conn),
             &Some(dir.path().to_path_buf()),
         );
 
@@ -1858,7 +2153,7 @@ mod tests {
             &cfg,
             &event,
             &mut cache,
-            &None,
+            None,
             &Some(dir.path().to_path_buf()),
         );
 
@@ -1876,7 +2171,7 @@ mod tests {
             builtin: Some("upload-to-backend".into()),
             ..TriggerConfig::default()
         };
-        let engine = TriggerEngine::new(vec![cfg], 500, None, None, None, None);
+        let engine = TriggerEngine::new(vec![cfg], 500, GraphDbSource::None, None, None, None);
         assert!(engine.s3_client.is_none());
         assert!(engine.s3_bucket.is_none());
     }
