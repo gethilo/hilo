@@ -1585,3 +1585,18 @@ tasks:
   status: complete
   created_at: '2026-09-24T08:52:52.950952+00:00'
   completed_at: '2026-09-24T09:07:09.772776+00:00'
+- id: df-warpfs-38-rj
+  title: hilo init installs managed .gitignore block (DF-WARPFS-38, re-judge on commit
+    71fc782)
+  criteria:
+  - 'Verify in the working tree at commit 71fc782: grep -c ''ensure_gitignore_entries''
+    hilo-cli/src/commands/init.rs is >= 2 AND grep -c ''HILO_MANAGED_IGNORE_HEADER''
+    hilo-cli/src/commands/init.rs is >= 3 AND grep -c ''init_installs_gitignore_block''
+    hilo-cli/src/commands/init.rs is >= 1 AND grep -c ''DF-WARPFS-38'' docs/inventory-policy.md
+    is >= 1 AND grep -c ''edges.jsonl'' docs/inventory-policy.md is >= 1 AND cargo
+    test -p hilo-cli --bin hilo runs with 104 passed including commands::init::tests::init_installs_gitignore_block
+    and commands::init::tests::init_gitignore_idempotent_and_preserves_existing; no
+    changes beyond the two files in commit 71fc782'
+  status: complete
+  created_at: '2026-09-24T11:01:22.782711+00:00'
+  completed_at: '2026-09-24T11:01:29.284438+00:00'
