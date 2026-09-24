@@ -69,3 +69,21 @@ cargo build -p hilo_ffi
 ```
 
 The build script (`build.rs`) auto-generates Rust scaffolding from `hilo.udl`.
+
+### Native library filename and the rename step
+
+The build produces the cdylib artifact `target/debug/libhilo_ffi.so`
+(release: `target/release/libhilo_ffi.so`). The generated Python bindings
+(`hilo.py`) do **not** load that name: UniFFI names the library after the
+UDL namespace (`hilo`), so they dlopen `libuniffi_hilo.so` from the same
+directory as `hilo.py`. Copy and rename the built library next to the
+generated Python module before importing it:
+
+```bash
+cp target/debug/libhilo_ffi.so /tmp/hilo-bindings/python/libuniffi_hilo.so
+```
+
+The generated Kotlin/Swift/Go bindings have their own embedding steps and
+do not consume this `.so` directly. For reference, the Python loader looks
+for `libuniffi_hilo.dylib` on macOS and `uniffi_hilo.dll` on Windows
+(same copy/rename step, next to `hilo.py`).
