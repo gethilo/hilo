@@ -796,12 +796,13 @@ it is broken in two ways a first-touch user hits immediately:
   with no Jekyll rewriting, so only the literal `*.md` URLs work
   (`getting-started` → 404, `getting-started.md` → 200). The links were
   written for a site generator that was never configured.
-- **`dashboard.html` is a frozen v0.2 snapshot that lies.** Footer says
-  "Generated 2026-07-12"; it claims 15 MCP tools (17 real), 10 crates (11),
-  stale test/file counts, "static_analysis · lsp PASS" (AGENTS.md records
-  those guard legs disabled as fake-green), and Recent Commits ending ~70
-  commits ago. Nothing regenerates it. Either generate it or delete it —
-  a dashboard that lies is worse than no dashboard.
+- **`dashboard.html` was a frozen v0.2 snapshot that lied.** Footer said
+  "Generated 2026-07-12"; it claimed 15 MCP tools (17 real), 10 crates
+  (11), stale test/file counts, "static_analysis · lsp PASS" (AGENTS.md
+  records those guard legs disabled as fake-green), and Recent Commits
+  ending ~70 commits ago. Nothing regenerated it. **Deleted 2026-09-24
+  (DF-WARPFS-47)** — a dashboard that lies is worse than no dashboard;
+  cite live `hilo graph stats` / `tools/list` output instead.
 
 Lesson for the project: CI redeploys the site on every docs/ push, so the
 site is always "fresh" — freshness of deploy is not freshness of content.

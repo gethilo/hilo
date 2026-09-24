@@ -399,9 +399,10 @@ no `*.tsx` / `*.jsx` (hilo-cli/src/commands/mount.rs:502). On a React repo,
 use `graph warm` (or a custom trigger list in the manifest) on .tsx-heavy
 trees instead of trusting the living map.
 
-**Public docs site (gethilo.github.io/hilo):** landing-page guide links 404
-(they omit the `.md` extension; append it yourself), and `dashboard.html`
-is a stale July v0.2 snapshot — do not cite its tool/crate/gate numbers.
+**Public docs site (gethilo.github.io/hilo):** landing-page guide links fixed
+2026-09-24 (b6e2c53 — all hrefs now carry `.md`); `dashboard.html` was a stale
+July v0.2 snapshot (wrong tool/crate/gate counts, fake-green gate legs) and was
+deleted 2026-09-24 — cite live `hilo graph stats` / `tools/list` output instead.
 
 ## Run 14 (2026-09-24, workspace surface): what works, what to avoid
 
