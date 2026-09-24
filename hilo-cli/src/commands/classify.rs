@@ -10,7 +10,9 @@
 use anyhow::Context;
 use anyhow::Result;
 use hilo_core::manifest::FeatureInference;
-use hilo_graph::{classify_file, infer_feature, Language};
+use hilo_graph::{
+    classify_file, entry_symbols_for_classification, infer_feature, Language, ENTRY_SYMBOLS_CAP,
+};
 use hilo_metadata::xattr;
 use std::collections::HashMap;
 use std::fs;
@@ -153,6 +155,16 @@ pub fn run_classify(dry_run: bool, verbose: bool, features: bool, limit: usize) 
                             );
                         }
                         printed_lines += 1;
+                        // GAP-099: entrypoint files report their top-level
+                        // entry symbols (the callables an agent starts at).
+                        // Additive: non-entrypoint output is unchanged.
+                        if role == "entrypoint" {
+                            let symbols =
+                                entry_symbols_for_classification(language, &reason, &source);
+                            if !symbols.is_empty() {
+                                println!("    symbols: {}", format_entry_symbols(&symbols));
+                            }
+                        }
                     }
                 } else {
                     // Write role and status as xattrs
@@ -252,6 +264,23 @@ pub fn run_classify(dry_run: bool, verbose: bool, features: bool, limit: usize) 
     }
 
     Ok(())
+}
+
+/// Render an entry-symbol listing (GAP-099): comma-separated names, capped
+/// at ENTRY_SYMBOLS_CAP with a "... N more" tail.
+fn format_entry_symbols(symbols: &[String]) -> String {
+    if symbols.len() <= ENTRY_SYMBOLS_CAP {
+        return symbols.join(", ");
+    }
+    let shown: Vec<&str> = symbols[..ENTRY_SYMBOLS_CAP]
+        .iter()
+        .map(|s| s.as_str())
+        .collect();
+    format!(
+        "{} ... {} more",
+        shown.join(", "),
+        symbols.len() - ENTRY_SYMBOLS_CAP
+    )
 }
 
 /// Walk all files recursively, skipping .git, target, node_modules.
