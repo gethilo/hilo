@@ -836,3 +836,39 @@ connections twice (15:33Z). The manual install procedure ran on las-03
 instead. One server outage should not cost a whole dogfood tick its install
 leg — the skill's designated fallback (las-03) is the working answer; the
 qa script only knows one server.
+
+## Run 14 — 2026-09-24 (task-router-dogfood, workspace / multi-repo surface)
+
+**The surface nobody had ever driven:** `hilo workspace mount|unmount|sync|
+ephemeral|wipe` — spec §6's multi-repo flagship. 14 runs in and this was still
+virgin; the angle rule ("runs 1-13 passed the CLI/graph surface green, take the
+untouched one") sent run 14 here, and it was the right call: the surface is
+🔴 DOES-NOT-DELIVER end to end.
+
+**How it is built (and why it fails):** the workspace FUSE implementation is a
+SEPARATE hardcoded-inode-map filesystem (`hilo-fuse/src/workspace_mount.rs`),
+not the main `ops.rs` FUSE stack. `populate_mount_children()` walks exactly one
+level of the backing repo; nested directories get inodes but nothing ever fills
+them, so every nested path ENOENTs forever (DF-WARPFS-48, P0). The mount is
+hardcoded `MountOption::RO` (workspace_mount.rs:516) with
+`read_only: true` from the CLI (workspace.rs:50) — the spec §6 per-repo
+`writable:` flag is decorative, while the mount log prints "(rw)" (DF-WARPFS-49).
+The manifest is a second YAML dialect (`WorkspaceManifest` in
+hilo-core/src/workspace.rs:38: repos/backends/mounts/auto_dependency_order ONLY)
+that rejects `hilo init`'s own `.vfs/manifest.yaml`, spec §4's `at:` field, and
+boolean `auto_pull` — with zero documentation anywhere (DF-WARPFS-50). The
+backend half WORKS: managed worktrees clone cleanly into
+`~/.hilo/worktrees/<name>/` (provenance-clean, complete trees). The failure is
+entirely the FUSE presentation layer.
+
+**The right way, for whoever fixes this:** the single-repo FUSE (ops.rs, run 7)
+already solves nested readdir/lookup and xattr passthrough — the workspace
+mount should reuse that engine per-backend instead of a second hand-rolled
+inode map; then a two-level `cat` regression test through the mount, and a
+cross-repo `external:` edge test for `graph warm --workspace` (currently a
+silent 0-file no-op, DF-WARPFS-51).
+
+**Fixture + evidence:** `/tmp/dogfood-warpfs-run14/` (two Go repos with a real
+cross-repo import, bare remotes), full transcript in
+`docs/dogfood/2026-09-24-run14-workspace-integration.md`. Perf: mount-to-listable
+111ms cold, unmount 10.0ms ± 0.6ms — no PERF row; the surface is broken, not slow.

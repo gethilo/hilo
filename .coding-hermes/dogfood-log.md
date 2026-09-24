@@ -612,3 +612,19 @@ left behind: docs/dogfood/2026-09-24-run13-docs-site-fix-reverify.md,
 diagnostics.md Run 13 section, skills/hilo-usage/SKILL.md run-13 section
 (list_directory trust RETIRED, .tsx workaround, docs-site caveats), rows,
 this entry.
+2026-09-24 | run 14 | 🔴 DOES-NOT-DELIVER (workspace surface; rest of hilo remains
+shippable per runs 7-13) | promise: spec §6 multi-repo workspace — declare repos,
+mount as unified writable tree, cross-repo edges | reality: mount serves an EMPTY
+tree above top level (every nested path ENOENT — P0 DF-WARPFS-48), hard-RO despite
+writable:true and a "(rw)" log line (DF-WARPFS-49), manifest dialect undocumented
+and rejects the help's own example file + spec §4 fields (DF-WARPFS-50),
+warm --workspace no-ops at 0 files (DF-WARPFS-51); backend worktree clones work.
+time-to-first-success: NEVER (flagship workflow impossible; 5 consecutive errors
+just to reach a mount). install leg: bunker-las-03 fresh spawn e90e8950, public
+clone f9223b9 (== HEAD) OK; rustup minimal 1.98.1 OK (avoid /tmp — shared per-IP
+with dead-UID files, write scratch to $HOME); cargo build --release running at
+log time, smoke + destroy to follow. rows: DF-WARPFS-48..51 appended + read-back
+verified (board 210 → 214, 0 dups) and committed f6f46e6, pushed
+(f9223b9..f6f46e6). left behind: docs/dogfood/2026-09-24-run14-workspace-integration.md,
+diagnostics.md Run 14 section, skills/hilo-usage/SKILL.md run-14 section. perf:
+mount 111ms cold, unmount 10.0ms ±0.6 — no PERF row (nothing a user waits on).

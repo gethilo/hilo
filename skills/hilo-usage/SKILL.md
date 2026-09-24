@@ -402,3 +402,18 @@ trees instead of trusting the living map.
 **Public docs site (gethilo.github.io/hilo):** landing-page guide links 404
 (they omit the `.md` extension; append it yourself), and `dashboard.html`
 is a stale July v0.2 snapshot — do not cite its tool/crate/gate numbers.
+
+## Run 14 (2026-09-24, workspace surface): what works, what to avoid
+
+`hilo workspace mount` is DO-NOT-USE until DF-WARPFS-48/49 close: through the
+mount, only each repo's TOP-LEVEL files resolve (nested paths ENOENT forever)
+and the whole tree is read-only regardless of `writable:` (log prints "(rw)"
+anyway). The managed worktrees it creates under `~/.hilo/worktrees/<name>/`
+ARE complete and usable directly — if you need multi-repo work today, clone or
+let the mount clone, then point the regular single-repo `hilo mount` /
+`hilo graph` at each worktree. Manifest gotchas (DF-WARPFS-50): the workspace
+manifest is NOT `.vfs/manifest.yaml` (rejected), spec §4's `at:` field is
+rejected, `auto_pull` is an integer of SECONDS not a boolean, and repos[] do
+nothing without explicit mounts[] entries. `graph warm --workspace` from the
+workspace root silently covers 0 files. Single-repo surfaces (CLI, graph,
+MCP, FUSE mount, classify) remain the trustworthy paths — runs 7-13.
