@@ -44,6 +44,52 @@ fn head_error_is_not_found(
     head_failure_means_absent(status, typed, code)
 }
 
+/// Pure decision core for [`aws_failure_to_s3_error`]: render the typed code
+/// header from what survived the failure. A wire/model code wins; an HTTP
+/// status alone (empty-body endpoints, moto et al.) still names the failure.
+/// `None` = neither survived = a transport-level failure (DNS, timeout,
+/// connection refused), which carries no service meaning.
+///
+/// (DF-WARPFS-24 — a bare `Display` string gave the user only
+/// "aws error: service error" with no code, no endpoint, no bucket.)
+fn aws_error_code_header(code: Option<&str>, status: Option<u16>) -> Option<String> {
+    match (code, status) {
+        (Some(c), Some(s)) => Some(format!("{c} ({s})")),
+        (Some(c), None) => Some(c.to_string()),
+        (None, Some(s)) => Some(format!("HTTP {s}")),
+        (None, None) => None,
+    }
+}
+
+/// Pure mapping of an AWS SDK failure into an [`S3Error`]: when a service
+/// error code and/or HTTP status survived, the error becomes the typed
+/// [`S3Error::Service`] with the code header FIRST (`NoSuchBucket (404)`);
+/// the raw SDK Display string is kept as the detail line. Transport-level
+/// failures (no code, no status) stay [`S3Error::Aws`] (DF-WARPFS-24).
+fn aws_failure_to_s3_error(code: Option<&str>, status: Option<u16>, detail: String) -> S3Error {
+    match aws_error_code_header(code, status) {
+        Some(code) => S3Error::Service { code, detail },
+        None => S3Error::Aws(detail),
+    }
+}
+
+/// Attach the where-context (`bucket 'b' @ endpoint`, [`S3Client::op_ctx`])
+/// to an S3 error (DF-WARPFS-24): for a typed [`S3Error::Service`] the
+/// context is appended to the code header, so the user sees
+/// `code — bucket 'x' @ endpoint` before the SDK detail line; for a plain
+/// [`S3Error::Aws`] the context prefixes the detail. Untyped variants
+/// (NotFound/ReadOnly/Io) carry no operation target and pass through.
+fn s3error_ctx(err: S3Error, ctx: &str) -> S3Error {
+    match err {
+        S3Error::Service { mut code, detail } => {
+            code.push_str(&format!(" — {ctx}"));
+            S3Error::Service { code, detail }
+        }
+        S3Error::Aws(detail) => S3Error::Aws(format!("{ctx}: {detail}")),
+        other => other,
+    }
+}
+
 /// Errors specific to S3 backend operations.
 #[derive(Debug, thiserror::Error)]
 pub enum S3Error {
@@ -57,21 +103,36 @@ pub enum S3Error {
     Io(#[from] std::io::Error),
     #[error("s3: aws error: {0}")]
     Aws(String),
+    /// Typed service failure carrying the extracted error code / HTTP status
+    /// FIRST, then bucket + endpoint context, then the raw SDK Display string
+    /// as the detail line (DF-WARPFS-24). Display shape:
+    /// `s3: <code> — bucket 'b' @ <endpoint>: <sdk detail>`.
+    #[error("s3: {code}: {detail}")]
+    Service { code: String, detail: String },
 }
 
 impl From<s3::Error> for S3Error {
     fn from(e: s3::Error) -> Self {
-        S3Error::Aws(e.to_string())
+        // s3::Error (error_meta::Error) implements ProvideErrorMetadata
+        // directly; pull the wire code when one survived (DF-WARPFS-24).
+        let detail = e.to_string();
+        let code = s3::error::ProvideErrorMetadata::code(&e).map(|c| c.to_string());
+        aws_failure_to_s3_error(code.as_deref(), None, detail)
     }
 }
 
-impl<E, R> From<s3::error::SdkError<E, R>> for S3Error
+// R is pinned to the SDK default (HttpResponse) so the raw HTTP status is
+// reachable — s3::error::SdkError<E> IS SdkError<E, HttpResponse> via the
+// crate's type-alias default, which is what every `.send()` call site yields.
+impl<E> From<s3::error::SdkError<E>> for S3Error
 where
-    E: std::fmt::Display,
-    R: std::fmt::Debug,
+    E: std::fmt::Display + s3::error::ProvideErrorMetadata,
 {
-    fn from(e: s3::error::SdkError<E, R>) -> Self {
-        S3Error::Aws(e.to_string())
+    fn from(e: s3::error::SdkError<E>) -> Self {
+        let detail = e.to_string();
+        let status = e.raw_response().map(|r| r.status().as_u16());
+        let code = e.as_service_error().and_then(|se| se.code());
+        aws_failure_to_s3_error(code, status, detail)
     }
 }
 
@@ -263,7 +324,7 @@ impl S3Client {
                 if format!("{}", e).contains("NoSuchKey") {
                     S3Error::NotFound(key.to_string())
                 } else {
-                    S3Error::from(e)
+                    s3error_ctx(S3Error::from(e), &self.op_ctx(bucket))
                 }
             })?;
 
@@ -272,7 +333,7 @@ impl S3Client {
             .body
             .collect()
             .await
-            .map_err(|e| S3Error::Aws(e.to_string()))?;
+            .map_err(|e| s3error_ctx(S3Error::Aws(e.to_string()), &self.op_ctx(bucket)))?;
         let bytes = body.into_bytes();
 
         // 4. Ensure cache directory exists
@@ -364,7 +425,7 @@ impl S3Client {
                 if format!("{}", e).contains("NoSuchKey") {
                     S3Error::NotFound(key.to_string())
                 } else {
-                    S3Error::from(e)
+                    s3error_ctx(S3Error::from(e), &self.op_ctx(bucket))
                 }
             })?;
 
@@ -372,7 +433,7 @@ impl S3Client {
             .body
             .collect()
             .await
-            .map_err(|e| S3Error::Aws(e.to_string()))?;
+            .map_err(|e| s3error_ctx(S3Error::Aws(e.to_string()), &self.op_ctx(bucket)))?;
         let bytes = body.into_bytes();
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent).await?;
@@ -398,7 +459,7 @@ impl S3Client {
         match resp {
             Ok(r) => Ok(r.last_modified().map(|t| t.secs() as u64)),
             Err(e) if head_error_is_not_found(&e) => Ok(None),
-            Err(e) => Err(S3Error::from(e)),
+            Err(e) => Err(s3error_ctx(S3Error::from(e), &self.op_ctx(bucket))),
         }
     }
 
@@ -545,6 +606,12 @@ impl S3Client {
             .join(bucket)
             .join(key.trim_start_matches('/'))
     }
+
+    /// Where-context for error disclosure (DF-WARPFS-24):
+    /// `bucket 'x' @ <endpoint>` — the exact store this client is talking to.
+    fn op_ctx(&self, bucket: &str) -> String {
+        format!("bucket '{}' @ {}", bucket, self.endpoint.display())
+    }
 }
 
 #[cfg(test)]
@@ -653,6 +720,101 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(env_client.endpoint, S3Endpoint::DefaultChain);
+    }
+
+    // DF-WARPFS-24: the SDK-error → S3Error mapping must preserve the typed
+    // service code (or HTTP status) instead of flattening to an opaque
+    // Display string, and attach the bucket/endpoint where-context.
+    #[test]
+    fn aws_error_code_header_matrix() {
+        assert_eq!(
+            aws_error_code_header(Some("NoSuchBucket"), Some(404)).as_deref(),
+            Some("NoSuchBucket (404)")
+        );
+        assert_eq!(
+            aws_error_code_header(Some("AccessDenied"), None).as_deref(),
+            Some("AccessDenied")
+        );
+        // Status alone: empty-body endpoints (moto) carry no wire code.
+        assert_eq!(
+            aws_error_code_header(None, Some(404)).as_deref(),
+            Some("HTTP 404")
+        );
+        // Neither survived = transport-level failure, no service meaning.
+        assert_eq!(aws_error_code_header(None, None), None);
+    }
+
+    #[test]
+    fn aws_failure_maps_to_typed_service_error() {
+        // RED-side guard: code + detail survive separately; code FIRST.
+        let err = aws_failure_to_s3_error(
+            Some("NoSuchBucket"),
+            Some(404),
+            "service error, metadata: code=NoSuchBucket".into(),
+        );
+        match &err {
+            S3Error::Service { code, detail } => {
+                assert_eq!(code, "NoSuchBucket (404)");
+                assert!(detail.contains("service error"), "detail kept: {detail}");
+            }
+            other => panic!("expected Service, got {other:?}"),
+        }
+        // No code/status at all → plain Aws (unchanged legacy shape).
+        assert!(matches!(
+            aws_failure_to_s3_error(None, None, "conn refused".into()),
+            S3Error::Aws(_)
+        ));
+    }
+
+    #[test]
+    fn service_error_display_leads_with_code_then_context() {
+        let err = s3error_ctx(
+            aws_failure_to_s3_error(Some("NoSuchBucket"), Some(404), "the sdk detail".into()),
+            "bucket 'nope' @ http://minio:9000",
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.starts_with("s3: NoSuchBucket (404) — bucket 'nope' @ http://minio:9000:"),
+            "user-facing shape, got: {msg}"
+        );
+        assert!(msg.ends_with("the sdk detail"), "sdk detail kept: {msg}");
+    }
+
+    #[test]
+    fn plain_aws_error_gets_context_prefix() {
+        let err = s3error_ctx(
+            S3Error::Aws("service error".into()),
+            "bucket 'b' @ default AWS config chain",
+        );
+        assert_eq!(
+            err.to_string(),
+            "s3: aws error: bucket 'b' @ default AWS config chain: service error"
+        );
+    }
+
+    #[test]
+    fn untyped_variants_pass_through_ctx() {
+        let nf = s3error_ctx(S3Error::NotFound("k".into()), "bucket 'b' @ ep");
+        assert_eq!(nf.to_string(), "s3: not found: k");
+        let ro = s3error_ctx(S3Error::ReadOnly, "bucket 'b' @ ep");
+        assert_eq!(ro.to_string(), "s3: read-only mount — writes rejected");
+    }
+
+    // The FULL user-facing chain for a sync failure (DF-WARPFS-24 acceptance
+    // criterion 2): S3Error::Service → BackendError → SyncError must carry
+    // code, bucket AND endpoint in what `hilo backend sync` prints.
+    #[test]
+    fn sync_failure_error_chain_names_code_bucket_and_endpoint() {
+        let s3_err = s3error_ctx(
+            aws_failure_to_s3_error(Some("NoSuchBucket"), Some(404), "service error".into()),
+            "bucket 'ghost-bucket' @ http://127.0.0.1:9",
+        );
+        let backend_err: crate::backend::BackendError = s3_err.into();
+        let sync_err: crate::planner::SyncError = backend_err.into();
+        let msg = sync_err.to_string();
+        for needle in ["NoSuchBucket (404)", "ghost-bucket", "http://127.0.0.1:9"] {
+            assert!(msg.contains(needle), "missing {needle:?} in: {msg}");
+        }
     }
 
     // Test: cache path computation
@@ -876,7 +1038,7 @@ impl S3Client {
                 if format!("{}", e).contains("NotFound") {
                     S3Error::NotFound(key.to_string())
                 } else {
-                    S3Error::from(e)
+                    s3error_ctx(S3Error::from(e), &self.op_ctx(bucket))
                 }
             })?;
         Ok(())
@@ -904,7 +1066,7 @@ impl S3Client {
                 r.last_modified().map(|t| t.secs() as u64).unwrap_or(0),
             ))),
             Err(e) if head_error_is_not_found(&e) => Ok(None),
-            Err(e) => Err(S3Error::from(e)),
+            Err(e) => Err(s3error_ctx(S3Error::from(e), &self.op_ctx(bucket))),
         }
     }
 }
