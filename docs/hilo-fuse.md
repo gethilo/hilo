@@ -29,7 +29,7 @@ Kernel-level virtual filesystem that mounts repositories and backends as a unifi
 |--------|-------------|
 | `daemon` | Daemon lifecycle — mount, unmount, signal handling |
 | `ops` | FUSE operations — `getattr`, `readdir`, `lookup`, `read`, `getxattr`, `listxattr` |
-| `permissions` | Permission enforcement — mode bits from manifest rules |
+| `permissions` | Re-exports from `hilo_permissions`. FUSE enforcement uses hardcoded default protections only — manifest `permissions.rules` are parsed but NOT consumed by FUSE |
 | `triggers` | FUSE-triggered file watchers |
 | `workspace_mount` | Multi-repo workspace mounting |
 

@@ -1,6 +1,23 @@
 # hilo-permissions — Permission Engine
 
-Glob-based path matching with mode bits. Evaluates whether Read, Write, or Execute operations are allowed on a path. Rules iterate in order — first match wins. Used by FUSE for kernel-level enforcement and by the MCP server for agent access control.
+Glob-based path matching with mode bits. Evaluates whether Read, Write, or Execute operations are allowed on a path. Rules iterate in order — first match wins.
+
+## Current enforcement status (read this before relying on permissions)
+
+As of v0.3.0:
+
+- **FUSE enforcement uses hardcoded default protections only.** The FUSE
+  engine is built from `default_protections()` (`hilo-fuse/src/ops.rs`);
+  it enforces those defaults on `open`, independent of the manifest.
+- **Manifest `permissions.rules`, `default_mode`, and `backends` are parsed
+  by `hilo-core` but NOT currently consumed by FUSE.** Rules in
+  `.vfs/manifest.yaml` have no effect on any surface.
+- **MCP permission enforcement is not implemented.** `hilo-mcp` contains no
+  permission code; the `PermissionEngine` in this crate is not wired into
+  the MCP server.
+
+The standard mount is also read-only (`hilo mount` sets `read_only=true`),
+so write protection today comes from the kernel, not from this crate.
 
 **Crate:** `hilo-permissions`  
 **Public modules:** 1 (flat crate)
