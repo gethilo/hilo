@@ -1618,3 +1618,29 @@ tasks:
   status: complete
   created_at: '2026-09-24T11:43:45.259848+00:00'
   completed_at: '2026-09-24T12:30:03.341034+00:00'
+- id: gap-099-entry-symbols
+  title: Symbol-level entrypoint reporting in classify
+  criteria:
+  - 'hilo classify --dry-run lists entry symbols: gin corpus names New/Default/Run
+    (all >=1), flask names the Flask class, repo self-check names main for hilo-cli/src/main.rs;
+    >=1 new unit test; cargo check --workspace exit 0; cargo test -p hilo_graph --lib
+    green; fmt clean; non-entrypoint output byte-identical'
+  status: in_progress
+  created_at: '2026-09-24T16:02:51.911522+00:00'
+- id: df-warpfs-24-s3-error-context
+  title: Typed S3 sync error codes with bucket/endpoint context
+  criteria:
+  - New unit test proves SDK-error mapping preserves service error code; new test
+    proves sync-failure error string includes bucket name; cargo check --workspace
+    0; cargo test -p hilo_backends green; fmt clean; success paths unchanged
+  status: complete
+  created_at: '2026-09-24T16:02:52.348490+00:00'
+  completed_at: '2026-09-24T16:14:13.550581+00:00'
+- id: df-warpfs-25-vendored-openssl
+  title: Non-root install fallback via opt-in vendored-openssl
+  criteria:
+  - cargo check -p hilo-cli --features vendored-openssl exits 0 (compiles OpenSSL
+    from source); README vendored-openssl >=2 hits + docker fallback line; getting-started
+    cross-ref >=1 hit; plain cargo check -p hilo-cli exit 0; fmt clean
+  status: in_progress
+  created_at: '2026-09-24T16:02:52.776358+00:00'

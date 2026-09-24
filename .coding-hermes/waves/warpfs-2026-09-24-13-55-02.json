@@ -1,0 +1,20 @@
+{
+  "tick": "warpfs-2026-09-24-13-55-02",
+  "board_tick": 225,
+  "budget": 12,
+  "wave_size": 3,
+  "base": "origin/master",
+  "base_sha": "5c5a2e3",
+  "model": "z-ai/glm-5.3-flash",
+  "provider": "xkiro",
+  "model_note": "tick-224 wave precedent (same-day, same project; seat-verified in event 676). Tick prompt Worker model/provider field was EMPTY.",
+  "independence_check": "GAP-099 touches hilo-graph/src/classify.rs + hilo-graph/src/signal.rs (symbol reuse) + hilo-cli/src/commands/classify.rs; DF-WARPFS-24 touches hilo-backends/src/{s3,backend}.rs + hilo-cli backend error rendering; DF-WARPFS-25 touches README.md + docs/getting-started.md + optional opt-in Cargo feature. Disjoint file sets; no depends_on edges between the three rows (verified from tasks.jsonl); worktrees are separate checkouts.",
+  "workers": [
+    {"id": "GAP-099", "worktree": "/home/kara/worktrees/warpfs-GAP-099", "branch": "wt/GAP-099", "files": ["hilo-graph/src/classify.rs", "hilo-graph/src/signal.rs", "hilo-cli/src/commands/classify.rs"], "tags": ["classify", "symbols", "entrypoints"], "brief": "/tmp/wfs-225-brief-gap099.txt"},
+    {"id": "DF-WARPFS-24", "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-24", "branch": "wt/DF-WARPFS-24", "files": ["hilo-backends/src/s3.rs", "hilo-backends/src/backend.rs", "hilo-cli/src/commands/backend.rs"], "tags": ["s3", "errors", "backend"], "brief": "/tmp/wfs-225-brief-dfw24.txt"},
+    {"id": "DF-WARPFS-25", "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-25", "branch": "wt/DF-WARPFS-25", "files": ["README.md", "docs/getting-started.md", "Cargo.toml"], "tags": ["install", "docs"], "brief": "/tmp/wfs-225-brief-dfw25.txt"}
+  ],
+  "merge_order": ["GAP-099", "DF-WARPFS-24", "DF-WARPFS-25"],
+  "merge_gate": "per-merge: git merge --no-ff; scoped gates on integrated tree (cargo check -p <crate>, cargo test -p hilo_graph --lib, fmt check); gitreins task complete per task AFTER merge commit exists",
+  "dispatched_at": "2026-09-24T09:05:00-05:00"
+}
