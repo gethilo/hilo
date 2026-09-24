@@ -43,7 +43,7 @@ way).
 | `vfs_graph_search` | `{query, limit?}` | `{results, total}` (or a `message` when `.vfs/graph/graph.db` is missing) | Deterministic semantic search (TF-IDF + BM25 + reciprocal rank fusion) |
 | `vfs_rule_list` | `{}` | `{rules, total}` | Rules defined in the manifest |
 | `vfs_rule_check` | `{name}` | `{rule, description, matches, total}` (or `{rule, error}` when the rule's query fails) | Execute a named rule query against the graph |
-| `vfs_list_directory` | `{path}` | `{entries, total}` | Entries in a virtual directory (backends mount table) |
+| `vfs_list_directory` | `{path}` | `{entries, total}` | Entries in a virtual directory (backends mount table), with the real local filesystem as fallback when the virtual listing is empty; errors on nonexistent paths and file paths |
 | `vfs_resolve_path` | `{path}` | `{real_path, backend, cached, sync_status}` (or `{error, path}` when unresolved) | Resolve a virtual path to its real storage location |
 | `vfs_backend_status` | `{path}` | `{backend, cache_path, cache_hit, remote_url, last_synced}` | Backend/cache/sync state for a file |
 | `vfs_sync_backend` | `{path}` | `{synced_files, errors, skipped_ignored}` | Sync the backend for a file; ignored/ephemeral paths report `skipped_ignored` |

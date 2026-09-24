@@ -19,7 +19,7 @@
 //! - `vfs_workspace_ephemeral` — list ephemeral (rebuildable) files
 //! - `vfs_workspace_wipe`   — plan or apply a wipe of ephemeral files
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
@@ -198,7 +198,7 @@ pub fn list_tools() -> Vec<Tool> {
         },
         Tool {
             name: "vfs_list_directory".into(),
-            description: "List entries in a virtual directory from the backends mount table.".into(),
+            description: "List entries in a virtual directory: backends mount table entries first, then the real local filesystem when the virtual listing is empty. Empty result means an empty directory; nonexistent paths and file paths return an error.".into(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -881,10 +881,24 @@ fn list_directory(arguments: &serde_json::Value) -> McpResult<serde_json::Value>
     let manifest = load_manifest()?;
     let mut entries = hilo_core::virtual_dir::list_directory(&manifest, path);
 
-    // Fallback: if no backends are configured, list the workspace directory
-    if entries.is_empty() && path == "/" {
-        if let Ok(cwd) = std::env::current_dir() {
-            if let Ok(dir_entries) = std::fs::read_dir(&cwd) {
+    // DF-WARPFS-41: fall back to the real local filesystem for ANY path when
+    // the virtual listing is empty. An empty result must mean "the directory
+    // is empty", never "the tool could not enumerate" — the pre-fix code only
+    // fell back when `path == "/"`, so every other populated path silently
+    // returned {entries: [], total: 0}.
+    if entries.is_empty() {
+        let base = if path == "/" {
+            std::env::current_dir()?
+        } else {
+            PathBuf::from(path)
+        };
+        if base.is_file() {
+            return Err(McpError::Protocol(format!(
+                "list_directory: not a directory: {path}"
+            )));
+        }
+        match std::fs::read_dir(&base) {
+            Ok(dir_entries) => {
                 for entry in dir_entries.flatten() {
                     let name = entry.file_name().to_string_lossy().to_string();
                     let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
@@ -901,6 +915,12 @@ fn list_directory(arguments: &serde_json::Value) -> McpResult<serde_json::Value>
                     });
                 }
             }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(McpError::Protocol(format!(
+                    "list_directory: path does not exist: {path}"
+                )));
+            }
+            Err(e) => return Err(e.into()),
         }
     }
 

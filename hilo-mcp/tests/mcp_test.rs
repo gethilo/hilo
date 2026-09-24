@@ -1311,3 +1311,139 @@ fn test_graph_related_jit_parses_uncached_source_file() {
     assert!(edges.iter().all(|e| e["relation"] == "imports"));
     assert!(edges.iter().all(|e| e["from"].as_str().unwrap() == path));
 }
+
+// -------------------------------------------------------------------------
+// vfs_list_directory — DF-WARPFS-41: silent-empty on populated dirs
+// -------------------------------------------------------------------------
+
+/// Call `vfs_list_directory` over JSON-RPC and return the full response.
+fn list_dir_rpc(path: &str) -> serde_json::Value {
+    let req = format!(
+        r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"vfs_list_directory","arguments":{{"path":"{path}"}}}}}}"#
+    );
+    rpc(&req)
+}
+
+#[test]
+fn test_list_directory_lists_populated_local_dir() {
+    let _guard = cwd_test_lock().lock().unwrap();
+    use std::fs;
+
+    // Fixture manifest: the tool requires a manifest to load (any manifest
+    // works — the fallback path is what we exercise here).
+    let dir = tempfile::TempDir::new().unwrap();
+    let prev_cwd = std::env::current_dir().unwrap();
+    std::env::set_current_dir(dir.path()).unwrap();
+    let _prev = RestoreCwd(prev_cwd);
+    fs::write(
+        dir.path().join("manifest.yaml"),
+        "project:\n  name: \"t\"\n",
+    )
+    .unwrap();
+
+    let sub = dir.path().join("populated");
+    fs::create_dir_all(&sub).unwrap();
+    fs::write(sub.join("alpha.bin"), b"a").unwrap();
+    fs::create_dir_all(sub.join("beta_dir")).unwrap();
+
+    // Absolute populated path must return entries (was silent-empty pre-fix).
+    let resp = list_dir_rpc(sub.to_str().unwrap());
+    assert!(
+        resp.get("error").is_none(),
+        "populated dir must not error: {resp}"
+    );
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    let result: serde_json::Value = serde_json::from_str(text).unwrap();
+    let entries = result["entries"].as_array().unwrap();
+    assert!(
+        entries
+            .iter()
+            .any(|e| e["name"] == "alpha.bin" && e["type"] == "file"),
+        "alpha.bin missing from entries: {text}"
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|e| e["name"] == "beta_dir" && e["type"] == "directory"),
+        "beta_dir missing from entries: {text}"
+    );
+    assert_eq!(result["total"], entries.len());
+    assert_eq!(result["total"], 2);
+}
+
+#[test]
+fn test_list_directory_error_on_nonexistent_and_file() {
+    let _guard = cwd_test_lock().lock().unwrap();
+    use std::fs;
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let prev_cwd = std::env::current_dir().unwrap();
+    std::env::set_current_dir(dir.path()).unwrap();
+    let _prev = RestoreCwd(prev_cwd);
+    fs::write(
+        dir.path().join("manifest.yaml"),
+        "project:\n  name: \"t\"\n",
+    )
+    .unwrap();
+
+    // Nonexistent path: explicit error, never silent-empty.
+    let resp = list_dir_rpc(dir.path().join("no_such_dir_41").to_str().unwrap());
+    let err = resp
+        .get("error")
+        .unwrap_or_else(|| panic!("nonexistent path must return a JSON-RPC error, got: {resp}"));
+    assert!(
+        err["message"].as_str().unwrap().contains("does not exist"),
+        "error should name the problem: {err}"
+    );
+
+    // File (not a directory): explicit error, never silent-empty.
+    let file = dir.path().join("plain_file.txt");
+    fs::write(&file, b"x").unwrap();
+    let resp = list_dir_rpc(file.to_str().unwrap());
+    let err = resp
+        .get("error")
+        .unwrap_or_else(|| panic!("file path must return a JSON-RPC error, got: {resp}"));
+    assert!(
+        err["message"].as_str().unwrap().contains("not a directory"),
+        "error should say not a directory: {err}"
+    );
+}
+
+#[test]
+fn test_list_directory_dot_and_root_still_populate() {
+    let _guard = cwd_test_lock().lock().unwrap();
+    use std::fs;
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let prev_cwd = std::env::current_dir().unwrap();
+    std::env::set_current_dir(dir.path()).unwrap();
+    let _prev = RestoreCwd(prev_cwd);
+    fs::write(
+        dir.path().join("manifest.yaml"),
+        "project:\n  name: \"t\"\n",
+    )
+    .unwrap();
+    fs::write(dir.path().join("marker.txt"), b"m").unwrap();
+
+    // "." was one of the silent-empty shapes in the dogfood run.
+    let resp = list_dir_rpc(".");
+    assert!(resp.get("error").is_none(), "`.` must not error: {resp}");
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    let result: serde_json::Value = serde_json::from_str(text).unwrap();
+    let entries = result["entries"].as_array().unwrap();
+    assert!(
+        entries.iter().any(|e| e["name"] == "manifest.yaml"),
+        "manifest.yaml should be listed for `.`: {text}"
+    );
+
+    // "/" must still populate (pre-fix special case preserved).
+    let resp = list_dir_rpc("/");
+    assert!(resp.get("error").is_none(), "`/` must not error: {resp}");
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    let result: serde_json::Value = serde_json::from_str(text).unwrap();
+    let entries = result["entries"].as_array().unwrap();
+    assert!(
+        !entries.is_empty(),
+        "`/` must still fall back to the CWD listing: {text}"
+    );
+}
