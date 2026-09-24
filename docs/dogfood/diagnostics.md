@@ -782,3 +782,57 @@ empty answer (skills/hilo-usage/SKILL.md updated this run).
 For directory orientation use `vfs_workspace_ephemeral` (works) — do not
 trust `vfs_list_directory`. Errors are informative; batch independent calls;
 the server is stateless per-process except xattrs, which persist.
+
+## Run 13 — 2026-09-24 (coding-hermes-tools-dogfood, docs site + fix re-verification)
+
+**The surface nobody visits:** the public docs site at
+https://gethilo.github.io/hilo/ — the front door every new user walks
+through. It is LIVE (redeploys on every push to docs/, last 2026-09-24) and
+it is broken in two ways a first-touch user hits immediately:
+
+- **All five "Guides" links on the landing page 404.** `docs/index.html`
+  links `getting-started`, `graph-engine`, `mcp-tools`, `cli-reference`,
+  `architecture` with no extension; Pages serves the repo's docs/ verbatim
+  with no Jekyll rewriting, so only the literal `*.md` URLs work
+  (`getting-started` → 404, `getting-started.md` → 200). The links were
+  written for a site generator that was never configured.
+- **`dashboard.html` is a frozen v0.2 snapshot that lies.** Footer says
+  "Generated 2026-07-12"; it claims 15 MCP tools (17 real), 10 crates (11),
+  stale test/file counts, "static_analysis · lsp PASS" (AGENTS.md records
+  those guard legs disabled as fake-green), and Recent Commits ending ~70
+  commits ago. Nothing regenerates it. Either generate it or delete it —
+  a dashboard that lies is worse than no dashboard.
+
+Lesson for the project: CI redeploys the site on every docs/ push, so the
+site is always "fresh" — freshness of deploy is not freshness of content.
+
+**Fix re-verification by real use (the other half of the angle).** Four
+defects closed on 09-23/24; each re-tested against the canopy corpus with
+the exact behavior that broke before, not by reading tests:
+
+- DF-41 `vfs_list_directory` → returns 15/11 real entries, errors on bad
+  paths. Fixed. (Update to the run-12 lesson above: the tool is trustworthy
+  again as of commit 8476574.)
+- DF-33 concurrency → two simultaneous MCP servers on one repo both answer
+  impact+stats; 8 parallel CLI graph commands, 8/8 rc=0 (read-only DuckDB
+  opens). The "one agent per repo" limitation is gone.
+- DF-30/DF-32 trigger mounts → `graph stats` works WHILE a --triggers mount
+  is up (no standing DB lock), and the daemon self-exits ~1s after
+  `fusermount3 -u` with no manual kill. The run-10/11 leak class is dead.
+- DF-28/DF-29 → defaults load from `hilo init`'s `triggers: []` manifest,
+  and nested-directory file writes now fire parse-and-diff (new files append
+  edges in ~0.5s). Root-only watching is gone.
+
+**And one NEW defect found only because re-verification used the tool the
+way a user does:** edits to EXISTING `.tsx` files never fire parse-and-diff
+(0/8 .tsx writes incl. 30s waits) while .ts/.rs edits fire instantly. The
+engine parses tsx fine — `default_triggers()` (hilo-cli/src/commands/
+mount.rs:502) just doesn't watch `*.tsx`/`*.jsx`. React repos get a living
+map that silently ignores every component edit. Filed DF-WARPFS-45.
+
+**The bunker leg's own lesson:** the QA battery could not run at all this
+tick — bunker-las-02's bunkerd was stuck in `activating` and refused spawn
+connections twice (15:33Z). The manual install procedure ran on las-03
+instead. One server outage should not cost a whole dogfood tick its install
+leg — the skill's designated fallback (las-03) is the working answer; the
+qa script only knows one server.

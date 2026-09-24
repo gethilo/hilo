@@ -378,3 +378,27 @@ honest (0.3.1-dev).
 **Known count mismatch (DF-WARPFS-43):** `graph stats` "Total files: 666" vs
 `graph warm` coverage "705 files" on the same tree — quote warm's coverage
 number in reports; stats under-reports by the no-imports set.
+
+## Run 13 (2026-09-24, docs site + fix re-verification): what changed, what to trust
+
+**Fixed and verified by use — safe to rely on now:**
+
+- `vfs_list_directory` works (real entries + explicit errors on bad paths;
+  commit 8476574). The run-12 "do not trust" rule above is RETIRED.
+- Concurrent readers coexist: multiple MCP servers / parallel CLI graph
+  commands on one repo all succeed (read-only DuckDB opens, f2aa69c).
+- `--triggers` mounts hold no graph.db lock (stats work during mount) and
+  the daemon self-exits ~1s after `fusermount3 -u` — no manual kill needed.
+- `hilo init`'s `triggers: []` manifest loads the 9 default triggers on
+  mount --triggers (no more silent no-op), and nested-path file writes fire
+  parse-and-diff.
+
+**STILL BROKEN (DF-WARPFS-45):** default triggers watch only 9 extensions —
+no `*.tsx` / `*.jsx` (hilo-cli/src/commands/mount.rs:502). On a React repo,
+`hilo mount --triggers` silently ignores every component edit. Until fixed,
+use `graph warm` (or a custom trigger list in the manifest) on .tsx-heavy
+trees instead of trusting the living map.
+
+**Public docs site (gethilo.github.io/hilo):** landing-page guide links 404
+(they omit the `.md` extension; append it yourself), and `dashboard.html`
+is a stale July v0.2 snapshot — do not cite its tool/crate/gate numbers.

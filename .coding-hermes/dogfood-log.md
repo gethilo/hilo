@@ -564,3 +564,51 @@ docs/dogfood/2026-09-23-run12-mcp-server.md,
 docs/dogfood/diagnostics.md Run 12 section, skills/hilo-usage/SKILL.md
 run-12 section (path/task arg names, list_directory distrust, stats-vs-warm
 count), rows, this entry.
+
+---
+
+## 2026-09-24 (coding-hermes-tools-dogfood tick 2026-09-24-15-28-40) — run 13, public docs site + fix re-verification at ef4748d
+
+verdict: 🟡 PROMISING-BUT-ROUGH — the product core is the best it has been in
+13 runs (six fix families verified FIXED by real use; perf in spec), but the
+public front door is broken (5/5 guide links 404 + a lying dashboard) and the
+trigger engine has one more silent-empty hole (.tsx/.jsx never fire).
+promise: angle by the stale-surface rule — no run had ever visited
+https://gethilo.github.io/hilo/ as a first-touch user, and 4 defect
+families closed 09-23/24 without a real-use re-verification. HEAD ef4748d
+(local release 0.3.1-dev).
+consumer pass: (a) docs site — landing 200/redeployed today, but all five
+Guides links 404 (links omit .md; Pages serves raw docs/, no generator);
+dashboard.html is a frozen v0.2 snapshot ("Generated 2026-07-12", 15 tools
+vs 17 real, stale gates/commits) deployed live; (b) fix re-verification on
+a scratch canopy copy (709 files, 6661 edges, release build) — DF-41
+list_directory returns 15/11 real entries + explicit errors (FIXED);
+DF-33 two simultaneous MCP servers both answer + 8/8 parallel CLI (FIXED);
+DF-30 stats-works-during-triggers-mount (FIXED); DF-32 daemon self-exits
+~1s after fusermount3 -u, no manual kill (FIXED); DF-28 defaults load from
+init's `triggers: []` (FIXED); DF-29 nested new-file writes fire ~0.5s
+(FIXED for new files); DF-38 managed .gitignore block installs, pre-existing
+content preserved (FIXED). NEW: every .tsx write (3 edits to existing
+App.tsx, 2 new .tsx files, 1 edit to a fresh copy) fired 0 edges across
+30s waits while .ts/.rs edits fired instantly → default_triggers()
+(mount.rs:502) watches 9 extensions, no *.tsx/*.jsx; engine parses tsx fine.
+time-to-first-success: ~1 min on the product (init+warm+stats); the DOCS
+path time-to-first-success is effectively NEVER (five dead links).
+perf (hyperfine, release, warm, n=20): stats 33.1ms ±3.2, impact d3
+26.8ms ±4.5; cold warm 17.2s/709 files. NO PERF ROW — nothing a user
+would notice; matches README claims and runs 9-12.
+install leg: bunker-las-02 bunkerd DOWN this tick (activating; spawn
+connection refused ×2 at 15:33Z) → qa battery could not run (explicitly
+recorded, NOT a silent pass). Manual skill procedure executed on
+bunker-las-03 instead (the skill's designated build host): fresh agent
+4f10f656, public clone at ef4748d (== HEAD), rustup minimal 1.98.1
+(needed a clean RUSTUP_HOME — the stock -y install hit os error 39 rename
+races; second wrinkle: /tmp is shared per-IP and owned by dead UIDs so
+/tmp writes from my first command landed on 2026-09-19 files),
+`cargo build --release` in flight at log time; smoke + destroy to follow.
+rows: DF-WARPFS-45..47 appended + read-back verified (board 207 → 210 rows,
+0 bad lines, each id exactly once, git diff --numstat == 3).
+left behind: docs/dogfood/2026-09-24-run13-docs-site-fix-reverify.md,
+diagnostics.md Run 13 section, skills/hilo-usage/SKILL.md run-13 section
+(list_directory trust RETIRED, .tsx workaround, docs-site caveats), rows,
+this entry.
