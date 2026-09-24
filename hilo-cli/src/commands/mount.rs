@@ -502,6 +502,10 @@ fn parse_debounce(s: &str) -> u64 {
 fn default_triggers() -> Vec<TriggerConfig> {
     let source_extensions = &[
         "*.go", "*.rs", "*.py", "*.ts", "*.js", "*.java", "*.c", "*.cpp", "*.rb",
+        // DF-WARPFS-45: the ts/js parser also accepts tsx/jsx, and mjs/cjs
+        // are ES/CommonJS module files — without them every React/TSX edit
+        // was silently ignored by the default watch list.
+        "*.tsx", "*.jsx", "*.mjs", "*.cjs",
     ];
     source_extensions
         .iter()
@@ -530,7 +534,11 @@ mod tests {
     #[test]
     fn test_default_triggers_covers_all_languages() {
         let configs = default_triggers();
-        assert_eq!(configs.len(), 9, "one trigger per supported language");
+        assert_eq!(
+            configs.len(),
+            13,
+            "one trigger per watched extension (tsx/jsx/mjs/cjs share parsers with ts/js)"
+        );
         for cfg in &configs {
             assert!(cfg.watch_pattern.starts_with("*."));
             assert_eq!(cfg.builtin.as_deref(), Some("parse-and-diff"));
@@ -561,7 +569,70 @@ mod tests {
         .unwrap();
         let configs = load_triggers(dir.path());
         assert_eq!(configs.len(), default_triggers().len());
-        assert_eq!(configs.len(), 9);
+        assert_eq!(
+            configs.len(),
+            13,
+            "DF-WARPFS-45: defaults include tsx/jsx/mjs/cjs — 13 patterns total"
+        );
+    }
+
+    #[test]
+    fn test_default_triggers_watch_list_content_and_shape() {
+        // DF-WARPFS-45 regression: the default watch list must cover React
+        // and module-file extensions, not just the original nine languages
+        // — on a React repo every .tsx/.jsx edit was silently ignored.
+        let configs = default_triggers();
+
+        // (a) all 13 patterns present, exactly.
+        let patterns: Vec<&str> = configs
+            .iter()
+            .map(|cfg| cfg.watch_pattern.as_str())
+            .collect();
+        for expected in [
+            "*.go", "*.rs", "*.py", "*.ts", "*.js", "*.java", "*.c", "*.cpp", "*.rb", "*.tsx",
+            "*.jsx", "*.mjs", "*.cjs",
+        ] {
+            assert!(
+                patterns.contains(&expected),
+                "default watch list missing `{expected}`"
+            );
+        }
+        assert_eq!(patterns.len(), 13);
+
+        // (b) no duplicate watch patterns.
+        let mut sorted = patterns.clone();
+        sorted.sort_unstable();
+        let unique = sorted.len();
+        sorted.dedup();
+        assert_eq!(
+            unique,
+            sorted.len(),
+            "duplicate watch patterns in default_triggers"
+        );
+
+        // (c) every generated trigger keeps the builtin parse-and-diff shape.
+        for cfg in &configs {
+            assert_eq!(
+                cfg.builtin.as_deref(),
+                Some("parse-and-diff"),
+                "trigger `{}` lost its builtin",
+                cfg.name
+            );
+            assert_eq!(
+                cfg.events,
+                vec!["write".to_string()],
+                "trigger `{}` must fire on write only",
+                cfg.name
+            );
+        }
+
+        // Naming contract: trim_start_matches yields update-graph-<ext>
+        // without the leading "*." (tsx → update-graph-tsx, not update-graph-*.tsx).
+        let tsx = configs
+            .iter()
+            .find(|cfg| cfg.watch_pattern == "*.tsx")
+            .expect("tsx trigger present");
+        assert_eq!(tsx.name, "update-graph-tsx");
     }
 
     #[test]
