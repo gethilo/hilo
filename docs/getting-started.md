@@ -29,8 +29,10 @@ sudo apt install libfuse3-dev attr
 > see the README's "Non-root / restricted hosts" section.
 
 > ⚠️ **Build time:** the first build compiles `duckdb-sys`/`arrow` from
-> source — expect 15-20 min and a C/C++ toolchain (`clang`, `CMake`,
-> `g++`). Subsequent builds are incremental and fast.
+> source — expect 15-20 min and a C/C++ toolchain (`g++`, e.g. from
+> `build-essential`). `clang` and `CMake` are **not** required — see the
+> README's build-time note (verified on a bare Debian 13 fresh install,
+> 2026-09-20). Subsequent builds are incremental and fast.
 
 ## First Run
 
