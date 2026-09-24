@@ -21,6 +21,12 @@ tokio = { version = "1", features = ["full"] }
 regex = "1"
 walkdir = "2"
 
+[features]
+# DF-WARPFS-25: opt-in OpenSSL vendoring for non-root / restricted hosts.
+# Compiles OpenSSL from source (needs only perl + a C compiler) instead of
+# linking the system libssl — no sudo, no pkg-config, no libssl-dev required.
+vendored-openssl = ["git2/vendored-openssl"]
+
 [dev-dependencies]
 tempfile = "3"
 filetime = "0.2"

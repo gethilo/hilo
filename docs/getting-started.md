@@ -24,6 +24,10 @@ sudo apt install libfuse3-dev attr
 # No additional deps needed for CLI-only use
 ```
 
+> On non-root / restricted hosts (no sudo, no `pkg-config`/`libssl-dev`),
+> build with `cargo install --path hilo-cli --features vendored-openssl` —
+> see the README's "Non-root / restricted hosts" section.
+
 > ⚠️ **Build time:** the first build compiles `duckdb-sys`/`arrow` from
 > source — expect 15-20 min and a C/C++ toolchain (`clang`, `CMake`,
 > `g++`). Subsequent builds are incremental and fast.

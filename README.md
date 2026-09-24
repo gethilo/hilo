@@ -36,12 +36,36 @@ Requirements:
 sudo apt install build-essential pkg-config libssl-dev libfuse3-dev attr
 ```
 
+### Non-root / restricted hosts
+
+On hosts without sudo (bare agent images, containers), the OpenSSL
+development headers above are not installable — and the build then dies in
+`openssl-sys`'s build script ("Could not find directory of OpenSSL
+installation"). Build with the `vendored-openssl` feature instead: it
+compiles OpenSSL from source (needs only `perl` and a C compiler, both
+present on standard images) and requires no sudo, no `pkg-config`, and no
+`libssl-dev`:
+
+```bash
+cargo install --path hilo-cli --features vendored-openssl
+# or, from a checkout:
+cargo build --release -p hilo-cli --features vendored-openssl
+```
+
+(First build takes longer — OpenSSL is compiled from source; later builds
+are cached.) FUSE mount support still needs `libfuse3-dev`, which does
+require sudo — if you need it on a restricted host, build inside a
+container (`docker build` / `docker run` with the repo mounted) and copy
+the compiled binary out.
+
 > ⚠️ **Build time:** the first `cargo build --release` also compiles DuckDB
 > (`duckdb-sys`)/Arrow from source — expect 15-20 min. A full source build
 > needs a C/C++ toolchain (`g++`, e.g. from `build-essential`), `pkg-config`,
 > and the OpenSSL and FUSE 3 **development** packages (`libssl-dev`,
 > `libfuse3-dev`) for the crates that link them (`openssl-sys` via `git2`,
 > `hilo-fuse`); `clang` and `CMake` are **not** required for the standard build.
+> On hosts without sudo, see **Non-root / restricted hosts** above for the
+> `--features vendored-openssl` alternative.
 > Subsequent builds are incremental and fast (~seconds).
 >
 > **Verified fresh-install (2026-09-20 dogfood run):** public clone at
