@@ -125,6 +125,27 @@ pub struct GraphStats {
     /// ordered by reference count descending.
     #[serde(skip)]
     pub top_dependencies: Vec<(String, i64)>,
+    /// Per-component roster (GAP-097): one entry per top-level directory of
+    /// the graph's real files, plus "." for root-level files. Full list —
+    /// display capping is the CLI's concern.
+    #[serde(skip)]
+    pub components: Vec<ComponentStat>,
+}
+
+/// One top-level component ("subsystem") in [`GraphStats::components`].
+///
+/// A component is the first path segment of a real file node: `render/api.go`
+/// belongs to `render`. Graph pseudo-nodes (`pkg:`/`sys:`/`std:`/`external:`)
+/// are never components, and files without a path separator (root files,
+/// e.g. `main.go`) aggregate under the component name ".".
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ComponentStat {
+    /// Top-level component name, e.g. "render"; "." for repo-root files.
+    pub name: String,
+    /// Number of distinct real files under the component.
+    pub files: i64,
+    /// Number of edges whose `from` is a file inside the component.
+    pub edges: i64,
 }
 
 /// Per-module statistics returned by `vfs_graph_module`.
@@ -2197,6 +2218,43 @@ impl GraphDB {
             }
         }
 
+        // Components (GAP-097): a "what is this system?" roster. Every real
+        // file node is bucketed by its first path segment (the top-level
+        // component); root-level files (no separator) aggregate under ".".
+        // Pseudo-node families mirror `resolution::is_symbol_node` —
+        // `pkg:`/`sys:`/`std:`/`external:` are dependency/symbol nodes, not
+        // filesystem paths, and must never appear as components. Full list;
+        // `--limit` capping is a display concern left to the CLI.
+        let mut components_stmt = self.conn.prepare(
+            "WITH real_files AS ( \
+                 SELECT DISTINCT \"from\" AS f \
+                 FROM edges \
+                 WHERE \"from\" NOT LIKE 'pkg:%' \
+                   AND \"from\" NOT LIKE 'sys:%' \
+                   AND \"from\" NOT LIKE 'std:%' \
+                   AND \"from\" NOT LIKE 'external:%' \
+             ) \
+             SELECT CASE WHEN instr(f, '/') = 0 THEN '.' \
+                         ELSE substr(f, 1, instr(f, '/') - 1) END AS component, \
+                    COUNT(DISTINCT f) AS files, \
+                    COUNT(*) AS edges \
+             FROM edges \
+             JOIN real_files ON edges.\"from\" = real_files.f \
+             GROUP BY component \
+             ORDER BY files DESC, component ASC",
+        )?;
+        let comp_rows = components_stmt.query_map(params![], |row| {
+            Ok(ComponentStat {
+                name: row.get::<_, String>(0)?,
+                files: row.get::<_, i64>(1)?,
+                edges: row.get::<_, i64>(2)?,
+            })
+        })?;
+        let mut components = Vec::new();
+        for r in comp_rows {
+            components.push(r?);
+        }
+
         Ok(GraphStats {
             total_edges,
             total_files: unique_files,
@@ -2206,6 +2264,7 @@ impl GraphDB {
             orphans,
             edge_types,
             top_dependencies: top,
+            components,
         })
     }
 
@@ -4428,6 +4487,79 @@ mod tests {
             untested,
             vec!["src/orphan.ts".to_string()],
             "only the file with no covering edge stays listed, got: {untested:?}"
+        );
+    }
+
+    // ── GAP-097: graph stats component roster ───────────────────────────────
+
+    #[test]
+    fn stats_components_first_segment_and_pseudo_nodes_excluded() {
+        // Component = first path segment of every real file `from`.
+        // `pkg:`/`sys:`/`std:`/`external:` pseudo-nodes must never appear,
+        // and root-level files (no separator) aggregate under ".".
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[
+            Edge::new("render/api.go", "pkg:std:fmt", "imports"),
+            Edge::new("render/api.go", "sys:linux/fs", "uses"),
+            Edge::new("render/template.go", "std:net/http", "imports"),
+            Edge::new("codec/json.go", "pkg:encoding/json", "imports"),
+            Edge::new("codec/json.go", "external:shared-lib:helper.go", "imports"),
+            Edge::new("root.go", "pkg:std:os", "imports"),
+        ])
+        .unwrap();
+
+        let stats = db.stats().unwrap();
+        let names: Vec<&str> = stats.components.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(
+            names,
+            // Ties on files break by name ASC: '.' (0x2E) sorts before "codec".
+            vec!["render", ".", "codec"],
+            "pseudo-nodes excluded, first-segment bucketing, root files under '.'"
+        );
+        let render = &stats.components[0];
+        assert_eq!(
+            (render.name.as_str(), render.files, render.edges),
+            ("render", 2, 3)
+        );
+        let root = &stats.components[1];
+        assert_eq!((root.name.as_str(), root.files, root.edges), (".", 1, 1));
+        let codec = &stats.components[2];
+        assert_eq!(
+            (codec.name.as_str(), codec.files, codec.edges),
+            ("codec", 1, 2)
+        );
+    }
+
+    #[test]
+    fn stats_components_order_files_desc_then_name_asc() {
+        // Ordering contract: files DESC, then name ASC as the tiebreak.
+        // file counts: b(3) > a/c(2) == c(2) -> a before c; d(1) last.
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[
+            Edge::new("b/one.go", "pkg:x", "imports"),
+            Edge::new("b/two.go", "pkg:x", "imports"),
+            Edge::new("b/three.go", "pkg:x", "imports"),
+            Edge::new("a/one.go", "pkg:x", "imports"),
+            Edge::new("a/two.go", "pkg:x", "imports"),
+            Edge::new("c/one.go", "pkg:x", "imports"),
+            Edge::new("c/two.go", "pkg:x", "imports"),
+            Edge::new("d/one.go", "pkg:x", "imports"),
+        ])
+        .unwrap();
+
+        let stats = db.stats().unwrap();
+        let names: Vec<&str> = stats.components.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, vec!["b", "a", "c", "d"]);
+    }
+
+    #[test]
+    fn stats_components_empty_graph_empty_vec() {
+        let db = GraphDB::open(":memory:").unwrap();
+        let stats = db.stats().unwrap();
+        assert!(
+            stats.components.is_empty(),
+            "an empty graph has no components, got: {:?}",
+            stats.components
         );
     }
 

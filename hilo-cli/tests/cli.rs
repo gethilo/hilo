@@ -383,6 +383,133 @@ fn graph_stats_no_data_prints_message() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn graph_stats_lists_top_level_components() {
+    // GAP-097: stats must answer "what is this system?" with a component
+    // roster — one entry per top-level directory, root files under ".",
+    // and no pkg:/sys:/std: pseudo-nodes in the list.
+    let dir = unique_tempdir("graph-stats-components");
+    fs::create_dir_all(dir.join("render")).expect("failed to create render");
+    fs::create_dir_all(dir.join("codec")).expect("failed to create codec");
+    fs::write(
+        dir.join("render/a.go"),
+        "package render\n\nimport \"fmt\"\n\nfunc A() { fmt.Println(\"a\") }\n",
+    )
+    .expect("failed to write render/a.go");
+    fs::write(
+        dir.join("render/b.go"),
+        "package render\n\nimport \"os\"\n\nfunc B() { _ = os.Getenv(\"X\") }\n",
+    )
+    .expect("failed to write render/b.go");
+    fs::write(
+        dir.join("codec/c.go"),
+        "package codec\n\nimport \"encoding/json\"\n\nfunc C() { _ = json.Valid([]byte(\"{}\")) }\n",
+    )
+    .expect("failed to write codec/c.go");
+    fs::write(
+        dir.join("root.go"),
+        "package main\n\nimport \"fmt\"\n\nfunc main() { fmt.Println(\"root\") }\n",
+    )
+    .expect("failed to write root.go");
+
+    let init = hilo_cmd()
+        .arg("init")
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo init");
+    assert!(
+        init.status.success(),
+        "init failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+
+    let warm = hilo_cmd()
+        .args(["graph", "warm"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn graph warm");
+    assert!(
+        warm.status.success(),
+        "graph warm failed: {}",
+        String::from_utf8_lossy(&warm.stderr)
+    );
+
+    let stats = hilo_cmd()
+        .args(["graph", "stats"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn graph stats");
+    assert!(
+        stats.status.success(),
+        "graph stats failed: {}",
+        String::from_utf8_lossy(&stats.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&stats.stdout);
+    assert!(
+        stdout.contains("Components (3 total):"),
+        "expected a 'Components (3 total):' header, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("  render: 2 files, 2 edges"),
+        "expected render with 2 files / 2 edges, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("  codec: 1 files, 1 edges"),
+        "expected codec with 1 file / 1 edge, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("  .: 1 files, 1 edges"),
+        "expected root files aggregated under '.', got:\n{stdout}"
+    );
+
+    // The roster itself must never contain pseudo-node families: scope the
+    // check to the lines between the Components header and the next section.
+    let section: Vec<&str> = stdout
+        .lines()
+        .skip_while(|l| !l.starts_with("Components ("))
+        .skip(1)
+        .take_while(|l| *l != "Most connected:" && *l != "Edge types:")
+        .collect();
+    assert!(
+        !section.is_empty(),
+        "components section must list at least one entry, got:\n{stdout}"
+    );
+    for line in &section {
+        assert!(
+            !line.starts_with("  pkg:")
+                && !line.starts_with("  sys:")
+                && !line.starts_with("  std:"),
+            "pseudo-node leaked into the component roster: {line}"
+        );
+    }
+
+    // --limit caps the roster display the same way it caps orphans.
+    let capped = hilo_cmd()
+        .args(["graph", "stats", "--limit", "2"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn capped graph stats");
+    let capped_stdout = String::from_utf8_lossy(&capped.stdout);
+    assert!(
+        capped_stdout.contains("Components (3 total):"),
+        "header must always show the full count, got:\n{capped_stdout}"
+    );
+    assert!(
+        capped_stdout.contains("  render: 2 files, 2 edges"),
+        "largest component still shown when capped, got:\n{capped_stdout}"
+    );
+    assert!(
+        !capped_stdout.contains("  codec:"),
+        "components beyond the limit must not be printed, got:\n{capped_stdout}"
+    );
+    assert!(
+        capped_stdout.contains("  ... 1 more components (use --limit 0 to show all)"),
+        "expected the cap trailer, got:\n{capped_stdout}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 // ─────────────────────── classify ───────────────────────
 
 #[test]
