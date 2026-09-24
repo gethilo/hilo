@@ -20,7 +20,10 @@ pub mod rules;
 pub mod semantic;
 pub mod signal;
 
-pub use classify::{classify_file, infer_feature, Classification};
+pub use classify::{
+    classify_file, entry_symbols_for_classification, extract_entry_symbols, infer_feature,
+    Classification, ENTRY_SYMBOLS_CAP,
+};
 pub use error::{GraphError, GraphResult};
 pub use graph::{
     ensure_schema, insert_edges_into, reconcile_edges_from_jsonl,

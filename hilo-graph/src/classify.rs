@@ -6,6 +6,7 @@
 
 use crate::error::GraphResult;
 use crate::parser::Language;
+use crate::signal::extract_rust_name;
 use tree_sitter::Parser as TsParser;
 
 /// Classification labels written as xattrs (user.vfs.*).
@@ -138,6 +139,20 @@ pub fn classify_file(
         });
     }
 
+    // 5b. Canonical entry symbols (GAP-099): frameworks expose their
+    // "where do I start" surface as canonical named symbols rather than a
+    // main function — Go constructor sets (New/Default/Run, e.g. gin.go)
+    // and Python application classes (class Flask). A file declaring them
+    // is an entrypoint even though it also carries library surface.
+    if has_canonical_entry(root, source.as_bytes(), language) {
+        return Ok(Classification {
+            role: "entrypoint".into(),
+            status: "stable".into(),
+            reason: format!("declares canonical entry symbols for {:?}", language),
+            feature: None,
+        });
+    }
+
     // Check for public API surface (library markers)
     if has_public_api(root, source.as_bytes(), language) {
         return Ok(Classification {
@@ -182,6 +197,365 @@ fn language_to_ts(lang: Language) -> tree_sitter::Language {
         Language::Julia => tree_sitter_julia::LANGUAGE.into(),
         Language::Elm => tree_sitter_elm::LANGUAGE.into(),
         Language::Nim => tree_sitter_nim::language(),
+    }
+}
+
+/// Per-language source-text seeds for AST-detected entrypoints.
+///
+/// When a file becomes role=entrypoint via its language's `has_*_main`
+/// pattern (not the filename convention), the callable an agent starts at
+/// is described by this source text rather than a single symbol name —
+/// e.g. Python's `if __name__ == "__main__":` guard, Go's `func main()`.
+/// GAP-099 renders this verbatim so `hilo classify` answers "where does
+/// execution start" even when the entrypoint is a pattern, not a symbol.
+/// Each seed matches the corresponding `has_*_entrypoint` detector.
+fn entrypoint_source_seeds(language: Language) -> &'static [&'static str] {
+    match language {
+        // Existing AST-detection text patterns, kept as source here (no
+        // behavior change — the same strings classify the file, they now
+        // also seed the symbol report):
+        Language::Python => &["if __name__ == \"__main__\"", "if __name__ == '__main__'"],
+        Language::Go => &["func main()"],
+        Language::Java => &["public static void main("],
+        Language::Rust => &["fn main("],
+        Language::C | Language::Cpp => &["int main", "void main"],
+        Language::Scala => &["def main(", "@main"],
+        Language::Zig => &["pub fn main("],
+        Language::CSharp => &["static void Main(", "static async Task Main("],
+        Language::Kotlin => &["fun main("],
+        Language::Elixir => &["def main("],
+        Language::Haskell => &["main"], // detector: any trimmed line start
+        Language::Erlang => &["-module(main)"],
+        Language::Julia => &["function main("],
+        Language::Dart => &["main()", "main(List"],
+        Language::Clojure => &["(-main"],
+        // Detectors for these languages are pure AST or shebang checks with
+        // no single text marker:
+        Language::JavaScript
+        | Language::TypeScript
+        | Language::Ruby
+        | Language::Php
+        | Language::Swift
+        | Language::Lua
+        | Language::OCaml
+        | Language::R
+        | Language::Elm
+        | Language::Nim => &[],
+    }
+}
+
+/// The symbol report line for one entrypoint file (GAP-099):
+/// names of the file's top-level entry symbols — the callables an agent
+/// starts at. Files whose entrypoint is a source pattern rather than a
+/// named symbol (Go's `func main()`, Python's `if __name__ == "__main__"`
+/// guard) carry a seed-string marker in angle brackets instead, and
+/// wrapper-style entrypoints (flask's `cli.py`: `if __name__ == "__main__"`
+/// around `main()`) surface the wrapper's target: the first top-level
+/// symbol whose definition line follows the last entrypoint-seed line.
+pub fn entry_symbols_for_classification(
+    language: Language,
+    reason: &str,
+    source: &str,
+) -> Vec<String> {
+    let mut symbols = extract_entry_symbols(language, source);
+
+    let by_convention = reason.starts_with("filename convention");
+    let seed_for_marker = if by_convention {
+        None
+    } else {
+        entrypoint_source_seeds(language)
+            .iter()
+            .find(|seed| source.contains(*seed))
+    };
+
+    match seed_for_marker {
+        // A seed matched: this file's entrypoint is that pattern, not a
+        // named symbol. Keep only symbols the pattern's line can reach —
+        // either defined after it, or named in its body (a wrapper like
+        // flask cli.py's `if __name__ == "__main__": main()`).
+        Some(seed) => {
+            let seed_end = source.find(seed).map(|i| i + seed.len()).unwrap_or(0);
+            let seed_line = source[..seed_end].matches('\n').count() + 1;
+            filter_symbols_after_line(&mut symbols, language, source, seed_line);
+            if !has_symbol_marker(&symbols) {
+                // Wrapper target: a symbol named inside the guard's body.
+                if let Some(target) = wrapper_target_after_seed(language, source, seed_end) {
+                    if !symbols.contains(&target) {
+                        symbols.push(target);
+                    }
+                }
+            }
+            if !has_symbol_marker(&symbols) {
+                symbols.push(format!("<{seed}>"));
+            }
+            symbols
+        }
+        // By-convention entrypoints (main.rs, __main__.py) report their
+        // symbols as-is; files with no symbols get no line at all.
+        None => symbols,
+    }
+}
+
+/// The first symbol defined anywhere in the file whose name appears in the
+/// source text after `offset` — i.e. the callable a pattern-entrypoint's
+/// body invokes (flask cli.py: `main` defined before the guard, invoked
+/// inside it). Python call shape `name(`, Go call shape `name(`.
+fn wrapper_target_after_seed(language: Language, source: &str, offset: usize) -> Option<String> {
+    let tail = &source[offset.min(source.len())..];
+    let defined = definition_lines(language, source);
+    // Prefer the definition closest to the tail's first word boundary hit.
+    let mut best: Option<(usize, String)> = None;
+    for (name, _line) in &defined {
+        let needle = format!("{name}(");
+        if let Some(pos) = tail.find(&needle) {
+            if best.as_ref().map(|(p, _)| pos < *p).unwrap_or(true) {
+                best = Some((pos, name.clone()));
+            }
+        }
+    }
+    best.map(|(_, n)| n)
+}
+
+/// Marker shape used for pattern-entrypoints (`<func main()>`).
+fn has_symbol_marker(symbols: &[String]) -> bool {
+    symbols
+        .iter()
+        .any(|s| s.starts_with('<') && s.ends_with('>'))
+}
+
+/// Keep only symbols defined after `line` (the entrypoint guard's line) —
+/// used when a pattern seeds the entrypoint so wrapper targets like
+/// flask cli.py's `main()` (defined after `if __name__ == "__main__":`
+/// via the click group) surface. Python defs/classes map line→name via
+/// the AST; the definition node's start row must be >= the guard line.
+fn filter_symbols_after_line(
+    symbols: &mut Vec<String>,
+    language: Language,
+    source: &str,
+    line: usize,
+) {
+    if line == 0 {
+        return;
+    }
+    let lines_with_defs = definition_lines(language, source);
+    symbols.retain(|s| lines_with_defs.iter().any(|(n, l)| n == s && *l >= line));
+}
+
+/// (name, 1-based start line) of every definition in a file that the
+/// entry-symbol walkers count — the line map `filter_symbols_after_line`
+/// filters against. Covers Python (defs/classes), Go (func decls and
+/// methods) and Rust (function items) so a pattern seed in any of the
+/// three entry-symbol languages can keep the symbols defined after it.
+fn definition_lines(language: Language, source: &str) -> Vec<(String, usize)> {
+    let mut parser = TsParser::new();
+    if parser.set_language(&language_to_ts(language)).is_err() {
+        return Vec::new();
+    }
+    let Some(tree) = parser.parse(source.as_bytes(), None) else {
+        return Vec::new();
+    };
+    let src = source.as_bytes();
+    let mut out = Vec::new();
+    def_lines_walk(tree.root_node(), src, language, &mut out);
+    out
+}
+
+fn def_lines_walk(
+    node: tree_sitter::Node,
+    source: &[u8],
+    language: Language,
+    out: &mut Vec<(String, usize)>,
+) {
+    let kind = node.kind();
+    let is_def = match language {
+        Language::Python => matches!(kind, "function_definition" | "class_definition"),
+        Language::Go => matches!(kind, "function_declaration" | "method_declaration"),
+        Language::Rust => kind == "function_item",
+        _ => false,
+    };
+    if is_def {
+        if let Some(name) = node
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source).ok())
+        {
+            out.push((name.to_string(), node.start_position().row + 1));
+            return; // nested defs are not top-level
+        }
+    }
+    let mut cursor = node.walk();
+    let children: Vec<tree_sitter::Node> = node.children(&mut cursor).collect();
+    for child in children {
+        def_lines_walk(child, source, language, out);
+    }
+}
+
+// ── Entry symbols (GAP-099) ─────────────────────────────────────────
+
+/// Maximum entry symbols listed per file before a "... N more" tail.
+pub const ENTRY_SYMBOLS_CAP: usize = 10;
+
+/// Entry-symbol definition, per language:
+/// - Rust: top-level `pub` fns (plus `fn main`).
+/// - Python: top-level def/class names (Flask = the class).
+///
+/// Go = top-level func decls, exported ones first; canonical entry names
+/// (New/Default/Run) lead the exported band, and exported top-level
+/// methods (e.g. `func (e *Engine) Run(...)` in gin.go — a framework's
+/// actual "where do I start" surface, which has no `func main`) count.
+///
+/// Unsupported languages yield an empty list (no line is printed).
+pub fn extract_entry_symbols(language: Language, source: &str) -> Vec<String> {
+    let mut parser = TsParser::new();
+    if parser.set_language(&language_to_ts(language)).is_err() {
+        return Vec::new();
+    }
+    let Some(tree) = parser.parse(source.as_bytes(), None) else {
+        return Vec::new();
+    };
+
+    let source = source.as_bytes();
+    let root = tree.root_node();
+
+    match language {
+        Language::Rust => rust_entry_symbols(root, source),
+        Language::Python => python_entry_symbols(root, source),
+        Language::Go => go_entry_symbols(root, source),
+        _ => Vec::new(),
+    }
+}
+
+/// True when a Rust item sits directly in the file's top-level item list
+/// (its parent is `source_file`; tree-sitter-rust attaches attributes as
+/// preceding siblings, so no attribute unwrapping is needed). Checking the
+/// immediate parent — not the whole ancestor chain — is the point: every
+/// chain eventually reaches `source_file`, so a chain walk would accept
+/// `impl`-block and nested functions too.
+fn is_top_level_rust(node: tree_sitter::Node) -> bool {
+    node.parent().is_some_and(|p| p.kind() == "source_file")
+}
+
+/// A Rust definition's name, when the definition is public.
+/// `extract_rust_name` (signal.rs, reused) already skips pub/async/unsafe;
+/// visibility is decided from the node's own first line so private items
+/// (`fn helper()` — no `pub`) never become entry symbols.
+fn rust_entry_symbol_name(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    let text = node.utf8_text(source).unwrap_or("");
+    let first = text.lines().next().unwrap_or(text).trim();
+    let is_public = first.starts_with("pub ")
+        || (node.kind() == "function_item" && first.starts_with("fn main("));
+    if !is_public {
+        return None;
+    }
+    extract_rust_name(first)
+}
+
+/// Rust = top-level pub fns (plus `fn main`), in source order.
+fn rust_entry_symbols(root: tree_sitter::Node, source: &[u8]) -> Vec<String> {
+    let mut names = Vec::new();
+    rust_entry_walk(root, source, &mut names);
+    names
+}
+
+fn rust_entry_walk(node: tree_sitter::Node, source: &[u8], names: &mut Vec<String>) {
+    if node.kind() == "function_item" && is_top_level_rust(node) {
+        if let Some(name) = rust_entry_symbol_name(node, source) {
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+    }
+    let mut cursor = node.walk();
+    let children: Vec<tree_sitter::Node> = node.children(&mut cursor).collect();
+    for child in children {
+        rust_entry_walk(child, source, names);
+    }
+}
+
+/// Python = top-level def/class names, in source order.
+fn python_entry_symbols(root: tree_sitter::Node, source: &[u8]) -> Vec<String> {
+    let mut names = Vec::new();
+    python_entry_walk(root, source, &mut names);
+    names
+}
+
+fn python_entry_walk(node: tree_sitter::Node, source: &[u8], names: &mut Vec<String>) {
+    match node.kind() {
+        "function_definition" | "class_definition" => {
+            if let Some(name) = node.child_by_field_name("name") {
+                if let Ok(n) = name.utf8_text(source) {
+                    if !n.is_empty() && !names.contains(&n.to_string()) {
+                        names.push(n.to_string());
+                    }
+                }
+            }
+            // Do NOT descend: nested defs/classes are not top-level entries.
+            return;
+        }
+        _ => {}
+    }
+    let mut cursor = node.walk();
+    let children: Vec<tree_sitter::Node> = node.children(&mut cursor).collect();
+    for child in children {
+        python_entry_walk(child, source, names);
+    }
+}
+
+/// Go = top-level func decls and methods, exported ones first.
+/// Order: canonical entry names (New/Default/Run) → other exported
+/// (Capitalized) names in source order → unexported names in source order.
+fn go_entry_symbols(root: tree_sitter::Node, source: &[u8]) -> Vec<String> {
+    let mut plain: Vec<String> = Vec::new();
+    let mut exported: Vec<String> = Vec::new();
+    go_entry_walk(root, source, &mut plain, &mut exported);
+
+    let canonical: &[&str] = &["New", "Default", "Run"];
+    let mut names: Vec<String> = Vec::new();
+    for c in canonical {
+        if exported.iter().any(|n| n == c) {
+            names.push((*c).to_string());
+        }
+    }
+    for n in exported {
+        if !names.contains(&n) {
+            names.push(n);
+        }
+    }
+    for n in plain {
+        if !names.contains(&n) {
+            names.push(n);
+        }
+    }
+    names
+}
+
+fn go_entry_walk(
+    node: tree_sitter::Node,
+    source: &[u8],
+    plain: &mut Vec<String>,
+    exported: &mut Vec<String>,
+) {
+    if node.kind() == "function_declaration" || node.kind() == "method_declaration" {
+        if let Some(name_node) = node.child_by_field_name("name") {
+            if let Ok(n) = name_node.utf8_text(source) {
+                if !n.is_empty() {
+                    let name = n.to_string();
+                    let is_exported = n.chars().next().is_some_and(|c| c.is_uppercase());
+                    if is_exported {
+                        if !exported.contains(&name) {
+                            exported.push(name);
+                        }
+                    } else if !plain.contains(&name) {
+                        plain.push(name);
+                    }
+                }
+            }
+        }
+        return; // top-level only: a func/method body is not a nested decl candidate
+    }
+    let mut cursor = node.walk();
+    let children: Vec<tree_sitter::Node> = node.children(&mut cursor).collect();
+    for child in children {
+        go_entry_walk(child, source, plain, exported);
     }
 }
 
@@ -492,6 +866,82 @@ fn has_go_main(node: tree_sitter::Node, source: &[u8]) -> bool {
         return text.contains("func main()");
     }
     walk_children(node, source, has_go_main)
+}
+
+// ── Canonical entry symbols (GAP-099) ───────────────────────────────
+
+/// Go constructor names that form a framework's entry surface. gin.go is
+/// the reference corpus: `func New()`, `func Default()` and the
+/// `func (e *Engine) Run(...)` method together are "where execution
+/// starts"; no single one of them is (a lone `func New()` is a common
+/// plain constructor).
+const CANONICAL_GO_ENTRY_NAMES: &[&str] = &["New", "Default", "Run"];
+
+/// Python application classes whose instantiation is where an application
+/// starts (the flask corpus's `class Flask`). Extensible list.
+const CANONICAL_PYTHON_ENTRY_CLASSES: &[&str] = &["Flask"];
+
+/// True when the file declares at least two distinct canonical Go entry
+/// names as top-level func declarations or methods.
+fn has_canonical_go_entry(node: tree_sitter::Node, source: &[u8]) -> bool {
+    canonical_go_entry_names(node, source).len() >= 2
+}
+
+/// The canonical Go entry names present as (top-level) func declarations
+/// or methods. Go cannot nest function declarations, so a full walk only
+/// ever sees file-scope decls.
+fn canonical_go_entry_names(node: tree_sitter::Node, source: &[u8]) -> Vec<&'static str> {
+    let mut out: Vec<&'static str> = Vec::new();
+    if node.kind() == "function_declaration" || node.kind() == "method_declaration" {
+        if let Some(name) = node
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source).ok())
+        {
+            if let Some(c) = CANONICAL_GO_ENTRY_NAMES.iter().find(|c| **c == name) {
+                out.push(c);
+            }
+        }
+        return out;
+    }
+    let mut cursor = node.walk();
+    let children: Vec<tree_sitter::Node> = node.children(&mut cursor).collect();
+    for child in children {
+        for name in canonical_go_entry_names(child, source) {
+            if !out.contains(&name) {
+                out.push(name);
+            }
+        }
+    }
+    out
+}
+
+/// True when a class named in CANONICAL_PYTHON_ENTRY_CLASSES is declared
+/// at the file's top level.
+fn has_canonical_python_entry(node: tree_sitter::Node, source: &[u8]) -> bool {
+    if node.kind() == "class_definition" {
+        if let Some(name) = node
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source).ok())
+        {
+            return CANONICAL_PYTHON_ENTRY_CLASSES.contains(&name);
+        }
+        return false;
+    }
+    let mut cursor = node.walk();
+    let children: Vec<tree_sitter::Node> = node.children(&mut cursor).collect();
+    children
+        .into_iter()
+        .any(|c| has_canonical_python_entry(c, source))
+}
+
+/// Language dispatch for canonical-entry-symbol detection (GAP-099).
+/// Languages without a canonical-symbol entry convention return false.
+fn has_canonical_entry(node: tree_sitter::Node, source: &[u8], language: Language) -> bool {
+    match language {
+        Language::Go => has_canonical_go_entry(node, source),
+        Language::Python => has_canonical_python_entry(node, source),
+        _ => false,
+    }
 }
 
 fn has_js_entrypoint(node: tree_sitter::Node, source: &[u8]) -> bool {
@@ -1386,5 +1836,201 @@ mod tests {
     fn test_feature_inference_windows_separators() {
         let feature = infer_feature("src\\auth\\login.go", "directory", None);
         assert_eq!(feature.as_deref(), Some("auth-module"));
+    }
+
+    // ── GAP-099: entry-symbol extraction ─────────────────────────────
+
+    #[test]
+    fn test_entry_symbols_rust_pub_fns() {
+        let source = "pub struct Engine;\n\n/// Builds the engine.\npub fn new() -> Engine { Engine }\n\nfn helper() {}\n\npub fn run(&self) {}\n";
+        let symbols = extract_entry_symbols(Language::Rust, source);
+        assert!(
+            symbols.contains(&"new".to_string()),
+            "pub fn new missing: {symbols:?}"
+        );
+        assert!(
+            symbols.contains(&"run".to_string()),
+            "pub fn run missing: {symbols:?}"
+        );
+        assert!(
+            !symbols.contains(&"helper".to_string()),
+            "private fn must not appear: {symbols:?}"
+        );
+    }
+
+    #[test]
+    fn test_entry_symbols_rust_nested_not_top_level() {
+        // A pub fn inside an impl block is not a top-level entry symbol.
+        let source = "struct E;\nimpl E {\n    pub fn build() -> E { E }\n}\npub fn top() {}\n";
+        let symbols = extract_entry_symbols(Language::Rust, source);
+        assert_eq!(
+            symbols,
+            vec!["top".to_string()],
+            "impl-block fn leaked: {symbols:?}"
+        );
+    }
+
+    #[test]
+    fn test_entry_symbols_python_top_level_defs_and_classes() {
+        let source = "import os\n\n\nclass Flask:\n    def __init__(self):\n        pass\n\n    def nested(self):\n        pass\n\n\ndef create_app():\n    return Flask()\n\n\ndef _private():\n    pass\n";
+        let symbols = extract_entry_symbols(Language::Python, source);
+        assert!(
+            symbols.contains(&"Flask".to_string()),
+            "class Flask missing: {symbols:?}"
+        );
+        assert!(
+            symbols.contains(&"create_app".to_string()),
+            "top-level def missing: {symbols:?}"
+        );
+        assert!(
+            !symbols.contains(&"nested".to_string()),
+            "method must not appear: {symbols:?}"
+        );
+        // _private IS a top-level def: it counts (agents may call it).
+        assert!(symbols.contains(&"_private".to_string()));
+    }
+
+    #[test]
+    fn test_entry_symbols_go_exported_first_with_methods() {
+        let source = "package gin\n\nfunc New() *Engine { return nil }\n\nfunc internal() {}\n\ntype Engine struct{}\n\nfunc (e *Engine) Run(addr string) error { return nil }\n\nfunc Default() *Engine { return nil }\n\nfunc hidden() {}\n";
+        let symbols = extract_entry_symbols(Language::Go, source);
+        // Exported first (New, Default, Run — canonical names lead), then unexported.
+        let exported_idx = |n: &str| symbols.iter().position(|s| s == n).unwrap_or(usize::MAX);
+        assert!(
+            exported_idx("New") < exported_idx("Default")
+                && exported_idx("Default") < exported_idx("Run"),
+            "canonical order wrong: {symbols:?}"
+        );
+        assert!(
+            exported_idx("Run") < exported_idx("internal"),
+            "exported must precede unexported: {symbols:?}"
+        );
+        assert!(
+            symbols.contains(&"internal".to_string()),
+            "unexported func missing: {symbols:?}"
+        );
+        assert!(
+            symbols.contains(&"hidden".to_string()),
+            "unexported hidden missing: {symbols:?}"
+        );
+    }
+
+    #[test]
+    fn test_entry_symbols_unsupported_language_empty() {
+        let symbols = extract_entry_symbols(Language::Ruby, "def main\nend\n");
+        assert!(symbols.is_empty());
+    }
+
+    #[test]
+    fn test_entry_symbols_pattern_seeded_go_main() {
+        // A Go main package: entrypoint via AST pattern, seed is func main().
+        let source = "package main\n\nfunc main() {\n    run()\n}\n\nfunc run() {}\n";
+        let symbols =
+            entry_symbols_for_classification(Language::Go, "contains entrypoint pattern", source);
+        // The seed matched: symbols after the seed line survive (run is at line 6).
+        assert!(
+            symbols.contains(&"run".to_string()),
+            "post-seed symbol missing: {symbols:?}"
+        );
+    }
+
+    #[test]
+    fn test_entry_symbols_guard_body_wrapper_target() {
+        // flask cli.py shape: main() is invoked inside the __main__ guard
+        // but defined BEFORE it — the report must still name it.
+        let source = "def main():\n    pass\n\n\nif __name__ == \"__main__\":\n    main()\n";
+        let symbols = entry_symbols_for_classification(
+            Language::Python,
+            "contains entrypoint pattern for Python",
+            source,
+        );
+        assert!(
+            symbols.contains(&"main".to_string()),
+            "guard-invoked wrapper target missing: {symbols:?}"
+        );
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.starts_with('<') && s.ends_with('>')),
+            "seed marker missing: {symbols:?}"
+        );
+    }
+
+    #[test]
+    fn test_classification_canonical_go_entry_constructors() {
+        // A gin-style library file that declares the canonical entry
+        // constructors (New/Default) plus a Run method is an entrypoint,
+        // not a library — its constructors ARE where execution starts.
+        let source = "package gin\n\ntype Engine struct{}\n\nfunc New() *Engine { return nil }\n\nfunc Default() *Engine { return nil }\n\nfunc (e *Engine) Run(addr string) error { return nil }\n\nfunc (e *Engine) internal() {}\n";
+        let c = classify_file(Language::Go, "gin.go", source).unwrap();
+        assert_eq!(c.role, "entrypoint", "reason: {}", c.reason);
+        assert!(c.reason.contains("canonical entry"), "reason: {}", c.reason);
+    }
+
+    #[test]
+    fn test_classification_canonical_go_needs_run_method_or_default() {
+        // func New() alone (a common constructor) is NOT enough — gin.go's
+        // surface is New+Default+Run; a lone constructor stays a library.
+        let source = "package pkg\n\nfunc New() *Thing { return nil }\n";
+        let c = classify_file(Language::Go, "thing.go", source).unwrap();
+        assert_ne!(c.role, "entrypoint", "reason: {}", c.reason);
+    }
+
+    #[test]
+    fn test_classification_canonical_python_flask_class() {
+        // A file declaring `class Flask` is the framework's entrypoint —
+        // the class is where an application starts (GAP-099 flask case).
+        let source = "class Flask:\n    def __init__(self, import_name):\n        pass\n\n    def run(self):\n        pass\n";
+        let c = classify_file(Language::Python, "app.py", source).unwrap();
+        assert_eq!(c.role, "entrypoint", "reason: {}", c.reason);
+        assert!(c.reason.contains("canonical entry"), "reason: {}", c.reason);
+    }
+
+    #[test]
+    fn test_classification_canonical_python_other_class_not_entrypoint() {
+        // An arbitrary class (not a canonical entry class) stays a library.
+        let source = "class Widget:\n    def __init__(self):\n        pass\n\n    def run(self):\n        pass\n";
+        let c = classify_file(Language::Python, "widget.py", source).unwrap();
+        assert_ne!(c.role, "entrypoint", "reason: {}", c.reason);
+    }
+
+    #[test]
+    fn test_classification_canonical_rust_untouched() {
+        // Rust files keep the existing classification: top-level pub fns
+        // are library surface, not canonical entry constructors.
+        let source = "pub fn new() -> u32 { 0 }\npub fn run() {}\npub fn a() {}\n";
+        let c = classify_file(Language::Rust, "lib.rs", source).unwrap();
+        assert_eq!(c.role, "library", "reason: {}", c.reason);
+    }
+
+    #[test]
+    fn test_entry_symbols_filename_convention_reports_all() {
+        // main.rs by filename convention: all pub fns report as-is.
+        let source = "pub fn setup() {}\nfn main() {}\n";
+        let symbols =
+            entry_symbols_for_classification(Language::Rust, "filename convention", source);
+        assert!(symbols.contains(&"setup".to_string()), "{symbols:?}");
+        assert!(symbols.contains(&"main".to_string()), "{symbols:?}");
+    }
+
+    #[test]
+    fn test_classification_classification_entrypoint_python_seed_marker() {
+        // Python file with only a __main__ guard: the guard-invoked target
+        // (`run`, defined before the guard) is named, plus the seed marker
+        // documenting the pattern itself.
+        let source = "def run():\n    pass\n\n\nif __name__ == \"__main__\":\n    run()\n";
+        let symbols = entry_symbols_for_classification(
+            Language::Python,
+            "contains entrypoint pattern for Python",
+            source,
+        );
+        assert_eq!(
+            symbols,
+            vec![
+                "run".to_string(),
+                "<if __name__ == \"__main__\">".to_string()
+            ],
+            "{symbols:?}"
+        );
     }
 }

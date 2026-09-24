@@ -1184,7 +1184,7 @@ fn extract_rust_signature(node: tree_sitter::Node, source: &[u8]) -> Option<Symb
 }
 
 /// Extract the identifier name from a Rust definition line.
-fn extract_rust_name(line: &str) -> Option<String> {
+pub(crate) fn extract_rust_name(line: &str) -> Option<String> {
     // Handle macro_rules! separately.
     if let Some(rest) = line.strip_prefix("macro_rules!") {
         return Some(
