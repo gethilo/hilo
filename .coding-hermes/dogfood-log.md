@@ -620,10 +620,12 @@ writable:true and a "(rw)" log line (DF-WARPFS-49), manifest dialect undocumente
 and rejects the help's own example file + spec §4 fields (DF-WARPFS-50),
 warm --workspace no-ops at 0 files (DF-WARPFS-51); backend worktree clones work.
 time-to-first-success: NEVER (flagship workflow impossible; 5 consecutive errors
-just to reach a mount). install leg: bunker-las-03 fresh spawn e90e8950, public
-clone f9223b9 (== HEAD) OK; rustup minimal 1.98.1 OK (avoid /tmp — shared per-IP
-with dead-UID files, write scratch to $HOME); cargo build --release running at
-log time, smoke + destroy to follow. rows: DF-WARPFS-48..51 appended + read-back
+just to reach a mount). install leg: PASS — bunker-las-03 fresh spawn e90e8950,
+public clone f9223b9 (== HEAD), rustup minimal 1.98.1 (avoid /tmp — shared per-IP
+with dead-UID files, write scratch to $HOME), cargo build --release RC=0 in 2538s
+(box under load 11-15; run 13 measured 1610s idle — doc's 15-20min claim assumes a
+quiet machine), smoke OK (init + warm 899 edges/103 files + stats + impact probe,
+12s), agent destroyed + key removed. rows: DF-WARPFS-48..51 appended + read-back
 verified (board 210 → 214, 0 dups) and committed f6f46e6, pushed
 (f9223b9..f6f46e6). left behind: docs/dogfood/2026-09-24-run14-workspace-integration.md,
 diagnostics.md Run 14 section, skills/hilo-usage/SKILL.md run-14 section. perf:
