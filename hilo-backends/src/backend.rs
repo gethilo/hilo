@@ -127,6 +127,14 @@ impl From<crate::S3Error> for BackendError {
         match e {
             crate::S3Error::NotFound(k) => BackendError::NotFound(k),
             crate::S3Error::ReadOnly => BackendError::ReadOnly,
+            // DF-WARPFS-24: the typed Service variant carries the extracted
+            // code/status header + bucket/endpoint context; flatten to the
+            // code-first string so the user sees
+            // `aws sdk error: s3: NoSuchBucket (404) — bucket 'x' @ ep: …`
+            // instead of an opaque `service error`.
+            crate::S3Error::Service { code, detail } => {
+                BackendError::Aws(format!("{code}: {detail}"))
+            }
             other => BackendError::Aws(other.to_string()),
         }
     }
