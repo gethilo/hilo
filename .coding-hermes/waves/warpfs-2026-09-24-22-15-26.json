@@ -1,0 +1,20 @@
+{
+  "tick": "warpfs-2026-09-24-22-15-26",
+  "board_tick": 227,
+  "budget": 9,
+  "wave_size": 2,
+  "base": "origin/master",
+  "base_sha": "b478b05",
+  "model": "z-ai/glm-5.3-flash",
+  "provider": "xkiro",
+  "model_note": "tick-224/225 wave precedent (same-day, same project; seat-verified in event 676). Tick prompt Worker model/provider field was EMPTY (14th+ recurrence).",
+  "independence_check": "GAP-102 touches hilo-graph/src/semantic.rs (+ its tests); DF-WARPFS-45 touches hilo-cli/src/commands/mount.rs (+ its tests). Disjoint file sets; no depends_on edges between the two rows (verified from tasks.jsonl); separate worktrees from a common base b478b05.",
+  "workers": [
+    {"id": "GAP-102", "worktree": "/home/kara/worktrees/warpfs-GAP-102", "branch": "wt/GAP-102", "files": ["hilo-graph/src/semantic.rs"], "tags": ["search", "recall", "tfidf", "regression"], "brief": "/tmp/wfs227-brief-gap102.txt", "gitreins_task": "gap-102-search-recall-collapse"},
+    {"id": "DF-WARPFS-45", "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-45", "branch": "wt/DF-WARPFS-45", "files": ["hilo-cli/src/commands/mount.rs"], "tags": ["triggers", "watch-list", "tsx"], "brief": "/tmp/wfs227-brief-dfw45.txt", "gitreins_task": "df-warpfs-45-tsx-triggers"}
+  ],
+  "merge_order": ["GAP-102", "DF-WARPFS-45"],
+  "merge_gate": "per-merge: git merge --no-ff; scoped gates on integrated tree (cargo check -p <crate>, cargo test -p <crate>, fmt check); gitreins task complete per task AFTER merge commit exists",
+  "parallel_foreman_direct": "DF-WARPFS-46 (docs 404s) closes foreman-direct while workers run",
+  "dispatched_at": "2026-09-24T17:20:00-05:00"
+}
