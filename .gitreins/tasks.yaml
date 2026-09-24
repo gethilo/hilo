@@ -1600,3 +1600,21 @@ tasks:
   status: complete
   created_at: '2026-09-24T11:01:22.782711+00:00'
   completed_at: '2026-09-24T11:01:29.284438+00:00'
+- id: GAP-097
+  title: graph stats component roster
+  criteria:
+  - 'stats output contains a Components section listing top-level components with
+    file counts, excluding pkg:/sys:/std: pseudo-nodes; cargo check --workspace exit
+    0; cargo test -p hilo_graph --lib exit 0; cargo test -p hilo-cli --test cli exit
+    0'
+  status: complete
+  created_at: '2026-09-24T11:43:44.955257+00:00'
+  completed_at: '2026-09-24T13:14:16.344631+00:00'
+- id: DF-WARPFS-40
+  title: FFI docs name cdylib and rename step
+  criteria:
+  - docs/hilo-ffi.md and hilo-ffi/README.md each contain libhilo_ffi, libuniffi_hilo,
+    and a cp rename step; cargo check -p hilo_ffi exit 0
+  status: complete
+  created_at: '2026-09-24T11:43:45.259848+00:00'
+  completed_at: '2026-09-24T12:30:03.341034+00:00'

@@ -1,0 +1,13 @@
+{
+  "tick": "warpfs-2026-09-24-11-23-37",
+  "budget": 2,
+  "wave_size": 2,
+  "base_sha": "dd2cb8d",
+  "workers": [
+    {"id": "GAP-097", "worktree": "/home/kara/worktrees/warpfs-GAP-097", "branch": "wt/GAP-097", "files": ["hilo-graph/src/graph.rs", "hilo-cli/src/commands/graph.rs", "docs/graph-engine.md"], "tags": ["graph-stats", "components", "bake-off"]},
+    {"id": "DF-WARPFS-40", "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-40", "branch": "wt/DF-WARPFS-40", "files": ["docs/hilo-ffi.md", "hilo-ffi/README.md"], "tags": ["ffi", "docs"]}
+  ],
+  "independence_check": "GAP-097 touches hilo-graph/src/graph.rs + hilo-cli stats + graph docs; DF-WARPFS-40 touches docs/hilo-ffi.md + hilo-ffi/README.md. Disjoint file sets, no depends_on edges between the rows (verified from tasks.jsonl). Lane verified live: z-ai/glm-5.3-flash @ xkiro (session_model_usage billing_base_url=https://api.xkiro.com on probe 20260924_063859_10002c); zai-glm pool fell back to xkiro serving the same sub model — no PAYG seat.",
+  "merge_order": ["GAP-097", "DF-WARPFS-40"],
+  "dispatched_at": "2026-09-24T06:45:00-05:00"
+}
