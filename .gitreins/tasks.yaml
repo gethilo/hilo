@@ -1571,5 +1571,6 @@ tasks:
   - Mount with --triggers must not hold graph.db in a way that makes graph stats/warm
     fail or silently disables a second mount; add regression coverage and preserve
     trigger behavior.
-  status: in_progress
+  status: complete
   created_at: '2026-09-24T03:44:42.905182+00:00'
+  completed_at: '2026-09-24T04:16:16.398803+00:00'
