@@ -52,6 +52,20 @@ None of these are ever committed. If a `warm` (or any command) shows changes
 in these files in `git status`, they are noise from a stale gitignore, not
 inventory drift.
 
+## The ignore contract is installed by `hilo init`
+
+`hilo init` appends a managed block to `.gitignore` (DF-WARPFS-38) covering
+the rebuildable cache files above — `graph.db`, `graph.db.wal`, `graph.duckdb`
+(+ wal), `.last_warm`, `.parse_cache.json`, `.last_reconcile` — so the first
+ordinary commit in a fresh project does not add a multi-megabyte `graph.db`
+or parse caches. The block is marked with a
+"# --- hilo managed: rebuildable .vfs cache state (installed by hilo init)"
+comment line and is idempotent: re-init never duplicates it, and any
+pre-existing `.gitignore` content is preserved verbatim. `.vfs/manifest.yaml` and
+`.vfs/graph/edges.jsonl` are inventory truth and are deliberately **not**
+ignored. Projects initialized before this change: add the managed block by
+hand or re-run `hilo init` (idempotent).
+
 ## Deliberate inventory refresh (operator recipe)
 
 The inventory can legitimately lag the tree: hand-edited or committed-before-

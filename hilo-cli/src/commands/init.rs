@@ -9,6 +9,59 @@ use hilo_metadata::inventory;
 use crate::commands::guard;
 use crate::commands::hooks;
 
+/// Managed `.gitignore` block `hilo init` installs (DF-WARPFS-38).
+///
+/// Covers only the rebuildable `.vfs/graph` cache state; `.vfs/manifest.yaml`
+/// and `.vfs/graph/edges.jsonl` are inventory truth and stay tracked. See
+/// `docs/inventory-policy.md`.
+pub const HILO_MANAGED_IGNORE_HEADER: &str =
+    "# --- hilo managed: rebuildable .vfs cache state (installed by `hilo init`) ---";
+const HILO_MANAGED_IGNORE_ENTRIES: &[&str] = &[
+    ".vfs/graph/graph.db",
+    ".vfs/graph/graph.db.wal",
+    ".vfs/graph/graph.duckdb",
+    ".vfs/graph/graph.duckdb.wal",
+    ".vfs/graph/.last_warm",
+    ".vfs/graph/.parse_cache.json",
+    ".vfs/graph/.last_reconcile",
+];
+
+/// Ensure `<root>/.gitignore` carries the managed block of rebuildable
+/// `.vfs` cache entries.
+///
+/// Idempotent: a second call with the block already present leaves the file
+/// byte-identical. Pre-existing content is preserved verbatim (the block is
+/// appended at the end, separated by a newline when needed).
+pub fn ensure_gitignore_entries(root: &Path) -> Result<()> {
+    let gitignore = root.join(".gitignore");
+    let existing = match std::fs::read_to_string(&gitignore) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e).with_context(|| format!("failed to read {}", gitignore.display())),
+    };
+
+    if existing.contains(HILO_MANAGED_IGNORE_HEADER) {
+        return Ok(());
+    }
+
+    let mut out = existing;
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    out.push_str(HILO_MANAGED_IGNORE_HEADER);
+    out.push('\n');
+    for entry in HILO_MANAGED_IGNORE_ENTRIES {
+        out.push_str(entry);
+        out.push('\n');
+    }
+
+    std::fs::write(&gitignore, out)
+        .with_context(|| format!("failed to write {}", gitignore.display()))
+}
+
 /// Create the `.vfs/` structure and a minimal `manifest.yaml` in the current
 /// directory.
 ///
@@ -46,6 +99,12 @@ pub fn run_in(
 
     // Create the .vfs/ directory tree (idempotent — safe to call repeatedly).
     inventory::create_vfs_structure(cwd).context("failed to create .vfs directory structure")?;
+
+    // DF-WARPFS-38: install the managed .gitignore block for the rebuildable
+    // `.vfs/graph` cache state, so the first ordinary commit does not add a
+    // multi-megabyte graph.db. Inventory truth (manifest.yaml, edges.jsonl)
+    // stays tracked.
+    ensure_gitignore_entries(cwd).context("failed to install .gitignore entries")?;
 
     let manifest_path = cwd.join(".vfs").join("manifest.yaml");
 
@@ -296,5 +355,50 @@ mod tests {
             "error must name the flag: {msg}"
         );
         assert!(!home.path().join(".vfs").exists());
+    }
+
+    #[test]
+    fn init_installs_gitignore_block() {
+        let project = TempDir::new().unwrap();
+        run_in(project.path(), false, None, true).unwrap();
+
+        let gi = std::fs::read_to_string(project.path().join(".gitignore")).unwrap();
+        assert!(
+            gi.contains(HILO_MANAGED_IGNORE_HEADER),
+            "init must install the managed block: {gi}"
+        );
+        for entry in [
+            ".vfs/graph/graph.db",
+            ".vfs/graph/.parse_cache.json",
+            ".vfs/graph/.last_reconcile",
+        ] {
+            assert!(gi.contains(entry), "managed block must cover {entry}");
+        }
+        // Inventory truth stays tracked — never in the managed block.
+        assert!(!gi.contains(".vfs/manifest.yaml"));
+        assert!(!gi.contains(".vfs/graph/edges.jsonl"));
+    }
+
+    #[test]
+    fn init_gitignore_idempotent_and_preserves_existing() {
+        let project = TempDir::new().unwrap();
+        let existing = "# my project ignores\n*.tmp\n";
+        std::fs::write(project.path().join(".gitignore"), existing).unwrap();
+
+        run_in(project.path(), false, None, true).unwrap();
+        let first = std::fs::read_to_string(project.path().join(".gitignore")).unwrap();
+        assert!(
+            first.starts_with(existing),
+            "pre-existing content preserved verbatim"
+        );
+        assert!(first.contains(HILO_MANAGED_IGNORE_HEADER));
+
+        // Re-init with an existing manifest → idempotent, byte-identical.
+        run_in(project.path(), false, None, true).unwrap();
+        let second = std::fs::read_to_string(project.path().join(".gitignore")).unwrap();
+        assert_eq!(
+            first, second,
+            "re-init must not duplicate or modify the block"
+        );
     }
 }
