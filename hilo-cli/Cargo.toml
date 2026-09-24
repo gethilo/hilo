@@ -31,6 +31,12 @@ duckdb = { version = "1.1", features = ["bundled"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "time"] }
 glob = "0.3"
 
+[features]
+# DF-WARPFS-25: passthrough to hilo_backends (which owns the git2 dependency).
+# `cargo install --path hilo-cli --features vendored-openssl` builds the whole
+# binary with OpenSSL compiled from source — no system libssl needed.
+vendored-openssl = ["hilo_backends/vendored-openssl"]
+
 [dev-dependencies]
 tempfile = "3"
 serde_json = "1"
