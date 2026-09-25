@@ -1646,3 +1646,81 @@ tasks:
   status: complete
   created_at: '2026-09-24T16:02:52.776358+00:00'
   completed_at: '2026-09-24T19:44:39.649809+00:00'
+- id: df-warpfs-45-tsx-triggers
+  title: DF-WARPFS-45 default trigger watch list missing tsx/jsx/mjs/cjs
+  criteria:
+  - default_triggers() in hilo-cli/src/commands/mount.rs includes *.tsx, *.jsx, *.mjs
+    and *.cjs alongside the existing 9 extensions; a committed unit test asserts all
+    13 watch patterns are present; cargo test -p hilo-cli green; live default-trigger
+    listing shows the tsx/jsx patterns.
+  status: complete
+  created_at: '2026-09-24T22:28:27.374501+00:00'
+  completed_at: '2026-09-24T23:43:01.555752+00:00'
+- id: df-warpfs-46-docs-guides-links
+  title: DF-WARPFS-46 docs landing links 404 on Pages
+  criteria:
+  - 'AC1: grep -cE ''href="(getting-started|graph-engine|mcp-tools|cli-reference|architecture)"''
+    docs/index.html == 0. AC2: grep -cE ''href="[a-z-]+[.]md"'' docs/index.html >=
+    7. AC3: docs/getting-started.md no longer claims clang+CMake required (grep ''clang''
+    shows ''not required''); README claim unchanged. AC4: live Pages all five .md
+    targets return 200 (verified 2026-09-24: getting-started.md, graph-engine.md,
+    mcp-tools.md, cli-reference.md, architecture.md). Commit b6e2c53 on master.'
+  status: complete
+  created_at: '2026-09-24T22:34:22.522405+00:00'
+  completed_at: '2026-09-24T22:35:04.930021+00:00'
+- id: df-warpfs-47-delete-fabricated-dashboard
+  title: DF-WARPFS-47 delete stale fabricated dashboard.html
+  criteria:
+  - 'AC1: docs/dashboard.html absent from master (git log --diff-filter=D -- docs/dashboard.html
+    shows the deletion commit). AC2: grep -rn ''dashboard.html'' docs/dogfood/diagnostics.md
+    shows the deleted-2026-09-24 record, not a live ''is a snapshot that lies'' present-tense
+    issue. AC3: no navigation reference remains (grep dashboard across docs/index.html
+    docs/index.md README.md = 0 hits). AC4: deletion commit 865b3d0 on master and
+    pushed (origin/master contains it).'
+  status: complete
+  created_at: '2026-09-24T22:39:36.485728+00:00'
+  completed_at: '2026-09-24T22:39:42.216869+00:00'
+- id: gap-102-search-recall-fix
+  title: 'GAP-102: index ALL file symbols for search recall (drop take(8) truncation);
+    GAP-103 invariants land with it'
+  criteria:
+  - 'The take(8) symbol truncation is gone from TfIdfIndex::build_with_symbols in
+    hilo-graph/src/semantic.rs: every symbol token enters the TF-IDF/BM25 term map;
+    only the BM25 doc-length contribution stays capped at the take(8) budget (doc_lens_capped:
+    path tokens + first-8-symbols token counts), so GAP-100 rankings hold by construction'
+  - 'Live on /tmp/bakeoff5/flask (READ-ONLY corpus, release binary from the fix branch):
+    hilo graph search url_for returns >= 5 results and names src/flask/helpers.py;
+    search flash returns results including src/flask/helpers.py. PREMISE DELTA documented:
+    helpers.py in the TOP 3 is not required - the corpus defines url_for in TWO files
+    (src/flask/app.py:1105 Scaffold method AND src/flask/helpers.py:200 module function),
+    both were invisible pre-fix (pre-fix binary returned 0 results naming helpers.py),
+    and app.py legitimately outranks helpers.py post-fix. Recall (present in results)
+    is the fixed defect'
+  - 'GAP-100 preserved: on /tmp/bakeoff5/express, hilo graph search ''res json'' ranks
+    lib/response.js #1'
+  - cargo test -p hilo_graph --lib fully green (313 passed, 0 failed) including the
+    new regression test search_real_extractor_finds_symbol_beyond_eight_ast_order
+    whose defining symbol sits beyond the first 8 AST-order symbols
+  - 'Work merged to master: fix 3acd6b8 + tests f05d69a, merge c7e0c60; cargo fmt
+    --all --check clean; RUSTFLAGS=-D warnings test compile exit 0'
+  status: complete
+  created_at: '2026-09-25T04:51:21.445397+00:00'
+  completed_at: '2026-09-25T04:51:45.921186+00:00'
+- id: gap-103-regression-invariants
+  title: 'GAP-103: regression tests for the search symbol-cap recall collapse (R1-R4)'
+  criteria:
+  - 'The four GAP-103 invariant tests exist in hilo-graph/src/semantic.rs mod tests:
+    gap103_r1_every_symbol_in_a_file_is_searchable (recall floor over EVERY parsed
+    symbol, oracle = parser''s own symbol table via default_symbol_extractor), gap103_r2_indexed_symbol_terms_match_parsed_symbols
+    (no silent drop + capped doc-len pinned to the take(8) budget so GAP-100 is locked),
+    gap103_r3_scores_monotonic_within_partition (descending scores WITHIN each demotion
+    partition; cross-partition drop documented as intentional GAP-100 demotion, not
+    a merge bug), gap103_r4_recall_floor_defining_file_in_top_results (fixed query-to-file
+    battery: url_for and flash must name src/flask/helpers.py within the top 3)'
+  - 'All four gap103 tests pass in cargo test -p hilo_graph --lib: 313 passed, 0 failed,
+    on the merged master tree'
+  - 'Work merged to master: tests f05d69a, merge c7e0c60; cargo fmt --all --check
+    clean; RUSTFLAGS=-D warnings test compile exit 0'
+  status: complete
+  created_at: '2026-09-25T04:51:38.439606+00:00'
+  completed_at: '2026-09-25T04:56:29.804651+00:00'
