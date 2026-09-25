@@ -485,3 +485,31 @@ Rules learned this run:
 - Go generated code calls `C.go_pkg_node`-style errors as `HiloError` with
   clear messages; the NotFound path lists the joined absolute path (helpful).
 
+
+## Run 17 (2026-09-25, plugin surface + manifest re-test): loading a plugin from .vfs/plugins destroys it
+
+- **NEVER run `hilo plugin load` on a file that already lives inside
+  `.vfs/plugins/`** (DF-WARPFS-58). The persist step copies the file onto
+  itself and std::fs::copy's O_TRUNC leaves it 0 bytes — exit 0, "persisted
+  to: …", plugin gone. Keep module sources outside the plugins dir and load
+  them from there; only then does `plugin list` see them.
+- **Manifest `plugins:` is a parsed no-op** (DF-WARPFS-59). The spec §4
+  plugins block with `hooks: on: file_write` parses and does nothing: no
+  code reads manifest.plugins, and the trigger/FUSE engines never call
+  dispatch_hook. Declared hooks will not fire — do not build on them.
+- **`hilo plugin list` metadata is honest but thin**: any valid-header wasm
+  loads with `v? — 0 hooks, 0 edge types` (hook discovery not implemented,
+  docs/hilo-plugins.md). Rejected inputs (text-as-.wasm, wrong version)
+  fail with precise byte-level errors — trust those.
+- **Hidden gem: `hilo graph rule-check <name>`** — add a `rules:` block to
+  `.vfs/manifest.yaml` with a raw DuckDB query over `edges` and run it by
+  name; wrong names list the available rules. Undocumented in README but
+  works (13.8 ms warm).
+- **Manifest `permissions.rules` still do nothing** (DF-WARPFS-60, re-test
+  of DF-31): files serve at default 0644 through the mount regardless of
+  declared modes. The honest status note is docs/hilo-permissions.md; the
+  spec §4 example is misleading. Read-only enforcement comes from the
+  kernel on `hilo mount`, nothing else.
+- Core read path re-verified healthy at 47f153b: init → warm → stats →
+  impact → classify → meta all green on a fresh project; stats 20.1 ms ±2.0
+  warm (n=20); mount round-trip + xattr + clean unmount clean.

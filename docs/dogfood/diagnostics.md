@@ -957,3 +957,47 @@ behavior via the same resolver — fixing it at the resolver fixes both
 surfaces, and the regression test is cheap: build a graph in a tmpdir,
 compute impact from a different CWD, assert the pkg-mediated dependents are
 still returned.
+
+## Run 17 — 2026-09-25 (coding-hermes-tools-dogfood, plugin surface + manifest re-test): the happy path was the untested path
+
+**How the plugin surface is built.** Three pieces that have never met each
+other: (1) `hilo-core/src/manifest.rs:644-682` parses a `plugins:` manifest
+block — name, wasm path, `hooks:` (`on`/`languages`/`priority`),
+`provides:` — under `deny_unknown_fields`, so the spec §4 example parses
+clean; (2) `hilo-plugins` holds a registry (`PluginRegistry::discover` scans
+`.vfs/plugins/` for `.wasm`, honest header checks from DF-WARPFS-22) and a
+runtime whose `dispatch_hook` *simulates* declared hooks (canned `AddEdge`);
+(3) `hilo-cli/src/commands/plugin.rs` builds a throwaway runtime from the
+`load` file argument, prints honest metadata, and persists the file into
+`.vfs/plugins/` (also DF-WARPFS-22). Nothing reads `manifest.plugins`, and
+`hilo-fuse`/`hilo-triggers` reference no plugin code — so declared hooks can
+never dispatch, and the loaded runtime dies when the CLI exits.
+
+**The error I hit.** Following the documented loop — module into
+`.vfs/plugins/`, then `hilo plugin load <path>` — loads successfully
+(`loaded plugin: victim`, `persisted to: …`, exit 0) and silently leaves a
+**0-byte file**: `std::fs::copy(path, dest)` with source inside the
+destination directory copies the file onto itself, and std::fs::copy opens
+the destination with O_TRUNC before the read. The next `plugin list` drops
+the empty file (header check on 0 bytes fails, correctly). Loading the same
+bytes from outside `.vfs/plugins` works — the only reason every prior probe
+(run 9's text file, the 22 fix's tests) missed it: they all loaded from
+outside.
+
+**The right way (until fixed).** Keep module sources outside `.vfs/plugins`
+(`plugins-src/` or anywhere else) and `hilo plugin load` them from there;
+the persist step then copies a real file and `plugin list` sees it. Never
+load a file that already lives in `.vfs/plugins/` — DF-WARPFS-58.
+
+**Permissions re-test after DF-31.** The honest status note lives only in
+`docs/hilo-permissions.md:5-21`; the spec's "Single Source of Truth" §4
+still shows a `permissions:` block with `mode: 0444` examples, and a
+re-probe this run confirms a `mode: 0600` rule on `src/**` has no effect
+(file serves at the 0644 default through the mount). Residual honesty gap
+filed as DF-WARPFS-60: the disclosure needs to reach README/spec, not just
+the crate page.
+
+**The lesson.** Run 9 tested load with garbage and found honesty bugs; run
+17 tested load with a *valid* plugin from the *documented* location and
+found data loss. Whenever a fix adds a write path, dogfood it at the
+location the docs' own examples use.

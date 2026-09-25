@@ -696,3 +696,27 @@ installing one would have exceeded the documented install path; local Go consume
 behavioral proof). agent destroyed + key removed after collect.
 left behind: docs/dogfood/2026-09-25-run16-go-ffi-consumer.md, diagnostics.md Run 16
 section, skills/hilo-usage/SKILL.md run-16 section, rows, this entry.
+2026-09-25 | run 17 | 🟡 PROMISING-BUT-ROUGH (plugin/extensibility surface; core read path ✅) |
+promise (angle by stale-surface rule — 16 runs never executed the full plugin workflow; permissions
+re-test after DF-31's doc-only fix): a user can extend Hilo with a WASM plugin — declare hooks in
+.vfs/manifest.yaml per spec §4, load the module, have the runtime pick it up. HEAD 47f153b (== origin).
+reality: core workflow green and fast on a fresh scratch project (init/warm/stats/impact/classify/meta,
+mount + xattr + read-only + clean unmount); rule-check is a working undocumented gem. But `hilo plugin
+load` on a file INSIDE .vfs/plugins (the location the manifest examples use) TRUNCATES the plugin to
+0 bytes while printing success (fs::copy onto itself, O_TRUNC before read; DF-WARPFS-58, deterministic
+repro: self-load 8→0 bytes rc=0, outside-load 8→8 OK). Manifest plugins: block parses and is read by
+nothing — declared hooks can never dispatch (fuse/triggers have zero plugin references; DF-WARPFS-59).
+permissions.rules re-probe: mode 0600 on src/** has no effect, spec §4 still implies enforcement, the
+honest note lives only in docs/hilo-permissions.md (DF-WARPFS-60, P3 residual of DF-31).
+time-to-first-success: <1 min core; NEVER for the documented plugin loop. friction count: 3.
+perf (hyperfine, release 47f153b, 1-file scratch graph, warm n=20): stats 20.1ms ±2.0, plugin list
+4.2ms ±0.4, rule-check 13.8ms ±0.7. NO PERF ROW — nothing a user waits on.
+install leg: PASS — bunker-las-03 fresh agent 38c5218d, public clone 47f153b (== HEAD), rustup minimal
+1.98.1 (clean RUSTUP_HOME, scratch in $HOME), cargo build --release -p hilo-cli --features vendored-openssl
+RC=0 in 1519s; smoke on a fresh cargo corpus: init+warm 55ms, stats/impact/related correct (0-edge
+warmup on empty lib.rs was the fingerprint cache, populated probe matched local). agent destroyed +
+key removed.
+rows: DF-WARPFS-58..60 appended + read-back verified (board 222 → 225, 0 bad lines, each id exactly
+once, trailing newline checked before append).
+left behind: docs/dogfood/2026-09-25-run17-plugins-manifest-retest.md, diagnostics.md Run 17 section,
+skills/hilo-usage/SKILL.md run-17 section, rows, this entry.
