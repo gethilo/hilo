@@ -555,7 +555,24 @@ pub fn run_warm_in(
     // carries them still skips.
     let derived_edges: [&[Edge]; 2] = [&service_edges, &contract_edges];
     let full_cache_hit = cached_n == total_files && total_files > 0;
-    if full_cache_hit && count_new_service_edges(&edges_jsonl, &derived_edges) == 0 {
+    // DF-WARPFS-61/64: "all cached, graph unchanged" is only safe when the
+    // DuckDB cache provably still agrees with the inventory. A lost or
+    // emptied graph.db (trigger cold-start window, db deleted by hand)
+    // keeps the parse cache and checkpoint fingerprint intact while holding
+    // zero rows — taking the fast path there would strand the empty db
+    // forever with warm exiting 0 ("healed" by nothing). When verification
+    // fails, fall through: the db write below rebuilds the cache from the
+    // freshly-parsed edges, and GraphDB::open's reconcile covers the rest.
+    let db_verified = hilo_graph::cache_matches_edges(
+        &cwd.join(".vfs")
+            .join("graph")
+            .join("graph.db")
+            .to_string_lossy(),
+    );
+    if full_cache_hit && !db_verified {
+        eprintln!("  cache verification failed (graph.db missing or emptied) — rebuilding the DuckDB cache");
+    }
+    if full_cache_hit && db_verified && count_new_service_edges(&edges_jsonl, &derived_edges) == 0 {
         if std::env::var("HILO_WARM_TIMING").is_ok() {
             eprintln!("  [timing] full cache hit — skipping jsonl+db write");
         }
@@ -3108,6 +3125,37 @@ mod tests {
         )
         .unwrap();
         assert_eq!(warm_cache_keys(home.path()), vec!["keep.rs".to_string()]);
+    }
+
+    /// DF-WARPFS-61/64: warm must NOT take the "all cached, graph unchanged"
+    /// fast path when graph.db is missing or emptied — it must rebuild the
+    /// db from the parse cache and exit with a populated, verifiable cache.
+    #[test]
+    fn warm_rebuilds_db_when_cache_is_lost_despite_full_parse_cache() {
+        let home = TempDir::new().unwrap();
+        let project = TempDir::new().unwrap();
+        std::fs::write(project.path().join("a.rs"), "fn a() {}\n").unwrap();
+        std::fs::write(project.path().join("b.rs"), "fn b() { a(); }\n").unwrap();
+
+        warm_project_fixture(project.path(), home.path(), &no_manifest).unwrap();
+        let graph_db = project.path().join(".vfs/graph/graph.db");
+        assert!(graph_db.exists(), "first warm must create the db");
+
+        // The cache is lost; the parse cache + checkpoint survive.
+        std::fs::remove_file(&graph_db).unwrap();
+
+        // Second warm: full parse-cache hit, but the db write MUST happen.
+        warm_project_fixture(project.path(), home.path(), &no_manifest).unwrap();
+
+        assert!(
+            graph_db.exists(),
+            "warm must rebuild a lost db instead of exiting 'graph unchanged'"
+        );
+        let verified = hilo_graph::cache_matches_edges(graph_db.to_str().unwrap());
+        assert!(
+            verified,
+            "the rebuilt db must pass cache verification (stamped row claim met)"
+        );
     }
 
     #[test]

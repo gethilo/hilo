@@ -512,7 +512,7 @@ fn hash_prefix(path: &Path, len: u64) -> GraphResult<(u64, u64)> {
 
 /// Reconcile checkpoint written next to `edges.jsonl` as `.last_reconcile`.
 ///
-/// v2 line: `v2:<mtime-nanos>:<size>:<consumed>:<prefix-hash>:<complete>`
+/// v3 line: `v3:<mtime-nanos>:<size>:<consumed>:<prefix-hash>:<rows>:<complete>`
 ///
 /// * `<consumed>` — byte offset just past the last line whose edge was
 ///   committed to `graph.db`. Every byte below it has been handled (parsed, or
@@ -522,6 +522,12 @@ fn hash_prefix(path: &Path, len: u64) -> GraphResult<(u64, u64)> {
 ///   (AGENTS.md design rule 3), and if a writer rewrote any consumed byte the
 ///   digest changes, so the open falls back to a full replay instead of
 ///   ingesting a delta on top of rows that no longer match the file.
+/// * `<rows>` — the `edges` table row count of the db the ingest wrote,
+///   recorded AFTER the ingest (DF-WARPFS-61/64). This is the verified
+///   claim: a fresh fingerprint plus a db that no longer holds at least
+///   this many rows means the cache was lost or emptied (trigger cold-start
+///   window, db deleted by hand) and the open MUST full-replay from
+///   `edges.jsonl` instead of trusting the checkpoint.
 /// * `<complete>` — 1 when the ingest reached EOF (the cache holds every row
 ///   of `edges.jsonl`), 0 when it stopped at the request budget. Only a
 ///   complete checkpoint may be trusted as "no reconcile needed"; an
@@ -529,47 +535,76 @@ fn hash_prefix(path: &Path, len: u64) -> GraphResult<(u64, u64)> {
 ///
 /// A legacy PERF-001 stamp (`<mtime-nanos>:<size>`) still answers "is the
 /// cache fresh?" — `fingerprint` is that same string — but carries no
-/// checkpoint, so a mismatch on one full-replays.
+/// checkpoint, so a mismatch on one full-replays. A v2 stamp
+/// (`v2:<mtime>:<size>:<consumed>:<hash>:<complete>`) is accepted with an
+/// UNVERIFIED row claim (`None`): the cache is trusted as-is and upgraded to
+/// v3 by the next write — a v2 checkpoint never forces a mass replay.
 ///
-/// Precondition of any checkpoint, inherited from PERF-001 and not verified
-/// here: the DuckDB file next to the stamp still holds what the previous
-/// ingest put there. Deleting `graph.db` by hand while leaving
-/// `.last_reconcile` in place is outside the contract; `hilo graph clean`
-/// drops `edges.jsonl` with it, which invalidates the stamp on its own.
+/// The precondition PERF-001 inherited — "the DuckDB file next to the stamp
+/// still holds what the previous ingest put there" — is no longer assumed
+/// blind: it is exactly what the `<rows>` claim verifies (DF-WARPFS-61).
+/// `hilo graph clean` still drops `edges.jsonl` with the db, which
+/// invalidates the stamp on its own.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ReconcileStamp {
     fingerprint: String,
     consumed: u64,
     prefix_hash: u64,
+    /// `edges` row count recorded for the stamped db; `None` on a v2 stamp
+    /// (pre-verification format — the claim cannot be checked).
+    rows: Option<u64>,
     complete: bool,
 }
 
 impl ReconcileStamp {
     fn encode(&self) -> String {
-        format!(
-            "v2:{}:{}:{:016x}:{}",
-            self.fingerprint,
-            self.consumed,
-            self.prefix_hash,
-            u8::from(self.complete)
-        )
+        match self.rows {
+            Some(rows) => format!(
+                "v3:{}:{}:{:016x}:{}:{}",
+                self.fingerprint,
+                self.consumed,
+                self.prefix_hash,
+                rows,
+                u8::from(self.complete)
+            ),
+            // v2 form, kept for stamps that predate the row claim.
+            None => format!(
+                "v2:{}:{}:{:016x}:{}",
+                self.fingerprint,
+                self.consumed,
+                self.prefix_hash,
+                u8::from(self.complete)
+            ),
+        }
     }
 
     fn decode(line: &str) -> Option<Self> {
         let fields: Vec<&str> = line.split(':').collect();
-        if fields.len() != 6 || fields[0] != "v2" {
-            return None;
+        match fields[0] {
+            "v2" if fields.len() == 6 => Some(Self {
+                fingerprint: format!("{}:{}", fields[1], fields[2]),
+                consumed: fields[3].parse().ok()?,
+                prefix_hash: u64::from_str_radix(fields[4], 16).ok()?,
+                rows: None,
+                complete: match fields[5] {
+                    "0" => false,
+                    "1" => true,
+                    _ => return None,
+                },
+            }),
+            "v3" if fields.len() == 7 => Some(Self {
+                fingerprint: format!("{}:{}", fields[1], fields[2]),
+                consumed: fields[3].parse().ok()?,
+                prefix_hash: u64::from_str_radix(fields[4], 16).ok()?,
+                rows: Some(fields[5].parse().ok()?),
+                complete: match fields[6] {
+                    "0" => false,
+                    "1" => true,
+                    _ => return None,
+                },
+            }),
+            _ => None,
         }
-        Some(Self {
-            fingerprint: format!("{}:{}", fields[1], fields[2]),
-            consumed: fields[3].parse().ok()?,
-            prefix_hash: u64::from_str_radix(fields[4], 16).ok()?,
-            complete: match fields[5] {
-                "0" => false,
-                "1" => true,
-                _ => return None,
-            },
-        })
     }
 }
 
@@ -579,18 +614,44 @@ fn read_stamp_line(edges_jsonl: &Path) -> Option<String> {
     Some(text.trim().to_string())
 }
 
-/// Read the checkpoint next to `edges.jsonl`, if the stamp is a v2 line.
+/// Read the checkpoint next to `edges.jsonl`, if the stamp is a v2/v3 line.
 #[cfg(test)]
 fn read_stamp(edges_jsonl: &Path) -> Option<ReconcileStamp> {
     ReconcileStamp::decode(&read_stamp_line(edges_jsonl)?)
 }
 
+/// Count the rows the `edges` table currently holds in `conn`.
+///
+/// The count is the verified part of the reconcile checkpoint: the stamp
+/// records how many rows the db was holding when the ingest completed, and
+/// every later open compares this same query against it (DF-WARPFS-61/64).
+/// An absent or empty table answers 0 — exactly the "cache was lost" state
+/// the verification exists to catch.
+fn db_edge_row_count(conn: &Connection) -> u64 {
+    conn.query_row("SELECT COUNT(*) FROM edges", params![], |row| {
+        row.get::<_, i64>(0)
+    })
+    .map(|n| n.max(0) as u64)
+    .unwrap_or(0)
+}
+
 /// Record the checkpoint an ingest reached.
 ///
+/// `row_count` is the `edges` row count OF THE DB the ingest wrote, taken
+/// AFTER the rows were committed — the verified claim later opens check
+/// before trusting this checkpoint (DF-WARPFS-61/64). The v3 stamp carries
+/// it; v2 stamps (no claim) remain readable for old workspaces.
+///
 /// `complete` is `false` when the ingest stopped at the request budget: the
-/// line still records the resume point, it just must not be read as "the cache
-/// is fresh".
-fn write_stamp(edges_jsonl: &Path, consumed: u64, prefix_hash: u64, complete: bool) {
+/// line still records the resume point, it just must not be read as "the
+/// cache is fresh".
+fn write_stamp(
+    edges_jsonl: &Path,
+    consumed: u64,
+    prefix_hash: u64,
+    row_count: u64,
+    complete: bool,
+) {
     let Some(fingerprint) = jsonl_fingerprint(edges_jsonl) else {
         return;
     };
@@ -598,6 +659,7 @@ fn write_stamp(edges_jsonl: &Path, consumed: u64, prefix_hash: u64, complete: bo
         fingerprint,
         consumed,
         prefix_hash,
+        rows: Some(row_count),
         complete,
     };
     let _ = std::fs::write(reconcile_stamp_path(edges_jsonl), stamp.encode());
@@ -641,15 +703,30 @@ impl ReconcilePlan {
 /// Decide the reconcile for one open, priming `hasher` with the bytes it
 /// verified so a delta ingest can extend the digest to its own end.
 ///
+/// `db_rows` is the live `edges` row count of the db being opened (from
+/// [`db_edge_row_count`]) — the fact a v3 checkpoint's row claim is checked
+/// against (DF-WARPFS-61/64). `None` means no count could be taken (no
+/// usable connection): the planner then keeps the file-level historical
+/// view — a v3 claim is unverifiable and never blocks a Skip. Every real
+/// open supplies a count (pre-open probe or its own connection).
+///
 /// Order is the point (GAP-094):
-/// 1. fingerprint match against a *complete* checkpoint → `Skip`; nothing is
-///    read at all, which is the warm path the row measured as flat.
+/// 1. fingerprint match against a *complete* checkpoint whose row claim
+///    matches the db → `Skip`; nothing is read at all, which is the warm
+///    path the row measured as flat.
 /// 2. a checkpoint whose consumed prefix still digests to its recorded value →
 ///    `Delta` from that offset, so a resident process pays for what changed
 ///    instead of re-inserting the corpus on every write (the cost the row
 ///    isolated to the new-row insert path, 20k rows → 2.9 GB).
-/// 3. anything else → `Full` from byte 0.
-fn plan_reconcile(edges_jsonl: &Path, hasher: &mut PrefixHasher) -> GraphResult<ReconcilePlan> {
+/// 3. anything else → `Full` from byte 0. This now includes the
+///    lost/emptied-cache state (rows vanished while the fingerprint stayed
+///    fresh): the full replay IS the self-heal, rebuilding the cache from
+///    the declared source of truth.
+fn plan_reconcile(
+    edges_jsonl: &Path,
+    hasher: &mut PrefixHasher,
+    db_rows: Option<u64>,
+) -> GraphResult<ReconcilePlan> {
     let Some((_, size)) = jsonl_stat(edges_jsonl) else {
         // No edges.jsonl: the ingest no-ops anyway (fresh project).
         return Ok(ReconcilePlan::Skip);
@@ -671,17 +748,48 @@ fn plan_reconcile(edges_jsonl: &Path, hasher: &mut PrefixHasher) -> GraphResult<
 
     let fresh = fingerprint.is_some_and(|fp| fp == stamp.fingerprint);
     if fresh && stamp.complete {
-        return Ok(ReconcilePlan::Skip);
+        // DF-WARPFS-61/64: "fresh" requires the db to still HOLD what the
+        // checkpoint claims. A v3 stamp with a vanished/emptied db (trigger
+        // cold-start window, db deleted by hand) must NOT skip — the full
+        // replay below rebuilds the cache from edges.jsonl. A v2 stamp has
+        // no claim to check (rows == None) and keeps its historical trust;
+        // `db_rows == None` means no count could be taken (no connection) —
+        // every real open supplies one, so unverifiable here means the
+        // file-level planner's historical view.
+        match (stamp.rows, db_rows) {
+            (None, _) => return Ok(ReconcilePlan::Skip),
+            (_, None) => return Ok(ReconcilePlan::Skip),
+            (Some(claimed), Some(actual)) if actual >= claimed => return Ok(ReconcilePlan::Skip),
+            (Some(claimed), Some(actual)) => {
+                eprintln!(
+                    "warning: reconcile checkpoint claims {claimed} cached edges but the graph db holds {actual}; rebuilding the cache from edges.jsonl (DF-WARPFS-61)"
+                );
+                // Fall through: the cache is gone, only a full replay heals.
+                *hasher = PrefixHasher::new();
+                return Ok(ReconcilePlan::ingest(0));
+            }
+        }
     }
 
     // A checkpoint is a resume point only while the bytes it claims are still
     // there. An append keeps the prefix identical; a rewrite or a truncation
     // digests differently and falls through to a full replay.
     if stamp.consumed > 0 && stamp.consumed <= size {
-        let verified = hash_prefix_into(hasher, edges_jsonl, stamp.consumed)?;
-        // A short read (file truncated under us) verifies nothing.
-        if verified == stamp.consumed && hasher.finish() == stamp.prefix_hash {
-            return Ok(ReconcilePlan::ingest(stamp.consumed));
+        // A delta resume only makes sense when the db holds the earlier rows
+        // the checkpoint's consumed-prefix claim stands on. A v3 stamp whose
+        // db lost those rows cannot resume on top of nothing (DF-WARPFS-61);
+        // a v2 stamp or an absent count keeps the historical behavior.
+        let resume_ok = match (stamp.rows, db_rows) {
+            (None, _) => true,
+            (_, None) => true,
+            (Some(claimed), Some(actual)) => actual >= claimed,
+        };
+        if resume_ok {
+            let verified = hash_prefix_into(hasher, edges_jsonl, stamp.consumed)?;
+            // A short read (file truncated under us) verifies nothing.
+            if verified == stamp.consumed && hasher.finish() == stamp.prefix_hash {
+                return Ok(ReconcilePlan::ingest(stamp.consumed));
+            }
         }
     }
 
@@ -981,7 +1089,16 @@ pub fn reconcile_edges_from_jsonl_with_chunk_size(
 
     // Stamp AFTER a successful full replay so the next open() can trust the
     // cache without touching edges.jsonl. A failed chunk returns above.
-    write_stamp(edges_jsonl, outcome.consumed, outcome.prefix_hash, true);
+    // DF-WARPFS-61/64: the stamp records the db's actual row count — the
+    // verified claim later opens check before trusting this checkpoint.
+    let row_count = db_edge_row_count(conn);
+    write_stamp(
+        edges_jsonl,
+        outcome.consumed,
+        outcome.prefix_hash,
+        row_count,
+        true,
+    );
     Ok(outcome.rows)
 }
 
@@ -1133,20 +1250,63 @@ fn open_disk_connection(path: &str, access: GraphAccess) -> GraphResult<Connecti
 /// file, stale or absent stamp) means the reconcile must INSERT, which a
 /// read-only handle cannot do — the caller falls back to the historical
 /// read-write open.
-fn ro_open_hot(path: &str, spill_watermark: u64) -> bool {
+///
+/// `probe_rows` is the `edges` row count taken by the caller on a
+/// short-lived READ-ONLY probe connection (shared lock) BEFORE this decision:
+/// a v3 checkpoint's row claim is verified against it, so a lost/emptied
+/// cache answers Ingest and the open heals read-write instead of serving an
+/// empty graph read-only (DF-WARPFS-61/64). `None` = probe unavailable
+/// (missing db, writer holds the lock) — the file-level historical view
+/// applies (a missing db file is already caught above).
+fn ro_open_hot(path: &str, spill_watermark: u64, probe_rows: Option<u64>) -> bool {
     if !Path::new(path).exists() {
         return false;
     }
     let Some(jsonl) = Path::new(path).parent().map(|dir| dir.join("edges.jsonl")) else {
         return false;
     };
-    match plan_reconcile(&jsonl, &mut PrefixHasher::new()) {
+    match plan_reconcile(&jsonl, &mut PrefixHasher::new(), probe_rows) {
         Ok(ReconcilePlan::Skip) => true,
         Ok(ReconcilePlan::Ingest { .. }) => {
             jsonl_stat(&jsonl).is_some_and(|(_, size)| size >= spill_watermark)
         }
         Err(_) => false,
     }
+}
+
+/// Would the DuckDB cache at `path` provably agree with the sibling
+/// `edges.jsonl` right now (DF-WARPFS-61/64)?
+///
+/// The caller (warm's fast path) must NOT skip its db write on "graph
+/// unchanged" unless this answers true: a lost or emptied cache keeps the
+/// parse cache and the checkpoint fingerprint intact while holding zero rows,
+/// and skipping the write would strand the empty db forever. Verification is
+/// the same read-only probe an `open_read_only` performs: a v3 checkpoint's
+/// row claim must be met by the db's live row count. Answers true when
+/// nothing needs verifying at all (no edges.jsonl, no checkpoint) — those
+/// states carry no stale-cache hazard.
+pub fn cache_matches_edges(path: &str) -> bool {
+    if !Path::new(path).exists() {
+        return false;
+    }
+    let Some(jsonl) = Path::new(path).parent().map(|dir| dir.join("edges.jsonl")) else {
+        return false;
+    };
+    if !jsonl.exists() {
+        return true;
+    }
+    if read_stamp_line(&jsonl).is_none() {
+        return true;
+    }
+    let probe_rows = DuckDbConfig::default()
+        .access_mode(AccessMode::ReadOnly)
+        .ok()
+        .and_then(|cfg| Connection::open_with_flags(path, cfg).ok())
+        .map(|conn| db_edge_row_count(&conn));
+    matches!(
+        plan_reconcile(&jsonl, &mut PrefixHasher::new(), probe_rows),
+        Ok(ReconcilePlan::Skip)
+    )
 }
 
 /// Does this DuckDB open error name the file-lock conflict class
@@ -1267,11 +1427,30 @@ impl GraphDB {
         } else {
             Path::new(path).ancestors().nth(3).map(Path::to_path_buf)
         };
+        let mut probe_rows: Option<u64> = None;
         let conn = if path == ":memory:" {
             Connection::open_in_memory()?
         } else {
             let (perf, spill_watermark) =
                 resolved_duckdb_perf(duckdb_perf_for_path(Path::new(path)));
+            // DF-WARPFS-61/64: verify the reconcile checkpoint's row claim
+            // against the db BEFORE choosing the access mode, via a
+            // short-lived READ-ONLY probe connection (shared lock — it
+            // coexists with concurrent readers and only fails while a writer
+            // holds the file). `None` (missing db / writer holds the lock /
+            // non-read-only intent) means the claim cannot be verified: a v3
+            // checkpoint never answers Skip on it, so a lost/emptied cache
+            // makes the open fall through to read-write and heal by full
+            // replay instead of serving an empty graph.
+            probe_rows = if access == GraphAccess::ReadOnly && Path::new(path).exists() {
+                DuckDbConfig::default()
+                    .access_mode(AccessMode::ReadOnly)
+                    .ok()
+                    .and_then(|cfg| Connection::open_with_flags(path, cfg).ok())
+                    .map(|conn| db_edge_row_count(&conn))
+            } else {
+                None
+            };
             // DF-WARPFS-33: a query-only open takes DuckDB's SHARED lock only
             // when the cache needs no replay (the hot path the measured 7/8
             // fan-out failure lives on). When the cache is missing or stale
@@ -1279,7 +1458,8 @@ impl GraphDB {
             // handle cannot do — the open falls back to the historical
             // read-write mode, serialized only when real rebuild work
             // exists (the AC3 cold path keeps full parity).
-            let ro_hot = access == GraphAccess::ReadOnly && ro_open_hot(path, spill_watermark);
+            let ro_hot =
+                access == GraphAccess::ReadOnly && ro_open_hot(path, spill_watermark, probe_rows);
             resolved = if ro_hot {
                 GraphAccess::ReadOnly
             } else {
@@ -1352,8 +1532,19 @@ impl GraphDB {
                     // PERF-001/GAP-094: skip the replay when the checkpoint
                     // says the cache already holds this exact file; otherwise
                     // ingest from the checkpoint, not from byte 0.
+                    // DF-WARPFS-61/64: the checkpoint's row claim is checked
+                    // against the db's live row count — a claim the db no
+                    // longer meets (lost or emptied cache) forces the full
+                    // replay that heals it. Read-only handles verified the
+                    // claim with the pre-open probe connection (`probe_rows`);
+                    // read-write handles count on their own connection.
+                    let db_rows = if matches!(resolved, GraphAccess::ReadOnly) {
+                        probe_rows
+                    } else {
+                        Some(db_edge_row_count(&conn))
+                    };
                     let mut hasher = PrefixHasher::new();
-                    match plan_reconcile(&jsonl, &mut hasher)? {
+                    match plan_reconcile(&jsonl, &mut hasher, db_rows)? {
                         ReconcilePlan::Skip => {
                             reconcile = Some(ReconcileReport {
                                 mode: ReconcileMode::Skipped,
@@ -1381,10 +1572,13 @@ impl GraphDB {
                             // budget-stopped pass still knows exactly which
                             // bytes it committed, and `complete` keeps the next
                             // open from mistaking it for a fresh cache.
+                            // DF-WARPFS-61/64: it also records the db's row
+                            // count AFTER this ingest — the verified claim.
                             write_stamp(
                                 &jsonl,
                                 outcome.consumed,
                                 outcome.prefix_hash,
+                                db_edge_row_count(&conn),
                                 !outcome.exhausted,
                             );
                             if outcome.exhausted {
@@ -2586,9 +2780,11 @@ mod tests {
         graph_dir.join("graph.db")
     }
 
-    /// The reconcile plan an open would run for `jsonl` (GAP-094).
+    /// The reconcile plan an open would run for `jsonl` (GAP-094). The
+    /// file-level planner's historical view: no db count supplied, so a v3
+    /// claim is unverifiable and never blocks a Skip (DF-WARPFS-61).
     fn plan_of(jsonl: &Path) -> ReconcilePlan {
-        super::plan_reconcile(jsonl, &mut PrefixHasher::new()).unwrap()
+        super::plan_reconcile(jsonl, &mut PrefixHasher::new(), None).unwrap()
     }
 
     /// One canonical `edges.jsonl` line for edge `i` of a synthetic corpus.
@@ -3794,6 +3990,186 @@ mod tests {
         );
     }
 
+    /// DF-WARPFS-61: a lost cache (db deleted while the checkpoint
+    /// fingerprint stayed fresh) must full-replay from edges.jsonl on the
+    /// next open — the run-18 recovery ritual without the ritual.
+    #[test]
+    fn df61_open_rebuilds_cache_when_db_is_missing_under_fresh_checkpoint() {
+        let dir = tempfile::tempdir().unwrap();
+        let (db_path, jsonl, lines) = write_edge_corpus(dir.path(), 5);
+        let db_path_str = db_path.to_str().unwrap();
+
+        // Phase 1 — populate and checkpoint (v3 stamp, complete).
+        let db = GraphDB::open_with_budget_ms(db_path_str, UNBOUNDED_RECONCILE_BUDGET_MS).unwrap();
+        assert_eq!(db.count_edges().unwrap(), 5);
+        drop(db);
+        let stamp = read_stamp(&jsonl).expect("the first open must checkpoint");
+        assert_eq!(stamp.rows, Some(lines.len() as u64));
+        assert!(stamp.complete);
+
+        // Phase 2 — the cache is lost; stamp + inventory survive.
+        std::fs::remove_file(&db_path).unwrap();
+
+        // Phase 3 — the next open must NOT skip: it rebuilds.
+        let healed = GraphDB::open_with_budget_ms(db_path_str, UNBOUNDED_RECONCILE_BUDGET_MS)
+            .expect("a missing db must heal via full replay, not error");
+        let report = healed.reconcile_report().unwrap().clone();
+        assert_eq!(
+            report.mode,
+            ReconcileMode::Full,
+            "a lost cache must full-replay (DF-WARPFS-61): {report:?}"
+        );
+        assert_eq!(report.rows_processed, lines.len());
+        assert_eq!(healed.count_edges().unwrap(), 5);
+        drop(healed);
+
+        // Phase 4 — the rebuilt checkpoint verifies: a fresh open skips
+        // again (the steady-state hot path is preserved).
+        let steady =
+            GraphDB::open_with_budget_ms(db_path_str, UNBOUNDED_RECONCILE_BUDGET_MS).unwrap();
+        assert_eq!(
+            steady.reconcile_report().unwrap().mode,
+            ReconcileMode::Skipped
+        );
+        assert_eq!(steady.count_edges().unwrap(), 5);
+    }
+
+    /// DF-WARPFS-61: the run-18 face where the db FILE exists but holds
+    /// nothing (a cold-start writer recreated it empty) — same heal.
+    #[test]
+    fn df61_open_rebuilds_cache_when_db_holds_zero_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let (db_path, _jsonl, lines) = write_edge_corpus(dir.path(), 4);
+        let db_path_str = db_path.to_str().unwrap();
+
+        let db = GraphDB::open_with_budget_ms(db_path_str, UNBOUNDED_RECONCILE_BUDGET_MS).unwrap();
+        assert_eq!(db.count_edges().unwrap(), 4);
+        drop(db);
+
+        // The cache is emptied in place: the file survives (the run-18
+        // cold-start face) but holds zero rows.
+        let wiper = Connection::open(db_path_str).unwrap();
+        wiper.execute("DELETE FROM edges", []).unwrap();
+        drop(wiper);
+
+        let healed = GraphDB::open_with_budget_ms(db_path_str, UNBOUNDED_RECONCILE_BUDGET_MS)
+            .expect("an emptied db must heal via full replay");
+        let report = healed.reconcile_report().unwrap().clone();
+        assert_eq!(report.mode, ReconcileMode::Full, "{report:?}");
+        assert_eq!(report.rows_processed, lines.len());
+        assert_eq!(healed.count_edges().unwrap(), 4);
+    }
+
+    /// DF-WARPFS-61: a legacy v2 stamp (no row claim) keeps its historical
+    /// trust — no mass replay — and the next ingest upgrades it to v3.
+    #[test]
+    fn df61_v2_stamp_is_trusted_without_row_claim_and_upgraded_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let (db_path, jsonl, lines) = write_edge_corpus(dir.path(), 4);
+        let db_path_str = db_path.to_str().unwrap();
+
+        // Populate via the free-function replay, then DOWNGRADE the stamp
+        // to the legacy v2 form (pre-verification format).
+        let conn = Connection::open(db_path_str).unwrap();
+        assert_eq!(
+            reconcile_edges_from_jsonl(&conn, &jsonl).unwrap(),
+            lines.len()
+        );
+        drop(conn);
+        let stamp = read_stamp(&jsonl).unwrap();
+        let v2_line = format!(
+            "v2:{}:{}:{:016x}:{}",
+            stamp.fingerprint,
+            stamp.consumed,
+            stamp.prefix_hash,
+            u8::from(stamp.complete)
+        );
+        std::fs::write(reconcile_stamp_path(&jsonl), &v2_line).unwrap();
+
+        // The v2 stamp is trusted as-is: NO mass replay.
+        let db = GraphDB::open_with_budget_ms(db_path_str, UNBOUNDED_RECONCILE_BUDGET_MS).unwrap();
+        assert_eq!(
+            db.reconcile_report().unwrap().mode,
+            ReconcileMode::Skipped,
+            "v2 has no row claim to verify"
+        );
+        assert_eq!(db.count_edges().unwrap(), lines.len() as i64);
+        drop(db);
+
+        // An append invalidates the fingerprint: the delta ingest runs and
+        // writes a v3 stamp carrying the verified row claim.
+        append_lines(&jsonl, &[edge_line(100)]);
+        let db2 = GraphDB::open_with_budget_ms(db_path_str, UNBOUNDED_RECONCILE_BUDGET_MS).unwrap();
+        let report2 = db2.reconcile_report().unwrap().clone();
+        assert_eq!(report2.mode, ReconcileMode::Delta);
+        assert_eq!(report2.rows_processed, 1);
+        let upgraded = read_stamp(&jsonl).unwrap();
+        assert_eq!(
+            upgraded.rows,
+            Some(lines.len() as u64 + 1),
+            "the next ingest must upgrade the stamp to v3"
+        );
+        assert_eq!(db2.count_edges().unwrap(), lines.len() as i64 + 1);
+    }
+
+    /// DF-WARPFS-61/64: the public verifier warm's fast path consults must
+    /// answer false for exactly the lost/emptied-cache states.
+    #[test]
+    fn df61_cache_matches_edges_gates_the_lost_cache_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let (db_path, _jsonl, _lines) = write_edge_corpus(dir.path(), 3);
+        let db_path_str = db_path.to_str().unwrap();
+
+        let db = GraphDB::open_with_budget_ms(db_path_str, UNBOUNDED_RECONCILE_BUDGET_MS).unwrap();
+        drop(db);
+        assert!(
+            cache_matches_edges(db_path_str),
+            "a verified cache must match"
+        );
+
+        // db removed → verification fails (this is what warm checks).
+        std::fs::remove_file(&db_path).unwrap();
+        assert!(
+            !cache_matches_edges(db_path_str),
+            "a missing db must fail verification"
+        );
+
+        // db present but empty (no table) → fails too.
+        let _fresh = Connection::open(db_path_str).unwrap();
+        assert!(
+            !cache_matches_edges(db_path_str),
+            "an emptied db must fail verification"
+        );
+    }
+
+    /// DF-WARPFS-61: a checkpoint claiming 0 rows (malformed-only inventory)
+    /// is verified by any 0-row db — the second open must skip, not loop.
+    #[test]
+    fn df61_heal_replay_of_malformed_only_jsonl_terminates_cleanly() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = create_graph_path(dir.path());
+        let jsonl = db_path.parent().unwrap().join("edges.jsonl");
+        std::fs::write(&jsonl, "not json at all\n{{\"broken\": true}}\n").unwrap();
+        let db_path_str = db_path.to_str().unwrap();
+
+        // First open: full replay processes zero rows and stamps rows=0.
+        let db = GraphDB::open_with_budget_ms(db_path_str, UNBOUNDED_RECONCILE_BUDGET_MS).unwrap();
+        assert_eq!(db.reconcile_report().unwrap().rows_processed, 0);
+        assert_eq!(db.count_edges().unwrap(), 0);
+        drop(db);
+
+        // Simulate the lost cache; the claim (0) is met by a 0-row db.
+        let _fresh = Connection::open(db_path_str).unwrap();
+        let second =
+            GraphDB::open_with_budget_ms(db_path_str, UNBOUNDED_RECONCILE_BUDGET_MS).unwrap();
+        assert_eq!(
+            second.reconcile_report().unwrap().mode,
+            ReconcileMode::Skipped,
+            "a 0-row claim on a 0-row db is verified — no replay loop"
+        );
+        assert_eq!(second.count_edges().unwrap(), 0);
+    }
+
     /// Byte length of a line block as written by [`append_lines`].
     fn appended_total_bytes(lines: &[String]) -> u64 {
         (lines.join("\n").len() + 1) as u64
@@ -4847,7 +5223,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            !ro_open_hot(db_path.to_str().unwrap(), 1024),
+            !ro_open_hot(db_path.to_str().unwrap(), 1024, None),
             "missing db file is never hot"
         );
         {
@@ -4855,7 +5231,7 @@ mod tests {
             assert_eq!(db.count_edges().unwrap(), 1);
         }
         assert!(
-            ro_open_hot(db_path.to_str().unwrap(), 1024),
+            ro_open_hot(db_path.to_str().unwrap(), 1024, Some(1)),
             "stamped fresh cache is hot: a read-only open needs no write"
         );
         // Growing edges.jsonl past the spill watermark also reads hot (the
@@ -4863,7 +5239,7 @@ mod tests {
         std::fs::write(&jsonl, "x".repeat(2048)).unwrap();
         // The fingerprint changed -> a full replay would be planned, but the
         // watermark path degrades instead — still write-free.
-        assert!(ro_open_hot(db_path.to_str().unwrap(), 1024));
+        assert!(ro_open_hot(db_path.to_str().unwrap(), 1024, Some(1)));
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -26,7 +26,7 @@ pub use classify::{
 };
 pub use error::{GraphError, GraphResult};
 pub use graph::{
-    ensure_schema, insert_edges_into, reconcile_edges_from_jsonl,
+    cache_matches_edges, ensure_schema, insert_edges_into, reconcile_edges_from_jsonl,
     reconcile_edges_from_jsonl_with_chunk_size, request_path_reconcile_budget_ms,
     set_request_path_reconcile_budget_ms, strip_file_prefix, DegradedReason, Direction,
     GraphAccess, GraphDB, ModuleStats, ReconcileMode, ReconcileReport,
