@@ -27,5 +27,9 @@
   ],
   "merge_order": ["DF-WARPFS-55"],
   "merge_gate": "per-merge: git merge --no-ff; scoped gates on integrated tree (cargo check -p hilo_graph, cargo test -p hilo_graph --lib, fmt check); gitreins task complete AFTER merge commit exists",
-  "dispatched_at": "2026-09-25T07:05:00-05:00"
+  "dispatched_at": "2026-09-25T07:05:00-05:00",
+  "status": "recovered",
+  "recovered_by_tick": "warpfs-2026-09-25-12-47-36",
+  "finished_at": "2026-09-25T08:20:00-05:00",
+  "recovery_note": "Worker DF-WARPFS-55 committed 6e4df7c on wt/DF-WARPFS-55 then died pre-merge (tier-1 PASS live at commit time per /tmp/wfs229-dfw55.log). Tick 231 harvested: merged to master as 2ce90ba, gates re-run green on integrated tree, gitreins task completed, row closed. No re-dispatch."
 }
