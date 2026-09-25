@@ -1001,3 +1001,62 @@ the crate page.
 17 tested load with a *valid* plugin from the *documented* location and
 found data loss. Whenever a fix adds a write path, dogfood it at the
 location the docs' own examples use.
+
+## Run 18 — 2026-09-25 (warpfs-dogfood, cross-surface session): the caches are the graph, and only the cold-start knows it
+
+**How the pieces fit.** Hilo's graph state lives in three places that must
+agree: `.vfs/graph/edges.jsonl` (the append-only INVENTORY — declared
+source of truth, git-tracked), `.vfs/graph/.parse_cache.json` (per-file
+parse state, keyed by content hash, used to skip unchanged files), and
+`.vfs/graph/graph.db` (the DuckDB query cache, rebuilt from the inventory
+"at mount/query time" per the design rules). Every graph answer a user
+gets — `stats`, `related`, `impact`, and every MCP `vfs_graph_*` tool —
+serves from graph.db. The trigger engine (inotify → debounce → re-parse
+changed file → APPEND new edges to edges.jsonl → update graph.db) is what
+keeps all three in sync between explicit warms.
+
+**Why it breaks only at cold-start.** Run 18 drove the surfaces
+together on a fresh 4-file project and found the sync is one-way per
+event: the daemon's incremental update rewrites graph.db from its own
+partial view of the event rather than merging against the inventory, so a
+write landing inside the daemon's cold-start reconcile window leaves
+graph.db persistently EMPTY-ish (2 distinct edges vs 5 in the JSONL) while
+edges.jsonl stays correct. The user-visible symptom is brutal precisely
+because the design is otherwise honest: `graph impact` answers from the
+wrong cache silently (missing dependents, rc=0), and the documented
+recovery, `graph warm`, is defeated by the parse cache — warm sees
+"unchanged" files, skips parsing, and exits 0 having written an empty
+graph.db. The caches, not the inventory, became the graph. Recovery needs
+`rm graph.db .parse_cache.json` — a two-file ritual no doc mentions
+(DF-WARPFS-61 P0, with DF-WARPFS-64 P2 covering the missing-db no-rebuild
+case). The window also surfaced two smaller faces of the same root:
+readers can catch a raw DuckDB lock-conflict error and an empty-graph read
+in the seconds before the daemon settles (the DF-WARPFS-30 steady-state
+lock fix does not cover startup), and every trigger re-parse re-appends
+the file's FULL edge set — `client.rs → pkg:parser` was in edges.jsonl
+×3 after three real edits — inflating the git-tracked inventory
+(DF-WARPFS-62 P2).
+
+**The fresh-box face.** On the bunker install leg (Debian 13, release
+build 24m19s), `hilo mount <project>/mt --daemon` — mount point INSIDE the
+served tree, the natural way to test hilo on hilo's own repo — daemonized,
+mounted, and then hung on every read (ls/getfattr/cat all block). The
+identical inner-mount works flawlessly on the dev host, so the hang is
+environment-dependent (DF-WARPFS-63 P1). Same lesson as run 7, now
+twice-proven: install-green ≠ mount-works on a stock box; only a real
+read on the ephemeral machine sees it. Also new from this leg: `/tmp`
+smoke dirs on a bunker box carry uid-residue from previous agents' users
+(init failed with EACCES until the smoke moved under `$HOME`), and the
+`--daemon` flag discards the tracing subscriber stderr, so a hung mount
+gives the user zero diagnostics.
+
+**The right way, until fixed.** (1) After starting a `--triggers` mount,
+run `hilo graph warm` ONCE and then sanity-check
+`hilo graph stats` against `wc -l`/distinct-count of edges.jsonl; if they
+disagree, `rm .vfs/graph/graph.db .vfs/graph/.parse_cache.json && hilo
+graph warm` before trusting any impact answer. (2) Never treat `warm`'s
+"graph unchanged" as proof the db is populated — it only means the parse
+cache skipped. (3) Mount OUTSIDE the project tree on stock boxes until
+DF-WARPFS-63 has a diagnosis. (4) The regression test that would pin all
+of this: warm → start trigger mount → edit immediately → poll stats 10×
+→ assert every poll equals the distinct edge count of edges.jsonl.

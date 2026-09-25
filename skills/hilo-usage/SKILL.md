@@ -513,3 +513,45 @@ Rules learned this run:
 - Core read path re-verified healthy at 47f153b: init → warm → stats →
   impact → classify → meta all green on a fresh project; stats 20.1 ms ±2.0
   warm (n=20); mount round-trip + xattr + clean unmount clean.
+
+## Run 18 (2026-09-25, cross-surface session): cold-start cache rules and the inner-mount hang
+
+Using the surfaces TOGETHER (CLI writes → FUSE + MCP read → triggers
+update the graph) re-verified a long list of fixes live (DF-WARPFS-6
+stock-box mount now MOUNTS on Debian 13; DF-WARPFS-28/29 trigger defaults
++ nested-path events append edges within ~2s; DF-WARPFS-30 no lock errors
+in steady state; MCP serverInfo now 0.3.1-dev). CLI-set xattr reads back
+through the mount (`getfattr`) AND through MCP `vfs_get_metadata`; the
+same structural question answered identically on all three surfaces in
+steady state.
+
+**Cross-surface rules (follow these or impact lies):**
+
+1. After starting `hilo mount --triggers`, treat the graph as unproven
+   until you compare `hilo graph stats` "distinct" against the distinct
+   `from→to` count of `.vfs/graph/edges.jsonl`. An edit landing during the
+   daemon's cold-start reconcile can leave graph.db persistently wrong
+   (P0 DF-WARPFS-61) and every `impact` then silently misses dependents.
+2. `hilo graph warm` printing "[all cached, graph unchanged]" does NOT
+   mean graph.db is populated — it means the parse cache skipped parsing.
+   If graph.db was deleted/lost, warm writes an EMPTY db and exits 0.
+   Full recovery: `rm .vfs/graph/graph.db .vfs/graph/.parse_cache.json
+   && hilo graph warm` (DF-WARPFS-61/64).
+3. `stats` with a missing graph.db says "Graph cache is empty" and exits 0
+   forever — it never rebuilds from edges.jsonl by itself (DF-WARPFS-64).
+4. Trigger re-parses append a file's FULL edge set each edit, so
+   edges.jsonl grows duplicates (`x → pkg:y` ×2, ×3 …). Distinct counts
+   stay right; raw lines churn the git-tracked inventory (DF-WARPFS-62).
+5. On stock Debian boxes, mount OUTSIDE the project tree. An inner-tree
+   mount (`hilo mount <project>/mt`) daemonized and then hung on every
+   read on the fresh install box while working perfectly on the dev host
+   (DF-WARPFS-63) — environment-dependent, zero diagnostics because
+   `--daemon` eats the tracing stderr.
+6. Bunker/tmpfs gotcha: smoke dirs under `/tmp` on bunker boxes can carry
+   uid-residue from previous agents (`init` fails EACCES). Smoke under
+   `$HOME`.
+
+Perf (release, 4-file fixture): impact d3 33.5ms ±6.8 warm, 1.54s ±0.74
+cold (deleted db — the DF-WARPFS-61/64 recovery gap in numbers); warm
+cached 8.7ms ±0.5; MCP spawn+init+impact median 20ms; fresh-box
+rustup+build 1493s on 6 vCPU.

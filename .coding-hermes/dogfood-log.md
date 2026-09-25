@@ -720,3 +720,37 @@ rows: DF-WARPFS-58..60 appended + read-back verified (board 222 → 225, 0 bad l
 once, trailing newline checked before append).
 left behind: docs/dogfood/2026-09-25-run17-plugins-manifest-retest.md, diagnostics.md Run 17 section,
 skills/hilo-usage/SKILL.md run-17 section, rows, this entry.
+---
+
+2026-09-25 | run 18 | 🟡 PROMISING-BUT-ROUGH (cross-surface integrated session; CLI/graph/FUSE/MCP individually healthy) |
+promise: an agent can use Hilo's surfaces (CLI, FUSE mount, MCP server) interchangeably against the
+same project and get coherent answers while the trigger engine keeps the graph current. angle (stale-
+surface rule — runs 1-17 each drove ONE surface in isolation): first integrated session — CLI meta
+write read back via FUSE getfattr AND MCP vfs_get_metadata, one structural question answered
+identically on all three surfaces, file edits propagated by the trigger engine into graph answers
+without manual warm. reality: steady-state coherence HELD and a batch of earlier fixes verified live
+(DF-WARPFS-6 stock-box mount now MOUNTS on fresh Debian 13; DF-WARPFS-28/29 trigger defaults + nested
+events append edges in ~2s; DF-WARPFS-30 zero lock errors across 30 churn queries with MCP+warm
+concurrent; MCP serverInfo now 0.3.1-dev) — but the surfaces DISAGREE at cold-start: an edit inside
+the trigger daemon's startup reconcile leaves graph.db persistently WRONG (2 distinct vs 5 distinct
+in edges.jsonl) so every `graph impact` silently misses dependents, and the documented recovery,
+`graph warm`, is defeated by the parse cache — it prints "[all cached, graph unchanged]" and exits 0
+having written an EMPTY graph.db; real recovery needs rm of BOTH graph.db and .parse_cache.json
+(DF-WARPFS-61 P0 + DF-WARPFS-64 P2). Also: trigger re-parses re-append a file's full edge set so the
+git-tracked edges.jsonl grows duplicates (x3 observed; DF-WARPFS-62 P2), and an inner-tree
+`hilo mount <project>/mt --daemon` on the fresh Debian box daemonized then hung on every read while
+the identical mount works on the dev host (DF-WARPFS-63 P1; --daemon eats tracing stderr so zero
+diagnostics). time-to-first-success: ~10 min. friction count: 4 defects (1 P0, 1 P1, 2 P2).
+perf (hyperfine, release, 4-file fixture, warm): impact d3 33.5ms ±6.8 (n=20); cold deleted-db impact
+1.54s ±0.74 (n=10) — that number IS the DF-WARPFS-61/64 recovery gap; warm cached 8.7ms ±0.5 (n=10);
+MCP spawn+init+impact median 20ms (n=10); no PERF row (nothing a user waits on in normal operation).
+install leg: PASS on las-03 fresh agent e4db409b (public clone 47f153b == origin HEAD in 8.6s;
+rustup minimal 1.98.1 + cargo build --release -p hilo-cli BUILD_RC=0 in 1493s; smoke: init/warm/meta
+green, mount --daemon MOUNT_RC=0 + MOUNT_UP on stock Debian 13 = DF-WARPFS-6 fix verified, then the
+inner-mount reads hung = DF-WARPFS-63). infra gotcha recorded: /tmp on the bunker carried uid-1004
+residue from a previous agent's user — smoke dirs must live under $HOME. agent destroyed + key removed.
+collision note: coding-hermes-tools-dogfood ran run 17 on the same workdir mid-tick (rows 58-60,
+commit 71aef37); renumbered to run 18 with row ids 61+, committed only my files by explicit pathspec.
+rows: DF-WARPFS-61..64 appended + read-back verified (board 225 -> 229, 0 dups, trailing-newline
+check before append). left behind: docs/dogfood/2026-09-25-run18-cross-surface.md, diagnostics.md
+Run 18 section, skills/hilo-usage/SKILL.md run-18 section, rows, this entry.
