@@ -224,7 +224,14 @@ pub struct TfIdfIndex {
     doc_freq: HashMap<String, usize>,
     /// Document → term frequencies (term → count in that document).
     term_freqs: Vec<HashMap<String, f64>>,
-    /// Average document length (in tokens).
+    /// Per-document capped length for BM25: path tokens in full + the token
+    /// count of the document's first 8 symbols (the take(8)-era budget).
+    /// Aligned with `term_freqs` (same document order). The FULL token count
+    /// is not stored — BM25 must see the same lengths the take(8)-era index
+    /// produced, so GAP-100's pinned rankings hold by construction; recall
+    /// comes from the term map, which keeps every symbol term (GAP-102).
+    doc_lens_capped: Vec<usize>,
+    /// Average capped document length (in tokens).
     avg_doc_len: f64,
     /// Total number of documents.
     n_docs: usize,
@@ -272,22 +279,43 @@ impl TfIdfIndex {
         let n_docs = documents.len();
         let mut doc_freq: HashMap<String, usize> = HashMap::new();
         let mut term_freqs: Vec<HashMap<String, f64>> = Vec::with_capacity(n_docs);
+        let mut doc_lens_capped: Vec<usize> = Vec::with_capacity(n_docs);
         let mut total_len: usize = 0;
 
         for doc_path in &documents {
             // Build the document text: file path tokens + optional symbols.
-            let mut doc_tokens = tokenize(doc_path);
+            // GAP-102: ALL symbol tokens are indexed (recall must not lose
+            // symbols past an arbitrary cutoff — flask's url_for is defined
+            // in helpers.py beyond its 8th symbol and went unfindable). The
+            // GAP-100 length discipline is kept by capping only the
+            // document LENGTH BM25 sees, not the token set (see the cap
+            // constant below).
+            let path_tokens = tokenize(doc_path);
+            let path_len = path_tokens.len();
+            let mut doc_tokens = path_tokens;
             if let Some(extract) = symbol_extractor {
                 let symbols = extract(doc_path);
-                // Cap the symbol enrichment at the same 8 the MAP tier
-                // applies (GAP-044): a definition-rich file (express's
-                // lib/response.js defines 20+ members) must not have its
-                // BM25 length penalty grow with its own API surface, or
-                // rework GAP-100 trades the test-file demotion for a
-                // different file outranking the definition file.
-                for sym in symbols.into_iter().take(8) {
-                    doc_tokens.extend(tokenize(&sym));
+                // GAP-102: every symbol's tokens go into the term map —
+                // recall must not lose symbols past an arbitrary cutoff
+                // (flask's url_for is defined in helpers.py beyond its 8th
+                // symbol and went unfindable). GAP-100's length discipline
+                // is kept EXACTLY: the BM25 length contribution of symbols
+                // is the token count of the FIRST 8 symbols (the take(8)
+                // budget, GAP-044's MAP-tier cap), so doc_len — per document
+                // and averaged — is byte-identical to the capped-index era
+                // and every pinned GAP-100 ranking holds by construction.
+                // Only recall grows.
+                let mut symbol_len_capped = 0usize;
+                for (i, sym) in symbols.into_iter().enumerate() {
+                    let toks = tokenize(&sym);
+                    if i < 8 {
+                        symbol_len_capped += toks.len();
+                    }
+                    doc_tokens.extend(toks);
                 }
+                doc_lens_capped.push(path_len + symbol_len_capped);
+            } else {
+                doc_lens_capped.push(doc_tokens.len());
             }
 
             // Deduplicate tokens within a document for term frequency.
@@ -301,7 +329,7 @@ impl TfIdfIndex {
                 *doc_freq.entry(term.clone()).or_insert(0) += 1;
             }
 
-            total_len += doc_tokens.len();
+            total_len += doc_lens_capped.last().copied().unwrap_or(0);
             term_freqs.push(tf);
         }
 
@@ -315,6 +343,7 @@ impl TfIdfIndex {
             documents,
             doc_freq,
             term_freqs,
+            doc_lens_capped,
             avg_doc_len,
             n_docs,
             k1: 1.2,
@@ -377,7 +406,10 @@ impl TfIdfIndex {
 
         for (i, doc_path) in self.documents.iter().enumerate() {
             let tf_map = &self.term_freqs[i];
-            let doc_len = tf_map.values().map(|v| *v as usize).sum::<usize>() as f64;
+            // GAP-102: the capped length (path tokens + first-8-symbols
+            // budget) — the same doc_len the take(8)-era index computed;
+            // the tf-map sum below would differ (dedup + unindexed terms).
+            let doc_len = self.doc_lens_capped[i] as f64;
             let mut score = 0.0;
 
             for term in &query_tokens {
@@ -1386,6 +1418,91 @@ mod tests {
         assert!(
             impl_pos < first_test_pos,
             "the member-assignment definition file must outrank every test hit, got: {:?}",
+            results.iter().map(|r| &r.file_path).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn search_real_extractor_finds_symbol_beyond_eight_ast_order() {
+        // GAP-102 regression: TfIdfIndex::build_with_symbols truncated the
+        // symbol enrichment with `.take(8)` (GAP-100's document-length cap
+        // misapplied to the token set), so a file whose DEFINING symbol is
+        // its 9th+ AST-order symbol was invisible to search for that
+        // symbol. This fixture puts `url_for` behind 8 filler definitions
+        // (mirroring flask's helpers.py, where url_for is defined at line
+        // 200 but is the 9th+ symbol); with the take(8) cap the query
+        // below never surfaced the defining file.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src/flask")).unwrap();
+        std::fs::create_dir_all(dir.path().join("test")).unwrap();
+        let mut source = String::new();
+        for name in [
+            "alpha_util",
+            "beta_util",
+            "gamma_util",
+            "delta_util",
+            "epsilon_util",
+            "zeta_util",
+            "eta_util",
+            "theta_util",
+        ] {
+            source.push_str(&format!("def {name}():\n    return '{name}'\n\n"));
+        }
+        source.push_str("def url_for(endpoint, **values):\n    return endpoint\n");
+        std::fs::write(dir.path().join("src/flask/helpers.py"), &source).unwrap();
+        // A test file whose FIRST symbol carries the query tokens: even in
+        // the broken take(8) state it matches, so the demotion contract is
+        // pinned on this fixture too — the definition file must outrank
+        // every test hit (GAP-100), and no file may be emitted twice.
+        std::fs::write(
+            dir.path().join("test/test_helpers.py"),
+            "def url_for_smoke():\n    pass\n",
+        )
+        .unwrap();
+        let db_path = dir.path().join("graph.db");
+        let db = GraphDB::open(db_path.to_str().unwrap()).unwrap();
+        db.insert_edges(&[
+            edge("src/flask/helpers.py", "pkg:jinja2", "imports"),
+            edge("test/test_helpers.py", "src/flask/helpers.py", "imports"),
+        ])
+        .unwrap();
+
+        // The DEFAULT extractor path (search + index_symbols + explicit
+        // root) — exactly what the CLI runs; no stub, no explicit closure.
+        let opts = SearchOpts {
+            limit: 10,
+            index_symbols: true,
+            root: Some(dir.path().to_path_buf()),
+        };
+        let results = search(&db, "url_for", &opts).unwrap();
+
+        let impl_pos = results
+            .iter()
+            .position(|r| r.file_path == "src/flask/helpers.py")
+            .unwrap_or_else(|| {
+                panic!(
+                    "a defining symbol beyond the 8th AST-order symbol must \
+                     still surface its defining file (GAP-102 take(8) \
+                     truncation), got: {:?}",
+                    results.iter().map(|r| &r.file_path).collect::<Vec<_>>()
+                )
+            });
+        let first_test_pos = results
+            .iter()
+            .position(|r| crate::classify::is_test_file(&r.file_path))
+            .expect("test hits must remain findable (demoted, not removed)");
+        assert!(
+            impl_pos < first_test_pos,
+            "the definition file must outrank every test hit, got: {:?}",
+            results.iter().map(|r| &r.file_path).collect::<Vec<_>>()
+        );
+        let mut paths: Vec<&str> = results.iter().map(|r| r.file_path.as_str()).collect();
+        paths.sort_unstable();
+        paths.dedup();
+        assert_eq!(
+            paths.len(),
+            results.len(),
+            "dedup contract: no file may appear twice, got: {:?}",
             results.iter().map(|r| &r.file_path).collect::<Vec<_>>()
         );
     }
