@@ -1735,3 +1735,16 @@ tasks:
     \ commit with co-author trailer"
   status: in_progress
   created_at: '2026-09-25T07:02:10.074246+00:00'
+- id: DF-WARPFS-58
+  title: plugin load self-copy truncates plugin to 0 bytes
+  criteria:
+  - 'AC: loading a plugin from a path inside .vfs/plugins leaves the file byte-identical
+    (grep-free live check: write payload, hilo plugin load .vfs/plugins/x.wasm, cmp
+    with original bytes) AND plugin list still discovers it; companion AC: load from
+    outside .vfs/plugins still persists an intact copy; regression tests plugin_load_from_plugins_dir_does_not_truncate
+    + plugin_load_from_outside_still_persists_intact_copy pass in hilo-cli --test
+    cli; cargo check -p hilo-cli exit 0; cargo clippy -p hilo-cli --all-targets --
+    -D warnings exit 0'
+  status: complete
+  created_at: '2026-09-25T11:10:03.445315+00:00'
+  completed_at: '2026-09-25T11:10:19.411180+00:00'
