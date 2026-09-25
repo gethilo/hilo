@@ -653,6 +653,15 @@ no PERF row (nothing a user waits on).
 install leg: battery path FAILED (bunker-qa.sh launch on las-03: agent 8924a5dc spawned, but
 detached qa-run.sh handoff wrote a 0-byte script — "DETECT_UP_PREV_DIR: unbound variable" —
 battery never started, silent death; las-02 was DOWN: connection refused) → manual install leg
-run on the same fresh agent per skill §1-5; result recorded above after completion.
+on the same fresh agent per skill §1-5: PASS — public clone (HEAD 0e7873d), rustup minimal
+1.98.1, cargo build --release -p hilo-cli RC=0 in 25m20s (box ~1/3 the speed of prior runs),
+smoke OK on a fresh 2-file rust project (init + warm 1 edge + MCP over stdio NDJSON: init
+0.000s, tools/list 17, graph_stats correct, understand 1047B) — NOTE the smoke also proved
+hilo's fingerprint cache deliberately skips re-warm when a file's content is UNCHANGED (my
+0-edge confusion was the cache, control-test confirmed intended behavior, no row).
+my own probes confirmed: client-side tool, server clean — do NOT file the transient
+'client hang' as hilo (was my smoke script sending a NOTIFICATION through a call-response
+helper: JSON-RPC notifications get no response by design, server.rs:75).
+agent destroyed + key removed + absence verified (bunker list grep = 0).
 left behind: docs/dogfood/2026-09-25-run15-mcp-official-sdk.md, diagnostics.md Run 15 section,
 skills/hilo-usage/SKILL.md run-15 section, rows, this entry.
