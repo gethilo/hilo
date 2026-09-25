@@ -1245,3 +1245,46 @@ scaling pair (1x vs 5x corpus) to prove superlinearity, then a code read to
 name the mechanism, then a control probe (--no-symbols) that isolates the
 cost to the symbol pass. The mount.rs:99 census took one grep AFTER the
 behavioral proof — behavior first, source to explain it, never instead.
+
+## Run 22 (2026-09-25, boardctl-dogfood) — PHP + Kotlin: the untested languages hold the unfound defects, and the hook lifecycle needed two machines to break
+
+**The lesson.** Eight language-corpus runs had made "26 languages" look
+plausible; runs 9 and 21 had made the graph core look near-shippable. The
+two languages nobody had ever warmed (PHP, Kotlin) broke both impressions
+in one run. PHP's dominant reuse pattern — same-namespace class references,
+which by language design need NO import syntax — is structurally invisible
+to an extractor built on use-statements (DF-WARPFS-82): composer's most
+extended base class reports as an ORPHAN. No prior language could have
+surfaced this because only PHP makes implicit-namespace reuse dominant.
+
+The second lesson is about the test design, not the code: the git-hook
+lifecycle looked healthy for 11 runs because every run had one machine.
+Post-commit firing was taken as proof the "metadata follows commits and
+pulls" promise held. A real two-clone pull test shows post-merge consumes
+a `.vfs/.dirty` marker that NOTHING writes — GAP-087's fix removed the
+writer but left the consumer and the README promise (DF-WARPFS-83). The
+pull half of the promise never existed at runtime; it was only ever
+unexercised.
+
+**How it was probed.** grep ground truth on both corpora (import lines,
+extends lines) before believing any hilo output; the Kotlin template-file
+delta triangulated via comm vs grep + stats component census + `ignore
+check` before calling it a silent drop rather than an exclusion; the
+self-heal re-check done at 5x the fixture scale (866 files, 28.5s rebuild,
+correct counts) rather than re-running the foreman's own test.
+
+**Right way for future agents on PHP/Kotlin:**
+- impact/related: use the pkg: form (PHP backslash FQCN, Kotlin dotted
+  FQCN). File-form is silently empty (DF-WARPFS-84).
+- Never trust stats' Orphans block on PHP until DF-82 lands.
+- After a pull on any second machine, run `hilo graph warm` manually —
+  the hook will not do it (DF-WARPFS-83).
+- Kotlin warm under-reports: template .kt files under test/resources
+  contribute zero edges (DF-WARPFS-85); pkg-form impact ~98% of grep.
+
+**Cross-run family watch.** file->pkg resolution: 7 languages now
+(Go/Python/TS-JS/Java/Ruby/PHP/Kotlin) — one language-keyed resolver, not
+seven fixes. understand keyword-noise: Java (DF-35) + Kotlin (DF-86) —
+both are "extractor captures the keyword node" bugs; the fix shape is the
+same. Coverage consumption (Tests: 0.0% with real tested_by edges) has
+now been seen on Java, TS/JS, and PHP — same consumer gap, three corpora.

@@ -816,3 +816,37 @@ rows: DF-WARPFS-75..81 appended via script with census before/after + trailing-n
 read-back (board 239 -> 246, 0 bad lines, each id exactly once).
 left behind: docs/dogfood/2026-09-25-run21-c-ruby-languages-sandbox.md, diagnostics.md Run 21
 section, skills/hilo-usage/SKILL.md run-21 section, rows, this entry.
+
+date: 2026-09-25 | run 22 (boardctl-dogfood tick 2026-09-25-21-49-30) | verdict: PROMISING-BUT-ROUGH
+promise (angle by stale-surface rule — 21 runs never warmed a PHP or Kotlin corpus — languages
+9 and 10 of the 26-language claim — and never drove the git-hook lifecycle across two machines;
+run 11 proved post-commit on one machine only): structural answers on PHP/Kotlin, and "metadata
+follows commits and pulls" per README.
+reality: PHP pkg-form impact exact (Solver 2/2 == grep); Kotlin pkg-form 173/176 (98.3%); warm/
+classify/related/search plumbing healthy on both (composer 10.9s cold warm, Exposed 83.9s, 16657
+edges); post-commit hook fires on real commits and the edge is queryable immediately (best-proven
+path in the product); MCP impact == CLI; deleted graph.db on 866 files self-heals in 28.5s (DF-61/64
+fix at 5x fixture scale). BUT: PHP same-namespace reuse invisible — BaseCommand extended by 31
+classes reports 0 dependents and stats calls it an ORPHAN (DF-82 P1); post-merge hook is dead code
+— nothing writes .vfs/.dirty, a real two-machine pull leaves the graph stale silently (impact 3 vs
+4, files 456 vs 457, exit 0) and the README pull-refresh promise can never fire (DF-83 P1); file→
+pkg resolution missing on PHP+Kotlin — 6th and 7th languages in the silent-empty family (DF-84 P1);
+Kotlin template .kt files with real imports contribute zero edges (DF-85 P2); Kotlin understand
+emits bare 'fun' keyword symbols (DF-86 P3).
+time-to-first-success: ~2 min PHP (init 6ms + warm 10.9s + first exact impact), ~4 min Kotlin.
+friction count: 5 defects + 2 usability notes (related has no --max-depth flag; meta --set needs
+--value as a separate flag).
+perf (Step 2b, hyperfine, release 281b6ff, Exposed 866 files, warm n=20): stats 67.4ms ±7.5,
+impact d1 33.1ms ±3.7, search 4.84s ±0.47 (DF-76 re-parse family re-confirmed on Kotlin, --limit
+does not help); cold-db rebuild 28.5s one-time. NO PERF ROW — nothing a user waits on beyond the
+already-filed search row.
+install leg: SKIPPED (DF-WARPFS-87 P2, sixth infra incident): las-01/03/04 ssh connect-timeout
+(hosts down), las-02 reachable but bunkerd crash-looping (auto-restart exit 1/FAILURE, same TLS
+refusal DF-WARPFS-81 recorded); fair retry after 95s wait, state unchanged; battery NOT launched.
+rows: DF-WARPFS-82..87 appended via script (census 246→252, trailing-newline check, read-back
+verified) and committed SURGICALLY while a sibling lane was mid-edit of the same board (reconstruct
+HEAD+mine, commit pathspec, restore sibling state byte-exact; numstat 6/0 in commit, 8/8 restored);
+pushed 9fd04d4 (6a84efa..9fd04d4).
+left behind: docs/dogfood/2026-09-25-run22-php-kotlin-hooks.md (integration report incl. the
+two-machine hook table), diagnostics.md Run 22 section, skills/hilo-usage/SKILL.md run-22 field
+notes, rows, this entry.

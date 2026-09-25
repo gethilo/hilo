@@ -694,3 +694,27 @@ executor exists — the wiring is missing.)
   an opaque DuckDB IO error (DF-79). The fix: `rm .vfs/graph/graph.db`,
   then any command replays edges.jsonl. No doc mentions this yet.
 - Never copy a project mid-warm; stop the daemon first.
+
+### Run 22 field notes — PHP + Kotlin (2026-09-25, 281b6ff)
+
+- **PHP pkg-form impact exact on cross-namespace imports** (Solver 2/2 ==
+  grep); BUT same-namespace reuse emits zero edges (DF-82): BaseCommand
+  shows 0/31 dependents and stats calls it an orphan. Until fixed, PHP
+  blast radius is use-statement-only — know the blind spot before
+  trusting an empty answer.
+- **Kotlin pkg-form impact 173/176** (98.3%): template .kt files under
+  exposed-maven-plugin/src/test/resources contribute no edges (DF-85).
+- **File-form impact/related silently empty on PHP AND Kotlin (DF-84)** —
+  same family as Ruby (DF-78, open) and Java (fixed). Translate to pkg:
+  yourself.
+- **Pull does NOT refresh the graph (DF-83)**: nothing writes
+  `.vfs/.dirty`; post-merge is dead code. After pulling on a second
+  machine, run `hilo graph warm` manually. Post-commit DOES work (new
+  file's edge appeared immediately after `git commit`).
+- **Self-heal at scale**: deleted graph.db on 866 files rebuilt silently
+  in 28.5s on the next command — trust the replay, do not hand-rebuild.
+- **related takes no --max-depth flag** (unlike impact); **meta --set
+  needs --value** (`--set k --value v`, two flags).
+- Perf on 866-file Kotlin graph (release, warm, n=20): stats 67.4ms ±7.5,
+  impact d1 33.1ms ±3.7; search 4.84s ±0.47 (DF-76 re-parse family, use
+  --no-symbols); cold-db rebuild 28.5s one-time. Nothing new to file.
