@@ -760,3 +760,4 @@ reality: push/pull/idempotent-resync genuinely work against a real Hetzner store
 time-to-first-success: ~12 min (init→mount→setup probes fast; the 400 cost a boto3 cross-check to localize)
 rows: DF-WARPFS-65..68 | artifacts: docs/dogfood/2026-09-25-run19-backend-sync-native-s3.md, diagnostics.md Run 19, skills/hilo-usage/SKILL.md run-19
 install leg: see 2026-09-25-bunker-install.md companion (this entry updated after the leg completes)
+install leg (run 19): install_seconds=1765 | bunker=las-bunker-03 agent=e632770a (destroyed) | smoke=ok (init/warm/stats/backend-surface) | documented clone+build path held; no new install findings

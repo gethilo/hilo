@@ -48,3 +48,13 @@ here so the run is never mistaken for a silent install skip.
 | 09-20 (run 8) | las-03 | PASS | 33m45s |
 | 09-22..23 (runs 9-12) | las-02 | ENV-BLOCKED ×4 (no pkg-config/sudo) | — |
 | **this run (13)** | las-03 | **PASS** | **26m50s** |
+
+## Run 19 install leg (2026-09-25) — PASS
+agent=e632770a (destroyed), Debian 13 trixie. Documented path (git clone
+github.com/gethilo/hilo + rustup + cargo build --release -p hilo-cli):
+BUILD_SECONDS=1765 (~29m, 6 vCPU). Smoke on the fresh box: init, graph warm
+(0 edges/1 file empty-repo behavior sane), graph stats, backend setup (honest
+"credentials: not found" on a cred-less box), backend list. RC=0 throughout.
+No new install findings — docs quickstart held. Headline feature (backend
+sync) needs credentials; exercised live from the control host instead (run
+19 report).
