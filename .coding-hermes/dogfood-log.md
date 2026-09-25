@@ -665,3 +665,34 @@ helper: JSON-RPC notifications get no response by design, server.rs:75).
 agent destroyed + key removed + absence verified (bunker list grep = 0).
 left behind: docs/dogfood/2026-09-25-run15-mcp-official-sdk.md, diagnostics.md Run 15 section,
 skills/hilo-usage/SKILL.md run-15 section, rows, this entry.
+2026-09-25 | run 16 | 🟡 PROMISING-BUT-ROUGH (Go FFI consumer; P0 found on the impact path) |
+promise (angle by stale-surface rule — runs 7/8/11 touched mount/backends/Python-FFI; the Go
+consumer had never been driven end to end): a Go developer can follow hilo-ffi/README.md to
+generate Go bindings and embed libhilo_ffi.so in a real Go program that answers structural
+questions about a repo without reading files. reality: generation works, cgo links the .so,
+stats/related/listdir/metadata all match the CLI, xattr written via Go FFI reads back via
+`hilo meta` (cross-surface proof) — BUT vfs_graph_impact is CWD-DEPENDENT and SILENTLY WRONG:
+pkg-node expansion (PkgResolver::pkg_node → python_module_for_file, resolution.rs:359) walks
+the filesystem from process CWD, not the handle root, so dependents reachable only via pkg:
+nodes vanish (rc=0, 0 dependents) from any other directory. Same query: 3 dependents from
+repo root, silent 0 from elsewhere (FFI and CLI both; CLI additionally builds a WRONG node
+name pkg:terminal_jail.interruptor.parser missing the plugin. prefix from a subdir). Proven
+not the binding layer: explicit pkg: start node through the same Go bindings returns the
+correct result; raw-byte cgo probe + Python FFI cross-check isolate it to the resolver.
+P0 row DF-WARPFS-55; P2s DF-WARPFS-56 (README's Go claim inverted: cgo DOES link the .so;
+no link/rpath docs; vendored-openssl feature not on hilo_ffi) + DF-WARPFS-57 (namespace
+vfs_get/set_metadata take raw CWD-relative paths while handle methods join root — two path
+dialects in one UDL). time-to-first-success: ~15 min (documented block is incomplete; the
+missing link/rpath step is DF-WARPFS-56). friction count: 3 (1 behavioral-P0, 2 docs).
+rows: DF-WARPFS-55..57 appended + read-back verified (board 219 → 222, 0 dups, trailing-
+newline check before append), committed 6258f4d, pushed e42c833..6258f4d (guard PASS).
+perf (hyperfine, release, 57-file real graph, warm): impact d3 17.5ms ±1.1 (n=20); search
+219ms ±10 (n=20); warm incremental 15.6ms ±0.5, cold 467ms ±15 (n=10); no PERF row (nothing
+a user waits on; matches runs 12-15).
+install leg: PASS on las-03 fresh agent df1379ab (public clone e42c833 == origin HEAD,
+rustup minimal 1.98.1, cargo build --release -p hilo_ffi RC=0 in 1308s; bindgen smoke ran
+after). Go smoke NOT run in the bunker (bare Debian user, no Go toolchain, no sudo —
+installing one would have exceeded the documented install path; local Go consumer is the
+behavioral proof). agent destroyed + key removed after collect.
+left behind: docs/dogfood/2026-09-25-run16-go-ffi-consumer.md, diagnostics.md Run 16
+section, skills/hilo-usage/SKILL.md run-16 section, rows, this entry.
