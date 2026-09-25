@@ -1733,8 +1733,9 @@ tasks:
     \ as the root run; (2) cargo test -p hilo_graph --lib green; (3) fmt clean, RUSTFLAGS='-D\
     \ warnings' compile exit 0; (4) diff confined to hilo-graph/ and hilo-cli/; (5)\
     \ commit with co-author trailer"
-  status: in_progress
+  status: complete
   created_at: '2026-09-25T07:02:10.074246+00:00'
+  completed_at: '2026-09-25T13:04:36.540766+00:00'
 - id: DF-WARPFS-58
   title: plugin load self-copy truncates plugin to 0 bytes
   criteria:
