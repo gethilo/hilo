@@ -3197,6 +3197,93 @@ fn plugin_load_valid_header_persists_and_lists() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// DF-WARPFS-58 regression: `hilo plugin load <path-inside-.vfs/plugins>` used
+/// to copy the file onto itself — std::fs::copy opened the destination with
+/// O_TRUNC before reading, truncating the plugin to 0 bytes while the load
+/// reported success (rc=0). After the fix the load must leave the plugin
+/// byte-identical AND still listed by `hilo plugin list`.
+#[test]
+fn plugin_load_from_plugins_dir_does_not_truncate() {
+    let dir = unique_tempdir("plugin-load-selfload");
+    init_project(&dir);
+    let plugins = dir.join(".vfs").join("plugins");
+    fs::create_dir_all(&plugins).expect("create .vfs/plugins");
+
+    // Minimal wasm-header file (the runtime validates the \0asm magic).
+    let victim = plugins.join("victim.wasm");
+    let payload = b"\0asm\x01\x00\x00\x00DF-WARPFS-58-regression-payload".to_vec();
+    fs::write(&victim, &payload).expect("write victim.wasm");
+
+    // Load from INSIDE .vfs/plugins — the exact path docs point at.
+    let output = run_hilo_with_retry(
+        hilo_cmd()
+            .args(["plugin", "load", victim.to_str().expect("utf8 path")])
+            .current_dir(&dir),
+    );
+    assert!(
+        output.status.success(),
+        "load must exit 0, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // The file must be byte-identical, not 0 bytes.
+    let after = fs::read(&victim).expect("read back plugin");
+    assert!(
+        after == payload,
+        "loading from .vfs/plugins destroyed the plugin ({}B -> {}B)",
+        payload.len(),
+        after.len()
+    );
+
+    // And the plugin must still be discovered by plugin list.
+    let listing = run_hilo_with_retry(hilo_cmd().args(["plugin", "list"]).current_dir(&dir));
+    assert!(
+        listing.status.success(),
+        "plugin list failed: {}",
+        String::from_utf8_lossy(&listing.stderr)
+    );
+    let list_out = String::from_utf8_lossy(&listing.stdout);
+    assert!(
+        list_out.contains("victim"),
+        "plugin list lost the loaded plugin, got: {list_out}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// DF-WARPFS-58 companion: the normal persist path (load from OUTSIDE
+/// .vfs/plugins) must keep persisting an intact copy of the source bytes.
+#[test]
+fn plugin_load_from_outside_still_persists_intact_copy() {
+    let dir = unique_tempdir("plugin-load-outside");
+    init_project(&dir);
+    let source = dir.join("fresh.wasm");
+    let payload = b"\0asm\x01\x00\x00\x00outside-persist-payload".to_vec();
+    fs::write(&source, &payload).expect("write fresh.wasm");
+
+    let output = run_hilo_with_retry(
+        hilo_cmd()
+            .args(["plugin", "load", source.to_str().expect("utf8 path")])
+            .current_dir(&dir),
+    );
+    assert!(
+        output.status.success(),
+        "load must exit 0, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let persisted =
+        fs::read(dir.join(".vfs").join("plugins").join("fresh.wasm")).expect("persisted plugin");
+    assert!(
+        persisted == payload,
+        "persisted copy diverges from the source bytes"
+    );
+    assert!(
+        source.exists(),
+        "loading from outside .vfs/plugins must not delete the source"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Unit-ish tests for the concurrent-relink casualty classifier. These run
 /// entirely in-process (no binary spawn), so they pass even while a
 /// concurrent `cargo build` holds `target/debug/hilo` mid-relink.

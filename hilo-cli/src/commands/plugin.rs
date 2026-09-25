@@ -62,9 +62,41 @@ pub fn run_plugin_load(wasm_path: &str) -> Result<()> {
         .file_name()
         .ok_or_else(|| anyhow::anyhow!("plugin path has no file name: {}", wasm_path))?;
     let dest = plugins_dir.join(file_name);
-    std::fs::copy(path, &dest)
-        .with_context(|| format!("failed to persist plugin to {}", dest.display()))?;
-    println!("persisted to: {}", dest.display());
+
+    // DF-WARPFS-58: when the source already lives inside .vfs/plugins, the
+    // persist step would copy the file onto itself — std::fs::copy opens the
+    // destination with O_TRUNC before reading, destroying the plugin (0 bytes)
+    // while the load still reports success. Skip the copy when source and
+    // destination are the same file, and fail loudly if a copy ever comes up
+    // short so data loss can never look like a successful load again.
+    let same_file = match (path.canonicalize(), dest.canonicalize()) {
+        (Ok(src), Ok(d)) => src == d,
+        // Destination not created yet can never be the source; canonicalize
+        // failure on an existing source is a real probe error.
+        (Ok(_), Err(_)) => false,
+        (Err(e), _) => {
+            return Err(e)
+                .with_context(|| format!("failed to resolve plugin path {}", path.display()));
+        }
+    };
+    if !same_file {
+        let copied = std::fs::copy(path, &dest)
+            .with_context(|| format!("failed to persist plugin to {}", dest.display()))?;
+        let expected = std::fs::metadata(path)
+            .with_context(|| format!("failed to stat plugin {}", path.display()))?
+            .len();
+        if copied != expected {
+            anyhow::bail!(
+                "persisted plugin is truncated: copied {} of {} bytes to {}",
+                copied,
+                expected,
+                dest.display()
+            );
+        }
+        println!("persisted to: {}", dest.display());
+    } else {
+        println!("already in .vfs/plugins: {}", dest.display());
+    }
 
     Ok(())
 }
