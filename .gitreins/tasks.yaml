@@ -1749,3 +1749,19 @@ tasks:
   status: complete
   created_at: '2026-09-25T11:10:03.445315+00:00'
   completed_at: '2026-09-25T11:10:19.411180+00:00'
+- id: df-warpfs-61-graph-cache-self-heal
+  title: Graph cache self-heals from edges.jsonl (DF-61/DF-64)
+  criteria:
+  - 'When graph.db is missing or emptied while edges.jsonl and the reconcile stamp
+    are fresh, hilo must self-heal: (1) GraphDB::open verifies the db holds at least
+    the stamped row count and full-replays from edges.jsonl on mismatch (v3 stamp
+    carries rows; v2 stamps verified in place and upgraded without mass replay); (2)
+    a read-only open that fails verification falls back to read-write and heals; (3)
+    warm''s full-cache-hit fast path is skipped when graph.db is missing or the stamp
+    is unverifiable, so warm exits having actually rebuilt the db; (4) new unit tests
+    cover heal-from-missing-db, heal-from-empty-db, v2 upgrade, malformed-only jsonl
+    no-loop; (5) workspace gates green: fmt, clippy -D warnings, cargo test -p hilo_graph
+    --lib, hilo-cli cli suite'
+  status: complete
+  created_at: '2026-09-25T17:46:16.115136+00:00'
+  completed_at: '2026-09-25T18:17:18.409788+00:00'
