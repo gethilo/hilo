@@ -761,3 +761,32 @@ time-to-first-success: ~12 min (init→mount→setup probes fast; the 400 cost a
 rows: DF-WARPFS-65..68 | artifacts: docs/dogfood/2026-09-25-run19-backend-sync-native-s3.md, diagnostics.md Run 19, skills/hilo-usage/SKILL.md run-19
 install leg: see 2026-09-25-bunker-install.md companion (this entry updated after the leg completes)
 install leg (run 19): install_seconds=1765 | bunker=las-bunker-03 agent=e632770a (destroyed) | smoke=ok (init/warm/stats/backend-surface) | documented clone+build path held; no new install findings
+date: 2026-09-25 | run 20 | verdict: PROMISING-BUT-ROUGH
+promise: a Python service embeds Hilo through the UniFFI bindings and gets the same answers the
+CLI gives — including where a file comes from (vfs_resolve_backend) — on a project backed by a
+live S3 store.
+angle (stale-surface rule): runs 1-19 never combined the Python FFI consumer with a LIVE backend;
+run 8's "FFI backends return constants" verdict also had never been re-verified.
+reality: the embedder story is REAL — documented Python FFI recipe works from zero on a fresh
+Debian 13 box (rustup 1.98.1, 985s, FFI_PY_OK), vfs_resolve_backend returns the true mount
+(backend=s3, s3://hilo-run20/, cached=true; constants era verifiably dead), DF-WARPFS-55 CWD fix
+re-proven from a second language, and the pull→warm→FFI chain makes backend files first-class
+graph citizens. Found: --pull re-logs a LWW 'conflict' for EVERY file on EVERY sync (6 rows on a
+zero-divergence pull; DF-WARPFS-69 P1, sharpens run-19 DF-67 — root cause is the ABSENCE of sync
+state), xattrs frozen-at-mount-time with read-only writes through the mount (DF-WARPFS-70 P2),
+README backend examples omit --endpoint so MinIO users land on the DF-65 broken path (DF-71 P2),
+stats 'Total files' means files-with-edges (DF-72 P3), README install paths all assume cargo
+(DF-73 P3), las-03 /tmp residue burns fresh legs — scratch under $HOME is standing doctrine
+(DF-74 P2).
+time-to-first-success: ~15 min. friction count: 6 findings (1 P1, 4 P2, 1 P3).
+perf (release binary, warm): graph stats 19.0ms ±1.8, impact pkg:util 16.4ms ±1.2 (n=20);
+Python FFI consumer script end-to-end 231ms ±12 (n=10; import of 125MB cdylib dominates) —
+no PERF row, nothing a user waits on.
+install leg: PASS on las-03 fresh agent 0ac19284 (public clone == HEAD 075e447; rustup minimal
+1.98.1 + hilo_ffi + hilo-cli debug builds + smoke init/warm/stats + python FFI consumer
+FFI_PY_OK, INSTALL_SECONDS=985; libfuse3-4 present-by-default claim VERIFIED on stock Debian 13).
+Attempts 1-2 burned by /tmp residue (DF-WARPFS-74). agent destroyed + key removed (DESTROY_RC=0).
+rows: DF-WARPFS-69..74 appended + read-back verified (board 233 -> 239, 0 malformed, trailing
+newline checked before append, +6 numstat exactly).
+left behind: docs/dogfood/2026-09-25-run20-python-ffi-backend.md, diagnostics.md Run 20 section,
+skills/hilo-usage/SKILL.md run-20 section, rows, this entry.

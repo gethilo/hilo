@@ -1109,3 +1109,53 @@ cross-check failures with a second client (boto3) before blaming the network; ve
 grep-counting its enablement line, not by trusting "triggers enabled, N active"; and read
 conflicts.jsonl after every sync — a ledger that grows during a no-conflict session is the
 finding.
+
+## Run 20 — 2026-09-25 (coding-hermes-tools-dogfood, Python FFI × live backend): the embedder's view is finally real, and the ledger lies faster than before
+
+Full report: docs/dogfood/2026-09-25-run20-python-ffi-backend.md. Angle: the
+one surface combination no run had touched — the Python UniFFI consumer driven
+against a project with a LIVE MinIO backend, with CLI cross-checks on every
+answer.
+
+**How the surfaces were made to agree.** The backend was stood up from the
+repo's own docker-compose.yml (MinIO RELEASE.2025-09-07, bucket created with
+`mc` inside the container — an independent client kept as ground truth for
+every sync claim). The mount was created purely through the documented CLI
+(`backend mount --type s3 --bucket hilo-run20 --endpoint http://127.0.0.1:9000
+--at s3data`), then the FFI was asked the question run 8 proved unanswerable:
+`vfs_resolve_backend("s3data/src/lib.rs")`. Answer came back
+`backend=s3, remote_url=s3://hilo-run20/, cached=true` — the constants era is
+verifiably dead (DF-WARPFS-12-era rewrites did the work; nobody had checked).
+
+**DF-WARPFS-55's CWD fix, re-proven from a second language.** Run 16 proved
+the fix from Go; run 20 proved it from Python: embedding process at /tmp,
+`HiloHandle(absolute_root)`, stats and impact identical to the CLI at the repo
+root. The handle-root design (constructor takes the repo, no ambient CWD) is
+what makes both proofs trivially possible — the earlier raw-path namespace
+functions (DF-WARPFS-57) remain the awkward half.
+
+**The pull→graph→FFI chain, and the two lies found in it.** A remote-only file
+dropped into MinIO, `backend sync --pull`, `graph warm --changed`, then FFI
+impact: the file joined the graph and dependents resolved correctly — backend
+files are first-class graph citizens, the thing the broken §7.1 hook (DF-66)
+prevents happening automatically. But the same pull printed "6 conflicts
+recorded" on a workspace that had diverged NOWHERE (push → pull, seconds
+apart, identical mtimes): the LWW planner keeps no sync state, so it re-litig
+ates the full key set every sync and logs routine RemoteWins decisions as
+conflicts (DF-WARPFS-69, P1). Run 19's DF-67 was 3 rows; the growth is
+per-sync-full-set. The lesson stands but the diagnosis is sharper now: it is
+not over-logging of edge cases, it is the ABSENCE of sync state.
+
+**Metadata through a mount is a frozen snapshot (DF-WARPFS-70).** CLI sets
+`user.vfs.role=library`; the mount started afterwards does not see it; writes
+through the mount are refused (read-only). While a mount is up, the README's
+headline surface is read-only and stale. Root cause shape: the daemon loads
+its xattr view at startup instead of passing host xattrs through at getattr —
+the same "state at startup" class as run 18's trigger cold-start bug.
+
+**Fresh-box economics.** The FFI recipe (bindgen → debug build → rename →
+import) ran from zero on stock Debian 13 in 985s including rustup minimal;
+libfuse3-4 present-by-default claim VERIFIED. Two install attempts were burned
+by las-03's /tmp residue (stale uid-1004 files → Permission-denied redirects
+that masquerade as build failures — BUILD_RC=1 with 0 crates compiled), hence
+DF-WARPFS-74: scratch under $HOME, always.

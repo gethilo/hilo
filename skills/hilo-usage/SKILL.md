@@ -594,3 +594,49 @@ Pitfalls (rows 65-68):
 Recommended auth for scripted runs until 65 fixes: export static env creds
 (never commit them) or keep AWS_PROFILE for the aws CLI but expect hilo's
 endpoint client to ignore it.
+
+## Python FFI consumer × live backend — the working recipe (run 20, 2026-09-25)
+
+The embedder story is real now. Verified end-to-end on a fresh Debian 13 box
+and on the dev host (HEAD 075e447):
+
+```bash
+cd hilo-ffi
+cargo run -p hilo_ffi --bin uniffi-bindgen -- generate src/hilo.udl \
+  --language python --no-format --out-dir /tmp/bind/python   # repo's own generator
+cargo build -p hilo_ffi                                       # debug, ~8s warm
+cp target/debug/libhilo_ffi.so /tmp/bind/python/libuniffi_hilo.so  # the rename step
+```
+
+```python
+import sys, os
+sys.path.insert(0, "/tmp/bind/python")
+h = hilo.HiloHandle("/abs/repo")          # CWD-independent (DF-55 fix holds from Python too)
+h.vfs_graph_stats()                        # total_edges honest; total_files = files WITH edges (DF-72)
+h.vfs_graph_impact("pkg:util", 3)          # matches CLI, incl. backend-pulled files
+h.vfs_resolve_backend("s3data/src/lib.rs") # REAL since the DF-12 era: backend='s3',
+                                           # remote_url='s3://bucket/', cached=True — verify
+                                           # with `cat .vfs/backends/mounts.yaml` first
+hilo.vfs_get_metadata("/abs/repo/src/lib.rs", "user.vfs.role")
+```
+
+Backend bring-up that works with MinIO (README omits --endpoint, DF-71):
+`hilo backend mount --type s3 --bucket B --endpoint http://127.0.0.1:9000 --at s3data`
+then `hilo backend sync --push`. Remote-only file → `--pull` → `graph warm
+--changed` → the file is in the graph and FFI-visible.
+
+Run-20 gotchas:
+1. xattrs are FROZEN at mount time (DF-70): set metadata BEFORE `hilo mount`,
+   or you cannot see it through the mount; writes through the mount are
+   read-only. Metadata is a pre-mount step.
+2. conflicts.jsonl grows per-sync-full-set (DF-69): after N syncs expect ~6N
+   rows on a clean workspace. Ground truth = the `mc`/aws listing, never the
+   ledger.
+3. stats' "Total files" counts files with edges only (DF-72); the warm
+   coverage line has the real discovered count.
+4. bunker las-03 fresh legs: scratch under $HOME ALWAYS (DF-74) — /tmp
+   carries prior-agent uid residue and Permission-denied redirects read as
+   BUILD_RC=1 with 0 crates compiled.
+5. graph numbers: `graph stats` 19ms, `graph impact` 16ms warm (release,
+   2-file fixture, n=20); Python FFI script end-to-end 231ms (import of the
+   125MB cdylib dominates). Nothing a user waits on.
