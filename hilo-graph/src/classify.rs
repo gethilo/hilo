@@ -92,7 +92,21 @@ pub fn classify_file(
         });
     }
 
-    // 3. Entrypoint detection by filename convention
+    // 3. Benchmark framework files: a main() in a benchmark/ metrics
+    //    directory drives a benchmark harness, not an application
+    //    (DF-WARPFS-36: Caliper-style runner mains in gson metrics/ were
+    //    tagged entrypoint). Matched before the AST entrypoint check so the
+    //    harness main never wins.
+    if is_benchmark_file(file_path) {
+        return Ok(Classification {
+            role: "benchmark".into(),
+            status: "stable".into(),
+            reason: "benchmark framework file (path convention)".into(),
+            feature: None,
+        });
+    }
+
+    // 4. Entrypoint detection by filename convention
     if is_entrypoint_by_name(file_path) {
         return Ok(Classification {
             role: "entrypoint".into(),
@@ -102,7 +116,7 @@ pub fn classify_file(
         });
     }
 
-    // 4. Crate/module root convention: lib.rs is the library crate root;
+    // 5. Crate/module root convention: lib.rs is the library crate root;
     //    mod.rs is a module root (src/mod.rs = crate root module, nested
     //    dirs = module roots). Both are library surface, never entrypoints —
     //    even when they contain few `pub fn` items (macro/re-export walls
@@ -116,7 +130,7 @@ pub fn classify_file(
         });
     }
 
-    // 5. AST-based detection for main functions and library markers
+    // 6. AST-based detection for main functions and library markers
     let mut parser = TsParser::new();
     let ts_lang = language_to_ts(language);
     parser
@@ -139,7 +153,7 @@ pub fn classify_file(
         });
     }
 
-    // 5b. Canonical entry symbols (GAP-099): frameworks expose their
+    // 6b. Canonical entry symbols (GAP-099): frameworks expose their
     // "where do I start" surface as canonical named symbols rather than a
     // main function — Go constructor sets (New/Default/Run, e.g. gin.go)
     // and Python application classes (class Flask). A file declaring them
@@ -708,6 +722,22 @@ fn is_build_script(path: &str) -> bool {
     lower.ends_with("build.rs") || lower.ends_with("build.zig")
 }
 
+// ── Benchmark file detection ────────────────────────────────────────
+
+/// Benchmark-harness files (DF-WARPFS-36): a `main()` inside a benchmark
+/// directory drives a benchmark framework (JMH, Caliper, google-benchmark),
+/// not the application. Directory components checked for exact equality so
+/// `mybenchmarks/` or `benchmark_utils/` never match. Matches AFTER test
+/// detection: a *Test.java under benchmarks/ stays `test`.
+fn is_benchmark_file(path: &str) -> bool {
+    path.split(['/', '\\']).any(|comp| {
+        matches!(
+            comp.to_lowercase().as_str(),
+            "benchmark" | "benchmarks" | "metrics"
+        )
+    })
+}
+
 // ── Crate/module root detection ─────────────────────────────────────
 
 /// `lib.rs` = library crate root; `mod.rs` = module root (either the
@@ -1220,8 +1250,44 @@ fn has_js_exports(node: tree_sitter::Node, source: &[u8]) -> bool {
 }
 
 fn has_java_public(node: tree_sitter::Node, source: &[u8]) -> bool {
+    // Modifier chain aware (DF-WARPFS-36): `public final class Gson`,
+    // `public abstract class ...`, `public static class ...` and
+    // `public final enum`/`record` declarations are all public API
+    // surface — a literal `public class` substring misses them. Only
+    // `public`-prefixed declaration lines count: a `private static class`
+    // member is not API (checked per line so nested members inside a
+    // package-private top-level class still mark the file as library).
     let text = node.utf8_text(source).unwrap_or("");
-    text.contains("public class") || text.contains("public interface")
+    for line in text.lines() {
+        let line = line.trim_start();
+        if !line.starts_with("public ") {
+            continue;
+        }
+        let after_visibility = line.split_once(' ').map(|(_, rest)| rest).unwrap_or("");
+        let head: String = after_visibility
+            .split_whitespace()
+            .take_while(|tok| {
+                matches!(
+                    *tok,
+                    "static" | "final" | "abstract" | "sealed" | "non-sealed" | "strictfp"
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        let rest = after_visibility
+            .strip_prefix(&head)
+            .unwrap_or(after_visibility)
+            .trim_start();
+        if rest.starts_with("class ")
+            || rest.starts_with("interface ")
+            || rest.starts_with("enum ")
+            || rest.starts_with("record ")
+            || rest.starts_with("@interface ")
+        {
+            return true;
+        }
+    }
+    false
 }
 
 fn has_c_header_fns(node: tree_sitter::Node, source: &[u8]) -> bool {
@@ -2032,5 +2098,66 @@ mod tests {
             ],
             "{symbols:?}"
         );
+    }
+
+    #[test]
+    fn test_java_public_api_modifier_chain() {
+        // DF-WARPFS-36: `public final class Gson` and friends are public API
+        // surface; the old literal `public class` substring check missed them.
+        let modified = "public final class Gson {\n}\n";
+        let c = classify_file(Language::Java, "gson/src/main/java/Gson.java", modified).unwrap();
+        assert_eq!(c.role, "library", "reason: {}", c.reason);
+        let abstract_class = "public abstract class JsonElement {\n}\n";
+        let c = classify_file(
+            Language::Java,
+            "src/main/java/JsonElement.java",
+            abstract_class,
+        )
+        .unwrap();
+        assert_eq!(c.role, "library", "reason: {}", c.reason);
+        let iface = "public interface TypeAdapter<T> {\n  T read();\n}\n";
+        let c = classify_file(Language::Java, "src/main/java/T.java", iface).unwrap();
+        assert_eq!(c.role, "library", "reason: {}", c.reason);
+    }
+
+    #[test]
+    fn test_java_public_api_nested_and_member_declarations() {
+        // Nested `public static class` members and package-private classes
+        // still classify: the nested one is public API, the private one is not.
+        let nested = "class Outer {\n  public static class Inner {\n  }\n}\n";
+        let c = classify_file(Language::Java, "src/main/java/Outer.java", nested).unwrap();
+        assert_eq!(c.role, "library", "reason: {}", c.reason);
+        let private_only = "class P {\n  private static class Q {\n  }\n}\n";
+        let c = classify_file(Language::Java, "src/main/java/P.java", private_only).unwrap();
+        assert_eq!(c.role, "unknown", "reason: {}", c.reason);
+    }
+
+    #[test]
+    fn test_benchmark_path_beats_main() {
+        // DF-WARPFS-36: a main() under a benchmark/metrics directory drives
+        // the harness, not the application.
+        let bench =
+            "public class ParseBenchmark {\n  public static void main(String[] args) {}\n}\n";
+        let c = classify_file(
+            Language::Java,
+            "metrics/src/main/java/ParseBenchmark.java",
+            bench,
+        )
+        .unwrap();
+        assert_eq!(c.role, "benchmark", "reason: {}", c.reason);
+        // Bench-path test files stay `test` (test detection runs first).
+        let bench_test = "public class ParseBenchTest {\n}\n";
+        let c = classify_file(
+            Language::Java,
+            "benchmarks/src/test/java/ParseBenchTest.java",
+            bench_test,
+        )
+        .unwrap();
+        assert_eq!(c.role, "test", "reason: {}", c.reason);
+        assert!(is_benchmark_file("a/benchmark/x.java"));
+        assert!(is_benchmark_file("a\\Benchmarks\\x.java"));
+        assert!(!is_benchmark_file("a/benchmarks_extra/x.java"));
+        assert!(!is_benchmark_file("a/src/main/java/M.java"));
+        // (negative assertions check component equality, not substring)
     }
 }
