@@ -850,3 +850,37 @@ pushed 9fd04d4 (6a84efa..9fd04d4).
 left behind: docs/dogfood/2026-09-25-run22-php-kotlin-hooks.md (integration report incl. the
 two-machine hook table), diagnostics.md Run 22 section, skills/hilo-usage/SKILL.md run-22 field
 notes, rows, this entry.
+date: 2026-09-25 | run 23 (warpfs-dogfood tick 2026-09-25-22-29-27) | verdict: PROMISING-BUT-ROUGH
+promise (angle by stale-surface rule — 22 runs had covered 9 of 26 languages, never the functional
+family): real Elixir/Haskell/Erlang/Elm corpora warmed and blast-radius-verified — languages 10-13
+of the 26-language claim.
+reality: the plumbing layer is language-uniform and fast (impact 25-35ms on ~200-file corpora,
+warm 0.2-10.3s), but every extractor carries its own defect the plumbing cannot see. Elm is
+EXACT (pkg:Api 17/17 == grep) — the hand-rolled import extractor matches the real
+tree-sitter-elm grammar, a genuine positive. Elixir use/import/alias edges are real but the
+qualified-call form (Plug.Conn.put_status, %Plug.Conn{}) is invisible: impact 34/44 = 77% recall
+(DF-88... see rows). Erlang is the worst: warm green at 6% coverage — include-attributes only,
+and the BSD license header's '"AS IS"' substring leaks into the graph as a local:AS IS node with
+16 phantom edges including bogus tested_by (DF-WARPFS-88 P1; extractor does substring contains()
++ raw quote-pair scan instead of node-kind filtering, parser.rs ~1082). Haskell family expansion
+is asymmetric: pkg:PostgREST.Config impact = 57 vs 26 grep-direct importers — 31 transitive
+extras AND 4 real child-module importers MISSING (DF-WARPFS-90 P1, wrong in both directions at
+once). Plus: Elixir P1 (DF-89), Erlang coverage P2 (DF-91), search --limit post-filter
+re-confirmed on 5th/6th language 445ms==448ms (DF-WARPFS-92 P2, no new perf row — the standing
+DF-76 row already carries it).
+time-to-first-success: ~2 min Elm (init+warm 0.9s + exact impact), ~3 min Elixir, ~12 min Haskell
+(warm 10.3s + ground-truth diff work).
+friction count: 5 defects; 0 usability notes (help/forms stayed honest everywhere).
+perf (Step 2b, hyperfine, release 281b6ff-dirty, warm): impact pkg:PostgREST.Config 34.0ms ±2.6
+(n=10, 204-file corpus); search 448.2ms ±9.2 (n=5); search --limit 5 445.3ms ±8.4 (n=3) — no
+PERF row: nothing a user waits on beyond the already-filed DF-76 search family.
+install leg: SKIPPED (DF-WARPFS-93 P2, 7th infra incident): las-01/03/04 ssh connect-timeout,
+las-02 reachable but bunkerd crash-looping (activating, ExecStart exit 1/FAILURE — unchanged
+from run 22 / DF-WARPFS-81); fair retries after 95s and 60s waits, state unchanged;
+'bunker list --server bunker-las-02' → connection refused; battery NOT launched.
+rows: DF-WARPFS-88..93 appended via /tmp script with census before/after (252→258), duplicate-id
+assertions, fsync, read-back verify — 0 bad lines, each id exactly once.
+left behind: docs/dogfood/2026-09-25-run23-functional-languages.md (integration report incl.
+per-language trust table), diagnostics.md Run 23 section, skills/hilo-usage/SKILL.md run-23
+field notes, rows, this entry.
+

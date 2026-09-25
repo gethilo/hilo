@@ -1288,3 +1288,53 @@ seven fixes. understand keyword-noise: Java (DF-35) + Kotlin (DF-86) —
 both are "extractor captures the keyword node" bugs; the fix shape is the
 same. Coverage consumption (Tests: 0.0% with real tested_by edges) has
 now been seen on Java, TS/JS, and PHP — same consumer gap, three corpora.
+Comment-text leakage into the graph: Erlang "AS IS" (DF-88) joins the
+Kotlin `fun` family (DF-35/86) — substring/keyword capture instead of
+node-kind filtering is the shared root cause.
+
+## Run 23 (2026-09-25, warpfs-dogfood tick 2026-09-25-22-29-27) — functional languages (Elixir/Haskell/Erlang/Elm)
+
+**What was being verified and why.** 22 runs had covered 9 of 26 languages,
+never one of the functional family. Run 23 warmed four real corpora: plug
+(Elixir), postgrest (Haskell), cowboy (Erlang), elm-spa-example (Elm) at
+HEAD d410fa8, local release build v0.3.0-108-g281b6ff-dirty.
+
+**Errors hit, in order, and what each taught:**
+
+1. `git clone github.com/elm/elm-spa-example` → "Repository not found" —
+   the repo lives under rtfeldman/. Lesson: verify clone URLs before
+   probing (a missing corpus is not a product defect, but a wasted probe
+   cycle).
+2. Erlang warm on cowboy: "34 edges across 11 files" of 189 — green exit,
+   near-empty graph. The coverage line ("178 no imports") *looks* like a
+   legitimate exclusion report; it is actually the extractor's poverty
+   (include attributes only, DF-91). Lesson: a green warm with low
+   coverage is a finding, not a shrug — compare the coverage line to what
+   the language guarantees structurally.
+3. `local:AS IS` appearing in edges.jsonl was initially suspicious of a
+   parser crash; triangulated by grepping the source files for the token
+   — line 7 of every BSD-header file. The extractor substring-matches
+   include nodes and quote-pair-scans raw text, so comment text leaks
+   (DF-88). Lesson: when a graph node contains a natural-language phrase,
+   grep the corpus for the phrase before blaming the query layer.
+4. Elixir impact 34 vs grep 44: first diff included false "misses" — files
+   that define `defmodule Plug.Conn.*` themselves. Recomputed ground
+   truth excluding definers (44), then confirmed the remaining 14 misses
+   all use direct qualified calls (`Plug.Conn.put_status`,
+   `%Plug.Conn{}`) with no import clause (DF-89). Lesson: grep ground
+   truth needs a definers-exclusion pass or you file a wrong number.
+5. Haskell impact 57 vs grep 26: both directions wrong at once — 31
+   transitive extras AND 4 missing real child-module importers
+   (`import PostgREST.Config.PgVersion` files absent from
+   `pkg:PostgREST.Config` impact). Lesson: family expansion must be
+   checked for symmetric semantics, not just recall.
+
+**Right way for future agents on the functional family:**
+- Elm: trust it (17/17 exact). Elixir/Haskell: use pkg: form, verify
+  headline impact against grep before acting (blind spots DF-89/90).
+- Erlang: the graph is include-attributes-only today; do not use it for
+  structure (DF-91), and beware comment-text nodes (DF-88).
+- search --limit does not reduce work on any tested language (5th/6th
+  confirmation, DF-92); use --no-symbols per run 22.
+- Impact/related latency stays in the 25–35ms class on 200-file corpora
+  across all four languages — the speed promise is extractor-independent.

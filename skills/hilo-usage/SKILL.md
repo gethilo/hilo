@@ -718,3 +718,25 @@ executor exists — the wiring is missing.)
 - Perf on 866-file Kotlin graph (release, warm, n=20): stats 67.4ms ±7.5,
   impact d1 33.1ms ±3.7; search 4.84s ±0.47 (DF-76 re-parse family, use
   --no-symbols); cold-db rebuild 28.5s one-time. Nothing new to file.
+
+### Run 23 field notes — functional family: Elixir, Haskell, Erlang, Elm (2026-09-25, d410fa8)
+
+- **Elm is the trust champion so far**: `pkg:Api` impact 17/17 == grep
+  (warm 0.86s, 335 edges / 34 files). Use pkg: form freely.
+- **Elixir**: use/import/alias → exact pkg: edges; BUT qualified-call
+  references (`Plug.Conn.put_status`, `%Plug.Conn{}`) are invisible —
+  impact pkg:Plug.Conn = 34/44 real dependents (DF-89). Also expect a
+  literal `pkg:unquote(target)` edge from `use Mod` with variable target.
+- **Haskell**: extraction thorough (2727 edges / 204 files) but family
+  expansion is asymmetric — pkg:PostgREST.Config impact = 57 with 31
+  transitive extras AND 4 missing real importers (DF-90). Verify against
+  grep before acting on a Haskell blast radius.
+- **Erlang**: warm is green but the graph is include-only (6% coverage,
+  DF-91) and comment text leaks into nodes: `local:AS IS` from BSD
+  headers has 16 phantom edges (DF-88). Do not use Erlang graphs for
+  structure yet.
+- **search --limit is a post-filter everywhere** (445ms == 448ms on
+  postgrest; 5th/6th language for DF-76). Use --no-symbols.
+- Impact latency holds at 25–35ms on ~200-file corpora in all four
+  languages; warm in 0.2–10.3s. The speed layer is not the problem —
+  each extractor is.
