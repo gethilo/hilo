@@ -838,6 +838,34 @@ instead. One server outage should not cost a whole dogfood tick its install
 leg — the skill's designated fallback (las-03) is the working answer; the
 qa script only knows one server.
 
+## Run 15 (2026-09-25, MCP server via the OFFICIAL SDK): the integration path a real agent uses
+
+Run 12 drove 8/17 tools with a hand-rolled subprocess NDJSON client. Run 15 drove the
+REMAINING 9 (related, module, understand-natural-tasks, list_directory, workspace
+ephemeral/wipe, backend status/sync, rule_check) through the official `mcp` Python SDK —
+the exact stack Claude Code / Hermes integrations use. Verdict: SHIPPABLE.
+
+- **Schemas served to the client are accurate** (`module_name`, `name`, `task`+`budget`/
+  `resolution`) — a real integration never guesses arg names. The spec §11 doc is what
+  lies (DF-WARPFS-52): it still says `module`/`rule_name`, omits `task`, and shows
+  response wrappers the tools don't emit (`related` returns a bare edge list, not
+  `{files:[...]}`).
+- `vfs_graph_related` returns a flat LIST of edge objects
+  `{from,to,relation,confidence,provenance,scope}` — parse accordingly.
+- `test_coverage_pct: 0.0` on a Rust module is BY DESIGN (graph.rs:1905: `.rs` files are
+  excluded from node-rule coverage because pkg: nodes are Cargo crates — one crate-root
+  `tested_by` edge would mark a whole `src/` covered). Do not file this; Go/Python repos
+  get real percentages.
+- DF-WARPFS-41 (list_directory silent-empty) is FIXED — verified live on this run.
+- `understand` anchor recall drops on one-generic-word tasks ("workspace" → 3 anchors, all
+  correct but few). Use a 3-6 word concrete task ("trigger debounce", "parse edges
+  duckdb") — recall is excellent there (DF-WARPFS-53 asks for worked examples in help).
+- SSE transport does NOT exist despite spec §11/manifest (`hilo serve` = clap error,
+  `--mcp` is the only mode). stdio only.
+- No-project: exits 1 with `run 'hilo init' first` — clean contract.
+- Numbers: understand 186 ms ± 8 warm (n=12) on a 110-file repo; handshake 0.01 s;
+  warm 2.24 s; zero non-JSON stdout bytes across all sessions.
+
 ## Run 14 — 2026-09-24 (task-router-dogfood, workspace / multi-repo surface)
 
 **The surface nobody had ever driven:** `hilo workspace mount|unmount|sync|

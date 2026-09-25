@@ -418,3 +418,32 @@ rejected, `auto_pull` is an integer of SECONDS not a boolean, and repos[] do
 nothing without explicit mounts[] entries. `graph warm --workspace` from the
 workspace root silently covers 0 files. Single-repo surfaces (CLI, graph,
 MCP, FUSE mount, classify) remain the trustworthy paths — runs 7-13.
+
+## Run 15 (2026-09-25, MCP over the official SDK): drive it like a real client
+
+```python
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+p = StdioServerParameters(command="hilo", args=["serve", "--mcp"], cwd="<warmed repo>")
+async with stdio_client(p) as (r, w):
+    async with ClientSession(r, w) as s:
+        await s.initialize()                      # protocolVersion 2024-11-05
+        tools = await s.list_tools()              # exactly 17, schemas accurate
+        res = await s.call_tool("vfs_graph_understand",
+                                {"task": "trigger debounce", "budget": 6000})
+```
+
+Rules learned this run:
+- Arg names come from the SERVED SCHEMAS, not spec §11 (`module_name`, `name`,
+  `task`; §11 is stale — DF-WARPFS-52). `tools/list` is the contract.
+- `vfs_graph_related` → flat list of edge objects (no `{files:...}` wrapper).
+- `vfs_graph_understand` wants a 3-6 word CONCRETE task; one generic word returns
+  few anchors (works, but recall scales with specificity — "trigger debounce"
+  anchored 7/7 right files, "workspace" only 3).
+- `test_coverage_pct` is always 0.0 for Rust modules BY DESIGN (Cargo-crate
+  granularity); don't misread it as "no tests".
+- `vfs_sync_backend` refuses unmanaged local paths (use `hilo backend sync`);
+  `vfs_workspace_ephemeral/wipe` operate on the LOCAL tree and work fine — the
+  run-14 workspace-mount defects don't apply to them.
+- SSE does not exist; stdio is the only transport. Outside a Hilo project the
+  server exits 1 telling you to run `hilo init`.

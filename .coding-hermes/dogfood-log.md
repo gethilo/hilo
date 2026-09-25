@@ -630,3 +630,29 @@ verified (board 210 → 214, 0 dups) and committed f6f46e6, pushed
 (f9223b9..f6f46e6). left behind: docs/dogfood/2026-09-24-run14-workspace-integration.md,
 diagnostics.md Run 14 section, skills/hilo-usage/SKILL.md run-14 section. perf:
 mount 111ms cold, unmount 10.0ms ±0.6 — no PERF row (nothing a user waits on).
+2026-09-25 | run 15 | ✅ SHIPPABLE (MCP surface, official-SDK integration path) | promise: a user
+can hilo init a real repo, warm the graph, point any MCP client at `hilo serve --mcp` and get
+17 working vfs_* tools | angle: run 12 drove 8/17 tools with a hand-rolled NDJSON client; run 15
+drove the remaining 9 (related, module, understand-natural-tasks, list_directory,
+workspace ephemeral/wipe, backend status/sync, rule_check) through the official `mcp` Python
+SDK (StdioServerParameters/ClientSession — the stack real integrations use), plus protocol
+layer: initialize 2024-11-05, honest serverInfo 0.3.1-dev, ACCURATE served schemas, clean
+stdout, clean no-project exit(1). DF-WARPFS-41 fix VERIFIED live (list_directory returns
+entries; was 7/7 silent-empty in run 12). time-to-first-success: <1 min (init 12ms + warm
+2.24s + handshake 0.01s); friction count: 2 (both documentation, not behavior).
+rows: DF-WARPFS-53 (spec §11 drift: arg names + response shapes + phantom SSE transport —
+doc lies where code is right), DF-WARPFS-54 (understand anchor recall on one-word tasks —
+worked examples wanted in tool description). Appended + read-back verified (board 217 → 219,
+each id once, numstat 2/0); first append attempt with duplicate id 52 was CAUGHT by the
+read-back verify and rolled back before commit (restore board, re-id, re-append).
+not a defect, checked and cleared: test_coverage_pct=0.0 on Rust modules is by design
+(graph.rs:1905 crate-granularity exclusion); main.rs listed as orphan is correct (no
+dependents for a bin entrypoint).
+perf: understand 186ms ±8 warm (n=12), 187ms first-ever; handshake 0.01s; warm 2.24s;
+no PERF row (nothing a user waits on).
+install leg: battery path FAILED (bunker-qa.sh launch on las-03: agent 8924a5dc spawned, but
+detached qa-run.sh handoff wrote a 0-byte script — "DETECT_UP_PREV_DIR: unbound variable" —
+battery never started, silent death; las-02 was DOWN: connection refused) → manual install leg
+run on the same fresh agent per skill §1-5; result recorded above after completion.
+left behind: docs/dogfood/2026-09-25-run15-mcp-official-sdk.md, diagnostics.md Run 15 section,
+skills/hilo-usage/SKILL.md run-15 section, rows, this entry.
