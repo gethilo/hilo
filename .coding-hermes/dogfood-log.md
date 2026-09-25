@@ -754,3 +754,9 @@ commit 71aef37); renumbered to run 18 with row ids 61+, committed only my files 
 rows: DF-WARPFS-61..64 appended + read-back verified (board 225 -> 229, 0 dups, trailing-newline
 check before append). left behind: docs/dogfood/2026-09-25-run18-cross-surface.md, diagnostics.md
 Run 18 section, skills/hilo-usage/SKILL.md run-18 section, rows, this entry.
+date: 2026-09-25 | run 19 | verdict: PROMISING-BUT-ROUGH
+promise: a user can mount an S3 backend and keep a workspace mirrored with `hilo backend sync` (+ auto-sync via `mount --triggers`).
+reality: push/pull/idempotent-resync genuinely work against a real Hetzner store with good plan disclosure and no ping-pong; but AWS_PROFILE auth hits an opaque 400 (empty-credential signing, DF-WARPFS-65), `mount --triggers` panics in SyncHook::new and the §7.1 sync hook silently never enables (DF-WARPFS-66), the conflicts ledger logs routine LWW resolutions as conflicts (DF-WARPFS-67), and --pull over-transfers (DF-WARPFS-68).
+time-to-first-success: ~12 min (init→mount→setup probes fast; the 400 cost a boto3 cross-check to localize)
+rows: DF-WARPFS-65..68 | artifacts: docs/dogfood/2026-09-25-run19-backend-sync-native-s3.md, diagnostics.md Run 19, skills/hilo-usage/SKILL.md run-19
+install leg: see 2026-09-25-bunker-install.md companion (this entry updated after the leg completes)

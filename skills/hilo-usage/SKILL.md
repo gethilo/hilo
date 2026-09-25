@@ -555,3 +555,42 @@ Perf (release, 4-file fixture): impact d3 33.5ms ±6.8 warm, 1.54s ±0.74
 cold (deleted db — the DF-WARPFS-61/64 recovery gap in numbers); warm
 cached 8.7ms ±0.5; MCP spawn+init+impact median 20ms; fresh-box
 rustup+build 1493s on 6 vCPU.
+
+## Run 19 (2026-09-25) — backend sync suite: what works, what bites
+
+Working end-to-end against a real S3-compatible store (verified Hetzner hel1,
+dedicated prefix): `backend setup` (honest engine/cred/tool table + next
+steps), `backend mount --type s3 --tool native` + `backend list`, `backend
+sync --push/--pull/--both` with per-plan endpoint/bucket/region disclosure,
+default ignores skipping `target/`, no ping-pong on repeated `--both`
+(equal-mtime tie-break holds), mtime alignment after transfers.
+Timings: first push 6.3s cold, incremental 2.5s, no-op --both 0.66s.
+
+Pitfalls (rows 65-68):
+1. Explicit-endpoint S3 mounts read credentials ONLY from
+   AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY env vars. AWS_PROFILE /
+   shared-credentials-file auth → opaque `InvalidArgument (400): service
+   error` from empty-credential signing, while `backend setup` says
+   "credentials: found" (it checks the whole chain). Cross-check with any
+   second S3 client to localize (DF-WARPFS-65).
+2. `hilo mount --triggers` on a workspace with a backend mount panics
+   (runtime-in-runtime, s3.rs:1125) inside SyncHook::new; the mount still
+   comes up and prints "triggers enabled, N active", but the §7.1 sync hook
+   is silently absent — grep the stderr for the panic and for
+   "backend sync hook enabled" (count 0 = hook never enabled)
+   (DF-WARPFS-66).
+3. `hilo mount` is READ-ONLY by default; only the §8 stream-mode branch
+   flips read_only=false. Writes through the mount fail with
+   "Read-only file system" — edit the underlying tree instead
+   (undocumented; part of DF-WARPFS-66's scope).
+4. `.vfs/sync/conflicts.jsonl` records routine LWW resolutions
+   (LocalWins/RemoteWins/equal) as "conflicts" — N conflicts recorded on a
+   clean push is normal today; only mtime+size divergence matters
+   (DF-WARPFS-67).
+5. `--pull` reports transfers for the whole union (local-only files
+   included); reconcile against the remote listing, not the summary
+   (DF-WARPFS-68).
+
+Recommended auth for scripted runs until 65 fixes: export static env creds
+(never commit them) or keep AWS_PROFILE for the aws CLI but expect hilo's
+endpoint client to ignore it.

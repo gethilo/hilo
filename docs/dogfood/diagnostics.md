@@ -1060,3 +1060,52 @@ cache skipped. (3) Mount OUTSIDE the project tree on stock boxes until
 DF-WARPFS-63 has a diagnosis. (4) The regression test that would pin all
 of this: warm → start trigger mount → edit immediately → poll stats 10×
 → assert every poll equals the distinct edge count of edges.jsonl.
+
+## Run 19 — 2026-09-25 (warpfs-dogfood): the backend sync suite's first real remote
+
+**How the sync stack is built, and why run 19 found what it found.** The GAP-55 sync engine
+is three layers: (1) a driver per backend kind (native S3 = aws-sdk-s1 wrapped in a
+hand-rolled current-thread tokio Runtime so the sync API can stay blocking; external tools =
+rclone et al. invoked as subprocesses), (2) a planner (`planner.rs`) that walks local keys and
+remote keys, compares sizes + mtimes, and resolves every difference by last-writer-wins with
+the §13.9 tie-breaks (equal → push-on-Push/pull-on-Pull/no-op-on-Both; deletes push-only),
+and (3) `execute_sync` which performs transfers, aligns mtimes after each one (the ping-pong
+guard), and appends anything "resolved" to `.vfs/sync/conflicts.jsonl`. The §7.1 trigger hook
+(`hilo-triggers/src/sync_hook.rs`) re-uses the planner incrementally: inotify events collect
+into a dirty set, a settle task flushes by running filtered plans per mount.
+
+**Error 1: the opaque 400 (DF-WARPFS-65).** `endpoint_client()` in s3.rs builds the S3 client
+for explicit-endpoint mounts with credentials read from exactly two env vars. Every other AWS
+auth path (shared credentials file / `AWS_PROFILE`, SSO, configs) silently degrades to
+empty-string credentials — the request goes out signed by nothing and Hetzner answers 400
+InvalidArgument with no body, which the SDK renders as `service error` with no code. The
+reason it took a cross-check to localize: `backend setup` looks at the whole ambient AWS chain
+and happily reports "credentials: found", so the tool told me twice that auth was fine while
+the client disagreed. The boto3 probe (same endpoint, same profile creds, list + upload OK)
+isolated the defect to hilo's client construction in one step — the shim technique of the
+run-20 bunker lesson, applied to a network client.
+
+**Error 2: the runtime-in-runtime panic (DF-WARPFS-66).** `SyncHook::new` is called from
+mount setup; with a backend mount present it constructs the S3Driver, whose constructor does
+`Runtime::new()` + `block_on()`. On a thread already driving an async runtime tokio panics.
+Because the panic happens on a spawned thread, the mount survives, prints "triggers enabled,
+13 active", and the sync hook enablement is simply never reached — no error, no line, just a
+stack trace the user gets no help interpreting. The lesson generalizes the run-18 cold-start
+finding: the danger zone of this codebase is not any single subsystem but the seams where a
+blocking API meets an async context — every new call site that touches a *Driver from
+non-test code needs a "which thread is this?" check.
+
+**Error 3 and 4: the planner's honesty leaks (67, 68).** LWW resolution is the planner's
+normal mode of operation, but `record_conflict` is called on the resolution path, so a
+workspace mirroring a remote that never diverged still accumulates "conflicts". And `--pull`
+walks the union of keys, transferring local-only files too, so its transfer count is
+unreconcilable against the remote listing. Both are meaning-erosion bugs rather than data
+bugs: the sync gets the right bytes where they belong, but its own reporting can no longer be
+trusted to describe what it did.
+
+**The right way to dogfood this suite:** mount against a REAL store with a dedicated prefix
+(real stores surface credential, checksum and region behavior that MinIO fixtures don't);
+cross-check failures with a second client (boto3) before blaming the network; verify §7.1 by
+grep-counting its enablement line, not by trusting "triggers enabled, N active"; and read
+conflicts.jsonl after every sync — a ledger that grows during a no-conflict session is the
+finding.
