@@ -68,6 +68,11 @@ truth.
 cargo build -p hilo_ffi
 ```
 
+> The `vendored-openssl` feature belongs to `hilo-cli`/`hilo_backends`
+> (restricted-host builds); it does NOT exist on `hilo_ffi` —
+> `cargo build -p hilo_ffi --features vendored-openssl` fails
+> (dogfood run 16).
+
 The build script (`build.rs`) auto-generates Rust scaffolding from `hilo.udl`.
 
 ### Native library filename and the rename step
@@ -83,7 +88,30 @@ generated Python module before importing it:
 cp target/debug/libhilo_ffi.so /tmp/hilo-bindings/python/libuniffi_hilo.so
 ```
 
-The generated Kotlin/Swift/Go bindings have their own embedding steps and
-do not consume this `.so` directly. For reference, the Python loader looks
+Kotlin and Swift bindings have their own platform embedding steps. The
+**Go bindings DO consume this `.so` directly**: the generated cgo code
+`#include`s `hilo.h` and links `libhilo_ffi.so` (verified run 16,
+2026-09-25: `ldd <consumer>` shows the link). A Go consumer needs the
+cgo environment at build time and a way to find the library at runtime:
+
+```bash
+# after generating into /tmp/hilo-bindings and building the cdylib:
+CGO_CFLAGS="-I/tmp/hilo-bindings/go/hilo" \
+CGO_LDFLAGS="-L target/release -lhilo_ffi -Wl,-rpath,$PWD/target/release" \
+go build ./...
+# (or drop the -Wl,-rpath flag and export LD_LIBRARY_PATH=target/release at runtime)
+```
+
+The Python loader looks
 for `libuniffi_hilo.dylib` on macOS and `uniffi_hilo.dll` on Windows
 (same copy/rename step, next to `hilo.py`).
+
+Smoke-check a Go build as part of the verification block:
+
+```bash
+test -f /tmp/hilo-bindings/python/hilo.py
+test -n "$(find /tmp/hilo-bindings/go -name '*.go' -print -quit)"
+test -f /tmp/hilo-bindings/go/hilo/hilo.h
+cd <go-consumer-module> && CGO_CFLAGS="-I/tmp/hilo-bindings/go/hilo" \
+CGO_LDFLAGS="-L <repo>/target/release -lhilo_ffi" go build ./...
+```

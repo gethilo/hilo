@@ -126,48 +126,60 @@ returns 6 real dependents (was always empty). GAP-035 (brace-group
 expansion), GAP-043 (intra-crate file→file edges — 177 on serde), GAP-044
 (understand symbols), GAP-045 (pkg labeling) all verified live.
 
-## Why the under-count happens (the new structural limit)
+## The under-count (fixed 2026-08-24: GAP-048 pkg-family matching)
 
-The resolution layer matches **exact** `pkg:serde` edge targets only.
-But GAP-035's brace-group expansion emits **per-member** edges —
+The run-2-era resolution layer matched **exact** `pkg:serde` edge targets
+only, while brace-group expansion (GAP-035) emits **per-member** edges —
 `use serde::{Serialize, Deserialize}` → edges to `pkg:serde::Serialize`,
-`pkg:serde::Deserialize`, not `pkg:serde`. On serde: 7 exact edges vs 53+
-member edges; 148 unique files import serde in some form; impact returns 6.
-So the two fixes (GAP-034 resolution, GAP-035 expansion) interact badly:
-the expansion multiplied the edge forms the resolution layer doesn't match.
-The right fix direction is prefix matching (`pkg:serde` matches
-`pkg:serde::*`) in the resolution layer, or resolving member edges back to
-the defining file. Tracked as GAP-048 (P0).
+`pkg:serde::Deserialize`, not `pkg:serde`. On serde that was 7 exact edges
+vs 53+ member edges; 148 unique files import serde in some form; impact
+returned 6. GAP-048 (closed 2026-08-24) added pkg-family matching:
+`pkg:<name>` now also matches `pkg:<name>::*` members and `pkg:<name>_*`
+companion crates (serde_derive/serde_test convention). On serde today:
+`impact serde/src/lib.rs` = 147, `impact 'pkg:serde'` = 148. File-level
+counts are no longer lower bounds. Live caveat: pkg expansion is
+CWD-anchored (DF-WARPFS-55).
 
-## How classify actually behaves (learned the hard way)
+## How classify actually behaves (updated 2026-09-05: GAP-049 landed)
 
-`hilo classify` role heuristics on real code: tests detected well
-(151/208 on serde, incl. nested test_suite/), but crate-root lib.rs files
-with hundreds of importers get role `unknown`; only 8 files got `library`
-(internals/*, private/*); the only `entrypoint`s were 4 build.rs scripts.
-So role xattrs are only trustworthy for tests today (GAP-049).
+Run-2-era classify tagged tests well (151/208 on serde, incl. nested
+test_suite/), but crate-root lib.rs files with hundreds of importers got
+role `unknown` and only build.rs got `entrypoint`. GAP-049 (closed
+2026-09-05) fixed the role heuristics: build.rs/build.zig → `build`,
+lib.rs/mod.rs crate and module roots → `library`. Verify on a fresh
+classify run before trusting cached role xattrs from older graphs.
 
-## The tested_by hole
+## The tested_by hole (status 2026-09-25: emitter still missing; DF-WARPFS-37/39)
 
-Nothing in the pipeline ever emits `tested_by` edges (0/749 on serde,
-0/256 on ripgrep in run 1). `graph untested` therefore lists all non-test
-files — including crate roots that the test_suite imports everywhere. It
-is a "not a test file" filter, not a coverage report (GAP-052).
+GAP-052's "nothing emits tested_by" finding predates run-12's Java work:
+the Java path NOW emits tested_by edges (1744 on gson), but they target
+`pkg:` pseudo-nodes and no consumer resolves them to files — so
+`graph module` still reports Tests: 0.0% while FFI/`graph untested` count
+emitting files as a proxy (58.02%). It is still a "not a test file"
+filter, not file coverage (DF-WARPFS-37/39 track the pkg-target +
+arithmetic-contradiction halves; GAP-052's Rust-side emitter gap stands
+for Rust corpora).
 
-## MCP stdout hygiene
+## MCP stdout hygiene (resolved 2026-08-24: GAP-050 shipped)
 
-`hilo serve --mcp` writes a tracing INFO event to stdout at startup.
-MCP stdio framing requires stdout to be pure JSON-RPC; a naive client
-crashes on the first line. Log to stderr (GAP-050).
+`hilo serve --mcp` used to write a tracing INFO event to stdout at
+startup, crashing naive JSON-RPC clients on the first line. GAP-050
+(closed 2026-08-24) moved tracing to stderr and added a purity regression
+test. Run-12 (2026-09-23) measured zero non-JSON stdout lines across six
+client sessions; `serverInfo.version` also now reports the real version
+(run 4's "serverInfo lies: 0.2.0" defect is fixed). stderr-only tracing
+is shipped behavior — no client workaround needed.
 
 ## The right way today (updated)
 
 1. init → warm → classify; expect ~35s/200 files (debug) / faster release.
-2. File-level impact/related WORK — but treat counts as lower bounds while
-   GAP-048 is open; cross-check with `impact 'pkg:<crate>'` and `stats`.
-3. Symbols: `graph understand <path>` (file paths accepted) — real symbols,
-   ugly formatting (GAP-053).
-4. MCP: use a client that skips non-JSON lines until GAP-050 lands.
+2. File-level impact/related WORK with pkg-family matching (GAP-048):
+   counts are full, not lower bounds. Live caveat: pkg expansion is
+   CWD-anchored (DF-WARPFS-55).
+3. Symbols: `graph understand <path>` (file paths accepted) — clean
+   per-line symbol lists (GAP-053 fixed 2026-08-24).
+4. MCP: plain JSON-RPC client; stdout is pure (GAP-050 shipped), tracing
+   is stderr-only.
 5. Build with `-p hilo-cli` (hyphen) (GAP-051 — fixed 2026-08-24).
 
 ---
