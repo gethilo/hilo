@@ -224,7 +224,14 @@ pub struct TfIdfIndex {
     doc_freq: HashMap<String, usize>,
     /// Document → term frequencies (term → count in that document).
     term_freqs: Vec<HashMap<String, f64>>,
-    /// Average document length (in tokens).
+    /// Per-document capped length for BM25: path tokens in full + the token
+    /// count of the document's first 8 symbols (the take(8)-era budget).
+    /// Aligned with `term_freqs` (same document order). The FULL token count
+    /// is not stored — BM25 must see the same lengths the take(8)-era index
+    /// produced, so GAP-100's pinned rankings hold by construction; recall
+    /// comes from the term map, which keeps every symbol term (GAP-102).
+    doc_lens_capped: Vec<usize>,
+    /// Average capped document length (in tokens).
     avg_doc_len: f64,
     /// Total number of documents.
     n_docs: usize,
@@ -272,22 +279,43 @@ impl TfIdfIndex {
         let n_docs = documents.len();
         let mut doc_freq: HashMap<String, usize> = HashMap::new();
         let mut term_freqs: Vec<HashMap<String, f64>> = Vec::with_capacity(n_docs);
+        let mut doc_lens_capped: Vec<usize> = Vec::with_capacity(n_docs);
         let mut total_len: usize = 0;
 
         for doc_path in &documents {
             // Build the document text: file path tokens + optional symbols.
-            let mut doc_tokens = tokenize(doc_path);
+            // GAP-102: ALL symbol tokens are indexed (recall must not lose
+            // symbols past an arbitrary cutoff — flask's url_for is defined
+            // in helpers.py beyond its 8th symbol and went unfindable). The
+            // GAP-100 length discipline is kept by capping only the
+            // document LENGTH BM25 sees, not the token set (see the cap
+            // constant below).
+            let path_tokens = tokenize(doc_path);
+            let path_len = path_tokens.len();
+            let mut doc_tokens = path_tokens;
             if let Some(extract) = symbol_extractor {
                 let symbols = extract(doc_path);
-                // Cap the symbol enrichment at the same 8 the MAP tier
-                // applies (GAP-044): a definition-rich file (express's
-                // lib/response.js defines 20+ members) must not have its
-                // BM25 length penalty grow with its own API surface, or
-                // rework GAP-100 trades the test-file demotion for a
-                // different file outranking the definition file.
-                for sym in symbols.into_iter().take(8) {
-                    doc_tokens.extend(tokenize(&sym));
+                // GAP-102: every symbol's tokens go into the term map —
+                // recall must not lose symbols past an arbitrary cutoff
+                // (flask's url_for is defined in helpers.py beyond its 8th
+                // symbol and went unfindable). GAP-100's length discipline
+                // is kept EXACTLY: the BM25 length contribution of symbols
+                // is the token count of the FIRST 8 symbols (the take(8)
+                // budget, GAP-044's MAP-tier cap), so doc_len — per document
+                // and averaged — is byte-identical to the capped-index era
+                // and every pinned GAP-100 ranking holds by construction.
+                // Only recall grows.
+                let mut symbol_len_capped = 0usize;
+                for (i, sym) in symbols.into_iter().enumerate() {
+                    let toks = tokenize(&sym);
+                    if i < 8 {
+                        symbol_len_capped += toks.len();
+                    }
+                    doc_tokens.extend(toks);
                 }
+                doc_lens_capped.push(path_len + symbol_len_capped);
+            } else {
+                doc_lens_capped.push(doc_tokens.len());
             }
 
             // Deduplicate tokens within a document for term frequency.
@@ -301,7 +329,7 @@ impl TfIdfIndex {
                 *doc_freq.entry(term.clone()).or_insert(0) += 1;
             }
 
-            total_len += doc_tokens.len();
+            total_len += doc_lens_capped.last().copied().unwrap_or(0);
             term_freqs.push(tf);
         }
 
@@ -315,6 +343,7 @@ impl TfIdfIndex {
             documents,
             doc_freq,
             term_freqs,
+            doc_lens_capped,
             avg_doc_len,
             n_docs,
             k1: 1.2,
@@ -377,7 +406,10 @@ impl TfIdfIndex {
 
         for (i, doc_path) in self.documents.iter().enumerate() {
             let tf_map = &self.term_freqs[i];
-            let doc_len = tf_map.values().map(|v| *v as usize).sum::<usize>() as f64;
+            // GAP-102: the capped length (path tokens + first-8-symbols
+            // budget) — the same doc_len the take(8)-era index computed;
+            // the tf-map sum below would differ (dedup + unindexed terms).
+            let doc_len = self.doc_lens_capped[i] as f64;
             let mut score = 0.0;
 
             for term in &query_tokens {
@@ -1388,6 +1420,384 @@ mod tests {
             "the member-assignment definition file must outrank every test hit, got: {:?}",
             results.iter().map(|r| &r.file_path).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn search_real_extractor_finds_symbol_beyond_eight_ast_order() {
+        // GAP-102 regression: TfIdfIndex::build_with_symbols truncated the
+        // symbol enrichment with `.take(8)` (GAP-100's document-length cap
+        // misapplied to the token set), so a file whose DEFINING symbol is
+        // its 9th+ AST-order symbol was invisible to search for that
+        // symbol. This fixture puts `url_for` behind 8 filler definitions
+        // (mirroring flask's helpers.py, where url_for is defined at line
+        // 200 but is the 9th+ symbol); with the take(8) cap the query
+        // below never surfaced the defining file.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src/flask")).unwrap();
+        std::fs::create_dir_all(dir.path().join("test")).unwrap();
+        let mut source = String::new();
+        for name in [
+            "alpha_util",
+            "beta_util",
+            "gamma_util",
+            "delta_util",
+            "epsilon_util",
+            "zeta_util",
+            "eta_util",
+            "theta_util",
+        ] {
+            source.push_str(&format!("def {name}():\n    return '{name}'\n\n"));
+        }
+        source.push_str("def url_for(endpoint, **values):\n    return endpoint\n");
+        std::fs::write(dir.path().join("src/flask/helpers.py"), &source).unwrap();
+        // A test file whose FIRST symbol carries the query tokens: even in
+        // the broken take(8) state it matches, so the demotion contract is
+        // pinned on this fixture too — the definition file must outrank
+        // every test hit (GAP-100), and no file may be emitted twice.
+        std::fs::write(
+            dir.path().join("test/test_helpers.py"),
+            "def url_for_smoke():\n    pass\n",
+        )
+        .unwrap();
+        let db_path = dir.path().join("graph.db");
+        let db = GraphDB::open(db_path.to_str().unwrap()).unwrap();
+        db.insert_edges(&[
+            edge("src/flask/helpers.py", "pkg:jinja2", "imports"),
+            edge("test/test_helpers.py", "src/flask/helpers.py", "imports"),
+        ])
+        .unwrap();
+
+        // The DEFAULT extractor path (search + index_symbols + explicit
+        // root) — exactly what the CLI runs; no stub, no explicit closure.
+        let opts = SearchOpts {
+            limit: 10,
+            index_symbols: true,
+            root: Some(dir.path().to_path_buf()),
+        };
+        let results = search(&db, "url_for", &opts).unwrap();
+
+        let impl_pos = results
+            .iter()
+            .position(|r| r.file_path == "src/flask/helpers.py")
+            .unwrap_or_else(|| {
+                panic!(
+                    "a defining symbol beyond the 8th AST-order symbol must \
+                     still surface its defining file (GAP-102 take(8) \
+                     truncation), got: {:?}",
+                    results.iter().map(|r| &r.file_path).collect::<Vec<_>>()
+                )
+            });
+        let first_test_pos = results
+            .iter()
+            .position(|r| crate::classify::is_test_file(&r.file_path))
+            .expect("test hits must remain findable (demoted, not removed)");
+        assert!(
+            impl_pos < first_test_pos,
+            "the definition file must outrank every test hit, got: {:?}",
+            results.iter().map(|r| &r.file_path).collect::<Vec<_>>()
+        );
+        let mut paths: Vec<&str> = results.iter().map(|r| r.file_path.as_str()).collect();
+        paths.sort_unstable();
+        paths.dedup();
+        assert_eq!(
+            paths.len(),
+            results.len(),
+            "dedup contract: no file may appear twice, got: {:?}",
+            results.iter().map(|r| &r.file_path).collect::<Vec<_>>()
+        );
+    }
+
+    // ── GAP-103: regression invariants for the GAP-102 take(8) collapse ──
+
+    #[test]
+    fn gap103_r1_every_symbol_in_a_file_is_searchable() {
+        // R1 (recall floor): for EVERY top-level symbol a fixture file
+        // defines, `search_with_symbols <symbol>` must surface the defining
+        // file — not just the first 8 AST-order symbols. Expectations are
+        // generated from the parser's own symbol table so the test cannot
+        // drift from what the indexer sees.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src/gen")).unwrap();
+        let mut source = String::new();
+        // 14 defs: the target names deliberately sit past the old take(8)
+        // boundary (positions 9-14).
+        for i in 0..14 {
+            source.push_str(&format!("def sym_{i:02}_util():\n    return {i}\n\n"));
+        }
+        std::fs::write(dir.path().join("src/gen/wide.py"), &source).unwrap();
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[crate::Edge::new("src/gen/wide.py", "pkg:json", "imports")])
+            .unwrap();
+
+        let extracted = default_symbol_extractor(dir.path());
+        let extractor: SymbolExtractor = Some(&extracted);
+        let opts = SearchOpts {
+            limit: 10,
+            index_symbols: true,
+            root: Some(dir.path().to_path_buf()),
+        };
+
+        // The parser's own symbol table is the oracle (default extractor).
+        let symbols = extracted("src/gen/wide.py");
+        assert!(
+            symbols.len() >= 14,
+            "fixture must define more than the take(8) boundary; extractor saw {:?}",
+            symbols
+        );
+        for sym in &symbols {
+            let token = sym
+                .split(|c: char| c == '(' || c == '<' || c == ',' || c == ' ' || c == ';')
+                .next()
+                .unwrap_or(sym);
+            let results = search_with_symbols(&db, token, &opts, extractor).unwrap();
+            assert!(
+                results.iter().any(|r| r.file_path == "src/gen/wide.py"),
+                "symbol '{sym}' (token '{token}') must be searchable — \
+                 a cap may demote but never make a symbol unsearchable (GAP-102/GAP-103 R1), \
+                 got: {:?}",
+                results.iter().map(|r| &r.file_path).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn gap103_r2_indexed_symbol_terms_match_parsed_symbols() {
+        // R2 (no silent drop): the number of symbol TERMS indexed per file
+        // must equal the number of symbols the extractor parses. The
+        // take(8) era failed exactly this invariant: 23 parsed symbols,
+        // 8 indexed. The capped doc-len record keeps BM25 lengths pinned
+        // to the take(8) budget, so it must NOT grow with the symbol list.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src/gen")).unwrap();
+        let mut source = String::new();
+        for name in [
+            "alpha_util",
+            "beta_util",
+            "gamma_util",
+            "delta_util",
+            "epsilon_util",
+            "zeta_util",
+            "eta_util",
+            "theta_util",
+            "iota_util",
+            "kappa_util",
+            "lambda_util",
+            "mu_util",
+        ] {
+            source.push_str(&format!("def {name}():\n    return '{name}'\n\n"));
+        }
+        std::fs::write(dir.path().join("src/gen/wide.py"), &source).unwrap();
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[crate::Edge::new("src/gen/wide.py", "pkg:json", "imports")])
+            .unwrap();
+
+        let symbols = |path: &str| -> Vec<String> {
+            if path == "src/gen/wide.py" {
+                vec![
+                    "alpha_util",
+                    "beta_util",
+                    "gamma_util",
+                    "delta_util",
+                    "epsilon_util",
+                    "zeta_util",
+                    "eta_util",
+                    "theta_util",
+                    "iota_util",
+                    "kappa_util",
+                    "lambda_util",
+                    "mu_util",
+                ]
+                .into_iter()
+                .map(str::to_string)
+                .collect()
+            } else {
+                Vec::new()
+            }
+        };
+        let index = TfIdfIndex::build_with_symbols(&db, Some(&symbols)).unwrap();
+        let doc = index
+            .documents
+            .iter()
+            .position(|d| d == "src/gen/wide.py")
+            .unwrap();
+        let tf = &index.term_freqs[doc];
+        let parsed: Vec<String> = symbols("src/gen/wide.py")
+            .iter()
+            .flat_map(|s| tokenize(s))
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        let missing: Vec<&String> = parsed.iter().filter(|t| !tf.contains_key(*t)).collect();
+        assert!(
+            missing.is_empty(),
+            "every parsed symbol token must be an indexed term \
+             (no silent truncation, GAP-103 R2); missing: {missing:?}"
+        );
+        // The capped length stays at the take(8) budget: path tokens +
+        // first-8 symbols' token COUNTS (with repetition, as the index
+        // counts) — not the full 12-symbol token count.
+        let first8_tokens: usize = symbols("src/gen/wide.py")
+            .iter()
+            .take(8)
+            .map(|s| tokenize(s).len())
+            .sum();
+        let path_len = tokenize("src/gen/wide.py").len();
+        let expected_len = path_len + first8_tokens;
+        assert_eq!(
+            index.doc_lens_capped[doc], expected_len,
+            "BM25 length must stay pinned to the take(8) budget (GAP-100 preserved)"
+        );
+    }
+
+    #[test]
+    fn gap103_r3_scores_monotonic_within_partition() {
+        // R3 (ordering invariant): within each demotion partition
+        // (implementation / test) scores must be descending. ACROSS
+        // partitions non-monotonicity is INTENTIONAL (GAP-100 demotion
+        // partition) — this is not the 'unsorted merge bug' the original
+        // GAP-102 hypothesis chased; the score drop at the partition
+        // boundary is by design and must not be 'fixed'.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src/gen")).unwrap();
+        std::fs::create_dir_all(dir.path().join("test")).unwrap();
+        let mut source = String::new();
+        for name in [
+            "alpha_util",
+            "beta_util",
+            "gamma_util",
+            "delta_util",
+            "epsilon_util",
+            "zeta_util",
+            "eta_util",
+            "theta_util",
+            "iota_util",
+            "kappa_util",
+            "lambda_util",
+            "mu_util",
+        ] {
+            source.push_str(&format!("def {name}():\n    return '{name}'\n\n"));
+        }
+        std::fs::write(dir.path().join("src/gen/wide.py"), &source).unwrap();
+        std::fs::write(
+            dir.path().join("test/test_wide.py"),
+            "def alpha_util_smoke():\n    pass\n",
+        )
+        .unwrap();
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[
+            crate::Edge::new("src/gen/wide.py", "pkg:json", "imports"),
+            crate::Edge::new("test/test_wide.py", "src/gen/wide.py", "imports"),
+        ])
+        .unwrap();
+        let extracted = default_symbol_extractor(dir.path());
+        let extractor: SymbolExtractor = Some(&extracted);
+        let opts = SearchOpts {
+            limit: 10,
+            index_symbols: true,
+            root: Some(dir.path().to_path_buf()),
+        };
+        let results = search_with_symbols(&db, "alpha_util", &opts, extractor).unwrap();
+
+        // Split by partition, preserving order, then assert per-partition
+        // descending scores. Cross-partition order is free (documented).
+        let mut impl_scores: Vec<f64> = Vec::new();
+        let mut test_scores: Vec<f64> = Vec::new();
+        for r in &results {
+            if crate::classify::is_test_file(&r.file_path) {
+                test_scores.push(r.score);
+            } else {
+                impl_scores.push(r.score);
+            }
+        }
+        assert!(
+            !impl_scores.is_empty() && !test_scores.is_empty(),
+            "fixture must produce hits in BOTH partitions, got: {:?}",
+            results
+                .iter()
+                .map(|r| (&r.file_path, r.score))
+                .collect::<Vec<_>>()
+        );
+        for (label, scores) in [("implementation", &impl_scores), ("test", &test_scores)] {
+            for w in scores.windows(2) {
+                assert!(
+                    w[0] >= w[1],
+                    "scores within the {label} partition must be descending \
+                     (cross-partition drop is INTENTIONAL GAP-100 demotion, not a merge bug); \
+                     got {scores:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn gap103_r4_recall_floor_defining_file_in_top_results() {
+        // R4 (file-level recall floor): for fixed query→expected-file pairs
+        // the correct file must appear within the top N results — the check
+        // that would have caught the take(8) collapse before a bake-off
+        // wave did. Mirrors the flask corpus shape: the defining symbol
+        // sits past the take(8) boundary.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src/flask")).unwrap();
+        std::fs::create_dir_all(dir.path().join("test")).unwrap();
+        let mut source = String::new();
+        for name in [
+            "alpha_util",
+            "beta_util",
+            "gamma_util",
+            "delta_util",
+            "epsilon_util",
+            "zeta_util",
+            "eta_util",
+            "theta_util",
+        ] {
+            source.push_str(&format!("def {name}():\n    return '{name}'\n\n"));
+        }
+        source.push_str("def url_for(endpoint, **values):\n    return endpoint\n");
+        source.push_str("def flash(message, category):\n    return message\n");
+        std::fs::write(dir.path().join("src/flask/helpers.py"), &source).unwrap();
+        std::fs::write(
+            dir.path().join("test/test_helpers.py"),
+            "def url_for_smoke():\n    pass\n",
+        )
+        .unwrap();
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[
+            crate::Edge::new("src/flask/helpers.py", "pkg:jinja2", "imports"),
+            crate::Edge::new("test/test_helpers.py", "src/flask/helpers.py", "imports"),
+        ])
+        .unwrap();
+        let extracted = default_symbol_extractor(dir.path());
+        let extractor: SymbolExtractor = Some(&extracted);
+        let opts = SearchOpts {
+            limit: 10,
+            index_symbols: true,
+            root: Some(dir.path().to_path_buf()),
+        };
+
+        // Fixed battery: query → expected file within the top N.
+        let battery = [
+            ("url_for", "src/flask/helpers.py", 3usize),
+            ("flash", "src/flask/helpers.py", 3),
+        ];
+        for (query, expected, n) in battery {
+            let results = search_with_symbols(&db, query, &opts, extractor).unwrap();
+            let pos = results
+                .iter()
+                .position(|r| r.file_path == expected)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "recall floor: '{query}' must name {expected} in the top {n}, \
+                         got: {:?}",
+                        results.iter().map(|r| &r.file_path).collect::<Vec<_>>()
+                    )
+                });
+            assert!(
+                pos < n,
+                "recall floor: '{query}' must name {expected} in the top {n} \
+                 (was position {pos}), got: {:?}",
+                results.iter().map(|r| &r.file_path).collect::<Vec<_>>()
+            );
+        }
     }
 
     #[test]
