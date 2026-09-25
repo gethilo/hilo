@@ -763,34 +763,51 @@ pub fn run_related(path: &str, relation: Option<&str>, direction: Option<&str>) 
 /// no `hilo graph warm` pre-requisite needed.
 pub fn run_impact(path: &str, max_depth: u32, format: Option<&str>, external: bool) -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
-    let graph_db = cwd.join(".vfs").join("graph").join("graph.db");
 
-    // Ensure the .vfs/graph directory exists.
-    if let Some(parent) = graph_db.parent() {
-        std::fs::create_dir_all(parent).ok();
-    }
-
+    // DF-WARPFS-55: `graph impact` answers for a REPO-RELATIVE subject, so
+    // running from a subdirectory must find the project root the graph lives
+    // in instead of creating/opening a fresh, empty `.vfs/graph/graph.db`
+    // there. Discovery walks up to the nearest graph db — the same upward
+    // rule `hilo init`-ed projects imply. A root-run still resolves exactly
+    // as before (the walk stops immediately at the CWD's own db). When NO
+    // graph exists upward (an unwarmed directory), keep the historical
+    // fresh-empty-db path so the GAP-039 loud "not in the graph" error is
+    // still what a bogus subject produces.
+    let (project_root, graph_db) = discover_graph_root(&cwd).unwrap_or_else(|| {
+        let graph_db = cwd.join(".vfs").join("graph").join("graph.db");
+        if let Some(parent) = graph_db.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
+        (cwd.clone(), graph_db)
+    });
     let graph_db_str = graph_db.to_str().unwrap_or(".vfs/graph/graph.db");
     let graph =
         GraphDB::open_read_only(graph_db_str).context("failed to open DuckDB graph database")?;
 
+    // DF-WARPFS-55: normalize the subject to repo-relative form before any
+    // check, so `hilo graph impact terminal_jail/parser.py` run from
+    // `<repo>/plugin` queries the same node as the same command from the
+    // repo root — never a wrong-package prefix. Absolute paths under the
+    // project root are accepted and made relative; symbol nodes pass through.
+    let path = normalize_subject(&project_root, path);
+
     let results = if external {
         // GAP-039: same node-existence check for the external path —
         // unknown paths must fail loudly, not look like zero dependents.
-        if !graph.file_in_graph(path)? && !Path::new(path).exists() {
+        if !graph.file_in_graph(&path)? && !Path::new(&path).exists() {
             anyhow::bail!(
                 "'{path}' is not in the graph (no such file and no matching graph node). {}",
                 hilo_graph::graph::UNRESOLVABLE_TARGET_HINT
             );
         }
         // For external: parse start file first, then use cross-repo BFS.
-        graph.ensure_parsed(path)?;
-        hilo_graph::impact::compute_impact_with_external(graph.conn(), path, max_depth, true)
+        graph.ensure_parsed(&path)?;
+        hilo_graph::impact::compute_impact_with_external(graph.conn(), &path, max_depth, true)
             .context("failed to compute impact with external edges")?
     } else {
         // JIT: parse start file on cache miss, then BFS over cache.
         graph
-            .impact_or_parse(path, max_depth)
+            .impact_or_parse(&path, max_depth)
             .context("failed to compute impact")?
     };
 
@@ -833,6 +850,66 @@ fn raw_edges_jsonl_count(cwd: &std::path::Path) -> Option<usize> {
     let path = cwd.join(".vfs").join("graph").join("edges.jsonl");
     let content = std::fs::read_to_string(path).ok()?;
     Some(content.lines().filter(|l| !l.trim().is_empty()).count())
+}
+
+/// DF-WARPFS-55: find the nearest project graph by walking up from `cwd`.
+///
+/// Returns `(project_root, graph_db_path)` for the first directory in the
+/// CWD→root chain that carries `.vfs/graph/graph.db` (or a sibling
+/// `edges.jsonl` the open can rebuild from). This is what lets
+/// `hilo graph impact` answer correctly from a subdirectory: the subject is
+/// repo-relative, so the query must run against the repo's graph, not a
+/// fresh, empty db created in the current directory.
+fn discover_graph_root(cwd: &Path) -> Option<(PathBuf, PathBuf)> {
+    for dir in cwd.ancestors() {
+        let graph_db = dir.join(".vfs").join("graph").join("graph.db");
+        if graph_db.exists() {
+            return Some((dir.to_path_buf(), graph_db));
+        }
+        let jsonl = dir.join(".vfs").join("graph").join("edges.jsonl");
+        if jsonl.exists() {
+            return Some((dir.to_path_buf(), graph_db)); // open() rebuilds from jsonl
+        }
+    }
+    None
+}
+
+/// DF-WARPFS-55: normalize an impact/related subject to repo-relative form.
+///
+/// Symbol nodes (`pkg:`/`sys:`/`file:`/`std:`/`external:`) pass through
+/// untouched. A path relative to the process CWD is re-expressed relative to
+/// the project root; an absolute path under the project root is stripped to
+/// its relative form. Anything else (a path outside the project, or relative
+/// in a way that escapes it) is returned unchanged and fails later with the
+/// standard "not in the graph" error naming what the caller passed.
+fn normalize_subject(project_root: &Path, path: &str) -> String {
+    if path.starts_with("pkg:")
+        || path.starts_with("sys:")
+        || path.starts_with("std:")
+        || path.starts_with("external:")
+        || path.starts_with("file:")
+    {
+        return path.to_string();
+    }
+    let requested = Path::new(path);
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let absolute = if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        cwd.join(requested)
+    };
+    // Only rewrite when the path actually RESOLVES: a subject that does not
+    // exist relative to the CWD (e.g. a repo-relative path typed from a
+    // subdirectory) must pass through unchanged so the graph layer can try
+    // it against the project root. Rewriting an unresolvable path would
+    // double-prefix it (`plugin/plugin/...`) and hide the real subject.
+    let Ok(resolved) = std::fs::canonicalize(&absolute) else {
+        return path.to_string();
+    };
+    if let Ok(rel) = resolved.strip_prefix(project_root) {
+        return rel.to_string_lossy().replace('\\', "/");
+    }
+    path.to_string()
 }
 
 /// PERF-001 companion: a missing `graph.db` is no longer a hard error when a

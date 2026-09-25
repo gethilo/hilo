@@ -98,8 +98,16 @@ pub struct GraphDB {
     /// Why the connection is degraded ([`GraphDB::is_degraded`]) — the spill
     /// watermark (GAP-093/095) or a request-path budget (GAP-094).
     degraded_reason: Option<DegradedReason>,
-    /// What this open did to the cache ([`GraphDB::reconcile_report`]).
+    /// Why this open did what it did to the cache ([`GraphDB::reconcile_report`]).
     reconcile: Option<ReconcileReport>,
+    /// DF-WARPFS-55: the repo root this graph belongs to, derived from the
+    /// opened db path and stamped onto the DuckDB session so every impact
+    /// BFS (including the root-less `compute_impact(conn, …)` FFI path)
+    /// anchors pkg-node expansion at the graph's root instead of the
+    /// process CWD. `None` for a `:memory:` connection opened directly for
+    /// tests (those callers pass absolute paths or construct the variable
+    /// themselves).
+    root: Option<PathBuf>,
 }
 
 /// Aggregate statistics computed over the `edges` table.
@@ -1249,6 +1257,16 @@ impl GraphDB {
     pub fn open_with_options(path: &str, budget_ms: u64, access: GraphAccess) -> GraphResult<Self> {
         let mut disk_perf = None;
         let mut resolved = access; // DF-WARPFS-33: the mode the handle REALLY opened with
+
+        // DF-WARPFS-55: derive the graph's repo root from the opened db path
+        // before the connection exists (the `:memory:` branch has none).
+        // The layout is `<root>/.vfs/graph/graph.db`, so the root is always
+        // three ancestors up — whatever the caller's CWD was at open time.
+        let derived_root = if path == ":memory:" {
+            None
+        } else {
+            Path::new(path).ancestors().nth(3).map(Path::to_path_buf)
+        };
         let conn = if path == ":memory:" {
             Connection::open_in_memory()?
         } else {
@@ -1278,6 +1296,25 @@ impl GraphDB {
         // a hot read-only handle must not touch it).
         if path == ":memory:" || !matches!(resolved, GraphAccess::ReadOnly) {
             ensure_schema(&conn)?;
+        }
+
+        // DF-WARPFS-55: stamp the derived root onto the DuckDB session. The
+        // impact BFS reads it back with `getvariable` so pkg-node expansion
+        // is anchored at the graph's root regardless of the process CWD —
+        // including on the root-less `compute_impact(conn, …)` shape the FFI
+        // bindings call. Stamping is best-effort on the same connection that
+        // carries queries; a failure degrades to the historical CWD anchor
+        // rather than failing an otherwise-good open.
+        if let Some(root) = &derived_root {
+            let stamped = conn.execute(
+                "SET VARIABLE hilo_resolution_root = ?",
+                [root.to_string_lossy().as_ref()],
+            );
+            if stamped.is_err() {
+                eprintln!(
+                    "warning: could not stamp resolution root on the graph session; impact queries fall back to CWD-anchored package resolution"
+                );
+            }
         }
 
         let mut degraded = false;
@@ -1386,7 +1423,15 @@ impl GraphDB {
             degraded_reason,
             reconcile,
             edges_jsonl,
+            root: derived_root,
         })
+    }
+
+    /// DF-WARPFS-55: the repo root this graph belongs to, when it was opened
+    /// from a disk path (the `<root>/.vfs/graph/graph.db` layout). `None` for
+    /// a `:memory:` connection.
+    pub fn root(&self) -> Option<&Path> {
+        self.root.as_deref()
     }
 
     /// Whether this disk-backed connection skipped or truncated the DuckDB
@@ -1601,9 +1646,19 @@ impl GraphDB {
         rel_filter: Option<&str>,
         direction: Direction,
     ) -> GraphResult<Vec<Edge>> {
+        // DF-WARPFS-55: same root-anchored pkg target as the cached path.
         let mut targets = vec![path.to_string()];
         if direction == Direction::Reverse {
-            if let Some(pkg) = PkgResolver::new().pkg_node(path) {
+            let mut resolver = PkgResolver::new();
+            let anchored = self
+                .root
+                .as_ref()
+                .map(|root| crate::resolution::AnchoredRoot::new(root.clone()));
+            let pkg = match anchored.as_ref() {
+                Some(root) => resolver.pkg_node_at(root, path),
+                None => resolver.pkg_node(path),
+            };
+            if let Some(pkg) = pkg {
                 targets.push(pkg);
             }
         }
@@ -1664,9 +1719,21 @@ impl GraphDB {
         // edges, not file→file edges, so a plain `WHERE "to" = <file>`
         // returns nothing for files that are only imported as part of their
         // crate. Symbol nodes (`pkg:...`/`sys:...`) resolve to None.
+        // DF-WARPFS-55: the resolver is anchored at the graph's root (falling
+        // back to the CWD walk only when no root was derived), so the same
+        // reverse query answers identically from any CWD.
         let mut targets: Vec<String> = vec![path.to_string()];
         if direction == Direction::Reverse {
-            if let Some(pkg) = crate::resolution::PkgResolver::new().pkg_node(path) {
+            let mut resolver = PkgResolver::new();
+            let anchored = self
+                .root
+                .as_ref()
+                .map(|root| crate::resolution::AnchoredRoot::new(root.clone()));
+            let pkg = match anchored.as_ref() {
+                Some(root) => resolver.pkg_node_at(root, path),
+                None => resolver.pkg_node(path),
+            };
+            if let Some(pkg) = pkg {
                 targets.push(pkg);
             }
         }
@@ -2438,10 +2505,32 @@ impl GraphDB {
         }
         let in_graph = self.file_in_graph(start_path)?;
         if !in_graph && !Path::new(start_path).exists() {
-            return Err(GraphError::Other(format!(
-                "'{start_path}' is not in the graph (no such file and no matching graph node). {UNRESOLVABLE_TARGET_HINT}"
-            )));
+            // DF-WARPFS-55: a repo-relative subject exists relative to the
+            // graph's root, not necessarily the process CWD — a caller in
+            // any other directory used to trip this guard on a REAL file.
+            let root_exists = self
+                .root
+                .as_ref()
+                .map(|root| root.join(start_path).exists())
+                .unwrap_or(false);
+            if !root_exists {
+                return Err(GraphError::Other(format!(
+                    "'{start_path}' is not in the graph (no such file and no matching graph node). {UNRESOLVABLE_TARGET_HINT}"
+                )));
+            }
         }
+        // DF-WARPFS-55: anchor pkg-node expansion at the graph's repo root,
+        // not the process CWD. The root was stamped on the DuckDB session at
+        // open time (derived from the db path) and rides into both BFS
+        // flavors below, so a caller invoking impact() from any directory
+        // gets the same pkg:<…> resolution — the old behavior silently
+        // returned 0 dependents unless the caller's CWD happened to be the
+        // repo root.
+        let anchored = self
+            .root
+            .as_ref()
+            .map(|root| crate::resolution::AnchoredRoot::new(root.clone()));
+        let anchored = anchored.as_ref();
         if self.degraded {
             if !in_graph {
                 return self
@@ -2452,6 +2541,7 @@ impl GraphDB {
             return impact::compute_impact_streaming(
                 start_path,
                 max_depth,
+                anchored,
                 local_resolver.as_ref(),
                 |visit| self.scan_jsonl_edges(visit),
             );
@@ -2459,7 +2549,7 @@ impl GraphDB {
         // Parse the start file first (no-op if already cached).
         self.ensure_parsed(start_path)?;
         // Delegate to existing BFS over the DuckDB edges cache.
-        impact::compute_impact(&self.conn, start_path, max_depth)
+        impact::compute_impact_at(&self.conn, start_path, max_depth, anchored)
     }
 }
 
@@ -2594,6 +2684,133 @@ mod tests {
             .collect::<Vec<_>>();
         facts.sort();
         facts
+    }
+
+    // ── DF-WARPFS-55: impact answers are CWD-independent ────────────────
+
+    /// AC1: a graph opened from a disk path stamps its repo root onto the
+    /// DuckDB session, so `impact_or_parse` on a repo-relative subject
+    /// resolves the pkg node through the ROOT even when the process CWD is
+    /// somewhere else entirely (no `set_current_dir` — that races parallel
+    /// tests; the CWD here is the harness's own, which is precisely the
+    /// "somewhere other than the repo root" the bug fires from).
+    ///
+    /// The corpus mirrors the dogfood run 16 shape: a python package under
+    /// a nested directory whose dependents only exist on the
+    /// `pkg:<dotted.module>` node the parser emitted at warm time.
+    #[test]
+    fn impact_resolves_pkg_node_via_graph_root_from_any_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        // The corpus mirrors the dogfood run 16 shape: nested python
+        // packages `plugin/` → `plugin/terminal_jail/`, whose module chain
+        // derives `pkg:plugin.terminal_jail.parser` at warm time. `runner`
+        // imports `parser`, so its edge targets that pkg: node.
+        std::fs::create_dir_all(dir.path().join("plugin/terminal_jail")).unwrap();
+        std::fs::write(dir.path().join("plugin/__init__.py"), "").unwrap();
+        std::fs::write(dir.path().join("plugin/terminal_jail/__init__.py"), "").unwrap();
+        std::fs::write(
+            dir.path().join("plugin/terminal_jail/parser.py"),
+            "def parse(): ...\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("plugin/terminal_jail/runner.py"),
+            "from plugin.terminal_jail.parser import parse\n",
+        )
+        .unwrap();
+
+        // Warm-time edges as the parser emits them: pkg: nodes, repo-relative.
+        let db_path = create_graph_path(dir.path());
+        let jsonl = db_path.parent().unwrap().join("edges.jsonl");
+        let edges = [
+            Edge::new(
+                "plugin/terminal_jail/runner.py",
+                "pkg:plugin.terminal_jail.parser",
+                "imports",
+            ),
+            Edge::new(
+                "plugin/terminal_jail/runner.py",
+                "pkg:plugin.terminal_jail.parser",
+                "imports",
+            ),
+        ];
+        let lines: Vec<String> = edges
+            .iter()
+            .map(|e| serde_json::to_string(e).unwrap())
+            .collect();
+        std::fs::write(&jsonl, lines.join("\n") + "\n").unwrap();
+
+        let db = GraphDB::open(db_path.to_str().unwrap()).unwrap();
+        let results = db
+            .impact_or_parse("plugin/terminal_jail/parser.py", 8)
+            .unwrap();
+        assert_eq!(
+            impact_facts(&results),
+            vec![(
+                "plugin/terminal_jail/runner.py".to_string(),
+                "imports".to_string(),
+                2,
+                "crate".to_string(),
+                Some("pkg:plugin.terminal_jail.parser".to_string()),
+            )],
+            "the pkg-mediated dependent must resolve through the graph's root, not the CWD"
+        );
+    }
+
+    /// The root-less `compute_impact(conn, …)` shape (the UniFFI bindings'
+    /// call) also answers root-anchored: the variable stamped at open time
+    /// lives on the connection itself.
+    #[test]
+    fn compute_impact_reads_session_stamped_root() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("plugin/terminal_jail")).unwrap();
+        std::fs::write(dir.path().join("plugin/__init__.py"), "").unwrap();
+        std::fs::write(dir.path().join("plugin/terminal_jail/__init__.py"), "").unwrap();
+        std::fs::write(
+            dir.path().join("plugin/terminal_jail/parser.py"),
+            "def parse(): ...\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("plugin/terminal_jail/runner.py"),
+            "from plugin.terminal_jail.parser import parse\n",
+        )
+        .unwrap();
+        let db_path = create_graph_path(dir.path());
+        let jsonl = db_path.parent().unwrap().join("edges.jsonl");
+        std::fs::write(
+            &jsonl,
+            serde_json::to_string(&Edge::new(
+                "plugin/terminal_jail/runner.py",
+                "pkg:plugin.terminal_jail.parser",
+                "imports",
+            ))
+            .unwrap()
+                + "\n",
+        )
+        .unwrap();
+
+        let db = GraphDB::open(db_path.to_str().unwrap()).unwrap();
+        let results =
+            crate::compute_impact(db.conn(), "plugin/terminal_jail/parser.py", 8).unwrap();
+        assert_eq!(results.len(), 1, "session-stamped root must anchor the BFS");
+        assert_eq!(results[0].path, "plugin/terminal_jail/runner.py");
+    }
+
+    /// A `:memory:` connection stamps no root, so the CWD fallback keeps the
+    /// historical behavior — pinned so the fallback is a deliberate
+    /// contract, not an accident. A direct file-to-file dependent answers
+    /// through the plain exact-match path (no pkg expansion involved).
+    #[test]
+    fn memory_connection_without_stamped_root_keeps_cwd_fallback() {
+        let db = GraphDB::open(":memory:").unwrap();
+        insert_edges_into(db.conn(), &[Edge::new("b.py", "a.py", "imports")]).unwrap();
+        // No hilo_resolution_root variable → no anchored resolution → the
+        // BFS answers the exact-match dependent exactly as before; the
+        // anchored pkg walk is what a disk-opened graph adds on top.
+        let results = db.impact_or_parse("a.py", 8).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].path, "b.py");
     }
 
     fn write_spill_fixture(root: &Path, watermark: &str) -> (PathBuf, Vec<Edge>) {

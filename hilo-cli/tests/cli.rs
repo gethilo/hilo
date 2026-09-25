@@ -3278,3 +3278,110 @@ fn version_includes_build_provenance() {
         "expected a 'built: <iso8601Z>' line, got: {s}"
     );
 }
+
+// ─────────────── graph impact from a subdirectory (DF-WARPFS-55) ───────────────
+
+/// AC2: `hilo graph impact <repo-relative-subject>` run from a SUBDIRECTORY
+/// must return the same answer as the same command from the repo root —
+/// same dependents, prefix-correct pkg node. Dogfood run 16 proved the old
+/// behavior: from `<repo>/plugin`, the subject resolved against the
+/// subdirectory (wrong node `pkg:terminal_jail.interruptor.parser`) or the
+/// command created an empty graph db in the subdirectory and answered
+/// "not in the graph". The test spawns the compiled binary with
+/// `Command::current_dir`, so nothing here races parallel tests.
+#[test]
+fn graph_impact_from_subdirectory_matches_root_run() {
+    let dir = unique_tempdir("impact-cwd");
+
+    // Nested python packages, mirroring the dogfood corpus: plugin/ →
+    // plugin/terminal_jail/. `runner` imports `parser`, so the warm-time
+    // edge targets pkg:plugin.terminal_jail.parser and the blast radius is
+    // only reachable through correct pkg-node expansion.
+    fs::create_dir_all(dir.join("plugin/terminal_jail")).expect("failed to create package dirs");
+    fs::write(dir.join("plugin/__init__.py"), "").expect("failed to write plugin/__init__.py");
+    fs::write(dir.join("plugin/terminal_jail/__init__.py"), "")
+        .expect("failed to write terminal_jail/__init__.py");
+    fs::write(
+        dir.join("plugin/terminal_jail/parser.py"),
+        "def parse(): ...\n",
+    )
+    .expect("failed to write parser.py");
+    fs::write(
+        dir.join("plugin/terminal_jail/runner.py"),
+        "from plugin.terminal_jail.parser import parse\n",
+    )
+    .expect("failed to write runner.py");
+
+    init_project(&dir);
+    let warm = run_hilo_with_retry(hilo_cmd().args(["graph", "warm"]).current_dir(&dir));
+    assert!(
+        warm.status.success(),
+        "graph warm failed: {}",
+        String::from_utf8_lossy(&warm.stderr)
+    );
+
+    let subject = "plugin/terminal_jail/parser.py";
+
+    // Baseline: the run from the repo root.
+    let root_run = run_hilo_with_retry(
+        hilo_cmd()
+            .args(["graph", "impact", "--format", "json", subject])
+            .current_dir(&dir),
+    );
+    assert!(
+        root_run.status.success(),
+        "root-run impact failed: {}",
+        String::from_utf8_lossy(&root_run.stderr)
+    );
+    let root_out = String::from_utf8_lossy(&root_run.stdout).into_owned();
+    assert!(
+        root_out.contains("plugin/terminal_jail/runner.py"),
+        "root run must see the importer, got: {root_out}"
+    );
+
+    // The same command from the `plugin` subdirectory — the historical
+    // failure site. Every observable must match the root run.
+    let subdir_run = run_hilo_with_retry(
+        hilo_cmd()
+            .args(["graph", "impact", "--format", "json", subject])
+            .current_dir(dir.join("plugin")),
+    );
+    assert!(
+        subdir_run.status.success(),
+        "subdirectory impact must not error (the empty-graph-db regression): {}",
+        String::from_utf8_lossy(&subdir_run.stderr)
+    );
+    let subdir_out = String::from_utf8_lossy(&subdir_run.stdout).into_owned();
+    assert_eq!(
+        root_out, subdir_out,
+        "subdirectory run must return the identical dependents to the root run"
+    );
+    assert!(
+        subdir_out.contains("pkg:plugin.terminal_jail.parser"),
+        "the pkg node must carry the full plugin. prefix (no cwd-truncated node): {subdir_out}"
+    );
+    assert!(
+        !subdir_out.contains("\"total\": 0"),
+        "a silent zero-dependents answer is the defect: {subdir_out}"
+    );
+
+    // An absolute path under the project root resolves to the same node.
+    let abs_subject = dir.join(subject).to_string_lossy().into_owned();
+    let abs_run = run_hilo_with_retry(
+        hilo_cmd()
+            .args(["graph", "impact", "--format", "json", &abs_subject])
+            .current_dir(&dir),
+    );
+    assert!(
+        abs_run.status.success(),
+        "absolute-path impact failed: {}",
+        String::from_utf8_lossy(&abs_run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&abs_run.stdout),
+        root_out,
+        "absolute and relative subjects must answer identically"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}

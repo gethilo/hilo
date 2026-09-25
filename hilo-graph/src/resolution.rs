@@ -123,6 +123,72 @@ impl PkgResolver {
         self.crate_name(path).map(|name| format!("pkg:{name}"))
     }
 
+    /// DF-WARPFS-55: resolve `path` to its `pkg:` node anchored at `root`
+    /// instead of the process CWD.
+    ///
+    /// `path` is interpreted relative to `root` exactly as the graph stores
+    /// edge endpoints (repo-relative), so a consumer running from any
+    /// directory resolves the same node. Absolute `path`s and symbol nodes
+    /// pass through unchanged (`root` never rewrites them). The cache is
+    /// keyed on the absolute path actually walked, so an anchored and an
+    /// unanchored resolution of the same file share one entry.
+    ///
+    /// This is the anchor the impact BFS must use: the historical CWD
+    /// anchor made `impact()` silently answer 0 dependents from any
+    /// directory other than the repo root (DF-WARPFS-55).
+    pub fn pkg_node_at(&mut self, root: &AnchoredRoot, path: &str) -> Option<String> {
+        if is_symbol_node(path) {
+            return None;
+        }
+        let abs = root.resolve(path);
+        if path.ends_with(".go") {
+            if is_symbol_node(&abs) {
+                return None;
+            }
+            let p = PathBuf::from(&abs);
+            if let Some(hit) = self.go_cache.get(&p) {
+                return hit.clone();
+            }
+            let node = go_package_for_file(&p).map(|import_path| format!("pkg:{import_path}"));
+            self.go_cache.insert(p, node.clone());
+            return node;
+        }
+        if path.ends_with(".py") {
+            if is_symbol_node(&abs) {
+                return None;
+            }
+            let p = PathBuf::from(&abs);
+            if let Some(hit) = self.py_cache.get(&p) {
+                return hit.clone();
+            }
+            let node = python_module_for_file(&p).map(|module| format!("pkg:{module}"));
+            self.py_cache.insert(p, node.clone());
+            return node;
+        }
+        if path.ends_with(".java") {
+            if is_symbol_node(&abs) {
+                return None;
+            }
+            let p = PathBuf::from(&abs);
+            if let Some(hit) = self.java_cache.get(&p) {
+                return hit.clone();
+            }
+            let node = java_class_for_file(&p).map(|fqcn| format!("pkg:{fqcn}"));
+            self.java_cache.insert(p, node.clone());
+            return node;
+        }
+        // Rust crate walk (the default branch of `pkg_node`). The cache is
+        // shared with `crate_name`, which stores the RAW name — the `pkg:`
+        // prefix is added on the way out, hit or miss.
+        let p = PathBuf::from(&abs);
+        if let Some(hit) = self.cache.get(&p) {
+            return hit.as_ref().map(|name| format!("pkg:{name}"));
+        }
+        let name = crate_name_for_file(&p);
+        self.cache.insert(p, name.clone());
+        name.map(|name| format!("pkg:{name}"))
+    }
+
     /// Resolve a `.go` path to its `pkg:<import path>` node, if the file
     /// lives under a Go module. Non-Go paths and symbol nodes return `None`
     /// without touching the filesystem; a `.go` file with no `go.mod`
@@ -192,6 +258,41 @@ impl PkgResolver {
         let name = crate_name_for_file(&p);
         self.cache.insert(p, name.clone());
         name
+    }
+}
+
+/// DF-WARPFS-55: the repo root a graph's edge paths are relative to.
+///
+/// Edge endpoints in `edges.jsonl` / the DuckDB cache are repo-relative, but
+/// `PkgResolver`'s package walks resolve paths against the filesystem. Where
+/// that resolution anchors decides the answer: anchored at the process CWD
+/// (the historical behavior), a consumer running from any other directory
+/// resolved the wrong `pkg:` node — or none — and `impact()` silently
+/// reported 0 dependents. Anchored at the graph's repo root (this type), the
+/// same query resolves the same node from any CWD.
+#[derive(Debug, Clone)]
+pub struct AnchoredRoot {
+    root: std::path::PathBuf,
+}
+
+impl AnchoredRoot {
+    /// Anchor at `root` (the repo root the graph was built from).
+    pub fn new(root: impl Into<std::path::PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+
+    /// The anchored form of `path`: an absolute path passes through
+    /// unchanged (it already names its own location), everything else is
+    /// joined onto the root and normalized to forward slashes — the exact
+    /// form the walks and edge endpoints use.
+    pub fn resolve(&self, path: &str) -> String {
+        if Path::new(path).is_absolute() || path.starts_with('/') {
+            return path.to_string();
+        }
+        let joined = self.root.join(path);
+        let joined = joined.to_string_lossy();
+        // Windows path separators never appear in edge endpoints.
+        joined.replace('\\', "/")
     }
 }
 
@@ -1151,6 +1252,100 @@ mod tests {
         assert_eq!(resolver.pkg_node("pkg:globset"), None);
         assert_eq!(resolver.pkg_node("sys:std"), None);
         assert_eq!(resolver.pkg_node("external:repo:path"), None);
+    }
+
+    // ── DF-WARPFS-55: root-anchored resolution is CWD-independent ──────
+
+    /// AC1: `pkg_node_at` resolves a repo-relative subject against the
+    /// passed root, NOT the process CWD — the whole point of the anchor.
+    /// The CWD is deliberately left wherever the test runner put it (never
+    /// `set_current_dir`: that races parallel tests); the resolver's
+    /// historical CWD anchor would return `None` here because the relative
+    /// path does not exist under the CWD.
+    #[test]
+    fn pkg_node_at_resolves_relative_subject_against_root_not_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "plugin/terminal_jail/Cargo.toml",
+            "[package]\nname = \"terminal_jail\"\nversion = \"0.1.0\"\n",
+        );
+        let parser_rs = write(
+            dir.path(),
+            "plugin/terminal_jail/src/parser.rs",
+            "pub struct Parser;\n",
+        );
+
+        let root = AnchoredRoot::new(dir.path());
+        let mut resolver = PkgResolver::new();
+        assert_eq!(
+            resolver
+                .pkg_node_at(&root, "plugin/terminal_jail/src/parser.rs")
+                .as_deref(),
+            Some("pkg:terminal_jail"),
+            "the subject must resolve via the passed root, whatever the CWD is"
+        );
+        assert_eq!(
+            resolver.pkg_node_at(&root, &parser_rs).as_deref(),
+            Some("pkg:terminal_jail"),
+            "an absolute subject resolves to the same node"
+        );
+    }
+
+    /// A Python subject resolves its dotted module through the root: the
+    /// package walk must see `__init__.py` under the graph root even when
+    /// the CWD is unrelated.
+    #[test]
+    fn pkg_node_at_anchors_python_module_walk() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "pkg/__init__.py", "");
+        write(dir.path(), "pkg/mod.py", "x = 1\n");
+
+        let root = AnchoredRoot::new(dir.path());
+        let mut resolver = PkgResolver::new();
+        assert_eq!(
+            resolver.pkg_node_at(&root, "pkg/mod.py").as_deref(),
+            Some("pkg:pkg.mod")
+        );
+        // Symbol nodes never resolve and never touch the filesystem,
+        // anchored or not (a bare walk on 'pkg:globset' must never hit disk).
+        assert_eq!(resolver.pkg_node_at(&root, "pkg:globset"), None);
+        assert_eq!(resolver.pkg_node_at(&root, "sys:std"), None);
+    }
+
+    /// A Go subject resolves its import path through the root's `go.mod`.
+    #[test]
+    fn pkg_node_at_anchors_go_module_walk() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "go.mod", "module example.com/m\n");
+        write(dir.path(), "internal/api/server.go", "package api\n");
+
+        let root = AnchoredRoot::new(dir.path());
+        let mut resolver = PkgResolver::new();
+        assert_eq!(
+            resolver
+                .pkg_node_at(&root, "internal/api/server.go")
+                .as_deref(),
+            Some("pkg:example.com/m/internal/api")
+        );
+    }
+
+    /// The same (root, relative-path) pair resolves to the same node from
+    /// any number of calls — the cache is keyed on the absolute path, so
+    /// repeated anchored resolutions stay consistent.
+    #[test]
+    fn pkg_node_at_is_stable_across_repeat_calls() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "pkg/__init__.py", "");
+        write(dir.path(), "pkg/a.py", "x = 1\n");
+        write(dir.path(), "pkg/b.py", "import pkg.a\n");
+
+        let root = AnchoredRoot::new(dir.path());
+        let mut resolver = PkgResolver::new();
+        let first = resolver.pkg_node_at(&root, "pkg/b.py");
+        let second = resolver.pkg_node_at(&root, "pkg/b.py");
+        assert_eq!(first, second);
+        assert_eq!(first.as_deref(), Some("pkg:pkg.b"));
     }
 
     #[test]
