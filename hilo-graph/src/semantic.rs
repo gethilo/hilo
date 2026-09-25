@@ -1545,10 +1545,7 @@ mod tests {
             symbols
         );
         for sym in &symbols {
-            let token = sym
-                .split(|c: char| c == '(' || c == '<' || c == ',' || c == ' ' || c == ';')
-                .next()
-                .unwrap_or(sym);
+            let token = sym.split(['(', '<', ',', ' ', ';']).next().unwrap_or(sym);
             let results = search_with_symbols(&db, token, &opts, extractor).unwrap();
             assert!(
                 results.iter().any(|r| r.file_path == "src/gen/wide.py"),
