@@ -33,9 +33,12 @@ pub use graph::{
     DEFAULT_REQUEST_PATH_RECONCILE_BUDGET_MS, RECONCILE_CHUNK_ROWS, UNBOUNDED_RECONCILE_BUDGET_MS,
     UNRESOLVABLE_TARGET_HINT,
 };
-pub use impact::{compute_impact, compute_impact_with_external, ImpactFile, ImpactResult};
+pub use impact::{
+    compute_impact, compute_impact_at, compute_impact_with_external, ImpactFile, ImpactResult,
+};
 pub use parser::{Language, Parser};
 pub use provenance::Provenance;
+pub use resolution::{AnchoredRoot, PkgResolver};
 pub use rules::{Rule, RuleCheckResult, RuleEngine, RuleError};
 pub use signal::{
     extract_symbol_names_for_index, understand, understand_with_source, Resolution, SignalFile,

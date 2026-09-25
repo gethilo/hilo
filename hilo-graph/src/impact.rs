@@ -188,6 +188,7 @@ fn collect_streamed(
 pub(crate) fn compute_impact_streaming(
     start_path: &str,
     max_depth: u32,
+    anchored: Option<&crate::resolution::AnchoredRoot>,
     local_resolver: Option<&LocalSpecResolver>,
     mut scan: impl FnMut(&mut dyn FnMut(Edge) -> bool) -> GraphResult<()>,
 ) -> GraphResult<Vec<ImpactFile>> {
@@ -200,6 +201,9 @@ pub(crate) fn compute_impact_streaming(
     visited.insert(start_path.to_string());
     let mut queue = VecDeque::from([(start_path.to_string(), 0)]);
     let mut resolver = PkgResolver::new();
+    // DF-WARPFS-55: pkg expansion anchors at the graph's repo root when one
+    // is available; `None` keeps the historical CWD anchor (e.g. tests that
+    // construct a bare connection).
     let file_query = !start_path.starts_with("pkg:") && !start_path.starts_with("sys:");
     let mut cx = Collector {
         results: &mut results,
@@ -215,6 +219,8 @@ pub(crate) fn compute_impact_streaming(
 
         let pkg_target = if path.starts_with("pkg:") {
             Some(path.clone())
+        } else if let Some(root) = anchored {
+            resolver.pkg_node_at(root, &path)
         } else {
             resolver.pkg_node(&path)
         };
@@ -313,6 +319,42 @@ pub fn compute_impact(
     start_path: &str,
     max_depth: u32,
 ) -> GraphResult<Vec<ImpactFile>> {
+    compute_impact_at(conn, start_path, max_depth, None)
+}
+
+/// [`compute_impact`] with an explicit pkg-resolution anchor (DF-WARPFS-55).
+///
+/// `anchored` is the repo root the queried graph's edge paths are relative
+/// to; when `Some`, pkg-node expansion joins the (repo-relative) subject and
+/// every BFS node onto it instead of the process CWD, so the answer is
+/// CWD-independent. Callers that hold a [`crate::GraphDB`] never call this
+/// directly — `impact_or_parse` supplies the anchor from the opened db path.
+/// `None` keeps the historical CWD-anchored walk (used when no root is
+/// derivable, e.g. `:memory:` test connections).
+///
+/// The root also arrives via the DuckDB session variable
+/// `hilo_resolution_root` (stamped by `GraphDB::open_with_options`), which is
+/// what makes the root-less `compute_impact(conn, …)` signature — the shape
+/// the UniFFI bindings call — answer with the anchored semantics: a variable
+/// set on the session wins, `None` here is only the fallback.
+pub fn compute_impact_at(
+    conn: &Connection,
+    start_path: &str,
+    max_depth: u32,
+    anchored: Option<&crate::resolution::AnchoredRoot>,
+) -> GraphResult<Vec<ImpactFile>> {
+    // DF-WARPFS-55: prefer the anchor the open stamped onto this session;
+    // an explicit parameter (none of the in-repo call sites pass one) still
+    // wins so future callers can override. The stamped root is owned here so
+    // the borrow outlives the BFS.
+    let stamped_root;
+    let anchored: Option<&crate::resolution::AnchoredRoot> = match anchored {
+        Some(root) => Some(root),
+        None => {
+            stamped_root = session_resolution_root(conn);
+            stamped_root.as_ref()
+        }
+    };
     if max_depth == 0 {
         return Ok(Vec::new());
     }
@@ -395,6 +437,8 @@ pub fn compute_impact(
             // The path is already a bare pkg node: the exact-match query
             // above covered `to = <path>`; only the family remains.
             Some(path.clone())
+        } else if let Some(root) = anchored {
+            resolver.pkg_node_at(root, &path)
         } else {
             resolver.pkg_node(&path)
         };
@@ -495,6 +539,10 @@ pub fn compute_impact_with_external(
     max_depth: u32,
     include_external: bool,
 ) -> GraphResult<Vec<ImpactFile>> {
+    // DF-WARPFS-55: same session-stamped anchor as compute_impact — the
+    // external BFS resolves pkg nodes identically, so it must anchor at the
+    // graph's root, not the CWD.
+    let anchored = session_resolution_root(conn);
     if max_depth == 0 {
         return Ok(Vec::new());
     }
@@ -575,6 +623,8 @@ pub fn compute_impact_with_external(
             // Bare pkg node queried directly: the exact-match query above
             // already covered `to = <path>`; only the family remains.
             Some(path.clone())
+        } else if let Some(root) = anchored.as_ref() {
+            resolver.pkg_node_at(root, &path)
         } else {
             resolver.pkg_node(&path)
         };
@@ -700,6 +750,28 @@ pub fn compute_impact_with_external(
     }
 
     Ok(results)
+}
+
+/// DF-WARPFS-55: read the resolution root stamped onto this DuckDB session
+/// by `GraphDB::open_with_options`, if any.
+///
+/// `SET VARIABLE`/`getvariable` are per-connection session state that works
+/// on read-only handles, so the root travels with the connection without any
+/// new public API — which is what lets the root-less `compute_impact(conn, …)`
+/// signature (the shape the UniFFI bindings and the CLI's external path call)
+/// answer with root-anchored pkg expansion. An unset variable (a connection
+/// opened outside `GraphDB::open`, e.g. `:memory:` test fixtures) reads as
+/// NULL → `None`, which keeps the historical CWD anchor.
+fn session_resolution_root(conn: &Connection) -> Option<crate::resolution::AnchoredRoot> {
+    conn.query_row(
+        "SELECT CAST(getvariable('hilo_resolution_root') AS VARCHAR)",
+        [],
+        |row| row.get::<_, Option<String>>(0),
+    )
+    .ok()
+    .flatten()
+    .filter(|root| !root.is_empty())
+    .map(crate::resolution::AnchoredRoot::new)
 }
 
 #[cfg(test)]
