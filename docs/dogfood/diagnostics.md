@@ -1159,3 +1159,89 @@ libfuse3-4 present-by-default claim VERIFIED. Two install attempts were burned
 by las-03's /tmp residue (stale uid-1004 files → Permission-denied redirects
 that masquerade as build failures — BUILD_RC=1 with 0 crates compiled), hence
 DF-WARPFS-74: scratch under $HOME, always.
+
+## Run 21 (2026-09-25, task-router-dogfood) — C/C++ + Ruby corpora, §14 sandbox, DF-61/64 fix re-verification
+
+**How the run chose its targets.** Twenty runs had exercised 5 of 26 languages
+(Rust×2, Go, Python, TS/JS, Java) and never a C/C++ repo — even though the
+README's flagship example (`sys:gtest/gtest.h`) is a C header query. The
+CHANGELOG has advertised "Bubblewrap sandboxing" since 0.2.x with a detailed
+spec section (§14) and no run had ever tried to USE it. The foreman had closed
+DF-WARPFS-61/64 (graph cache self-heal, 2af3c0d) two hours earlier and the fix
+had never been verified by use. Those three are the run.
+
+**C/C++: the include model stops at the compilation unit (DF-WARPFS-75).**
+Hilo's C parser emits edges only from `.c` files. Headers appear as edge
+TARGETS (so a header's direct `.c` includers are found — server.h 72/72 exact)
+but never as SOURCES: a jq census of edges.jsonl shows zero edges with a `.h`
+source, though server.h carries 53 `#include` lines. Every header's impact
+under-counts by exactly its header-includer count (rax.h: 1 `.c` + 3 `.h`
+includers → hilo reports 1), and transitive C blast radius — the question C
+developers actually ask, because touching server.h recompiles the world — is
+structurally unanswerable. The right mental model: hilo currently answers
+"which compilation units include this header directly", not "what depends on
+this header". Related honesty gap (DF-WARPFS-80): the error message advertises
+`sys:<header>`, but the actual C node form is `local:adlist.h` — bare basename,
+no directory, `local:` unmentioned. A user following the tool's own advice
+fails. Fold both into one header-work fix.
+
+**Ruby joins the file→package gap family (DF-WARPFS-78), with a new face.**
+`require 'sidekiq/api'` resolves to `pkg:sidekiq/api`, pkg-form impact is 21/21
+exact vs grep — but `impact lib/sidekiq/api.rb` is a confident empty answer
+(rc=0). That is now five languages (Go, Python, TS/JS, Java, Ruby) sharing one
+missing resolver. The new observation this run: `graph stats` lists
+`lib/sidekiq.rb` — the gem ENTRYPOINT — under "Orphans (no incoming edges)".
+The orphan report consumes the same unresolved class, so the tool tells a user
+that core files are dead code. One generalized file→package resolver closes
+the family; per-language patches have left it open for six runs.
+
+**§14 sandboxing: built, tested, advertised — and unreachable (DF-WARPFS-77).**
+With the spec §14.3 example block verbatim in `.vfs/manifest.yaml` and bwrap
+0.10.0 installed, `hilo mount --daemon` exits 0 and serves the tree with ZERO
+bwrap processes. The wiring census explains it: `mount.rs:99` hardcodes
+`sandbox: None` (the manifest block is never parsed into FuseConfig), the
+daemon's bwrap-missing refusal branch can therefore never fire, and
+`BubblewrapExecutor::run` has no production caller — its only consumers are
+unit tests. The shipped feature is arg-vector construction. This is run 17's
+plugin story (manifest block parsed by nothing) repeating at the sandbox layer,
+and it is the clearest premature-completion signature in the repo: L1/L2 green
+(compiles, tests pass), L3 absent (no user can reach it). Until wired or
+honestly descoped, spec §14.2's isolation promises ("agent calls home over
+network → Blocked") do not hold.
+
+**Search: the per-invocation parse tax (DF-WARPFS-76, the perf finding).**
+`graph search` with default options costs 4.204s ±0.112 on redis (539 files)
+— 4.178s of it USER time, pure CPU — vs 32.6ms with `--no-symbols` on the same
+query and graph: 129x. It scales superlinearly (243ms at 103 files → 4.2s at
+539; 17x for 5.2x) and `--limit 5` does not help, because the cost is index
+BUILD, not result count. Mechanism (code read; sampling blocked by
+perf_event_paranoid=4): the CLI opts into symbol indexing (graph.rs:2281), and
+`default_symbol_extractor` (semantic.rs:44) re-reads and tree-sitter-parses
+EVERY document file per process. The persistent parse cache that `warm`
+maintains — the thing that makes warm incremental at 15ms — is ignored here,
+so every search re-pays the full warm parse bill. The GAP-077 recall win
+bought exact-symbol findability at a price no one measured, and at redis scale
+the price is a user-visible multi-second stall on a command the README groups
+under "near-instant". `stats` 32.6ms / `impact` d3 44.9ms on the same graph
+confirm everything ELSE is fine.
+
+**DF-61/64 self-heal: headline verified, adjacent case broken (DF-WARPFS-79).**
+Real-use re-verification of 2af3c0d: a DELETED graph.db heals exactly as
+claimed — the next open replays edges.jsonl and impact returns correct
+results. But a graph.db emptied IN PLACE to 0 bytes (disk-full, killed copy —
+the run-18 cold-start face the fix's own message describes) hard-fails every
+command with `DuckDB error: IO Error: The file ... exists, but it is not a
+valid DuckDB database file!` — AND the documented recovery `graph warm` hits
+the same wall, because warm opens the db before any heal logic runs. The
+mechanism is the fix's own read-only probe open: DuckDB rejects a 0-byte file
+there, before `plan_reconcile` can schedule the replay. Lesson for the fix
+family: the probe assumed a structurally valid file; a cheap `stat` (0 bytes →
+treat as missing) closes it. The user-visible lesson is unchanged from run 18:
+cache damage must never strand the user in an undocumented recovery ritual.
+
+**Method notes.** perf_event_paranoid=4 on this host blocks perf record
+(zero-sized data) — the perf skill's fallback ladder applies: hyperfine
+scaling pair (1x vs 5x corpus) to prove superlinearity, then a code read to
+name the mechanism, then a control probe (--no-symbols) that isolates the
+cost to the symbol pass. The mount.rs:99 census took one grep AFTER the
+behavioral proof — behavior first, source to explain it, never instead.

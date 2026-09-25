@@ -640,3 +640,57 @@ Run-20 gotchas:
 5. graph numbers: `graph stats` 19ms, `graph impact` 16ms warm (release,
    2-file fixture, n=20); Python FFI script end-to-end 231ms (import of the
    125MB cdylib dominates). Nothing a user waits on.
+
+## C/C++, Ruby, sandbox reality, search cost, damaged-cache recovery (run 21, 2026-09-25)
+
+HEAD f13a95d, release v0.3.0-104-gce9de75-dirty. Corpora: sidekiq (Ruby,
+177 files) and redis (C, 562 files warmed).
+
+### Querying C/C++ repos — what works, what lies
+
+- **Works**: `.c`-file blast radius for a header is EXACT
+  (`impact local:server.h` → 72/72 vs grep). `related <file>` shows a .c
+  file's includes. warm 11.2s/562 files; non-UTF-8 files named honestly.
+- **Lies (DF-75)**: header→header includes do not exist in the graph —
+  every header's impact under-counts by exactly its `.h`-includer count,
+  and transitive blast radius is unanswerable. Treat hilo's C impact as
+  "direct .c includers", nothing more, until DF-75 lands.
+- **Id-form trap (DF-80)**: C headers are nodes named `local:adlist.h`
+  (bare basename). The CLI's accepted-forms error advertises `sys:<header>`
+  — that form FAILS on C corpora today. Try `local:` when `sys:` fails.
+
+### Querying Ruby repos
+
+- **pkg-form exact**: `impact pkg:sidekiq/api` → 21/21 vs grep
+  (`require 'sidekiq/api'` sites). `pkg:sidekiq/manager` → 2/2.
+- **file-form silently empty (DF-78)**: `impact lib/sidekiq/api.rb` →
+  "No dependents found" rc=0. Same family as Go/Python/TS/JS/Java — on
+  Ruby, use the `pkg:` form (translate the require path to the package
+  path yourself).
+- **stats Orphans is untrustworthy for Ruby (same class)**: it listed
+  `lib/sidekiq.rb` — the gem entrypoint — as an orphan despite 21+ real
+  importers. Verify with grep before believing an orphan line.
+
+### `graph search` on real repos: use --no-symbols until DF-76 lands
+
+Default search re-reads + re-parses EVERY source file per invocation:
+4.2s on 539 files (243ms on 103) — superlinear, `--limit` doesn't help,
+cost is index build. `--no-symbols` = 33ms on the same graph with the
+path+symbol-recall tradeoff. If you need symbol hits and can pay 4s,
+fine; otherwise run `--no-symbols` and grep the top hits.
+
+### sandbox: block in the manifest is IGNORED (DF-77)
+
+The CHANGELOG/spec §14 advertise bwrap isolation; in reality
+`hilo mount` never reads the block (hardcoded `sandbox: None`),
+runs unsandboxed, exits 0, and warns nothing. Do not believe agent
+isolation from hilo mounts yet. (bwrap itself IS installed and the
+executor exists — the wiring is missing.)
+
+### graph.db damage recovery (updated run-18 guidance)
+
+- db file DELETED → self-heals on next command (DF-61/64 fix verified).
+- db file exists but 0 bytes → every command AND `graph warm` fail with
+  an opaque DuckDB IO error (DF-79). The fix: `rm .vfs/graph/graph.db`,
+  then any command replays edges.jsonl. No doc mentions this yet.
+- Never copy a project mid-warm; stop the daemon first.

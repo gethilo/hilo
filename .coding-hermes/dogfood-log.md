@@ -790,3 +790,29 @@ rows: DF-WARPFS-69..74 appended + read-back verified (board 233 -> 239, 0 malfor
 newline checked before append, +6 numstat exactly).
 left behind: docs/dogfood/2026-09-25-run20-python-ffi-backend.md, diagnostics.md Run 20 section,
 skills/hilo-usage/SKILL.md run-20 section, rows, this entry.
+date: 2026-09-25 | run 21 (task-router-dogfood tick 2026-09-25-20-59-07) | verdict: PROMISING-BUT-ROUGH
+promise (angle by stale-surface rule — 20 runs never warmed a C/C++ or Ruby corpus, never enabled
+the CHANGELOG's "Bubblewrap sandboxing", and the foreman had just closed DF-61/64 without a use
+re-verification): structural answers on any of 26 languages <1s, agent isolation per spec §14.
+reality: C .c-impact exact (server.h 72/72), Ruby pkg-impact exact (sidekiq/api 21/21), stats/
+impact millisecond-class on 539 files, DF-61/64 DELETED-db heal verified live — BUT C headers are
+never edge sources (zero header->header includes; every header blast radius under-counted, rax.h
+1/4; DF-75 P1), search re-parses every file per invocation (4.204s vs 33ms --no-symbols = 129x,
+superlinear 103->539 files; DF-76 P0), sandbox: block never read by the CLI (mount.rs:99 hardcodes
+None; mount runs unsandboxed rc=0 with bwrap installed; executor has no production caller; DF-77
+P0), Ruby file-form silently empty + stats lists the gem entrypoint as an orphan (DF-78 P1),
+0-byte graph.db defeats open AND the documented warm recovery with an opaque DuckDB error (DF-79
+P1), C header id form is undocumented local: while the error advertises sys: (DF-80 P2).
+time-to-first-success: ~30s sidekiq (init 16ms + warm 0.96s), ~1 min redis; friction count: 7.
+perf (hyperfine, release, warm): stats 32.6ms ±2.4, impact d3 44.9ms ±2.4 (redis, n=20); search
+4.204s ±0.112 (n=10, USER 4.178s pure CPU; perf_event_paranoid=4 blocked sampling — scaling pair
++ code read + --no-symbols control instead) — PERF ROW FILED (DF-76): the first search cost a
+user would feel in 21 runs. warm cold 11.2s redis / 0.96s sidekiq; incremental not re-measured.
+install leg: SKIPPED — DF-WARPFS-81 P2: las-03 + las-01 ssh connect-timeout; las-02 reachable but
+bunkerd crash-looping (restart counter 25158: refuses plaintext bind :10002/:10001 without
+tls.enabled, plus audit chain-head 'record hash mismatch (tampered)'); battery NOT launched;
+host-owner decisions, out of lane. Fifth install-leg infra incident (runs 9/10/11/13/15).
+rows: DF-WARPFS-75..81 appended via script with census before/after + trailing-newline check +
+read-back (board 239 -> 246, 0 bad lines, each id exactly once).
+left behind: docs/dogfood/2026-09-25-run21-c-ruby-languages-sandbox.md, diagnostics.md Run 21
+section, skills/hilo-usage/SKILL.md run-21 section, rows, this entry.
