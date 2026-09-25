@@ -1,0 +1,31 @@
+{
+  "tick": "warpfs-2026-09-25-06-47-51",
+  "board_tick": 229,
+  "budget": 5,
+  "wave_size": 1,
+  "base": "origin/master",
+  "base_sha": "39e830b601a3ba5c26af2eda4389bb5c98ddedfb",
+  "model": "z-ai/glm-5.3-flash",
+  "provider": "xkiro",
+  "model_note": "tick-224/225/227 wave precedent (same-day, same project; seat-verified in event 676). Tick prompt Worker model/provider field was EMPTY (recurring norm). Seat identity re-verified via session_model_usage after dispatch per DISPATCH LAW.",
+  "independence_check": "Single code worker: DF-WARPFS-55 touches hilo-graph/src/resolution.rs (+ graph.rs/CLI as needed). Foreman-direct parallel items are disjoint: DF-WARPFS-24 (verification-only board close, no code), DF-WARPFS-42 (docs/dogfood/diagnostics.md), DF-WARPFS-56 (hilo-ffi/README.md). DF-WARPFS-57 NOT dispatched: its fix lives in hilo-ffi/src/lib.rs and the root-threading fix in DF-55 may also want to touch hilo-ffi — held back to keep worker isolation provable; re-filed for next tick.",
+  "workers": [
+    {
+      "id": "DF-WARPFS-55",
+      "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-55",
+      "branch": "wt/DF-WARPFS-55",
+      "files": ["hilo-graph/src/resolution.rs", "hilo-graph/src/graph.rs", "hilo-cli/src/commands/graph.rs"],
+      "tags": ["ffi", "impact", "cwd", "pkg-resolution", "p0"],
+      "brief": "/tmp/wfs229-brief-dfw55.txt",
+      "gitreins_task": "df-warpfs-55-impact-cwd-anchor"
+    }
+  ],
+  "foreman_direct_parallel": [
+    {"id": "DF-WARPFS-24", "kind": "verification-only board-stale close (fix 56e81a5 merged tick 225; row left pending)"},
+    {"id": "DF-WARPFS-42", "kind": "docs-only premise fix (diagnostics.md lags GAP-050 landing)"},
+    {"id": "DF-WARPFS-56", "kind": "docs-only (hilo-ffi README embedding recipe from run-16)"}
+  ],
+  "merge_order": ["DF-WARPFS-55"],
+  "merge_gate": "per-merge: git merge --no-ff; scoped gates on integrated tree (cargo check -p hilo_graph, cargo test -p hilo_graph --lib, fmt check); gitreins task complete AFTER merge commit exists",
+  "dispatched_at": "2026-09-25T07:05:00-05:00"
+}
