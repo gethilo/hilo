@@ -447,3 +447,41 @@ Rules learned this run:
   run-14 workspace-mount defects don't apply to them.
 - SSE does not exist; stdio is the only transport. Outside a Hilo project the
   server exits 1 telling you to run `hilo init`.
+
+## Run 16 (2026-09-25, Go FFI consumer): embed the .so in Go — and never trust impact() across CWDs
+
+The Go bindings COMPILE AND RUN end to end; the docs just stop one step short
+(DF-WARPFS-56). Working recipe (Go 1.26, bindings from `uniffi-bindgen-go
+v0.4.0+v0.28.3`):
+
+```bash
+cd hilo-ffi
+cargo build -p hilo_ffi                        # debug ~10s warm; the .so IS the Go link target
+uniffi-bindgen-go src/hilo.udl --out-dir /tmp/bind/go --no-format
+mkdir -p mymodule/hilo-ffi && cp /tmp/bind/go/hilo/hilo.go /tmp/bind/go/hilo/hilo.h mymodule/hilo-ffi/
+sed -i '1s/package hilo/package hilo-ffi/' mymodule/hilo-ffi/hilo.go   # rename pkg to taste
+cd mymodule && CGO_LDFLAGS="-L/home/…/target/debug -lhilo_ffi -Wl,-rpath,/home/…/target/debug" \
+  CGO_CFLAGS="-I$(pwd)/hilo-ffi" go build -o mytool .
+LD_LIBRARY_PATH=/home/…/target/debug ./mytool /abs/path/to/repo
+```
+
+Rules learned this run:
+- The README's "Go bindings do not consume this .so directly" is WRONG — cgo
+  links `libhilo_ffi.so`; without `-lhilo_ffi` the build fails at link time.
+  Run `ldd ./mytool` to prove which .so you are actually exercising.
+- `vfs_get_metadata` / `vfs_set_metadata` are NAMESPACE functions taking a
+  RAW path: they do NOT join the handle root and resolve against CWD. Use an
+  ABSOLUTE path (`root + "/rel/path"`) with them; handle methods
+  (`VfsGraphRelated` etc.) join the root and want repo-relative paths.
+- **P0 (DF-WARPFS-55): `vfs_graph_impact` is CWD-dependent and silently
+  wrong.** Run the consumer with CWD == the handle root, or expect silent 0
+  dependents for any file whose dependents reach it through a `pkg:` node
+  (Python packages, Go packages, Rust crates — most real graphs). The CLI
+  `graph impact` has the same disease. Until DF-WARPFS-55 is fixed, treat
+  cross-package impact results as trustworthy ONLY when the process CWD is
+  the repo root.
+- `related()` returns OUTGOING edges (what the file imports), not dependents
+  — checked against the CLI, not a defect.
+- Go generated code calls `C.go_pkg_node`-style errors as `HiloError` with
+  clear messages; the NotFound path lists the joined absolute path (helpful).
+

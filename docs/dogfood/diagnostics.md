@@ -901,3 +901,47 @@ silent 0-file no-op, DF-WARPFS-51).
 cross-repo import, bare remotes), full transcript in
 `docs/dogfood/2026-09-24-run14-workspace-integration.md`. Perf: mount-to-listable
 111ms cold, unmount 10.0ms ± 0.6ms — no PERF row; the surface is broken, not slow.
+
+## Run 16 — 2026-09-25 (warpfs-dogfood, Go FFI consumer): how the resolver turns CWD into graph truth
+
+**How this surface is built.** `hilo-ffi` compiles to `libhilo_ffi.so` with a
+UniFFI `.udl` as source of truth; `uniffi-bindgen-go` generates cgo bindings
+that `#include <hilo.h>` and link the `.so` directly (contrary to the README,
+which says Go "does not consume this `.so` directly" — it does). `HiloHandle`
+canonicalizes and stores the repo root in its constructor, then every method
+joins that root: `graph_db()` opens `<root>/.vfs/graph/graph.db`,
+`graph_subject()` strips the root prefix from absolute paths and passes a bare
+repo-relative path (the "subject") down to `hilo_graph::compute_impact`.
+
+**The design seam that failed.** The BFS in `impact.rs` needs to expand a file
+subject into its package node (`parser.py` → `pkg:plugin.terminal_jail.interruptor.parser`)
+so it can hop file → package → importers. That expansion (`PkgResolver::pkg_node`
+→ `python_module_for_file` / `go_package_for_file` / `crate_name_for_file`)
+works by **walking the filesystem**: climb parents looking for `__init__.py`
+/ `go.mod` / `Cargo.toml`. But it receives the bare relative subject, and
+nothing anchors the walk at the handle root — the process CWD decides where
+`__init__.py` is found. When CWD == repo root the walk happens to land in the
+right package and the answer is right. From any other CWD the walk dies at a
+non-package parent and returns `None`, and the impact BFS then only sees
+direct edges — silently (0 dependents, rc=0). No error anywhere, because
+`None` is a legal "no package node" answer.
+
+**Why it took a three-surface bisect:** the Go consumer failed while the
+Python FFI probe "worked" — because that probe was (accidentally) run from
+the repo copy's root, and the working/non-working split followed CWD, not
+binding. The ladder that localized it: (1) Go depth sweep — depth had no
+effect, so the argument lowering was innocent; (2) explicit `pkg:` start node
+through the Go bindings — worked perfectly (264-byte response), so the
+cgo/RustBuffer path was innocent; (3) same query, Python FFI, only CWD
+changed — flipped 3 → 0. Root cause in one file/line:
+`hilo-graph/src/resolution.rs:359` (`current.join("__init__.py").is_file()`)
+and its siblings — filesystem walks anchored at CWD instead of root.
+
+**The right way:** the subject's package-node expansion must be anchored at
+the root the handle already canonicalized (thread the root into
+`PkgResolver`, or resolve the subject to an absolute path before the walk and
+strip the prefix from the resulting module name). The CLI inherits the same
+behavior via the same resolver — fixing it at the resolver fixes both
+surfaces, and the regression test is cheap: build a graph in a tmpdir,
+compute impact from a different CWD, assert the pkg-mediated dependents are
+still returned.
