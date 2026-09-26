@@ -971,6 +971,175 @@ fn graph_warm_accounts_for_every_discovered_file() {
 }
 
 #[test]
+fn graph_stats_reconciles_census_against_warm_ledger() {
+    // DF-WARPFS-43: after a warm, `graph stats` must reconcile its
+    // edge-derived census against warm's own coverage accounting instead of
+    // reporting two headline numbers that silently disagree. The reconcile
+    // block appears on BOTH warm paths (fresh write and full-cache hit).
+    let dir = unique_tempdir("stats-census-reconcile");
+    fs::write(
+        dir.join("app.py"),
+        "import helper\n\ndef run():\n    helper.go()\n",
+    )
+    .expect("failed to write app.py");
+    fs::write(
+        dir.join("helper.py"),
+        "import os\n\ndef go():\n    os.path.join('x')\n",
+    )
+    .expect("failed to write helper.py");
+    // Zero-edge: counted by warm's Coverage line, absent from the census.
+    fs::write(dir.join("constants.py"), "MAX = 1\n").expect("failed to write constants.py");
+
+    let init = hilo_cmd()
+        .arg("init")
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo init");
+    assert!(
+        init.status.success(),
+        "hilo init failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+
+    let warm = hilo_cmd()
+        .args(["graph", "warm"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn graph warm");
+    assert!(
+        warm.status.success(),
+        "graph warm failed: {}",
+        String::from_utf8_lossy(&warm.stderr)
+    );
+
+    let stats = hilo_cmd()
+        .args(["graph", "stats"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn graph stats");
+    assert!(
+        stats.status.success(),
+        "graph stats failed: {}",
+        String::from_utf8_lossy(&stats.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&stats.stdout);
+    let census_line = stdout
+        .lines()
+        .find(|l| l.starts_with("File census: "))
+        .expect("stats must carry the census reconcile block:\n{stdout}");
+    // 2 discovered files carry edges; constants.py is a no-imports file.
+    assert!(
+        census_line.contains(
+            "3 discovered files = 2 contribute + 1 zero-edge (1 no imports + 0 package facades)"
+        ),
+        "census line must reconcile both definitions:\n  {census_line}\nfull stdout:\n{stdout}"
+    );
+
+    // The ledger refresh also happens on the full-cache-hit fast path.
+    let rewarm = hilo_cmd()
+        .args(["graph", "warm"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn cached graph warm");
+    assert!(rewarm.status.success(), "rewarm failed");
+    let ledger: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(dir.join(".vfs/graph/coverage.json"))
+            .expect("warm must persist the coverage ledger"),
+    )
+    .expect("coverage ledger must be valid JSON");
+    assert_eq!(ledger["schema"], 1);
+    assert_eq!(ledger["discovered_files"], 3);
+    assert_eq!(ledger["contributes"], 2);
+    assert_eq!(ledger["no_imports"], 1);
+    assert_eq!(ledger["unique_edge_sources"], 2);
+
+    // Stale-inventory branch: delete a source file whose edges persist in
+    // the append-only inventory, then re-warm. The fresh ledger drops it
+    // from the contributor count while the census keeps counting its
+    // lingering rows (delta insert never purges) — the reconcile line must
+    // name the drift instead of letting the two numbers look contradictory.
+    fs::remove_file(dir.join("helper.py")).expect("failed to remove helper.py");
+    let rewarm2 = hilo_cmd()
+        .args(["graph", "warm"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn graph warm after deletion");
+    assert!(
+        rewarm2.status.success(),
+        "warm after deletion failed: {}",
+        String::from_utf8_lossy(&rewarm2.stderr)
+    );
+    let stats2 = hilo_cmd()
+        .args(["graph", "stats"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn graph stats after deletion");
+    assert!(stats2.status.success(), "stats after deletion failed");
+    let stdout2 = String::from_utf8_lossy(&stats2.stdout);
+    let census_line2 = stdout2
+        .lines()
+        .find(|l| l.starts_with("File census: "))
+        .expect("stats must keep the reconcile block after a source deletion:\n{stdout2}");
+    assert!(
+        census_line2.contains("stale entries no longer on disk"),
+        "deleted-source census must surface stale inventory entries:\n  {census_line2}\nfull stdout:\n{stdout2}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn graph_stats_without_ledger_prints_no_census_block() {
+    // Degraded mode (ledger absent/corrupt): stats keeps its pre-ledger
+    // output shape — no census block, no failure.
+    let dir = unique_tempdir("stats-no-ledger");
+    fs::write(
+        dir.join("app.py"),
+        "import os\n\ndef go():\n    os.path.join('x')\n",
+    )
+    .expect("failed to write app.py");
+    let init = hilo_cmd()
+        .arg("init")
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo init");
+    assert!(
+        init.status.success(),
+        "hilo init failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    let warm = hilo_cmd()
+        .args(["graph", "warm"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn graph warm");
+    assert!(warm.status.success(), "warm failed");
+    fs::remove_file(dir.join(".vfs/graph/coverage.json"))
+        .expect("failed to remove the ledger for the degraded-mode probe");
+
+    let stats = hilo_cmd()
+        .args(["graph", "stats"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn graph stats");
+    assert!(
+        stats.status.success(),
+        "stats without a ledger must still succeed: {}",
+        String::from_utf8_lossy(&stats.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&stats.stdout);
+    assert!(
+        !stdout.contains("File census:"),
+        "no census block without a ledger:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Total files: 1"),
+        "base stats output must be intact:\n{stdout}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn graph_warm_help_documents_discovery_overrides() {
     let output = hilo_cmd()
         .args(["graph", "warm", "--help"])

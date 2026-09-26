@@ -114,6 +114,7 @@ hilo graph stats
 # Output:
 # Total edges: 202 distinct / 292 raw (edges.jsonl)
 # Total files: 81
+# File census: 81 files with edges (distinct edge sources) — warm last counted 90 discovered files = 82 contribute + 8 zero-edge (7 no imports + 1 package facades); some sources may be stale entries no longer on disk (edges.jsonl is append-only)
 # Components (6 total):
 #   src: 61 files, 180 edges
 #   docs: 12 files, 8 edges
@@ -136,6 +137,17 @@ roster. The header always shows the full component count; the list is
 capped like the orphans list by `--limit` (default 25), with a
 `... N more components (use --limit 0 to show all)` trailer — pass
 `--limit 0` to print every component.
+
+The `File census` line reconciles `Total files` with the coverage
+accounting `hilo graph warm` prints at the end of every run (persisted in
+`.vfs/graph/coverage.json`). `Total files` is a census of distinct edge
+sources in the graph; warm's Coverage line counts every discovered file —
+zero-edge files (no imports, package facades) never carry an edge source,
+and `edges.jsonl` is append-only, so sources of files deleted after an
+earlier warm can linger in the census. When the two definitions disagree,
+the line states both numbers and names the difference instead of leaving
+two headline numbers that look contradictory. A missing or unreadable
+ledger degrades gracefully: the census line is simply omitted.
 
 ### `related`
 

@@ -171,6 +171,51 @@ fn coverage_path_lines(label: &str, paths: &[String]) -> Vec<String> {
     lines
 }
 
+/// DF-WARPFS-43: end-of-warm coverage ledger, persisted next to the graph
+/// cache so `graph stats` can reconcile its edge-derived file census against
+/// the same accounting warm prints. The census underlies `Total files` and
+/// counts DISTINCT edge sources; the ledger counts every discovered file —
+/// zero-edge files (no imports, facades) never appear in the census, and an
+/// append-only `edges.jsonl` keeps superseded sources in it. Persisting the
+/// ledger lets stats surface that difference with both definitions instead
+/// of reporting two headline numbers that silently disagree.
+const COVERAGE_LEDGER: &str = "coverage.json";
+
+/// Serialize the end-of-warm accounting to `.vfs/graph/coverage.json`
+/// (DF-WARPFS-43). Best-effort: a write failure is a warning, never a warm
+/// failure — stats degrades to the pre-ledger output (no census line).
+///
+/// Written on every warm that processes files, including the full-cache-hit
+/// fast path, so the ledger is refreshed in lockstep with the printed
+/// `Coverage:` verdict on every run.
+fn write_coverage_ledger(cwd: &Path, report: &CoverageReport, discovered: usize, sources: usize) {
+    let path = cwd.join(".vfs").join("graph").join(COVERAGE_LEDGER);
+    let doc = serde_json::json!({
+        "schema": 1,
+        "discovered_files": discovered,
+        "contributes": report.contributes,
+        "package_facades": report.facades,
+        "no_imports": report.no_imports,
+        "unreadable": report.unreadable.len(),
+        "unsupported_extension": report.unsupported.len(),
+        "unique_edge_sources": sources,
+    });
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            eprintln!("warning: failed to create {}: {e}", parent.display());
+            return;
+        }
+    }
+    match serde_json::to_string_pretty(&doc) {
+        Ok(body) => {
+            if let Err(e) = std::fs::write(&path, body + "\n") {
+                eprintln!("warning: failed to write {}: {e}", path.display());
+            }
+        }
+        Err(e) => eprintln!("warning: failed to serialize coverage ledger: {e}"),
+    }
+}
+
 pub fn run_warm(
     workspace: bool,
     language: Option<String>,
@@ -582,6 +627,9 @@ pub fn run_warm_in(
         println!("Discovered {n} edges across {m} files ({langs} languages) [all cached, graph unchanged]");
         exclusions.print();
         coverage.print();
+        // DF-WARPFS-43: refresh the ledger on the fast path too — stats
+        // reconciles against it and must never read a stale accounting.
+        write_coverage_ledger(cwd, &coverage, total_files, unique_sources.len());
         let _ = t_jsonl; // timing span unused on this path
         return Ok(());
     }
@@ -644,6 +692,8 @@ pub fn run_warm_in(
     println!("Discovered {n} edges across {m} files ({langs} languages)");
     exclusions.print();
     coverage.print();
+    // DF-WARPFS-43: persist the accounting stats reconciles against.
+    write_coverage_ledger(cwd, &coverage, total_files, unique_sources.len());
 
     // Update the last-warm marker so --changed knows the cutoff.
     let warm_marker = cwd.join(".vfs").join("graph").join(".last_warm");
@@ -981,6 +1031,50 @@ pub fn run_stats(limit: usize) -> Result<()> {
         None => println!("Total edges: {}", stats.total_edges),
     }
     println!("Total files: {}", stats.total_files);
+    // DF-WARPFS-43: reconcile the edge-derived census against warm's own
+    // end-of-warm accounting. The census (and Total files above) counts
+    // DISTINCT edge sources in the graph; warm's Coverage line counts every
+    // discovered file. Zero-edge files never enter the census and an
+    // append-only edges.jsonl keeps superseded sources in it, so the two
+    // numbers disagree by design on most trees — surface both definitions
+    // and the delta instead of two headline numbers that look contradictory.
+    if let Ok(ledger_body) =
+        std::fs::read_to_string(cwd.join(".vfs").join("graph").join(COVERAGE_LEDGER))
+    {
+        if let Ok(ledger) = serde_json::from_str::<serde_json::Value>(&ledger_body) {
+            let discovered = ledger.get("discovered_files").and_then(|v| v.as_u64());
+            let contributes = ledger.get("contributes").and_then(|v| v.as_u64());
+            let no_imports = ledger.get("no_imports").and_then(|v| v.as_u64());
+            let facades = ledger.get("package_facades").and_then(|v| v.as_u64());
+            if let (Some(discovered), Some(contributes), Some(no_imports), Some(facades)) =
+                (discovered, contributes, no_imports, facades)
+            {
+                let census = stats.total_files.max(0) as u64;
+                let zero_edge = no_imports + facades;
+                if census > contributes {
+                    // Stale inventory: the census still counts edge sources
+                    // the latest warm no longer saw (deleted/renamed files —
+                    // edges.jsonl is append-only, the DuckDB delta insert
+                    // never purges their rows). This is the DF-WARPFS-43
+                    // run-12 signature (666 census vs 659 contributors).
+                    println!(
+                        "File census: {census} files with edges (distinct edge sources) — warm last counted {discovered} discovered files = {contributes} contribute + {zero_edge} zero-edge ({no_imports} no imports + {facades} package facades); some sources may be stale entries no longer on disk (edges.jsonl is append-only)"
+                    );
+                } else if census < contributes {
+                    // Ledger ahead of the graph db (e.g. a warm whose db
+                    // write failed): the census is missing rows the latest
+                    // warm counted as contributors.
+                    println!(
+                        "File census: {census} files with edges (distinct edge sources) — warm last counted {discovered} discovered files = {contributes} contribute + {zero_edge} zero-edge ({no_imports} no imports + {facades} package facades); the census is missing contributors (stale or truncated graph cache — run `hilo graph warm`)"
+                    );
+                } else {
+                    println!(
+                        "File census: {census} files with edges (distinct edge sources) — warm last counted {discovered} discovered files = {contributes} contribute + {zero_edge} zero-edge ({no_imports} no imports + {facades} package facades)"
+                    );
+                }
+            }
+        }
+    }
     // GAP-097: the component roster — what subsystems make up this system.
     // Capped by the same --limit rule as orphans (0 = unlimited).
     if !stats.components.is_empty() {
@@ -2515,7 +2609,13 @@ pub fn run_clean() -> Result<()> {
 fn clean_graph_dir(cwd: &Path) -> Result<usize> {
     let graph_dir = cwd.join(".vfs").join("graph");
     let mut removed = 0;
-    for name in ["edges.jsonl", "graph.db", ".parse_cache.json", ".last_warm"] {
+    for name in [
+        "edges.jsonl",
+        "graph.db",
+        ".parse_cache.json",
+        ".last_warm",
+        COVERAGE_LEDGER,
+    ] {
         let path = graph_dir.join(name);
         match std::fs::remove_file(&path) {
             Ok(()) => {
@@ -2586,16 +2686,23 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let graph_dir = dir.path().join(".vfs").join("graph");
         fs::create_dir_all(&graph_dir).unwrap();
-        for name in ["edges.jsonl", "graph.db", ".parse_cache.json", ".last_warm"] {
+        for name in [
+            "edges.jsonl",
+            "graph.db",
+            ".parse_cache.json",
+            ".last_warm",
+            COVERAGE_LEDGER,
+        ] {
             fs::write(graph_dir.join(name), "stale").unwrap();
         }
 
         let removed = clean_graph_dir(dir.path()).unwrap();
-        assert_eq!(removed, 4);
+        assert_eq!(removed, 5);
         assert!(!graph_dir.join("edges.jsonl").exists());
         assert!(!graph_dir.join("graph.db").exists());
         assert!(!graph_dir.join(".parse_cache.json").exists());
         assert!(!graph_dir.join(".last_warm").exists());
+        assert!(!graph_dir.join(COVERAGE_LEDGER).exists());
 
         // Second run: nothing to remove, not an error.
         let removed = clean_graph_dir(dir.path()).unwrap();

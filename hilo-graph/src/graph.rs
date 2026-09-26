@@ -5156,6 +5156,52 @@ mod tests {
         );
     }
 
+    // ── DF-WARPFS-43: the file census counts distinct edge SOURCES — the
+    // definition `graph stats`' Total files reconciles against warm's ledger.
+
+    #[test]
+    fn stats_file_census_counts_distinct_edge_sources() {
+        // The census is `COUNT(DISTINCT from)`, NOT the node count: a file
+        // with no outgoing edge is invisible to it (zero-edge files only
+        // show up as `to` targets), and one file contributes once no matter
+        // how many edges fan out of it.
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[
+            // two edges out of one file — still one census entry
+            Edge::new("a/main.go", "pkg:fmt", "imports"),
+            Edge::new("a/main.go", "b/util.go", "imports"),
+            // a zero-edge file: appears only as a `to` target
+            Edge::new("a/main.go", "c/constants.py", "imports"),
+        ])
+        .unwrap();
+        let stats = db.stats().unwrap();
+        assert_eq!(
+            stats.total_files, 1,
+            "only a/main.go carries an outgoing edge; c/constants.py is a to-target, not a source"
+        );
+    }
+
+    #[test]
+    fn stats_file_census_is_raw_distinct_sources() {
+        // The census is the raw `COUNT(DISTINCT from)` — the exact set warm's
+        // `unique_edge_sources` ledger field counts — so the two reconcile by
+        // construction. Symbol-node sources are excluded upstream by the
+        // parser (pkg:/sys: never take the from side); this test only pins
+        // that the census does not silently drift from the ledger's
+        // definition.
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[
+            Edge::new("a/lib.rs", "pkg:serde", "imports"),
+            Edge::new("b/lib.rs", "a/lib.rs", "imports"),
+        ])
+        .unwrap();
+        let stats = db.stats().unwrap();
+        assert_eq!(
+            stats.total_files, 2,
+            "distinct sources across both files (no node-level dedupe beyond the source set)"
+        );
+    }
+
     // ── DF-WARPFS-33: concurrent open / read-only mode ─────────────────────
 
     #[test]
