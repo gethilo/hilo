@@ -1787,3 +1787,20 @@ tasks:
   status: complete
   created_at: '2026-09-25T23:57:03.306353+00:00'
   completed_at: '2026-09-26T00:03:30.344630+00:00'
+- id: df-warpfs-43-stats-census-reconcile
+  title: graph stats reconciles its file census with warm's coverage ledger (DF-WARPFS-43)
+  criteria:
+  - "Commit 047b2b9 is on master with 'Addresses DF-WARPFS-43' in the subject. hilo-cli/src/commands/graph.rs\
+    \ contains write_coverage_ledger persisting .vfs/graph/coverage.json on both warm\
+    \ return paths (fresh write and full-cache hit), run_stats prints a 'File census:'\
+    \ reconcile line naming the edge-census vs discovered-file definitions, clean_graph_dir\
+    \ purges coverage.json, and a missing ledger degrades to the pre-ledger output.\
+    \ Tests: stats_file_census_counts_distinct_edge_sources and stats_file_census_is_raw_distinct_sources\
+    \ pass in hilo_graph; graph_stats_reconciles_census_against_warm_ledger and graph_stats_without_ledger_prints_no_census_block\
+    \ pass in hilo-cli. Live: on /home/kara/hermes-canopy, target/release/hilo graph\
+    \ stats prints 'File census: 687 files with edges (distinct edge sources) \u2014\
+    \ warm last counted 726 discovered files = 680 contribute' and /home/kara/.cargo/bin/cargo\
+    \ test -p hilo_graph --lib exits 0."
+  status: complete
+  created_at: '2026-09-26T02:26:54.341912+00:00'
+  completed_at: '2026-09-26T02:26:54.890218+00:00'
