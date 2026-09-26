@@ -1775,3 +1775,15 @@ tasks:
   status: complete
   created_at: '2026-09-25T21:55:27.078284+00:00'
   completed_at: '2026-09-25T22:05:11.317416+00:00'
+- id: df-warpfs-39-coverage-surface-agreement
+  title: 'DF-WARPFS-39: coverage surfaces must agree on one definition; residual =
+    FFI tested_pct documented as proxy'
+  criteria:
+  - 'On gson at HEAD: graph module gson/src/main/java, graph untested and FFI vfs_graph_stats
+    agree with no 0.0%-vs-58% contradiction; spot-checked covered file (JsonReader
+    via JsonReaderTest) excluded from untested; FFI tested_pct semantics documented
+    as an import/emit-derived proxy (not test-suite coverage) in hilo-ffi/src/lib.rs
+    GraphStats doc + docs/hilo-ffi.md'
+  status: complete
+  created_at: '2026-09-25T23:57:03.306353+00:00'
+  completed_at: '2026-09-26T00:03:30.344630+00:00'

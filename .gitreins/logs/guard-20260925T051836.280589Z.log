@@ -1,0 +1,64 @@
+GitReins guard run log — full output (the console summary is bounded)
+run_utc: 2026-09-25T05:18:36Z
+workdir: /home/kara/warpfs
+test_mode: full
+test_targets: all (full mode)
+overall: FAIL
+guards: 2 (1 failed, 0 skipped)
+diagnostics:
+  first_failing_test: none detected
+  secrets_scanners: clean (gitleaks + builtin cross-check)
+
+==============================================================================
+[FAIL] tests (full)  passed=false  exit_code=1
+==============================================================================
+--- output (untruncated) ---
+rust-lint: rust-analyzer ran: /home/kara/.cargo/bin/rust-analyzer — rust-analyzer 1.98.0 (88d9e12 2026-08-18)
+    Checking hilo_metadata v0.3.1-dev (/home/kara/warpfs/hilo-metadata)
+    Checking hilo_core v0.3.1-dev (/home/kara/warpfs/hilo-core)
+    Checking hilo_backends v0.3.1-dev (/home/kara/warpfs/hilo-backends)
+    Checking hilo_graph v0.3.1-dev (/home/kara/warpfs/hilo-graph)
+    Checking hilo_permissions v0.3.1-dev (/home/kara/warpfs/hilo-permissions)
+    Checking hilo_fuse v0.3.1-dev (/home/kara/warpfs/hilo-fuse)
+   Compiling hilo_ffi v0.3.1-dev (/home/kara/warpfs/hilo-ffi)
+    Checking hilo_triggers v0.3.1-dev (/home/kara/warpfs/hilo-triggers)
+    Checking hilo_mcp v0.3.1-dev (/home/kara/warpfs/hilo-mcp)
+    Checking hilo_plugins v0.3.1-dev (/home/kara/warpfs/hilo-plugins)
+   Compiling hilo-cli v0.3.1-dev (/home/kara/warpfs/hilo-cli)
+error: this manual char comparison can be written more succinctly
+    --> hilo-graph/src/semantic.rs:1549:24
+     |
+1549 |                 .split(|c: char| c == '(' || c == '<' || c == ',' || c == ' ' || c == ';')
+     |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: consider using an array of `char`: `['(', '<', ',', ' ', ';']`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#manual_pattern_char_comparison
+     = note: `-D clippy::manual-pattern-char-comparison` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::manual_pattern_char_comparison)]`
+
+error: could not compile `hilo_graph` (lib test) due to 1 previous error
+rust-lint: workspace clippy reported findings; classifying with the scoped pair
+    Checking hilo_graph v0.3.1-dev (/home/kara/warpfs/hilo-graph)
+    Checking hilo_backends v0.3.1-dev (/home/kara/warpfs/hilo-backends)
+   Compiling hilo-cli v0.3.1-dev (/home/kara/warpfs/hilo-cli)
+    Checking hilo_plugins v0.3.1-dev (/home/kara/warpfs/hilo-plugins)
+    Checking hilo_triggers v0.3.1-dev (/home/kara/warpfs/hilo-triggers)
+    Checking hilo_fuse v0.3.1-dev (/home/kara/warpfs/hilo-fuse)
+    Checking hilo_mcp v0.3.1-dev (/home/kara/warpfs/hilo-mcp)
+error: this manual char comparison can be written more succinctly
+    --> hilo-graph/src/semantic.rs:1549:24
+     |
+1549 |                 .split(|c: char| c == '(' || c == '<' || c == ',' || c == ' ' || c == ';')
+     |                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: consider using an array of `char`: `['(', '<', ',', ' ', ';']`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#manual_pattern_char_comparison
+     = note: `-D clippy::manual-pattern-char-comparison` implied by `-D warnings`
+     = help: to override `-D warnings` add `#[allow(clippy::manual_pattern_char_comparison)]`
+
+error: could not compile `hilo_graph` (lib test) due to 1 previous error
+rust-lint: clippy reported findings at deny level -D warnings
+
+==============================================================================
+[PASS] secrets  passed=true  exit_code=n/a
+==============================================================================
+--- output (untruncated) ---
+gitleaks: clean
