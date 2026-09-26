@@ -884,3 +884,29 @@ left behind: docs/dogfood/2026-09-25-run23-functional-languages.md (integration 
 per-language trust table), diagnostics.md Run 23 section, skills/hilo-usage/SKILL.md run-23
 field notes, rows, this entry.
 
+
+## 2026-09-26 — warpfs (Hilo) — 🟡 PROMISING-BUT-ROUGH (run 24, warpfs-dogfood tick nudge2-nudge1)
+
+promise tested: the two-machine collaboration loop — A annotates + warms + pushes,
+B clones and uses the map (never tested in runs 1-23).
+reality: the graph half works exactly as advertised (B reads 879-edge stats/impact
+at 0.02s off the shipped .vfs with no re-warm), but annotations die at the push —
+meta --set persists ONLY as xattrs (.vfs/features/ stays empty, no export path,
+declared store unwired) and git strips them, so B reads 'No Hilo metadata' on
+every file A annotated (DF-WARPFS-95 P1). Second defect: SIGKILL mid-warm leaves
+an empty graph.db + surviving parse cache; re-warm then says 'all cached, graph
+unchanged' and never rebuilds, and stats/impact silently report wrong numbers
+(5 edges / 879 raw; 'No dependents found') until an undiscoverable `graph clean`
+(DF-WARPFS-94 P1; root cause submitted to off-by-one sub_b51845). P2: init does
+not gitignore the 1.0MB derived graph.db (DF-WARPFS-96).
+time-to-first-success: ~3 min (A: init+4 annotations+warm 2.1s; B: clone+stats 0.02s).
+friction count: 3 defects; 0 usability notes (help text honest throughout).
+perf (Step 2b): warm cold 2.1s / cached <0.9s on 99 files; B stats/impact 0.02s
+cold — no PERF row (nothing a user waits on; DF-76 family already filed).
+install leg: SKIPPED (DF-WARPFS-97 P2, 8th infra incident): las-01/03/04 ssh
+connect-timeout, las-02 reachable but bunkerd still crash-looping (exit 1
+restart loop) at 03:44Z + fair retry 03:54Z; battery NOT launched.
+rows: DF-WARPFS-94..97 appended with census verify (258→262, 0 dups, all parse).
+left behind: docs/dogfood/2026-09-26-run24-metadata-portability.md (integration
+report), diagnostics.md Run 24 section, skills/hilo-usage/SKILL.md run-24 field
+notes, rows, this entry.

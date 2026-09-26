@@ -1338,3 +1338,39 @@ HEAD d410fa8, local release build v0.3.0-108-g281b6ff-dirty.
   confirmation, DF-92); use --no-symbols per run 22.
 - Impact/related latency stays in the 25–35ms class on 200-file corpora
   across all four languages — the speed promise is extractor-independent.
+
+## Run 24 (2026-09-26, warpfs-dogfood tick warpfs-dogfood-2026-09-24-21-31-02-nudge2-nudge1) — metadata portability across a fresh clone: the map travels, the annotations die at the push
+
+**Angle (23 prior runs never crossed the clone boundary):** machine A annotates
++ warms + pushes; machine B clones and uses both. Corpus gin (99 Go files,
+879 edges). Head 6d443df, binary 0.3.1-dev.
+
+**How the two stores actually work (learned by driving both):**
+- Annotations = **filesystem xattrs only** (`user.vfs.*`). `.vfs/features/` is
+  created by init and never written; `metadata.namespaces: []` in the manifest
+  is unwired; no export/import subcommand exists. Git strips xattrs on
+  transfer ⇒ everything curated on A is invisible on B (`hilo meta gin.go` →
+  "No Hilo metadata" on a fresh clone, DF-WARPFS-95 P1).
+- Graph = edges.jsonl (git-friendly, travels) + DuckDB (derived cache,
+  1.0MB binary that a naive `git add -A` commits because init gitignores
+  nothing, DF-WARPFS-96 P2). B reads the shipped graph at 0.02s cold with no
+  re-warm — the flagship half of the promise works.
+
+**The crash story (the new mechanism this run contributes):** kill `graph
+warm` mid-parse ⇒ edges.jsonl survives, parse cache survives, graph.db is
+left EMPTY ⇒ the next warm short-circuits on the parse cache ("all cached,
+graph unchanged") and never reconciles ⇒ stats/impact silently report wrong
+numbers (5 edges / "No dependents found") until `graph clean`. warm validates
+cache freshness, never cache-vs-source consistency. Submitted post-debug to
+off-by-one (`duckdb-graph-cache-stale-after-crash-warm-says-cached`, sub_b51845);
+board row DF-WARPFS-94 P1 (sibling of DF-79 zero-byte variant).
+
+**Right way for future agents:**
+- Commit `.vfs/manifest.yaml` + `.vfs/graph/edges.jsonl`; never the DuckDB.
+- Treat annotations as per-machine until DF-95 lands: keep a repo-committed
+  `meta --set` script (or wait for the `.vfs/features` mirror) and re-apply
+  after clone.
+- After any killed/interrupted warm: `graph clean && graph warm` before
+  trusting ANY number — silent wrong answers are the failure mode, not errors.
+- B-side numbers: stats/impact 0.02s off the shipped graph; full warm 2.1s on
+  99 files. Nothing here is slow — the defects are correctness/portability.

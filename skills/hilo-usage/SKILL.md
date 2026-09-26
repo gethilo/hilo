@@ -740,3 +740,20 @@ executor exists — the wiring is missing.)
 - Impact latency holds at 25–35ms on ~200-file corpora in all four
   languages; warm in 0.2–10.3s. The speed layer is not the problem —
   each extractor is.
+
+## Run 24 field notes — metadata portability across a fresh clone (2026-09-26)
+
+- **The map travels; annotations do not.** A fresh clone reads the committed
+  `.vfs/graph` immediately (stats/impact 0.02s, no re-warm). But `hilo meta`
+  writes ONLY xattrs — git strips them — so every annotation is invisible on
+  machine B (DF-WARPFS-95). Until the fix lands: keep a repo-committed
+  `meta --set` script and re-apply after cloning.
+- **Never commit `.vfs/graph/graph.db`** — it's the derived 1MB DuckDB cache;
+  edges.jsonl is the source of truth. init doesn't gitignore it (DF-WARPFS-96);
+  check `.gitignore` yourself after `hilo init`.
+- **After ANY killed or interrupted `graph warm`, run `hilo graph clean &&
+  hilo graph warm` before trusting stats/impact.** A crash leaves an empty
+  graph.db that the parse-cache short-circuit never rebuilds, and queries
+  then silently return wrong numbers ("5 edges / 879 raw", "No dependents
+  found") with exit 0 (DF-WARPFS-94). The 'graph unchanged' message after a
+  crash is a lie, not a status.
