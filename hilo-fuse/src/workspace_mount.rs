@@ -167,20 +167,47 @@ impl WorkspaceMount {
         }
     }
 
-    fn populate_mount_children(&self, mount_idx: usize) {
-        let mount = &self.mounts[mount_idx];
-        let dir_entries = match std::fs::read_dir(&mount.backing_path) {
-            Ok(e) => e,
-            Err(_) => return,
+    /// Populate the direct children of the directory inode `dir_ino` from its
+    /// backing directory.
+    ///
+    /// The root lists one entry per mount (its mount name); every other
+    /// directory maps its workspace-relative path (e.g. `demo/src`) onto the
+    /// owning mount's backing directory and lists exactly one level there, so
+    /// nested lookups resolve instead of re-listing the repo root.
+    /// Returns `false` when `dir_ino` is not a known directory (ENOENT).
+    fn populate_dir_children(&self, dir_ino: u64) -> bool {
+        if dir_ino == ROOT_INO {
+            self.populate_root_children();
+            return true;
+        }
+        let (mount_idx, dir_rel) = {
+            let files = self.files.read().unwrap();
+            match files.get(&dir_ino) {
+                Some(e) if matches!(e.kind, InodeKind::Directory) => match e.mount_idx {
+                    Some(idx) => (idx, e.path.clone()),
+                    None => return true, // known directory outside any mount
+                },
+                _ => return false,
+            }
         };
+        let mount = &self.mounts[mount_idx];
         let mount_name = Path::new(&mount.at)
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| mount.name.clone());
+        let backing_dir = {
+            let empty = PathBuf::new();
+            let rest = dir_rel.strip_prefix(&mount_name).unwrap_or(&empty);
+            mount.backing_path.join(rest)
+        };
+        let dir_entries = match std::fs::read_dir(&backing_dir) {
+            Ok(e) => e,
+            Err(_) => return true,
+        };
         let mut files = self.files.write().unwrap();
         for entry in dir_entries.flatten() {
             let name = entry.file_name();
-            let child_path = PathBuf::from(&mount_name).join(&name);
+            let child_path = dir_rel.join(&name);
             if files.values().any(|e| e.path == child_path) {
                 continue;
             }
@@ -202,6 +229,7 @@ impl WorkspaceMount {
                 },
             );
         }
+        true
     }
 }
 
@@ -211,20 +239,9 @@ impl Filesystem for WorkspaceMount {
     }
 
     fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        if parent == ROOT_INO {
-            self.populate_root_children();
-        } else {
-            let needs_populate = {
-                let files = self.files.read().unwrap();
-                files.get(&parent).and_then(|e| e.mount_idx).is_some()
-            };
-            if needs_populate {
-                let mount_idx = {
-                    let files = self.files.read().unwrap();
-                    files.get(&parent).and_then(|e| e.mount_idx).unwrap()
-                };
-                self.populate_mount_children(mount_idx);
-            }
+        if !self.populate_dir_children(parent) {
+            reply.error(ENOENT);
+            return;
         }
 
         let expected_path = {
@@ -251,6 +268,9 @@ impl Filesystem for WorkspaceMount {
                 return;
             }
         }
+        // Not in the populated table: the backing filesystem had no such
+        // entry at population time (population failures surface as the same
+        // ENOENT; the kernel retries after entry_timeout).
         reply.error(ENOENT);
     }
 
@@ -277,6 +297,13 @@ impl Filesystem for WorkspaceMount {
         offset: i64,
         mut reply: ReplyDirectory,
     ) {
+        // Populate one level from the backing directory so a first readdir of
+        // a nested directory lists its real children (lookup alone populates
+        // only the ancestors it walks through).
+        if !self.populate_dir_children(ino) {
+            reply.error(ENOENT);
+            return;
+        }
         let files = self.files.read().unwrap();
         let dir_entry = match files.get(&ino) {
             Some(e) if matches!(e.kind, InodeKind::Directory) => e.clone(),
@@ -523,4 +550,67 @@ fn mount_options(config: &crate::FuseConfig) -> Vec<MountOption> {
         opts.push(MountOption::AutoUnmount);
     }
     opts
+}
+
+// ============================================================
+// TEST SEAMS (doc(hidden)) — used by tests/fuse_test.rs
+// ============================================================
+
+#[doc(hidden)]
+pub fn ws_populate_dir_for_test(fs: &WorkspaceMount, dir_ino: u64) -> bool {
+    fs.populate_dir_children(dir_ino)
+}
+
+#[doc(hidden)]
+pub fn ws_inode_for_path_for_test(fs: &WorkspaceMount, rel: &str) -> Option<u64> {
+    let files = fs.files.read().unwrap();
+    files.iter().find(|(_, e)| e.path == *rel).map(|(i, _)| *i)
+}
+
+#[doc(hidden)]
+pub fn ws_child_names_for_test(fs: &WorkspaceMount, dir_ino: u64) -> Vec<String> {
+    let files = fs.files.read().unwrap();
+    let dir_path = match files.get(&dir_ino) {
+        Some(e) => e.path.clone(),
+        None => return Vec::new(),
+    };
+    let mut names: Vec<String> = files
+        .iter()
+        .filter(|(_, e)| {
+            e.path != dir_path && e.path.parent().map(|p| p == dir_path).unwrap_or(false)
+        })
+        .map(|(_, e)| {
+            e.path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string()
+        })
+        .collect();
+    names.sort();
+    names
+}
+
+#[doc(hidden)]
+pub fn ws_backing_file_for_test(fs: &WorkspaceMount, rel: &str) -> Option<PathBuf> {
+    let files = fs.files.read().unwrap();
+    let entry = files
+        .iter()
+        .find(|(_, e)| e.path == *rel && matches!(e.kind, InodeKind::File))?
+        .1
+        .clone();
+    let idx = entry.mount_idx?;
+    let mount = fs.mounts.get(idx)?;
+    let mount_name = Path::new(&mount.at)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let empty = PathBuf::new();
+    let rest = entry.path.strip_prefix(&mount_name).unwrap_or(&empty);
+    Some(mount.backing_path.join(rest))
+}
+
+#[doc(hidden)]
+pub fn ws_root_ino_for_test() -> u64 {
+    ROOT_INO
 }
