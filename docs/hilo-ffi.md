@@ -26,6 +26,17 @@ Supporting dictionaries (`MetadataResult`, `SetMetadataResult`,
 `DirectoryListing`) and the `HiloError` enum (`InvalidInput`, `NotFound`,
 `BackendUnavailable`, `InternalError`) are defined in the same UDL.
 
+### `GraphStats` fields
+
+`vfs_graph_stats()` returns `GraphStats`:
+
+| Field | Meaning |
+|---|---|
+| `total_files` | Files in the graph |
+| `total_edges` | Raw edges in the graph |
+| `unique_relations` | Distinct edge relation types |
+| `tested_pct` | Share of graphed files **not** listed by `hilo graph untested` — files that emit a `tested_by` edge (test-shaped) or are covered by one under the pkg:/local: resolution rules. This is an import/emit-derived proxy measured without running any tests, NOT a test-suite coverage percentage; `hilo graph module <dir>` reports the same rule-set scoped to a directory. |
+
 ## Generating Bindings
 
 The repository provides the UniFFI 0.28 generator as a Cargo binary. Go uses

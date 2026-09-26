@@ -77,10 +77,21 @@ pub struct GraphImpactResult {
 }
 
 #[derive(Debug, Clone)]
+/// Aggregate graph statistics returned by `vfs_graph_stats`.
+///
+/// These numbers are derived from the dependency graph's import/emit
+/// patterns, not from running a test suite.
 pub struct GraphStats {
     pub total_files: u32,
     pub total_edges: u32,
     pub unique_relations: u32,
+    /// Share of graphed files NOT reported by `untested_files_at` (the same
+    /// set `hilo graph untested` prints). A file avoids the untested list
+    /// when it emits a `tested_by` edge (test-shaped) or is covered by one
+    /// under the pkg:/local: resolution rules — so this is the share of
+    /// files that look like tests or are imported by one, NOT a test-suite
+    /// coverage percentage. `hilo graph module <dir>` reports the same
+    /// rule-set scoped to a directory prefix (`test_coverage_pct`).
     pub tested_pct: f64,
 }
 
