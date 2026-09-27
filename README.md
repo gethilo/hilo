@@ -9,6 +9,27 @@ test coverage, blast radius — without burning context window on file reads.
 
 ## Install
 
+> **No prebuilt binaries are published yet.** As of v0.3.0 the
+> [Releases](https://github.com/gethilo/hilo/releases) page carries artefacts
+> for no platform, so every install path below builds from source — and
+> **every path starts with `cargo`**. On a machine with no Rust toolchain,
+> bootstrap it first (this needs no root):
+>
+> ```bash
+> curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --profile minimal
+> source "$HOME/.cargo/env"
+> ```
+
+Which path applies to your host?
+
+| Host | Path |
+|------|------|
+| you have `sudo` | [Standard source build](#standard-source-build) — one `apt install` |
+| no `sudo`, but `pkg-config` and the FUSE 3 **dev** files are already installed | Standard source build — skip the `apt install` line |
+| no `sudo` and no dev files (bare container images, agent sandboxes) | [Source build without sudo](#source-build-without-sudo) |
+
+### Standard source build
+
 ```bash
 git clone https://github.com/gethilo/hilo.git
 cd hilo && cargo build --release
@@ -25,38 +46,83 @@ Requirements:
   standard Debian/Ubuntu base install (verified present-by-default on a fresh
   Debian 13 box — no action needed there); only minimal images (containers,
   stripped-down VMs) need `apt install libfuse3-4` explicitly.
-- **`attr`** — provides `getfattr`/`setfattr`, used for xattr operations
-  (reading and writing `user.vfs.*`).
-- **`libfuse3-dev`** — headers and `pkg-config` files, needed only to
-  *compile* the FUSE mount support in a source build. It is not a runtime
-  requirement, and it is not needed at all to run a prebuilt binary.
+- **`attr`** — *optional.* It provides the `getfattr`/`setfattr` commands used
+  by the inspection examples below; Hilo itself reads and writes `user.vfs.*`
+  xattrs through the kernel (the Rust `xattr` crate), so neither the CLI nor
+  the daemon shells out to those binaries.
+- **`libfuse3-dev`** and **`pkg-config`** — headers and the `fuse3.pc` file,
+  needed only to *compile* the FUSE mount support in a source build. They are
+  not runtime requirements, and they are not needed at all to run a prebuilt
+  binary.
 
 ```bash
 # Ubuntu/Debian — installing libfuse3-dev pulls in libfuse3-4
 sudo apt install build-essential pkg-config libssl-dev libfuse3-dev attr
 ```
 
-### Non-root / restricted hosts
+### Source build without sudo
 
-On hosts without sudo (bare agent images, containers), the OpenSSL
-development headers above are not installable — and the build then dies in
-`openssl-sys`'s build script ("Could not find directory of OpenSSL
-installation"). Build with the `vendored-openssl` feature instead: it
-compiles OpenSSL from source (needs only `perl` and a C compiler, both
-present on standard images) and requires no sudo, no `pkg-config`, and no
-`libssl-dev`:
+On a host where you cannot `sudo` — bare container images, agent sandboxes,
+locked-down VMs — the build hits two walls, and only one of them is OpenSSL:
+
+1. **OpenSSL** (`openssl-sys`, pulled in by `git2`). With no development
+   headers the build dies with *"Could not find directory of OpenSSL
+   installation"*. This is fixed by the **`vendored-openssl` feature**, which
+   compiles OpenSSL from source and needs only `perl` and a C compiler — no
+   sudo, no `libssl-dev`. It does **not** remove the `pkg-config` requirement
+   in the next point.
+2. **FUSE** (`fuser`, pulled in by `hilo-fuse`). The feature does **not** cover
+   this one: `fuser` 0.15 probes `pkg-config` for `fuse3.pc` while building and
+   panics (`build.rs:47`) when it cannot find it. Supply the FUSE dev files
+   from userspace instead — fetch the `.deb`s and unpack them under `$HOME`
+   (`apt-get download` only fetches; it needs no privileges):
 
 ```bash
-cargo install --path hilo-cli --features vendored-openssl
-# or, from a checkout:
-cargo build --release -p hilo-cli --features vendored-openssl
+# 1. Rust, no root
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --profile minimal
+source "$HOME/.cargo/env"
+
+# 2. FUSE 3 dev files under $HOME, no root
+mkdir -p "$HOME/.local/hilo-deps" && cd "$HOME/.local/hilo-deps"
+apt-get download libfuse3-dev libfuse3-4 pkgconf pkgconf-bin
+for d in *.deb; do dpkg-deb -x "$d" root/; done
+
+# 3. Retarget the unpacked fuse3.pc (its default prefix is /usr)
+sed -i "s|^prefix=/usr|prefix=$PWD/root/usr|" root/usr/lib/x86_64-linux-gnu/pkgconfig/fuse3.pc
+
+# 4. Build against the unpacked files: vendored OpenSSL + userspace FUSE dev
+cd "$HOME"
+git clone https://github.com/gethilo/hilo.git && cd hilo
+env PKG_CONFIG="$HOME/.local/hilo-deps/root/usr/bin/pkg-config" \
+    PKG_CONFIG_PATH="$HOME/.local/hilo-deps/root/usr/lib/x86_64-linux-gnu/pkgconfig" \
+    cargo build --release -p hilo-cli --features vendored-openssl
+cp target/release/hilo ~/.cargo/bin/hilo
 ```
 
-(First build takes longer — OpenSSL is compiled from source; later builds
-are cached.) FUSE mount support still needs `libfuse3-dev`, which does
-require sudo — if you need it on a restricted host, build inside a
-container (`docker build` / `docker run` with the repo mounted) and copy
-the compiled binary out.
+Notes on step 2–4:
+
+- `pkgconf-bin` is the package that ships the `pkg-config` binary on Debian 13
+  and Ubuntu 24.04 and newer. If that download line fails on an older release,
+  drop `pkgconf-bin` and download `pkgconf` — or `pkg-config` — on its own.
+  `apt-get download` resolves every name in one call, so a wrong name downloads
+  nothing at all; the step needs `apt` and network access.
+- Everything else in the toolchain (`cc`/`g++`, `make`, `perl`) must already be
+  in the image — a C/C++ compiler is required for the bundled DuckDB build
+  whatever your privileges are. On images that bootstrap a userspace compiler
+  (e.g. `zig cc` wrappers), point `CC`/`CXX` at it.
+- The unpacked `.deb`s also carry `libfuse3.so.4`, so if `hilo` then refuses to
+  start with *"libfuse3.so.4: cannot open shared object file"*, add
+  `LD_LIBRARY_PATH="$HOME/.local/hilo-deps/root/usr/lib/x86_64-linux-gnu"`.
+- `hilo mount` additionally needs the `fusermount3` helper (package `fuse3`) and
+  kernel FUSE support **at run time**; `init`, `graph`, `classify` and
+  `serve --mcp` do not.
+- There is no "CLI only" build today — `hilo-fuse` is a hard dependency of
+  `hilo-cli`, so every source build needs the FUSE dev files.
+- **Docker alternative:** where rootless Docker is available (it needs no sudo),
+  build inside an image that already has the dev packages and copy
+  `target/release/hilo` out of the container instead of unpacking `.deb`s.
+- The first build takes longer — OpenSSL *and* DuckDB are compiled from source;
+  later builds are cached.
 
 > ⚠️ **Build time:** the first `cargo build --release` also compiles DuckDB
 > (`duckdb-sys`)/Arrow from source — expect 15-20 min. A full source build
@@ -64,8 +130,9 @@ the compiled binary out.
 > and the OpenSSL and FUSE 3 **development** packages (`libssl-dev`,
 > `libfuse3-dev`) for the crates that link them (`openssl-sys` via `git2`,
 > `hilo-fuse`); `clang` and `CMake` are **not** required for the standard build.
-> On hosts without sudo, see **Non-root / restricted hosts** above for the
-> `--features vendored-openssl` alternative.
+> On hosts without sudo, see **[Source build without
+> sudo](#source-build-without-sudo)** above — it covers both walls, the
+> `--features vendored-openssl` OpenSSL one and the `fuser`/`pkg-config` one.
 > Subsequent builds are incremental and fast (~seconds).
 >
 > **Verified fresh-install (2026-09-20 dogfood run):** public clone at

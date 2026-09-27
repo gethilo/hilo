@@ -12,21 +12,51 @@ hilo --help
 
 ### Requirements
 
-- Rust 1.80+
-- `libfuse3-dev` (for FUSE mount)
-- `attr` package (for `getfattr` / `setfattr`)
+- Rust 1.80+ — `cargo` is required by every install path (no prebuilt
+  binaries are published yet)
+- `libfuse3-dev` and `pkg-config` — needed to **build** (the FUSE bindings);
+  a prebuilt binary needs only the `libfuse3-4` runtime library
+- `attr` package — *optional*, only for the `getfattr` / `setfattr`
+  inspection commands (Hilo itself uses xattr syscalls)
 
 ```bash
 # Ubuntu/Debian
-sudo apt install libfuse3-dev attr
+sudo apt install build-essential pkg-config libssl-dev libfuse3-dev attr
 
 # macOS (FUSE not supported; CLI + MCP still work)
 # No additional deps needed for CLI-only use
 ```
 
-> On non-root / restricted hosts (no sudo, no `pkg-config`/`libssl-dev`),
-> build with `cargo install --path hilo-cli --features vendored-openssl` —
-> see the README's "Non-root / restricted hosts" section.
+### No sudo? Install without root
+
+A bare image or sandbox with no `sudo` can still build the CLI — nothing in
+this path needs privileges:
+
+```bash
+# 1. Rust into ~/.cargo (no root)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --profile minimal
+source "$HOME/.cargo/env"
+
+# 2. FUSE 3 dev files under $HOME (apt-get download needs no privileges)
+mkdir -p "$HOME/.local/hilo-deps" && cd "$HOME/.local/hilo-deps"
+apt-get download libfuse3-dev libfuse3-4 pkgconf pkgconf-bin
+for d in *.deb; do dpkg-deb -x "$d" root/; done
+sed -i "s|^prefix=/usr|prefix=$PWD/root/usr|" root/usr/lib/x86_64-linux-gnu/pkgconfig/fuse3.pc
+
+# 3. Build: vendored OpenSSL + the unpacked FUSE dev files
+git clone https://github.com/gethilo/hilo.git && cd hilo
+env PKG_CONFIG="$HOME/.local/hilo-deps/root/usr/bin/pkg-config" \
+    PKG_CONFIG_PATH="$HOME/.local/hilo-deps/root/usr/lib/x86_64-linux-gnu/pkgconfig" \
+    cargo build --release -p hilo-cli --features vendored-openssl
+cp target/release/hilo ~/.cargo/bin/hilo
+```
+
+`--features vendored-openssl` removes the OpenSSL / `libssl-dev` requirement,
+and unpacking the two FUSE `.deb`s removes the `pkg-config` / `libfuse3-dev`
+one — the vendored feature alone is **not** enough, because `fuser`'s build
+script probes `pkg-config` for `fuse3.pc`. Full rationale, caveats and the
+Docker alternative: README →
+[Source build without sudo](../README.md#source-build-without-sudo).
 
 > ⚠️ **Build time:** the first build compiles `duckdb-sys`/`arrow` from
 > source — expect 15-20 min and a C/C++ toolchain (`g++`, e.g. from
