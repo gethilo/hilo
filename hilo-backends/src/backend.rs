@@ -803,6 +803,11 @@ mod tests {
         // surfaces ToolMissing when rclone is not installed — NOT the
         // InvalidConfig "requires an external tool" error the raw config
         // would produce in ExternalToolDriver.
+        // Ensure rclone is not in PATH for this test.
+        let original_path = std::env::var_os("PATH");
+        let empty_dir = std::env::temp_dir().join("empty_path");
+        std::fs::create_dir_all(&empty_dir).expect("Failed to create empty dir");
+        std::env::set_var("PATH", &empty_dir);
         let cfg = BackendConfig {
             kind: BackendKind::GDrive,
             name: "gdrive-auto".into(),
@@ -811,6 +816,12 @@ mod tests {
             ..Default::default()
         };
         let result = BackendRegistry::from_config(&cfg);
+        // Restore PATH after the call
+        if let Some(original) = original_path {
+            std::env::set_var("PATH", original);
+        } else {
+            std::env::remove_var("PATH");
+        }
         let err = match result {
             Err(e) => e,
             Ok(_) => panic!("expected ToolMissing, got Ok"),
