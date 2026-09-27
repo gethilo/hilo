@@ -730,7 +730,11 @@ fn strip_query_hash(spec: &str) -> &str {
 /// then directory `index` modules. A spec that already carries an extension
 /// keeps it (probed as `.ts`/`.tsx` first when it ends `.js`/`.mjs` — the
 /// TS ESM convention where emitted-JS specifiers name the TS source).
-fn candidate_paths(base: &Path) -> Vec<PathBuf> {
+///
+/// `pub(crate)`: the signal engine resolves `local:` specifier nodes against
+/// the graph's own file set with the same probe ladder (GAP-098), so the two
+/// callers can never disagree about what `./x` names.
+pub(crate) fn candidate_paths(base: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let has_ext = base.extension().is_some();
     if has_ext {
@@ -792,7 +796,11 @@ fn probe_existing(base: &Path) -> PathBuf {
 /// Lexically normalize `.` / `..` path components (no filesystem access, no
 /// requirement that the path exists). `a/b/../c` → `a/c`; a `..` above the
 /// root is dropped.
-fn lexical_normalize(path: &Path) -> PathBuf {
+///
+/// `pub(crate)`: shared with the signal engine's `local:` specifier
+/// resolution (GAP-098) — the same normalization decides what a specifier
+/// names in both callers.
+pub(crate) fn lexical_normalize(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for component in path.components() {
         match component {

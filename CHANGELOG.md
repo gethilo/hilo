@@ -6,6 +6,26 @@ All notable changes to Hilo are documented in this file.
 
 ### Fixed
 
+- **`graph understand` now surfaces the named symbols of a flow** (GAP-098):
+  the `MAP`/`SIGNATURES` symbol list was a flat `take(8)` in source order, so
+  the definition a question was about could not appear once a file had more
+  than 8 of them — flask's `wsgi_app`/`full_dispatch_request`/
+  `finalize_request` (app.py, 40th of 41) and gin's `ServeHTTP`/
+  `handleHTTPRequest` (gin.go, 43rd/45th of 50) were unreachable no matter how
+  exactly they were named. A file whose definitions name the task now lists
+  them in source order up to 24 and appends any task-named definition past
+  that; a file that does not name the task keeps the historical 8, byte for
+  byte. Measured on the pinned bake-off corpora (flask/gin/express/vitest/bat/
+  duckbrain flow questions): flask 1/4→4/4, gin 1/4→4/4, duckbrain 0/4→4/4,
+  with express/vitest/bat unchanged at 3/3, 3/3, 4/4.
+- **`graph understand` resolves `local:` import specifiers** (GAP-098, the
+  GAP-072/079 family): `local:../../duckdb/connection` is an import *string*,
+  and as a row it both answered nothing (`(no symbols extracted)`) and consumed
+  one of the `max_nodes` slots a real file needed — on duckbrain 37 of 60 rows
+  were specifier ghosts, which is why the duckdb/storage layers the question
+  asked about never appeared at all. Specifiers are now resolved against the
+  importing file's own directory (extension/`index` probing) to the file the
+  graph stores, and a specifier naming nothing in the graph is dropped.
 - **`--type git` / `--type local` backend mounts removed** (DF-WARPFS-19):
   they printed success while cloning into `~/.hilo/worktrees`, persisted
   nowhere `hilo backend list`/`sync` reads. Every unsupported type now fails

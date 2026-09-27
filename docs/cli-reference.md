@@ -212,6 +212,22 @@ the budget in characters, so for a fixed graph the output is non-decreasing in
 design: it returns every matched file's detail block. The CLI itself only
 exposes the harmonic resolution.
 
+The `MAP` tier lists each file's definitions, with an allowance that follows
+the task text: a file whose definitions name the task — one of them carries a
+task word as a whole word, e.g. `dispatch_request` for "request" or
+`ServeHTTP` for "servehttp" — lists its definitions in source order up to 24,
+and any task-named definition past that is appended, so the file's own flow
+vocabulary is never truncated. A file that only mentions the task in passing
+keeps the historical 8. `SIGNATURES` covers the same definitions for the
+`Detail`/`Signature` tiers.
+
+`local:` import specifiers (`local:../duckdb/connection`) never appear as rows:
+an unopenable import string names nothing, so it is resolved to the file it
+names — against the importing file's own directory, with
+extension/`index` probing — and the resolved file takes its place. A
+specifier whose target is not in the graph is dropped rather than printed as
+an empty row.
+
 ### `search`
 
 Deterministic semantic code search (TF-IDF + BM25).

@@ -33,6 +33,7 @@ use crate::error::GraphResult;
 use crate::graph::{Direction, GraphDB};
 use crate::parser::{Language, Parser};
 use crate::provenance::Provenance;
+use crate::resolution::{candidate_paths, lexical_normalize};
 
 // ──────────────────────────── Types ────────────────────────────
 
@@ -170,16 +171,20 @@ where
     F: Fn(&str) -> Option<String>,
 {
     // 1. Discover anchors by matching task tokens against file paths.
+    let task_tokens = tokenize_task(task);
+    // The graph's own file set: the authority for resolving `local:`
+    // specifier nodes (GAP-098). Built once per call — one SQL scan, the
+    // same budget `semantic::search` already pays for its own resolver.
+    let known_files = graph_file_set(db);
     let anchors = discover_anchors(db, task, opts.seed_limit);
 
     // 2. Traverse the graph from anchors to collect the file set.
-    let file_scores = traverse_and_score(db, &anchors, opts.depth, opts.max_nodes);
+    let file_scores = traverse_and_score(db, &anchors, opts.depth, opts.max_nodes, &known_files);
 
     // 3. Sort files by score descending (deterministic — path breaks ties).
     // Anchors all carry score 1.0; within that band the anchor grade
     // (component > prefix > substring token match, GAP-078) orders files so
     // the best anchor leads the result.
-    let task_tokens = tokenize_task(task);
     let anchor_grades: HashMap<&str, u64> = anchors
         .iter()
         .map(|a| {
@@ -211,7 +216,7 @@ where
     });
 
     // 4. Extract symbols and assign tiers.
-    let signal_files = build_signal_files(&sorted_files, opts, source_reader)?;
+    let signal_files = build_signal_files(&sorted_files, opts, source_reader, &task_tokens)?;
 
     // 5. Format output text.
     let text = format_output(&signal_files, &anchors, opts);
@@ -249,6 +254,12 @@ fn discover_anchors(db: &GraphDB, task: &str, seed_limit: usize) -> Vec<String> 
     // MAP budget. Excluded from anchor discovery entirely; corpora warmed by
     // a pre-GAP-091 binary still carry them (parse-cache hits re-append
     // cached legacy lines), so this is filtered at query time too.
+    // GAP-098 generalises the same rule to the `local:` family
+    // (`local:../duckdb/connection`): the JS/TS importer's specifier is not a
+    // path, and on duckbrain these ghosts out-ranked the real layer files
+    // they named (`src/duckdb/connection.ts`, `src/storage/manifest.ts`) for
+    // the very tokens those files match — so the layers the question asked
+    // about never entered the answer at all.
     let (froms, tos) = db.distinct_files().unwrap_or((Vec::new(), Vec::new()));
     let mut all_files: HashSet<String> = froms.into_iter().collect();
     all_files.extend(tos);
@@ -300,9 +311,9 @@ fn discover_anchors(db: &GraphDB, task: &str, seed_limit: usize) -> Vec<String> 
 /// Graded match quality of one lowercased task token against one lowercased
 /// path (GAP-078). Whole component (4) > component prefix (2) > incidental
 /// in-component substring (1); graph pseudo-nodes (`pkg:`, `sys:`, `std:`,
-/// `external:`) score 0 so a real file matching the same task term can never
-/// rank below them. Returns 0 when the token is absent — zero matches are
-/// never anchors.
+/// `external:`, `local:`) score 0 so a real file matching the same task term
+/// can never rank below them. Returns 0 when the token is absent — zero
+/// matches are never anchors.
 fn token_match_grade(path: &str, token: &str) -> u64 {
     if is_pseudo_node(path) || !path.contains(token) {
         return 0;
@@ -320,12 +331,105 @@ fn token_match_grade(path: &str, token: &str) -> u64 {
 }
 
 /// Whether `path` is a graph pseudo-node rather than a filesystem path
-/// (same families as `resolution::is_symbol_node`).
+/// (same families as `resolution::is_symbol_node`, plus the `local:` import
+/// specifiers of GAP-098 — an unopenable import *string* that names a file
+/// only after the importing edge's directory resolves it).
 fn is_pseudo_node(path: &str) -> bool {
     path.starts_with("pkg:")
         || path.starts_with("sys:")
         || path.starts_with("std:")
         || path.starts_with("external:")
+        || is_specifier_node(path)
+}
+
+/// Whether `path` is a raw `local:` import specifier node rather than a file.
+fn is_specifier_node(path: &str) -> bool {
+    path.starts_with("local:")
+}
+
+/// Every file path the graph knows, in one pass over its edge endpoints
+/// (GAP-098). Import-specifier nodes are filtered out: they are not files, so
+/// they can never be the target of a `local:` specifier.
+fn graph_file_set(db: &GraphDB) -> HashSet<String> {
+    let (froms, tos) = db.distinct_files().unwrap_or((Vec::new(), Vec::new()));
+    let mut files: HashSet<String> = froms.into_iter().collect();
+    files.extend(tos);
+    files.retain(|p| !is_pseudo_node(p));
+    files
+}
+
+/// Resolve a `local:<specifier>` node to the real file it names (GAP-098).
+///
+/// The specifier resolves against the *importing* file's directory — the same
+/// node string emitted from two directories names two different files — using
+/// the extension/index probe ladder [`candidate_paths`] documents
+/// (`./x` → `x.ts`, `x.js` → `x.ts`, `x` → `x/index.ts`, …). Candidates are
+/// intersected with the graph's own file set: the file a specifier names is
+/// the file the graph already stores under its real path, and a target the
+/// graph has never seen carries no edges and nothing to contribute to a
+/// graph-derived answer.
+///
+/// Filesystem-free by design — unlike the impact/search resolver, which
+/// probes the disk for the *querying* process's view of the tree, understand
+/// needs a deterministic answer for a graph, warm or in-memory. `None` means
+/// the specifier names nothing this graph knows (dangling import, target
+/// outside the corpus); callers drop it rather than emit a ghost row.
+fn resolve_local_specifier(
+    node: &str,
+    importer: &str,
+    known_files: &HashSet<String>,
+) -> Option<String> {
+    let raw = node.strip_prefix("local:")?;
+    // A trailing `?query` / `#hash` is a bundler suffix, not part of the path.
+    let raw = raw.split(['?', '#']).next().unwrap_or(raw);
+    if raw.is_empty() || raw == "." {
+        return None;
+    }
+    let base = if let Some(rooted) = raw.strip_prefix('/') {
+        // Repo-root-relative specifier.
+        lexical_normalize(std::path::Path::new(rooted))
+    } else {
+        let dir = std::path::Path::new(importer).parent()?;
+        lexical_normalize(&dir.join(raw))
+    };
+    candidate_paths(&base)
+        .into_iter()
+        .map(|candidate| candidate.to_string_lossy().into_owned())
+        .find(|candidate| !candidate.is_empty() && known_files.contains(candidate))
+}
+
+/// Relevance of one symbol name to the task tokens (GAP-098).
+///
+/// Names and tokens are normalized the way the semantic index normalizes them
+/// ([`crate::semantic::tokenize`]: camelCase/snake_case → lowercase words), so
+/// a `ServeHTTP` definition is comparable to the task word "servehttp" and
+/// `full_dispatch_request` to "request". Ladder, mirroring
+/// [`token_match_grade`]: the whole normalized name equals the token (4), a
+/// word equals it (4), a word is a prefix of it or vice versa (2), the name
+/// contains it (1). 0 means the symbol does not name the task at all.
+fn symbol_match_grade(name: &str, task_tokens: &[String]) -> u64 {
+    if task_tokens.is_empty() {
+        return 0;
+    }
+    let words = crate::semantic::tokenize(name);
+    let normalized: String = words.concat();
+    let mut best = 0u64;
+    for token in task_tokens {
+        let grade = if normalized == *token || words.iter().any(|w| w == token) {
+            4
+        } else if words
+            .iter()
+            .any(|w| w.starts_with(token.as_str()) || token.starts_with(w.as_str()))
+        {
+            2
+        } else if name.to_lowercase().contains(token.as_str()) {
+            1
+        } else {
+            0
+        };
+        best = best.max(grade);
+    }
+    best
 }
 
 /// Tokenize a task string for anchor matching.
@@ -348,11 +452,15 @@ fn tokenize_task(task: &str) -> Vec<String> {
 /// - Direct neighbors get score = provenance_weight * 0.8
 /// - 2-hop neighbors get score = provenance_weight * 0.5
 /// - Deeper files get score = provenance_weight * 0.3 / depth
+///
+/// `known_files` is the graph's own file set, used to resolve `local:`
+/// specifier nodes to the files they name (GAP-098).
 fn traverse_and_score(
     db: &GraphDB,
     anchors: &[String],
     max_depth: usize,
     max_nodes: usize,
+    known_files: &HashSet<String>,
 ) -> HashMap<String, (f64, String)> {
     let mut scores: HashMap<String, (f64, String)> = HashMap::new();
 
@@ -394,32 +502,49 @@ fn traverse_and_score(
                 // neither be read for symbols nor traversed meaningfully
                 // (its only edges point back into the same importers).
                 // Skipped without consuming a visited slot or budget.
-                if crate::semantic::is_relative_specifier_node(&neighbor) {
-                    continue;
-                }
+                // GAP-098: the same is true of a `local:` specifier — with the
+                // added step that the file it NAMES is a real, readable
+                // neighbor, resolved against this edge's own importing
+                // directory. Replacing the ghost with its target is what puts
+                // a TS/JS repo's target layers (`src/duckdb/…`,
+                // `src/storage/…`) into the answer at all; an unresolvable
+                // specifier (dangling import, target outside the graph) is
+                // dropped, exactly as `pkg:.` always was.
+                let targets: Vec<String> = if is_specifier_node(&neighbor) {
+                    resolve_local_specifier(&neighbor, &edge.from, known_files)
+                        .into_iter()
+                        .collect()
+                } else if crate::semantic::is_relative_specifier_node(&neighbor) {
+                    Vec::new()
+                } else {
+                    vec![neighbor]
+                };
 
-                if visited.insert(neighbor.clone()) {
-                    let prov = Provenance::parse(&edge.provenance).unwrap_or(Provenance::AstExact);
-                    let weight = prov.trust_weight();
-                    let depth_factor = match depth + 1 {
-                        1 => 0.8,
-                        2 => 0.5,
-                        _ => 0.3 / (depth as f64),
-                    };
-                    let new_score = weight * depth_factor;
+                for neighbor in targets {
+                    if visited.insert(neighbor.clone()) {
+                        let prov =
+                            Provenance::parse(&edge.provenance).unwrap_or(Provenance::AstExact);
+                        let weight = prov.trust_weight();
+                        let depth_factor = match depth + 1 {
+                            1 => 0.8,
+                            2 => 0.5,
+                            _ => 0.3 / (depth as f64),
+                        };
+                        let new_score = weight * depth_factor;
 
-                    // Keep the highest score (deterministic — first writer wins ties).
-                    scores
-                        .entry(neighbor.clone())
-                        .and_modify(|(s, p)| {
-                            if new_score > *s {
-                                *s = new_score;
-                                *p = edge.provenance.clone();
-                            }
-                        })
-                        .or_insert((new_score, edge.provenance.clone()));
+                        // Keep the highest score (deterministic — first writer wins ties).
+                        scores
+                            .entry(neighbor.clone())
+                            .and_modify(|(s, p)| {
+                                if new_score > *s {
+                                    *s = new_score;
+                                    *p = edge.provenance.clone();
+                                }
+                            })
+                            .or_insert((new_score, edge.provenance.clone()));
 
-                    frontier.push((neighbor, depth + 1));
+                        frontier.push((neighbor, depth + 1));
+                    }
                 }
             }
         }
@@ -549,8 +674,9 @@ fn extract_symbols_from_ast(node: tree_sitter::Node, source: &[u8], lang: Langua
         }
         Language::Rust => {
             // Single AST-order walk: definitions and `pub use` re-exports
-            // interleaved by source position, so the 8-symbol MAP cap cannot
-            // truncate re-exports that appear early in the file (GAP-037).
+            // interleaved by source position, so the per-file symbol
+            // allowance cannot truncate re-exports that appear early in the
+            // file (GAP-037).
             collect_rust_symbols(node, source, &mut symbols);
         }
         Language::Python => {
@@ -566,8 +692,9 @@ fn extract_symbols_from_ast(node: tree_sitter::Node, source: &[u8], lang: Langua
             // Single AST-order walk (the collect_rust_symbols pattern):
             // declaration symbols (GAP-075 shapes) AND member-assignment
             // definitions (`res.json = function json(obj) {}`, GAP-100)
-            // interleaved by source position, so the 8-symbol MAP cap
-            // cannot truncate one definition family in favor of the other.
+            // interleaved by source position, so the per-file symbol
+            // allowance cannot truncate one definition family in favor of
+            // the other.
             collect_js_symbols(node, source, &mut symbols);
         }
         Language::Java => {
@@ -1511,12 +1638,43 @@ fn extract_identifier(line: &str, _kw1: &str, kw2: &str) -> Option<String> {
 
 // ──────────────────────────── Tier assignment & formatting ────────────────────────────
 
+/// Symbol allowance per file in the MAP tier, for a file that does NOT name
+/// the task: the historical flat cap, kept as the floor so an unrelated
+/// file's row stays as cheap as it has always been.
+const SYMBOL_FLOOR: usize = 8;
+
+/// The [`symbol_match_grade`] at which a definition counts as NAMING the task:
+/// the whole normalized name equals a task token, or one of its words does.
+/// Only this grade promotes a file to the raised allowance — a passing
+/// substring or prefix mention leaves the file's row exactly as it was, which
+/// is what keeps the MAP's size bounded when a task word like "request" or
+/// "handler" appears in most files of a repo.
+const SYMBOL_NAMED: u64 = 4;
+
+/// Symbol allowance per file for a file that DOES name the task: the
+/// source-order window every such file lists, before any NAMED definition
+/// past it is appended (see `build_signal_files`).
+///
+/// The flat cap of 8, applied in source order, was the whole defect behind
+/// "`graph understand` does not surface the named symbols of a flow": on flask
+/// `wsgi_app`/`full_dispatch_request`/`finalize_request` are the 25th, 26th and
+/// 27th of app.py's 41 definitions and gin's `ServeHTTP`/`handleHTTPRequest`
+/// are the 43rd and 45th of gin.go's 50, so the flow the question asked about
+/// could not appear no matter how exactly it was named. The window is sized to
+/// carry the flow *steps* as well — the definitions between two named ones
+/// that carry no task word: gin's `getValue` (tree.go, 20th of 23) and `Next`
+/// (context.go, 9th of 151), and on a 54-definition file it still reaches the
+/// constructor chain at the head (`from_cache`/`from_binary`/
+/// `set_fallback_theme`, bat's 5th/6th/7th).
+const SYMBOL_NAMED_WINDOW: usize = 24;
+
 /// Build `SignalFile` entries from sorted file list, extracting symbols
 /// and assigning tiers based on score.
 fn build_signal_files<F>(
     sorted: &[(String, f64, String)],
     opts: &SignalOpts,
     source_reader: Option<F>,
+    task_tokens: &[String],
 ) -> GraphResult<Vec<SignalFile>>
 where
     F: Fn(&str) -> Option<String>,
@@ -1557,14 +1715,61 @@ where
             Vec::new()
         };
 
-        // Cap at 8 symbols per file for MAP tier.
-        let symbols: Vec<String> = raw_symbols.iter().take(8).map(|s| s.name.clone()).collect();
+        // Symbol allowance, query-aware (GAP-098). The flat `take(8)` in
+        // source order had no notion of the question: a definition past the
+        // 8th was unreachable no matter how exactly it named the task, and
+        // the file the question was actually about got the same 8 rows as an
+        // unrelated test fixture. Two arms now:
+        //
+        // - a file that does NOT name the task keeps the historical floor in
+        //   source order — its row is byte-identical to what it always was;
+        // - a file that DOES name the task (one of its definitions carries a
+        //   task word as a whole word: `ServeHTTP` for "servehttp",
+        //   `dispatch_request` for "request", `app.handle` for "app") lists
+        //   its symbols in source order up to `SYMBOL_NAMED_WINDOW`, then
+        //   appends any NAMED definition sitting past that window. Source
+        //   order is kept, so nothing the file used to show is demoted;
+        //   the append is what makes the file's own task vocabulary
+        //   unforgettable (flask's `wsgi_app` is app.py's 40th of 41
+        //   definitions, gin's `ServeHTTP`/`handleHTTPRequest` are gin.go's
+        //   43rd and 45th of 50). The window is what carries the flow steps
+        //   between two named ones — gin's `getValue` (tree.go, 20th of 23)
+        //   and `Next` (context.go, 9th of 151) carry no task word at all.
+        let mut ranked: Vec<(u64, usize, &Symbol)> = raw_symbols
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (symbol_match_grade(&s.name, task_tokens), i, s))
+            .collect();
+        ranked.sort_by_key(|(_, index, _)| *index);
 
-        // Full signatures for SIGNATURES and DETAIL tiers.
+        let names_the_task = ranked.iter().any(|(grade, _, _)| *grade >= SYMBOL_NAMED);
+        let window = if names_the_task {
+            SYMBOL_NAMED_WINDOW
+        } else {
+            SYMBOL_FLOOR
+        };
+        let mut selected: Vec<&Symbol> = ranked
+            .iter()
+            .take(window)
+            .map(|(_, _, symbol)| *symbol)
+            .collect();
+        if names_the_task {
+            selected.extend(
+                ranked
+                    .iter()
+                    .skip(window)
+                    .filter(|(grade, _, _)| *grade >= SYMBOL_NAMED)
+                    .map(|(_, _, symbol)| *symbol),
+            );
+        }
+
+        let symbols: Vec<String> = selected.iter().map(|s| s.name.clone()).collect();
+
+        // Full signatures for SIGNATURES and DETAIL tiers, under the same
+        // selection so the MAP and the spine name the same definitions.
         let signatures: Vec<SymbolSignature> = if tier == Tier::Signature || tier == Tier::Detail {
-            raw_symbols
+            selected
                 .iter()
-                .take(8)
                 .map(|s| SymbolSignature {
                     name: s.name.clone(),
                     line: s.line,
@@ -3082,5 +3287,292 @@ use crate::private::Hidden;
                 names
             );
         }
+    }
+
+    #[test]
+    fn understand_floors_symbols_at_eight_for_files_that_do_not_name_the_task() {
+        // A file that names none of the task's words keeps the historical
+        // row: the first 8 definitions, in source order (GAP-098 keeps the
+        // floor arm byte-identical to the take(8) era).
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[edge("src/big.go", "src/util.go", "imports")])
+            .unwrap();
+
+        let opts = SignalOpts::default();
+        let reader = |path: &str| -> Option<String> {
+            if path.contains("big") {
+                let mut src = "package big\n".to_string();
+                for i in 0..20 {
+                    src.push_str(&format!("func Func{i}() {{}}\n"));
+                }
+                Some(src)
+            } else {
+                None
+            }
+        };
+
+        let result = understand_with_source(&db, "big", &opts, Some(reader)).unwrap();
+        let big_file = result
+            .files
+            .iter()
+            .find(|f| f.path.contains("big"))
+            .unwrap();
+        assert_eq!(
+            big_file.symbols.len(),
+            SYMBOL_FLOOR,
+            "a file that names none of the task must keep the floor"
+        );
+        let expected: Vec<String> = (0..SYMBOL_FLOOR).map(|i| format!("Func{i}")).collect();
+        assert_eq!(
+            big_file.symbols, expected,
+            "the floor arm must stay in SOURCE order (no reordering)"
+        );
+    }
+
+    #[test]
+    fn understand_lists_named_definitions_past_the_symbol_window() {
+        // GAP-098: a definition that NAMES the task is never truncated, even
+        // when it sits far past the per-file window. Before this, a file with
+        // more definitions than the cap could not surface its own
+        // task-named symbol at all (flask's wsgi_app was app.py's 40th of 41).
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[edge("src/far.go", "src/util.go", "imports")])
+            .unwrap();
+
+        let reader = |path: &str| -> Option<String> {
+            if path.contains("far") {
+                let mut src = "package far\n".to_string();
+                for i in 0..40 {
+                    src.push_str(&format!("func Helper{i}() {{}}\n"));
+                }
+                // The named definition, well past the window.
+                src.push_str("func FarWidget() {}\n");
+                Some(src)
+            } else {
+                None
+            }
+        };
+
+        let result =
+            understand_with_source(&db, "far", &SignalOpts::default(), Some(reader)).unwrap();
+        let far = result
+            .files
+            .iter()
+            .find(|f| f.path.contains("far"))
+            .unwrap();
+        assert!(
+            far.symbols.iter().any(|s| s == "FarWidget"),
+            "a task-named definition must survive the window, got {:?}",
+            far.symbols
+        );
+        assert!(
+            far.symbols.len() > SYMBOL_FLOOR,
+            "a file that names the task may list past the floor, got {}",
+            far.symbols.len()
+        );
+        // Source order is preserved for the window; the named symbol past it
+        // is appended, so nothing the file used to show is demoted.
+        assert_eq!(
+            far.symbols.first().map(String::as_str),
+            Some("Helper0"),
+            "the window must stay in source order, got {:?}",
+            far.symbols
+        );
+    }
+
+    #[test]
+    fn understand_window_carries_unnamed_flow_steps_of_a_named_file() {
+        // The flow's middle steps usually carry none of the task's words
+        // (gin's getValue under "tree"/"handler", Next under "Handler"). A
+        // file that names the task therefore lists its whole window, not just
+        // the matching definitions.
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[edge("src/tree.go", "src/util.go", "imports")])
+            .unwrap();
+
+        let reader = |path: &str| -> Option<String> {
+            if path.contains("tree") {
+                let mut src = "package tree\n".to_string();
+                for i in 0..20 {
+                    src.push_str(&format!("func step{i}() {{}}\n"));
+                }
+                src.push_str("func TreeLookup() {}\n");
+                Some(src)
+            } else {
+                None
+            }
+        };
+
+        let result =
+            understand_with_source(&db, "tree", &SignalOpts::default(), Some(reader)).unwrap();
+        let tree = result
+            .files
+            .iter()
+            .find(|f| f.path.contains("tree"))
+            .unwrap();
+        assert!(
+            tree.symbols.iter().any(|s| s == "TreeLookup"),
+            "the task-named definition must be listed, got {:?}",
+            tree.symbols
+        );
+        assert!(
+            tree.symbols.iter().any(|s| s == "step19"),
+            "the unnamed steps inside the window must be listed too, got {:?}",
+            tree.symbols
+        );
+    }
+
+    #[test]
+    fn understand_resolves_local_specifiers_to_the_file_they_name() {
+        // GAP-098: `local:../duckdb/connection` is an import STRING. The row
+        // it used to occupy answered nothing (`(no symbols extracted)`) and,
+        // worse, spent one of the `max_nodes` slots the real file needed — on
+        // duckbrain 37 of 60 rows were specifier ghosts, which is why the
+        // question's duckdb/storage layers never appeared.
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[
+            edge(
+                "src/mcp/tools/recall.ts",
+                "local:../../duckdb/connection",
+                "imports",
+            ),
+            edge(
+                "src/duckdb/queries.ts",
+                "local:../mcp/tools/shared",
+                "imports",
+            ),
+            // The real target exists in the graph (it has its own imports).
+            edge("src/duckdb/connection.ts", "pkg:node:fs", "imports"),
+            edge("src/duckdb/queries.ts", "pkg:node:path", "imports"),
+        ])
+        .unwrap();
+
+        let reader = |path: &str| -> Option<String> {
+            if path == "src/mcp/tools/recall.ts" {
+                Some("export function recallTool() {}\n".into())
+            } else if path == "src/duckdb/connection.ts" {
+                Some("export function getDuckDBConnection() {}\n".into())
+            } else if path == "src/duckdb/queries.ts" {
+                Some("export function queryMemories() {}\n".into())
+            } else {
+                None
+            }
+        };
+
+        let result =
+            understand_with_source(&db, "recall path", &SignalOpts::default(), Some(reader))
+                .unwrap();
+
+        let paths: Vec<&str> = result.files.iter().map(|f| f.path.as_str()).collect();
+        assert!(
+            !paths.iter().any(|p| p.starts_with("local:")),
+            "no `local:` specifier may survive as a row, got {paths:?}"
+        );
+        let connection = result
+            .files
+            .iter()
+            .find(|f| f.path == "src/duckdb/connection.ts")
+            .expect("the file a `local:` specifier names must be traversed into");
+        assert!(
+            connection
+                .symbols
+                .iter()
+                .any(|s| s == "getDuckDBConnection"),
+            "the resolved file must carry its own symbols, got {:?}",
+            connection.symbols
+        );
+    }
+
+    #[test]
+    fn understand_drops_local_specifiers_that_name_nothing_in_the_graph() {
+        // A dangling specifier (or one whose target the graph never saw) is
+        // dropped rather than emitted as a ghost row — the GAP-091 treatment
+        // of `pkg:.config`, extended to the `local:` family.
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[
+            edge("src/app.ts", "local:./missing", "imports"),
+            edge("src/app.ts", "pkg:node:path", "imports"),
+        ])
+        .unwrap();
+
+        let reader = |path: &str| -> Option<String> {
+            (path == "src/app.ts").then(|| "export function boot() {}\n".into())
+        };
+
+        let result =
+            understand_with_source(&db, "boot", &SignalOpts::default(), Some(reader)).unwrap();
+        assert!(
+            result.files.iter().all(|f| !f.path.starts_with("local:")),
+            "an unresolvable specifier must not become a row, got {:?}",
+            result.files.iter().map(|f| &f.path).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn local_specifier_nodes_are_never_anchors() {
+        // A `local:` node matches the very tokens the real file it names
+        // matches (`local:../duckdb/connection` contains "duckdb"), and used
+        // to out-rank the real file alphabetically — spending an anchor slot
+        // on an unopenable string.
+        assert_eq!(
+            token_match_grade("local:../../duckdb/connection", "duckdb"),
+            0,
+            "a local: specifier is not a path and must never anchor"
+        );
+        assert_eq!(
+            token_match_grade("src/duckdb/connection.ts", "duckdb"),
+            4,
+            "the real file the specifier names keeps its whole-component match"
+        );
+    }
+
+    #[test]
+    fn resolve_local_specifier_probes_extensions_and_the_importers_directory() {
+        // `./x` → `x.ts`, `x.js` → `x.ts` (TS ESM convention), `x` →
+        // `x/index.ts`; the SAME node string from two directories names two
+        // different files.
+        let known: HashSet<String> = [
+            "src/mcp/tools/recall.ts",
+            "src/mcp/tools/shared.ts",
+            "src/duckdb/connection.ts",
+            "src/storage/index.ts",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+
+        assert_eq!(
+            resolve_local_specifier(
+                "local:../../duckdb/connection",
+                "src/mcp/tools/recall.ts",
+                &known
+            ),
+            Some("src/duckdb/connection.ts".to_string())
+        );
+        assert_eq!(
+            resolve_local_specifier("local:./shared.js", "src/mcp/tools/recall.ts", &known),
+            Some("src/mcp/tools/shared.ts".to_string())
+        );
+        assert_eq!(
+            resolve_local_specifier("local:../storage", "src/duckdb/connection.ts", &known),
+            Some("src/storage/index.ts".to_string())
+        );
+        // Dangling: nothing in the graph answers to that specifier.
+        assert_eq!(
+            resolve_local_specifier("local:./nope", "src/mcp/tools/recall.ts", &known),
+            None
+        );
+        // The SAME node string from two directories names two different
+        // files: `./connection` is `src/duckdb/connection.ts` only from
+        // inside `src/duckdb/`.
+        assert_eq!(
+            resolve_local_specifier("local:./connection", "src/duckdb/recall.ts", &known),
+            Some("src/duckdb/connection.ts".to_string())
+        );
+        assert_eq!(
+            resolve_local_specifier("local:./connection", "src/mcp/tools/recall.ts", &known),
+            None,
+            "from another directory the same string names a file the graph does not have"
+        );
     }
 }

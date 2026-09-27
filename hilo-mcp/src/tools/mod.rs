@@ -151,7 +151,7 @@ pub fn list_tools() -> Vec<Tool> {
         },
         Tool {
             name: "vfs_graph_understand".into(),
-            description: "Get harmonic multi-resolution context for a task — MAP (file→symbols), SIGNATURES (one-line per symbol), DETAIL (whitespace-minified source). Position-ordered, budget-controlled, deterministic.".into(),
+            description: "Get harmonic multi-resolution context for a task — MAP (file→symbols), SIGNATURES (one-line per symbol), DETAIL (whitespace-minified source). Position-ordered, budget-controlled, deterministic. Definitions that name the task are always listed; `local:` import specifiers are resolved to the file they name.".into(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
