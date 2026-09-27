@@ -670,6 +670,12 @@ impl Backend for MockBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    /// Serializes PATH-mutating tests in this module (Rust runs tests in
+    /// parallel threads). Mirrors external.rs's PATH_LOCK: the global PATH
+    /// swap below races sibling tests' set_var/restore windows without it.
+    static PATH_LOCK: Mutex<()> = Mutex::new(());
 
     /// The identical contract suite both MockBackend and LocalDriver must pass.
     pub(crate) fn contract_suite(b: &dyn Backend, tmp: &tempfile::TempDir) {
@@ -803,11 +809,16 @@ mod tests {
         // surfaces ToolMissing when rclone is not installed — NOT the
         // InvalidConfig "requires an external tool" error the raw config
         // would produce in ExternalToolDriver.
-        // Ensure rclone is not in PATH for this test.
+        // Swap PATH for a private empty tempdir so the ToolMissing branch is
+        // exercised on ANY host (this box ships rclone in ~/.local/bin). Held
+        // under PATH_LOCK, the same serializer external.rs's PATH tests use —
+        // both modules run in one parallel test binary, and the global PATH
+        // swap would race their set_var/restore windows without it. The lock
+        // guard also makes PATH restoration panic-safe.
+        let _path_guard = PATH_LOCK.lock().unwrap();
+        let bin_dir = tempfile::tempdir().unwrap();
         let original_path = std::env::var_os("PATH");
-        let empty_dir = std::env::temp_dir().join("empty_path");
-        std::fs::create_dir_all(&empty_dir).expect("Failed to create empty dir");
-        std::env::set_var("PATH", &empty_dir);
+        std::env::set_var("PATH", bin_dir.path());
         let cfg = BackendConfig {
             kind: BackendKind::GDrive,
             name: "gdrive-auto".into(),
@@ -816,12 +827,7 @@ mod tests {
             ..Default::default()
         };
         let result = BackendRegistry::from_config(&cfg);
-        // Restore PATH after the call
-        if let Some(original) = original_path {
-            std::env::set_var("PATH", original);
-        } else {
-            std::env::remove_var("PATH");
-        }
+        std::env::set_var("PATH", original_path.unwrap());
         let err = match result {
             Err(e) => e,
             Ok(_) => panic!("expected ToolMissing, got Ok"),
