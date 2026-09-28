@@ -120,6 +120,13 @@ An initialized project with no edges yet is a valid server root.
 
 Aggregate statistics about the dependency graph.
 
+On an empty graph — before `hilo graph warm`, or after
+`hilo graph clean` — `hilo graph stats` prints exactly one line:
+
+```
+Graph cache is empty. Query a file or run `hilo graph warm` to populate.
+```
+
 ```bash
 hilo graph stats
 
