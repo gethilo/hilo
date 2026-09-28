@@ -331,9 +331,10 @@ bucket in its plan header; prefer an explicit `--endpoint` on a mount (or a
 sync run) over the `AWS_ENDPOINT_URL` environment variable, which is only
 disclosed, never silently consumed.
 
-- `hilo backend mount` — mount a virtual backend (S3, gdrive, onedrive,
-  dropbox, external; the `git`/`local` types are not supported and fail
-  with `unknown backend type`)
+- `hilo backend mount --type <TYPE> --at <AT>` — mount a virtual backend
+  (types: `s3`, `gdrive`, `onedrive`, `dropbox`, `external`; the
+  `git`/`local` types are not supported and fail with
+  `unknown backend type`)
 - `hilo backend list` — list registered backends (from
   `.vfs/backends/mounts.yaml`)
 - `hilo workspace mount` — mount all repos and backends from the manifest
