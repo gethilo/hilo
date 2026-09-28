@@ -23,6 +23,7 @@ const HILO_MANAGED_IGNORE_ENTRIES: &[&str] = &[
     ".vfs/graph/graph.duckdb.wal",
     ".vfs/graph/.last_warm",
     ".vfs/graph/.parse_cache.json",
+    ".vfs/graph/.symbols_cache.json",
     ".vfs/graph/.last_reconcile",
 ];
 
@@ -370,6 +371,7 @@ mod tests {
         for entry in [
             ".vfs/graph/graph.db",
             ".vfs/graph/.parse_cache.json",
+            ".vfs/graph/.symbols_cache.json",
             ".vfs/graph/.last_reconcile",
         ] {
             assert!(gi.contains(entry), "managed block must cover {entry}");

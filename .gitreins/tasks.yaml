@@ -1804,3 +1804,14 @@ tasks:
   status: complete
   created_at: '2026-09-26T02:26:54.341912+00:00'
   completed_at: '2026-09-26T02:26:54.890218+00:00'
+- id: GAP-098
+  title: 'P2 \u2014  does not surface the named symbols of a flow on some repos: 1/4
+    key flow symbols on flask and gin (bat 4/4, express 3/3, vitest 3/3); capability
+    is at parity with scc, not ahead'
+  criteria:
+  - "when the task names a flow (request path, pipeline, chain), bias ranking toward\
+    \ the call-chain spine \u2014 the functions that actually hand off to each other\
+    \ \u2014 over generic lexical neighbours"
+  status: complete
+  created_at: '2026-09-27T04:01:57.389086+00:00'
+  completed_at: '2026-09-27T04:24:10.848356+00:00'
