@@ -9,6 +9,18 @@ files and a default manifest.
 hilo init
 ```
 
+Git hooks (`.git/hooks/post-commit` + `post-merge`) are only installed
+when the directory is a git repository. Without `.git/`, the hooks are
+skipped and a warning is printed:
+
+```
+Initialized Hilo in <dir>
+warning: .git/ not found — skipping git hook installation
+  Run 'git init' first, then 'hilo init' to enable hooks.
+```
+
+Hooks are enabled by running `git init` first, then `hilo init` again.
+
 Refuses to run when the current directory is your HOME directory — an
 accidental `hilo init` there scatters `.vfs/` state across your home.
 Pass `--allow-home` to override explicitly:
