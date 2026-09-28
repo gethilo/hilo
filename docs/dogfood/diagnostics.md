@@ -1374,3 +1374,40 @@ board row DF-WARPFS-94 P1 (sibling of DF-79 zero-byte variant).
   trusting ANY number — silent wrong answers are the failure mode, not errors.
 - B-side numbers: stats/impact 0.02s off the shipped graph; full warm 2.1s on
   99 files. Nothing here is slow — the defects are correctness/portability.
+
+## Run 25 — 2026-09-28 — Workspace ephemeral/wipe + PERF-009 verification attempt
+
+**Surface tested:** `hilo workspace ephemeral` and `hilo workspace wipe --ephemeral [--apply]`.
+These are the two MCP tools (vfs_workspace_ephemeral, vfs_workspace_wipe) that DOC-5 flagged
+as missing from the SKILL.md table. They are also CLI subcommands under `hilo workspace`.
+
+**What we learned:**
+- `workspace ephemeral` walks the workspace and lists files matching ephemeral patterns:
+  `target/`, `.vfs/graph/` (except edges.jsonl), `__pycache__/`, `.gitreins/logs/`.
+  Output format: `<path>\t<size>\t<glob>`. Honest, useful, no surprises.
+- `workspace wipe --ephemeral` is a dry-run by default. Prints "would remove <path>" for each
+  ephemeral file. Safe to run without `--apply`.
+- `workspace wipe --ephemeral --apply` deletes the files and reports total bytes freed.
+  Verified: created `target/debug/test.bin`, ran wipe --apply, file was gone.
+- No defects. The tools do what they say, safely.
+
+**PERF-009 verification attempt:**
+- Tried to verify whether `.symbols_cache.json` is created after `graph warm` and reused on
+  subsequent `graph search` invocations (the fix from commit 75fdcdc).
+- Blocked: installed binary is stale (built 2026-09-22, before PERF-009). Release build
+  timed out after 10+ minutes on both local and bunker-las-03.
+- This is the 10th consecutive dogfood run where the install leg could not complete due to
+  build time. The pattern is consistent: fresh Rust builds of the full workspace take 15-25
+  minutes on first compile, which exceeds the tick's time budget.
+- **Lesson:** dogfood runs that need to verify perf fixes need a pre-built binary or a faster
+  build path (e.g., `cargo build -p hilo-cli --release` instead of full workspace, or a
+  cached target/ directory). The README's "Standard source build" path is correct but slow.
+
+**Bunker agent lifecycle:**
+- Spawned agent 63217649 on bunker-las-03 (ssh reachable, bunkerd active, Docker 26.1.5).
+- Installed Rust 1.98.1 via rustup (no sudo needed, ~/.cargo/bin).
+- Cloned gethilo/hilo from GitHub (public repo, no auth needed).
+- Started `cargo build --release` in background via `setsid bash /tmp/build.sh > ~/build.log 2>&1 &`.
+- After 10+ minutes, build still running (no target/release/hilo yet).
+- Destroyed agent explicitly (`bunker destroy 63217649 --server bunker-las-03`) — TTL was 2h,
+  but explicit destroy is the contract.

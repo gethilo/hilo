@@ -910,3 +910,28 @@ rows: DF-WARPFS-94..97 appended with census verify (258→262, 0 dups, all parse
 left behind: docs/dogfood/2026-09-26-run24-metadata-portability.md (integration
 report), diagnostics.md Run 24 section, skills/hilo-usage/SKILL.md run-24 field
 notes, rows, this entry.
+
+## 2026-09-28 — warpfs (Hilo) — 🟡 PROMISING-BUT-ROUGH (run 25, warpfs-dogfood tick)
+
+promise tested: (1) workspace ephemeral/wipe — the two undocumented MCP tools from DOC-5;
+(2) PERF-009 symbol-index persistence — does .symbols_cache.json actually work?
+reality: workspace ephemeral/wipe WORKS perfectly — lists ephemeral files with sizes and
+globs, dry-run is safe, --apply deletes and reports bytes freed (verified: 2MB across 31
+files). PERF-009 CANNOT VERIFY — installed binary is stale (v0.3.0-14-g2b26d3f, built
+2026-09-22, pre-dates PERF-009 commit 75fdcdc by 6 days). Release builds timed out after
+10+ minutes on both local and bunker-las-03 (agent 63217649, fresh Debian, Rust 1.98.1).
+time-to-first-success: ~2 min (workspace tools worked immediately; PERF-009 blocked, not slow).
+friction count: 2 defects (DF-WARPFS-99 stale binary, DF-WARPFS-100 build timeout);
+0 usability notes.
+perf (Step 2b): not measured — could not get a fresh binary. Stale binary's search times
+(0.55-0.58s warm on 111 files) consistent with run 23; no regression in graph/search path,
+but symbol-cache question unanswerable.
+install leg: SKIPPED (DF-WARPFS-100, 10th infra incident): spawned agent 63217649 on
+bunker-las-03 (ssh reachable, bunkerd active, Docker 26.1.5), installed Rust 1.98.1 via
+rustup, cloned gethilo/hilo from GitHub, started cargo build --release — after 10+ minutes
+still building. Same locally. Root cause: full workspace release builds exceed tick time
+budget. 10th consecutive run where install leg could not complete.
+rows: DF-WARPFS-98..100 appended via board_append.py (284 -> 287, 0 dups).
+left behind: docs/dogfood/2026-09-28-run25-workspace-ephemeral-perf009.md (integration
+report), diagnostics.md Run 25 section, skills/hilo-usage/SKILL.md run-25 field notes,
+rows, this entry. Bunker agent 63217649 destroyed.

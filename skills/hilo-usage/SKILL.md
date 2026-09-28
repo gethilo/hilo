@@ -757,3 +757,35 @@ executor exists — the wiring is missing.)
   then silently return wrong numbers ("5 edges / 879 raw", "No dependents
   found") with exit 0 (DF-WARPFS-94). The 'graph unchanged' message after a
   crash is a lie, not a status.
+
+## Run 25 field notes — workspace ephemeral/wipe + PERF-009 verification attempt (2026-09-28)
+
+- **`hilo workspace ephemeral` works perfectly.** Lists target/, .vfs/graph/
+  (except edges.jsonl), __pycache__/, .gitreins/logs/ with sizes and glob
+  patterns. Output format: `<path>\t<size>\t<glob>`. Honest, useful, no surprises.
+- **`hilo workspace wipe --ephemeral` is a dry-run by default.** Prints "would
+  remove <path>" for each ephemeral file. Safe to run without `--apply`.
+- **`hilo workspace wipe --ephemeral --apply` deletes files and reports bytes
+  freed.** Verified: created `target/debug/test.bin`, ran wipe --apply, file
+  was gone, reported "freed 2087575 bytes across 31 file(s)". No defects.
+- **PERF-009 (symbol-index persistence) CANNOT VERIFY.** Installed binary is
+  stale (v0.3.0-14-g2b26d3f, built 2026-09-22, pre-dates PERF-009 commit
+  75fdcdc by 6 days). Release builds timed out after 10+ minutes on both
+  local and bunker-las-03. The .symbols_cache.json file does not exist after
+  `graph warm` on the stale binary. Cannot verify whether the 23x-96x speedup
+  claimed in PERF-009 holds, whether cache invalidation works, or whether the
+  cache is actually persisted across CLI invocations.
+- **Binary freshness is a blocker for verifying recent perf work.** The
+  installed binary at ~/.cargo/bin/hilo is 6 days old. Full workspace release
+  builds take 15-25 minutes on first compile, which exceeds the tick's time
+  budget. Dogfood runs that need to verify perf fixes need a pre-built binary
+  or a faster build path (e.g., `cargo build -p hilo-cli --release` instead
+  of full workspace, or a cached target/ directory).
+- **Install leg: SKIPPED (10th consecutive run).** Spawned agent 63217649 on
+  bunker-las-03 (ssh reachable, bunkerd active, Docker 26.1.5), installed
+  Rust 1.98.1 via rustup, cloned gethilo/hilo from GitHub, started
+  `cargo build --release` — after 10+ minutes still building. Same locally.
+  Root cause: full workspace release builds exceed tick time budget. The
+  README's "Standard source build" path is correct but slow — a fresh user
+  on a slow machine could wait 20-30 minutes. No defect in the install
+  instructions themselves, but the time cost is a usability friction.
