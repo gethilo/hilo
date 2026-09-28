@@ -935,3 +935,18 @@ rows: DF-WARPFS-98..100 appended via board_append.py (284 -> 287, 0 dups).
 left behind: docs/dogfood/2026-09-28-run25-workspace-ephemeral-perf009.md (integration
 report), diagnostics.md Run 25 section, skills/hilo-usage/SKILL.md run-25 field notes,
 rows, this entry. Bunker agent 63217649 destroyed.
+
+## Run 26 — 2026-09-28 21:44 (MCP server + graph query perf + understand regression)
+- **Binary:** v0.3.0-144-g01a9634-dirty (debug, built 2026-09-28 15:51)
+- **Angle:** MCP server E2E + graph query performance + understand tool correctness (changed from run 25's workspace-ephemeral focus)
+- **Verdict:** PROMISING-BUT-ROUGH (MCP works, CLI works, but search is 200x slower than claimed on debug, understand returns wrong content)
+- **Time-to-first-success:** ~2 min (MCP initialize + tools/list worked immediately)
+- **Findings:**
+  - DF-WARPFS-101: graph search 4.4s on 83-file corpus (debug build) — README claims 0.02s on 793 files
+  - DF-WARPFS-102: graph understand "rate limiter" returns Go test fixture (AuthMiddleware from middleware.go), not task-relevant context
+  - DF-WARPFS-103: SKIPPED-install-bunker (11th consecutive run, release build timeout)
+- **MCP server:** initialize + tools/list + vfs_graph_stats all work (17 tools exposed)
+- **Perf (debug build):** graph stats 0.44s, graph impact 0.28s, graph search 4.39s, graph understand 2.77s
+- **Install leg:** SKIPPED (same wall as runs 16-25: full workspace release builds exceed tick budget)
+- **Rows filed:** 3 (DF-WARPFS-101..103), board now 290 rows
+- **Left behind:** docs/dogfood/2026-09-28-run26-mcp-perf-understand.md, diagnostics.md Run 26 section, skills/hilo-usage/SKILL.md run-26 field notes
