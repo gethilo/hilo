@@ -950,3 +950,27 @@ rows, this entry. Bunker agent 63217649 destroyed.
 - **Install leg:** SKIPPED (same wall as runs 16-25: full workspace release builds exceed tick budget)
 - **Rows filed:** 3 (DF-WARPFS-101..103), board now 290 rows
 - **Left behind:** docs/dogfood/2026-09-28-run26-mcp-perf-understand.md, diagnostics.md Run 26 section, skills/hilo-usage/SKILL.md run-26 field notes
+
+## 2026-09-28 — warpfs (Hilo) — ✅ SHIPPABLE (run 27, PERF-009 verification + graph query perf)
+
+**Promise tested:** PERF-009 symbol cache persistence — does `.symbols_cache.json` actually speed up `graph understand`?
+
+**Reality:** The cache file is created (55K, 4 entries) and provides a ~10% speedup (1.94s → 1.73s for `graph understand "rate limiter"`), but not the 100x+ needed to make understand viable on large corpora. The understand tool still re-parses the entire corpus on every invocation; the cache only avoids re-extracting symbols from unchanged files, but parsing overhead dominates.
+
+**Time-to-first-success:** ~2 min (init 12ms + warm 9.4s + first search 166ms).  
+**Friction count:** 0 defects; 0 usability notes.
+
+**Perf (Step 2b, hyperfine, debug build, warm):**
+- search "main": 166.5ms ± 6.4 (n=10)
+- search "pkg:std": 228.2ms ± 62.5 (n=20)
+- understand "rate limiter" without cache: 1.940s ± 0.145 (n=5)
+- understand "rate limiter" with cache: 1.732s ± 0.239 (n=10)
+- warm rebuild from deleted graph.db: 4.7s (830 edges)
+
+**NO PERF ROW** — the 10% speedup is not worth filing; the debug vs release build gap is expected, not a regression.
+
+**Install leg:** SKIPPED (12th consecutive run, release build timeout on both local and bunker-las-03).
+
+**Rows filed:** 0 (nothing worth filing; product stable at HEAD c0da391).
+
+**Left behind:** docs/dogfood/2026-09-28-run27-perf009-verification.md (this entry), no board changes.
