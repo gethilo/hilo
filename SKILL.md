@@ -112,6 +112,8 @@ hilo-ffi/           # UniFFI bindings (Kotlin, Swift, Python)
 | `vfs_rule_list` | List all rules defined in the Hilo manifest (stale-files, untested-critical, transitive-impact, etc.) |
 | `vfs_backend_status` | Get backend information for a file — which backend owns it, cache status, remote URL, and last sync state |
 | `vfs_sync_backend` | Sync the backend for a file — returns count of synced files and any errors |
+| `vfs_workspace_ephemeral` | List ephemeral (rebuildable/redownloadable) files in the workspace — path, size, and the deciding rule; an optional path limits the listing to that subtree |
+| `vfs_workspace_wipe` | Plan or apply a wipe of ephemeral files — dry_run defaults to true (planned only), pass dry_run: false to delete; files with user.vfs.ephemeral = false are never removed |
 
 ## Key Design Rules
 
