@@ -9,6 +9,18 @@ files and a default manifest.
 hilo init
 ```
 
+Git hooks (`.git/hooks/post-commit` + `post-merge`) are only installed
+when the directory is a git repository. Without `.git/`, the hooks are
+skipped and a warning is printed:
+
+```
+Initialized Hilo in <dir>
+warning: .git/ not found — skipping git hook installation
+  Run 'git init' first, then 'hilo init' to enable hooks.
+```
+
+Hooks are enabled by running `git init` first, then `hilo init` again.
+
 Refuses to run when the current directory is your HOME directory — an
 accidental `hilo init` there scatters `.vfs/` state across your home.
 Pass `--allow-home` to override explicitly:
@@ -107,6 +119,13 @@ An initialized project with no edges yet is a valid server root.
 ### `stats`
 
 Aggregate statistics about the dependency graph.
+
+On an empty graph — before `hilo graph warm`, or after
+`hilo graph clean` — `hilo graph stats` prints exactly one line:
+
+```
+Graph cache is empty. Query a file or run `hilo graph warm` to populate.
+```
 
 ```bash
 hilo graph stats
@@ -363,7 +382,20 @@ hilo backend mount --type s3 --bucket my-bucket --prefix data --at /s3
 
 # Explicit region (default: us-east-1)
 hilo backend mount --type s3 --bucket my-bucket --at /s3 --region eu-west-1
+
+# S3-compatible endpoint (MinIO et al.): connect THERE with static
+# credentials and path-style addressing
+hilo backend mount --type s3 --bucket my-bucket --at /s3 \
+  --endpoint http://minio.internal:9000
 ```
+
+`--endpoint <URL>` points the S3 driver at an explicit S3-compatible
+endpoint (MinIO, R2, self-hosted gateways). When set, the driver connects
+there with static credentials and path-style addressing, ignoring
+`AWS_ENDPOINT_URL`. Without it, the endpoint is resolved from the
+environment at sync time: `AWS_ENDPOINT_URL` is the env fallback, and the
+resolved endpoint is disclosed on every `backend sync` plan line — never
+silently consumed.
 
 Backend-backed workspace mounts (new surface; `--type` s3/gdrive/onedrive/
 dropbox/external):
@@ -379,6 +411,8 @@ hilo backend mount --type gdrive --remote "gdrive:workspace" --at /mnt/vfs/gd \
 
 # Optional flags: --tool auto|native|rclone|s3sync|gdrive|onedrive|dropbox
 #                 --mode stream|mirror (default mirror)
+#                 --endpoint <URL> (S3-compatible endpoint: MinIO et al.)
+#                 --url <URL> (remote URL for --type external)
 #                 --ignore-file <PATH> (extra ignore file, optional)
 #                 --poll-secs <N> (default 60)
 #                 --no-default-ignores
