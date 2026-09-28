@@ -363,7 +363,20 @@ hilo backend mount --type s3 --bucket my-bucket --prefix data --at /s3
 
 # Explicit region (default: us-east-1)
 hilo backend mount --type s3 --bucket my-bucket --at /s3 --region eu-west-1
+
+# S3-compatible endpoint (MinIO et al.): connect THERE with static
+# credentials and path-style addressing
+hilo backend mount --type s3 --bucket my-bucket --at /s3 \
+  --endpoint http://minio.internal:9000
 ```
+
+`--endpoint <URL>` points the S3 driver at an explicit S3-compatible
+endpoint (MinIO, R2, self-hosted gateways). When set, the driver connects
+there with static credentials and path-style addressing, ignoring
+`AWS_ENDPOINT_URL`. Without it, the endpoint is resolved from the
+environment at sync time: `AWS_ENDPOINT_URL` is the env fallback, and the
+resolved endpoint is disclosed on every `backend sync` plan line — never
+silently consumed.
 
 Backend-backed workspace mounts (new surface; `--type` s3/gdrive/onedrive/
 dropbox/external):
@@ -379,6 +392,8 @@ hilo backend mount --type gdrive --remote "gdrive:workspace" --at /mnt/vfs/gd \
 
 # Optional flags: --tool auto|native|rclone|s3sync|gdrive|onedrive|dropbox
 #                 --mode stream|mirror (default mirror)
+#                 --endpoint <URL> (S3-compatible endpoint: MinIO et al.)
+#                 --url <URL> (remote URL for --type external)
 #                 --ignore-file <PATH> (extra ignore file, optional)
 #                 --poll-secs <N> (default 60)
 #                 --no-default-ignores
