@@ -4,6 +4,7 @@
 //! first access. `warm` is an optional batch pre-parse for CI / power users.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -13,6 +14,8 @@ use hilo_graph::{GraphDB, ImpactResult, Language, Parser};
 use hilo_metadata::inventory::{self, Edge};
 use rayon::prelude::*;
 use regex::Regex;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::commands::guard;
 
@@ -67,6 +70,229 @@ fn file_fingerprint(p: &Path) -> Option<(u128, u64)> {
         .ok()?
         .as_nanos();
     Some((nanos, m.len()))
+}
+
+// PERF-009: one-shot `graph search` and `graph understand` processes share
+// source-defined symbols through a content-validated cache. This cache is
+// deliberately separate from `.parse_cache.json`: warm's cache is keyed by
+// mtime+size and stores import edges, while exact-symbol recall must reject a
+// same-size/same-mtime source rewrite.
+const SYMBOL_CACHE_VERSION: u32 = 1;
+const SYMBOL_CACHE_FILE: &str = ".symbols_cache.json";
+const MAX_SYMBOL_SOURCE_BYTES: u64 = 1_000_000;
+static SYMBOL_CACHE_TEMP_ID: AtomicUsize = AtomicUsize::new(0);
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedSymbolCache {
+    version: u32,
+    root: String,
+    fingerprint: String,
+    symbols: BTreeMap<String, Vec<String>>,
+}
+
+#[derive(Debug)]
+struct SymbolCacheLoad {
+    symbols: BTreeMap<String, Vec<String>>,
+    #[cfg(test)]
+    rebuilt: bool,
+}
+
+fn symbol_cache_path(root: &Path) -> PathBuf {
+    root.join(".vfs").join("graph").join(SYMBOL_CACHE_FILE)
+}
+
+/// Graph documents that can carry source-defined symbols, sorted so both the
+/// fingerprint and serialized cache are deterministic.
+fn symbol_source_paths(graph: &GraphDB) -> Result<Vec<String>> {
+    let (froms, tos) = graph
+        .distinct_files()
+        .context("failed to list graph files for symbol cache")?;
+    let mut paths: BTreeSet<String> = froms.into_iter().chain(tos).collect();
+    paths.retain(|path| {
+        if path.starts_with("pkg:")
+            || path.starts_with("local:")
+            || path.starts_with("sys:")
+            || path.starts_with("std:")
+            || path.starts_with("external:")
+        {
+            return false;
+        }
+        Path::new(path)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .and_then(Language::from_extension)
+            .is_some()
+    });
+    Ok(paths.into_iter().collect())
+}
+
+/// Scan every graph source path and hash its bytes. When `extract` is true,
+/// parse symbols from the exact bytes folded into the fingerprint; this keeps
+/// a concurrent edit from pairing one revision's key with another revision's
+/// symbols. Missing/unopenable files get a deterministic empty-symbol marker,
+/// so a formerly readable file can never reuse its old symbols.
+fn scan_symbol_sources(
+    root: &Path,
+    root_id: &str,
+    paths: &[String],
+    extract: bool,
+) -> Result<(String, BTreeMap<String, Vec<String>>)> {
+    let mut corpus = Sha256::new();
+    hash_field(&mut corpus, &SYMBOL_CACHE_VERSION.to_le_bytes());
+    hash_field(&mut corpus, root_id.as_bytes());
+    let mut symbols = BTreeMap::new();
+
+    for rel in paths {
+        hash_field(&mut corpus, rel.as_bytes());
+        let full = root.join(rel);
+        match std::fs::File::open(&full) {
+            Ok(mut file) => {
+                hash_field(&mut corpus, b"file");
+                let collect_source = extract
+                    && file
+                        .metadata()
+                        .map(|m| m.len() <= MAX_SYMBOL_SOURCE_BYTES)
+                        .unwrap_or(false);
+                let mut source = collect_source.then(Vec::new);
+                let mut file_hash = Sha256::new();
+                let mut buf = [0u8; 64 * 1024];
+                loop {
+                    let n = file.read(&mut buf).with_context(|| {
+                        format!("failed to fingerprint symbol source {}", full.display())
+                    })?;
+                    if n == 0 {
+                        break;
+                    }
+                    file_hash.update(&buf[..n]);
+                    if let Some(bytes) = source.as_mut() {
+                        if bytes.len() + n <= MAX_SYMBOL_SOURCE_BYTES as usize {
+                            bytes.extend_from_slice(&buf[..n]);
+                        } else {
+                            source = None;
+                        }
+                    }
+                }
+                hash_field(&mut corpus, &file_hash.finalize());
+
+                let names = source
+                    .and_then(|bytes| String::from_utf8(bytes).ok())
+                    .map(|source| hilo_graph::signal::extract_symbol_names_for_index(rel, &source))
+                    .unwrap_or_default();
+                if extract {
+                    symbols.insert(rel.clone(), names);
+                }
+            }
+            Err(error) => {
+                hash_field(&mut corpus, b"unreadable");
+                hash_field(&mut corpus, format!("{:?}", error.kind()).as_bytes());
+                if extract {
+                    symbols.insert(rel.clone(), Vec::new());
+                }
+            }
+        }
+    }
+
+    Ok((format!("{:x}", corpus.finalize()), symbols))
+}
+
+fn hash_field(hasher: &mut Sha256, bytes: &[u8]) {
+    hasher.update((bytes.len() as u64).to_le_bytes());
+    hasher.update(bytes);
+}
+
+fn load_or_build_symbol_cache(root: &Path, graph: &GraphDB) -> Result<SymbolCacheLoad> {
+    let root_id = root
+        .canonicalize()
+        .with_context(|| format!("failed to resolve graph root {}", root.display()))?
+        .to_string_lossy()
+        .into_owned();
+    let paths = symbol_source_paths(graph)?;
+    let cache_path = symbol_cache_path(root);
+
+    let cached = std::fs::read(&cache_path)
+        .ok()
+        .and_then(|raw| serde_json::from_slice::<PersistedSymbolCache>(&raw).ok());
+    if let Some(cached) = cached {
+        if cached.version == SYMBOL_CACHE_VERSION && cached.root == root_id {
+            let (current, _) = scan_symbol_sources(root, &root_id, &paths, false)?;
+            if current == cached.fingerprint {
+                return Ok(SymbolCacheLoad {
+                    symbols: cached.symbols,
+                    #[cfg(test)]
+                    rebuilt: false,
+                });
+            }
+        }
+    }
+
+    let (fingerprint, symbols) = scan_symbol_sources(root, &root_id, &paths, true)?;
+    let cache = PersistedSymbolCache {
+        version: SYMBOL_CACHE_VERSION,
+        root: root_id,
+        fingerprint,
+        symbols,
+    };
+    write_symbol_cache_atomic(&cache_path, &cache)?;
+    Ok(SymbolCacheLoad {
+        symbols: cache.symbols,
+        #[cfg(test)]
+        rebuilt: true,
+    })
+}
+
+fn write_symbol_cache_atomic(path: &Path, cache: &PersistedSymbolCache) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("symbol cache path has no parent: {}", path.display()))?;
+    std::fs::create_dir_all(parent).with_context(|| {
+        format!(
+            "failed to create symbol cache directory {}",
+            parent.display()
+        )
+    })?;
+    let payload = serde_json::to_vec(cache).context("failed to serialize symbol cache")?;
+
+    for _ in 0..16 {
+        let id = SYMBOL_CACHE_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+        let temp = parent.join(format!(
+            ".{SYMBOL_CACHE_FILE}.tmp.{}.{}",
+            std::process::id(),
+            id
+        ));
+        let mut file = match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("failed to create symbol cache temp file {}", temp.display())
+                })
+            }
+        };
+        let write_result = (|| -> Result<()> {
+            file.write_all(&payload)
+                .context("failed to write symbol cache temp file")?;
+            file.sync_all()
+                .context("failed to sync symbol cache temp file")?;
+            drop(file);
+            std::fs::rename(&temp, path).with_context(|| {
+                format!(
+                    "failed to atomically replace symbol cache {}",
+                    path.display()
+                )
+            })?;
+            Ok(())
+        })();
+        if write_result.is_err() {
+            let _ = std::fs::remove_file(&temp);
+        }
+        return write_result;
+    }
+
+    anyhow::bail!("failed to reserve a temporary symbol cache file")
 }
 
 /// GAP-065: per-file warm outcome so every discovered source file is
@@ -2347,8 +2573,11 @@ pub fn run_understand(task: &str, budget: Option<usize>) -> Result<()> {
         opts.token_budget = b;
     }
 
-    let result = hilo_graph::signal::understand(&graph, task, &opts)
-        .context("failed to run signal engine")?;
+    let symbols = load_or_build_symbol_cache(&cwd, &graph)?.symbols;
+    let cached_symbols = |path: &str| symbols.get(path).cloned().unwrap_or_default();
+    let result =
+        hilo_graph::signal::understand_with_symbols(&graph, task, &opts, Some(&cached_symbols))
+            .context("failed to run signal engine")?;
 
     println!("{}", result.text);
     Ok(())
@@ -2377,8 +2606,14 @@ pub fn run_search(query: &str, limit: Option<usize>, no_symbols: bool) -> Result
     // restores the cheap path-only index.
     opts.index_symbols = !no_symbols;
 
-    let results = hilo_graph::semantic::search(&graph, query, &opts)
-        .context("failed to run semantic search")?;
+    let results = if no_symbols {
+        hilo_graph::semantic::search(&graph, query, &opts)
+    } else {
+        let symbols = load_or_build_symbol_cache(&cwd, &graph)?.symbols;
+        let cached_symbols = |path: &str| symbols.get(path).cloned().unwrap_or_default();
+        hilo_graph::semantic::search_with_symbols(&graph, query, &opts, Some(&cached_symbols))
+    }
+    .context("failed to run semantic search")?;
 
     if results.is_empty() {
         println!("No results found for '{}'.", query);
@@ -2584,8 +2819,9 @@ pub fn run_rule_check(name: &str) -> Result<()> {
 /// `hilo graph clean` — delete the cached dependency graph.
 ///
 /// Removes `.vfs/graph/edges.jsonl`, `.vfs/graph/graph.db`, the
-/// `.parse_cache.json` per-file parse cache, and the `.last_warm` marker so the
-/// next `warm` (or JIT parse) rebuilds the graph from scratch. Use this after
+/// `.parse_cache.json` per-file parse cache, the `.symbols_cache.json`
+/// semantic symbol cache, and the `.last_warm` marker so the next `warm` (or
+/// JIT parse) rebuilds the graph from scratch. Use this after
 /// crate renames or file moves leave stale edges in the cache (e.g.
 /// `warpfs-*` entries after the rename to `hilo-*`).
 pub fn run_clean() -> Result<()> {
@@ -2613,6 +2849,7 @@ fn clean_graph_dir(cwd: &Path) -> Result<usize> {
         "edges.jsonl",
         "graph.db",
         ".parse_cache.json",
+        SYMBOL_CACHE_FILE,
         ".last_warm",
         COVERAGE_LEDGER,
     ] {
@@ -2690,6 +2927,7 @@ mod tests {
             "edges.jsonl",
             "graph.db",
             ".parse_cache.json",
+            SYMBOL_CACHE_FILE,
             ".last_warm",
             COVERAGE_LEDGER,
         ] {
@@ -2697,16 +2935,168 @@ mod tests {
         }
 
         let removed = clean_graph_dir(dir.path()).unwrap();
-        assert_eq!(removed, 5);
+        assert_eq!(removed, 6);
         assert!(!graph_dir.join("edges.jsonl").exists());
         assert!(!graph_dir.join("graph.db").exists());
         assert!(!graph_dir.join(".parse_cache.json").exists());
+        assert!(!graph_dir.join(SYMBOL_CACHE_FILE).exists());
         assert!(!graph_dir.join(".last_warm").exists());
         assert!(!graph_dir.join(COVERAGE_LEDGER).exists());
 
         // Second run: nothing to remove, not an error.
         let removed = clean_graph_dir(dir.path()).unwrap();
         assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn symbol_cache_serializes_and_invalidates_on_content_and_version() {
+        let root = TempDir::new().unwrap();
+        let graph_dir = root.path().join(".vfs").join("graph");
+        let src_dir = root.path().join("src");
+        fs::create_dir_all(&graph_dir).unwrap();
+        fs::create_dir_all(&src_dir).unwrap();
+        let source_path = src_dir.join("plain.rs");
+        let first_source = "pub fn CachedNeedle() {}\n";
+        let second_source = "pub fn MutantNeedle() {}\n";
+        assert_eq!(
+            first_source.len(),
+            second_source.len(),
+            "fixture must prove content-derived invalidation at equal size"
+        );
+        fs::write(&source_path, first_source).unwrap();
+        fs::write(src_dir.join("dep.rs"), "pub fn Dependency() {}\n").unwrap();
+
+        let graph_path = graph_dir.join("graph.db");
+        let graph = GraphDB::open(graph_path.to_str().unwrap()).unwrap();
+        graph
+            .insert_edges(&[Edge::new("src/plain.rs", "src/dep.rs", "imports")])
+            .unwrap();
+
+        let first = load_or_build_symbol_cache(root.path(), &graph).unwrap();
+        assert!(first.rebuilt, "first load must build the cache");
+        assert_eq!(
+            first.symbols.get("src/plain.rs").unwrap(),
+            &vec!["CachedNeedle".to_string()]
+        );
+
+        let raw = fs::read(symbol_cache_path(root.path())).unwrap();
+        let persisted: PersistedSymbolCache = serde_json::from_slice(&raw).unwrap();
+        assert_eq!(persisted.version, SYMBOL_CACHE_VERSION);
+        assert_eq!(
+            persisted.root,
+            root.path().canonicalize().unwrap().to_string_lossy()
+        );
+        assert_eq!(persisted.symbols, first.symbols);
+        let first_fingerprint = persisted.fingerprint;
+
+        let hit = load_or_build_symbol_cache(root.path(), &graph).unwrap();
+        assert!(!hit.rebuilt, "unchanged second load must reuse the cache");
+        assert_eq!(hit.symbols, first.symbols);
+
+        fs::write(&source_path, second_source).unwrap();
+        let changed = load_or_build_symbol_cache(root.path(), &graph).unwrap();
+        assert!(changed.rebuilt, "same-size source edit must rebuild");
+        assert_eq!(
+            changed.symbols.get("src/plain.rs").unwrap(),
+            &vec!["MutantNeedle".to_string()]
+        );
+        assert!(
+            !changed
+                .symbols
+                .get("src/plain.rs")
+                .unwrap()
+                .iter()
+                .any(|name| name == "CachedNeedle"),
+            "stale symbols must not survive a content change"
+        );
+        let changed_raw = fs::read(symbol_cache_path(root.path())).unwrap();
+        let mut changed_doc: PersistedSymbolCache = serde_json::from_slice(&changed_raw).unwrap();
+        assert_ne!(changed_doc.fingerprint, first_fingerprint);
+
+        changed_doc.version = 0;
+        fs::write(
+            symbol_cache_path(root.path()),
+            serde_json::to_vec(&changed_doc).unwrap(),
+        )
+        .unwrap();
+        let wrong_version = load_or_build_symbol_cache(root.path(), &graph).unwrap();
+        assert!(wrong_version.rebuilt, "wrong cache version must rebuild");
+        let repaired: PersistedSymbolCache =
+            serde_json::from_slice(&fs::read(symbol_cache_path(root.path())).unwrap()).unwrap();
+        assert_eq!(repaired.version, SYMBOL_CACHE_VERSION);
+
+        let temp_files = fs::read_dir(&graph_dir)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .contains(".symbols_cache.json.tmp")
+            })
+            .count();
+        assert_eq!(temp_files, 0, "atomic publish must leave no temp file");
+    }
+
+    #[test]
+    fn cached_symbols_drive_real_search_and_understand_calls() {
+        let root = TempDir::new().unwrap();
+        let graph_dir = root.path().join(".vfs").join("graph");
+        let src_dir = root.path().join("src");
+        fs::create_dir_all(&graph_dir).unwrap();
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::write(src_dir.join("plain.rs"), "pub fn ExactCacheNeedle() {}\n").unwrap();
+        fs::write(src_dir.join("dep.rs"), "pub fn Dependency() {}\n").unwrap();
+
+        let graph_path = graph_dir.join("graph.db");
+        let graph = GraphDB::open(graph_path.to_str().unwrap()).unwrap();
+        graph
+            .insert_edges(&[Edge::new("src/plain.rs", "src/dep.rs", "imports")])
+            .unwrap();
+
+        let built = load_or_build_symbol_cache(root.path(), &graph).unwrap();
+        assert!(built.rebuilt);
+        drop(built);
+        let cached = load_or_build_symbol_cache(root.path(), &graph).unwrap();
+        assert!(
+            !cached.rebuilt,
+            "second process-shaped load must hit disk cache"
+        );
+        let extract = |path: &str| cached.symbols.get(path).cloned().unwrap_or_default();
+
+        // `root: None` is deliberate: the fixture is outside the process CWD,
+        // so only the injected persisted symbols can satisfy this exact name.
+        let search_opts = hilo_graph::semantic::SearchOpts {
+            limit: 10,
+            index_symbols: true,
+            root: None,
+        };
+        let search = hilo_graph::semantic::search_with_symbols(
+            &graph,
+            "ExactCacheNeedle",
+            &search_opts,
+            Some(&extract),
+        )
+        .unwrap();
+        assert!(
+            search
+                .iter()
+                .any(|result| result.file_path == "src/plain.rs"),
+            "real semantic search must recall the defining file from cached symbols: {search:?}"
+        );
+
+        let understood = hilo_graph::signal::understand_with_symbols(
+            &graph,
+            "ExactCacheNeedle",
+            &hilo_graph::signal::SignalOpts::default(),
+            Some(&extract),
+        )
+        .unwrap();
+        assert!(
+            understood.anchors.iter().any(|path| path == "src/plain.rs"),
+            "real understand fallback must anchor via cached symbols: {:?}",
+            understood.anchors
+        );
     }
 
     #[test]

@@ -105,10 +105,11 @@ pub struct SearchOpts {
     /// Maximum number of results to return.
     pub limit: usize,
     /// Enrich the index with file-defined symbols before matching (GAP-077).
-    /// Default OFF: the first query with it ON pays one tree-sitter parse
-    /// per source file (memoized within the query; cached warms don't help
-    /// across processes). Callers that need exact-symbol recall — CLI
-    /// interactive use, MCP `vfs_graph_search` — opt in.
+    /// Default OFF: callers without a persisted symbol source pay one
+    /// tree-sitter parse per source file (memoized within the query). CLI
+    /// one-shot search/understand inject their on-disk cache (PERF-009);
+    /// other callers that need exact-symbol recall — including MCP
+    /// `vfs_graph_search` — opt in here.
     pub index_symbols: bool,
     /// Root directory the default symbol extractor reads fixture files
     /// from. `None` (the default) reads the process CWD — the historical

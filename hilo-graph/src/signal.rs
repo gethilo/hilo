@@ -153,7 +153,29 @@ pub struct SignalResult {
 ///
 /// The output is deterministic: same task + same graph state → identical text.
 pub fn understand(db: &GraphDB, task: &str, opts: &SignalOpts) -> GraphResult<SignalResult> {
-    understand_with_source::<fn(&str) -> Option<String>>(db, task, opts, None)
+    understand_with_source_and_symbols::<fn(&str) -> Option<String>>(db, task, opts, None, None)
+}
+
+/// Run the signal engine with a caller-provided symbol source for semantic
+/// anchor fallback.
+///
+/// PERF-009: one-shot CLI callers use this narrow seam to inject the persisted
+/// symbol cache instead of reparsing every source file in each process. The
+/// cache changes anchor discovery only; tier rendering still reads current
+/// source through the normal path.
+pub fn understand_with_symbols(
+    db: &GraphDB,
+    task: &str,
+    opts: &SignalOpts,
+    symbol_extractor: crate::semantic::SymbolExtractor<'_>,
+) -> GraphResult<SignalResult> {
+    understand_with_source_and_symbols::<fn(&str) -> Option<String>>(
+        db,
+        task,
+        opts,
+        None,
+        symbol_extractor,
+    )
 }
 
 /// Run the signal engine with an optional source-file resolver.
@@ -170,13 +192,26 @@ pub fn understand_with_source<F>(
 where
     F: Fn(&str) -> Option<String>,
 {
+    understand_with_source_and_symbols(db, task, opts, source_reader, None)
+}
+
+fn understand_with_source_and_symbols<F>(
+    db: &GraphDB,
+    task: &str,
+    opts: &SignalOpts,
+    source_reader: Option<F>,
+    symbol_extractor: crate::semantic::SymbolExtractor<'_>,
+) -> GraphResult<SignalResult>
+where
+    F: Fn(&str) -> Option<String>,
+{
     // 1. Discover anchors by matching task tokens against file paths.
     let task_tokens = tokenize_task(task);
     // The graph's own file set: the authority for resolving `local:`
     // specifier nodes (GAP-098). Built once per call — one SQL scan, the
     // same budget `semantic::search` already pays for its own resolver.
     let known_files = graph_file_set(db);
-    let anchors = discover_anchors(db, task, opts.seed_limit);
+    let anchors = discover_anchors(db, task, opts.seed_limit, symbol_extractor);
 
     // 2. Traverse the graph from anchors to collect the file set.
     let file_scores = traverse_and_score(db, &anchors, opts.depth, opts.max_nodes, &known_files);
@@ -241,7 +276,12 @@ where
 /// (GAP-078: "session" in `src/flask/sessions.py` is a better anchor than
 /// "bug" inside `debughelpers.py`). Files are ranked by graded score, then
 /// alphabetically; a file with zero token matches is never an anchor.
-fn discover_anchors(db: &GraphDB, task: &str, seed_limit: usize) -> Vec<String> {
+fn discover_anchors(
+    db: &GraphDB,
+    task: &str,
+    seed_limit: usize,
+    symbol_extractor: crate::semantic::SymbolExtractor<'_>,
+) -> Vec<String> {
     let tokens = tokenize_task(task);
     if tokens.is_empty() {
         return Vec::new();
@@ -301,10 +341,11 @@ fn discover_anchors(db: &GraphDB, task: &str, seed_limit: usize) -> Vec<String> 
         index_symbols: true,
         root: None,
     };
-    let semantic_results = match crate::semantic::search(db, task, &search_opts) {
-        Ok(results) => results,
-        Err(_) => return Vec::new(),
-    };
+    let semantic_results =
+        match crate::semantic::search_with_symbols(db, task, &search_opts, symbol_extractor) {
+            Ok(results) => results,
+            Err(_) => return Vec::new(),
+        };
     semantic_results.into_iter().map(|r| r.file_path).collect()
 }
 
@@ -2238,7 +2279,7 @@ mod tests {
         ])
         .unwrap();
 
-        let anchors = discover_anchors(&db, "session handling", 8);
+        let anchors = discover_anchors(&db, "session handling", 8, None);
 
         assert_eq!(
             anchors.first().map(String::as_str),
