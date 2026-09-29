@@ -12,6 +12,7 @@ target/
 .vfs/graph/.parse_cache.json
 .vfs/graph/.symbols_cache.json
 .vfs/graph/.last_reconcile
+.vfs/graph/coverage.json
 
 # GitReins local state
 .gitreins/tasks.yaml
