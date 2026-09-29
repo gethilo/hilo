@@ -7,7 +7,7 @@ without reading files.
 
 ## Guides
 
-- **[Getting Started](getting-started.md)** — install, init, first discover
+- **[Getting Started](getting-started.md)** — install, init, first warm
 - **[Architecture](architecture.md)** — FUSE, metadata engine, backends
 - **[CLI Reference](cli-reference.md)** — every command and flag
 - **[MCP Tools](mcp-tools.md)** — agent integration via JSON-RPC
