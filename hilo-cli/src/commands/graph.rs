@@ -1130,11 +1130,55 @@ pub fn run_impact(path: &str, max_depth: u32, format: Option<&str>, external: bo
                         file.path, file.relation, file.depth, file.scope, via, prov, conf
                     );
                 }
+                // REV-WARPFS-2: a file-form query reaches its real importers
+                // through the crate's `pkg:` node, and GAP-048 family
+                // expansion folds in sibling pkg members — so the row count
+                // can exceed the direct importers of the file. Say so once,
+                // derived from the rows just printed so the note can never
+                // contradict them.
+                if let Some(note) = crate_scope_note(&results, &path) {
+                    println!("{note}");
+                }
             }
         }
     }
 
     Ok(())
+}
+
+/// REV-WARPFS-2: the one-line `note:` printed after an impact result set that
+/// contains crate-scoped rows, or `None` when there is nothing to explain.
+///
+/// A file's imports resolve to `pkg:<crate>` pseudo-nodes rather than
+/// file→file edges, so a file query reaches the file's real importers one
+/// extra hop away (`file → pkg:<crate> → importer`), and GAP-048 family
+/// expansion additionally matches the crate's sibling pkg members
+/// (`pkg:<crate>::<item>`, `pkg:<crate>_<sibling>`). Both make the row count
+/// exceed the number of direct importers, which a bare count cannot show.
+///
+/// The counts come from the result rows themselves (not a second query), so
+/// the note always agrees with what was printed — including on the streaming
+/// path, where the DuckDB cache may have skipped replay.
+fn crate_scope_note(results: &[hilo_graph::ImpactFile], path: &str) -> Option<String> {
+    let crate_rows = results
+        .iter()
+        .filter(|f| f.scope == hilo_graph::impact::SCOPE_CRATE)
+        .count();
+    if crate_rows == 0 {
+        return None;
+    }
+    let mut via: Vec<&str> = results.iter().filter_map(|f| f.via.as_deref()).collect();
+    via.sort_unstable();
+    via.dedup();
+    let via = if via.is_empty() {
+        String::new()
+    } else {
+        format!(" (via {})", via.join(", "))
+    };
+    Some(format!(
+        "note: {crate_rows} of {} rows are crate-scoped{via}: matched through the crate's pkg: node, not '{path}' itself. Family expansion (GAP-048) also folds in sibling pkg members (pkg:<crate>::<item>, pkg:<crate>_<sibling>), so this total can exceed the direct importers of the file.",
+        results.len()
+    ))
 }
 
 /// Count non-empty lines in `.vfs/graph/edges.jsonl` (the raw edge records
@@ -5333,5 +5377,56 @@ mod tests {
             !is_generated_stub(Path::new("src/live/long_header.py"), &long),
             "the banner window is the file HEAD, not the whole file"
         );
+    }
+
+    /// REV-WARPFS-2: the crate-scope note fires only for a result set that
+    /// holds crate-scoped rows, and it states the crate hop plus the GAP-048
+    /// family caveat — the two things a bare row count hides.
+    #[test]
+    fn crate_scope_note_states_crate_hop_and_family_expansion() {
+        use hilo_graph::impact::{SCOPE_CRATE, SCOPE_FILE};
+
+        let row = |scope: &str, via: Option<&str>| hilo_graph::ImpactFile {
+            path: "crates/b/src/main.rs".to_string(),
+            relation: "imports".to_string(),
+            depth: 2,
+            scope: scope.to_string(),
+            via: via.map(str::to_string),
+            provenance: None,
+            confidence: None,
+        };
+
+        // Nothing to explain: empty result set, or file-scoped rows only.
+        assert!(crate_scope_note(&[], "crates/a/src/lib.rs").is_none());
+        assert!(
+            crate_scope_note(&[row(SCOPE_FILE, None)], "crates/a/src/lib.rs").is_none(),
+            "a file-scoped-only result set needs no note"
+        );
+
+        // One file-scoped row among two crate-scoped ones: the note counts
+        // only the crate-scoped rows and names the crate node it went
+        // through, deduplicated.
+        let results = [
+            row(SCOPE_FILE, None),
+            row(SCOPE_CRATE, Some("pkg:a")),
+            row(SCOPE_CRATE, Some("pkg:a")),
+        ];
+        let note = crate_scope_note(&results, "crates/a/src/lib.rs")
+            .expect("crate-scoped rows must produce a note");
+        assert!(note.contains("2 of 3 rows are crate-scoped"), "{note}");
+        assert!(note.contains("via pkg:a"), "{note}");
+        assert!(note.contains("crates/a/src/lib.rs"), "{note}");
+        assert_eq!(
+            note.matches("pkg:a").count(),
+            1,
+            "the via list is deduplicated: {note}"
+        );
+        assert!(note.contains("GAP-048"), "{note}");
+        assert!(
+            note.contains("sibling pkg members"),
+            "the note must name the family-expansion caveat: {note}"
+        );
+        assert!(note.starts_with("note: "), "{note}");
+        assert_eq!(note.lines().count(), 1, "the note is one line: {note}");
     }
 }

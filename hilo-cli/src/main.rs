@@ -232,6 +232,28 @@ struct ImpactArgs {
     path: String,
 
     /// Maximum depth of transitive traversal (default: 10).
+    ///
+    /// Depth counts HOPS between graph nodes, and dependency chains pass
+    /// through the `pkg:<crate>` pseudo-node: the parser emits edges that
+    /// target `pkg:<crate>` (and, for named imports, `pkg:<crate>::<item>`)
+    /// rather than file→file edges, so a file-form query reaches that file's
+    /// real importers as `file → pkg:<crate> → importer` — two hops.
+    ///
+    /// `--max-depth 1` therefore reports only edges that target the queried
+    /// file itself (or a `local:` node resolving to it). For sources whose
+    /// imports resolve to `pkg:` nodes — Rust, Java — that is usually ZERO
+    /// rows even when the file has many importers, so use `--max-depth 2` or
+    /// more for a file-form query. Rows reached through a crate node print
+    /// `scope=crate` and `via pkg:<crate>`; true file-level rows print
+    /// `scope=file`.
+    ///
+    /// A crate's pkg FAMILY is matched too (GAP-048): member nodes
+    /// `pkg:<crate>::<item>` and underscore-sibling crates
+    /// `pkg:<crate>_<sibling>` (e.g. `serde_derive` for `serde`). Because
+    /// its public surface re-exports them, the reported count can exceed the
+    /// number of direct importers of the queried file — see
+    /// docs/cli-reference.md (`hilo graph impact`, Family expansion) for the
+    /// tradeoff.
     #[arg(long, default_value = "10")]
     max_depth: u32,
 

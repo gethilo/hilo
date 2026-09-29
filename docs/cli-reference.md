@@ -191,7 +191,8 @@ hilo graph related hilo-graph/tests/fixtures/handler.go --direction reverse --re
 Find all files that depend on a given file, directly or transitively.
 
 ```bash
-# Direct dependents only
+# Depth 1 = only edges that target this file itself (usually zero rows for a
+# Rust/Java source — see Depth semantics below)
 hilo graph impact hilo-graph/src/lib.rs --max-depth 1
 
 # Full transitive closure (default: 10)
@@ -203,6 +204,50 @@ hilo graph impact hilo-graph/src/lib.rs --format json
 # Include external cross-repo edges in the traversal
 hilo graph impact hilo-graph/src/lib.rs --external
 ```
+
+#### Depth semantics
+
+`--max-depth` counts HOPS between graph nodes, and dependency chains pass
+through the `pkg:<crate>` pseudo-node: the parser emits edges that target
+`pkg:<crate>` (and, for named imports, `pkg:<crate>::<item>`) instead of
+file→file edges, so a file-form query reaches that file's real importers as
+`file → pkg:<crate> → importer` — two hops, not one.
+
+- `--max-depth 1` reports only edges whose target is the queried file itself
+  (or a `local:` node resolving to it). For a Rust or Java source — whose
+  imports resolve to `pkg:` nodes — that is usually **zero dependents**, even
+  when the file has many importers. Read it as "no edge targets this file
+  directly", never as "nothing depends on this file".
+- **A file-form query typically needs `--max-depth 2` or more.** The default
+  is 10, which is why the default answer looks right: the crate hop is inside
+  the budget. Rows reached through a crate node print `scope=crate` and
+  `via pkg:<crate>`; a true file-level dependent prints `scope=file`. That
+  per-row scope is what keeps a crate-level match from being read as a
+  dependent of the file itself.
+
+#### Family expansion (`GAP-048`)
+
+Resolving a `pkg:<crate>` node also matches that crate's **family**: the
+member nodes the parser emits for named imports (`pkg:<crate>::<item>`) and
+underscore-sibling companion crates (`pkg:<crate>_<sibling>`, e.g.
+`serde_derive` for `serde`). The match is prefix-anchored — `pkg:ab::Thing`
+never leaks into a query on `pkg:a`.
+
+The tradeoff, stated plainly: **the reported count can exceed the number of
+direct importers of the queried file.** A crate-level query also counts
+importers of its sibling members (`pkg:grep_matcher`, `pkg:grep_searcher` for
+`pkg:grep`), and a symbol member counts once per importing file. That is
+deliberate — the parser emits member/member-crate nodes as the import targets,
+so a crate query that matched only the exact `pkg:<crate>` node under-reported
+the blast radius (the pre-GAP-048 measurement was 6 of 148 serde importers).
+The cost is precision at the crate boundary.
+
+To get just the direct importers of one file: filter the output to
+`scope=file` rows (text output labels every row), or query the specific
+`pkg:<crate>::<item>` node instead of the file. When a file-form query does
+return crate-scoped rows, the text output ends with a one-line `note:` saying
+how many rows were crate-scoped and that family expansion is included.
+`--format json` adds no prose — every row carries `scope` and `via` instead.
 
 ### `understand`
 
