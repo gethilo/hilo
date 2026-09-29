@@ -1815,3 +1815,112 @@ tasks:
   status: complete
   created_at: '2026-09-27T04:01:57.389086+00:00'
   completed_at: '2026-09-27T04:24:10.848356+00:00'
+- id: README-DOCS-WAVE
+  title: 'README docs wave: backend mount example form, Testing+Known gaps sections,
+    Rust toolchain claim'
+  criteria:
+  - 'README-1: no README example implies hilo backend mount <type> <path>; every backend
+    mount example uses --type and --at. README-2: a Testing heading documents real
+    Makefile targets (test, check, fmt, clippy, test-integration) and a Known gaps
+    heading states plugin hooks and manifest permission rules are not enforced, citing
+    docs/hilo-plugins.md and docs/hilo-permissions.md. README-3: no unqualified 1.80+
+    claim remains in README.md and the badge agrees with the Requirements bullet and
+    with CI tracking stable.'
+  status: in_progress
+  created_at: '2026-09-28T20:13:21.926833+00:00'
+- id: CLI-DOCS-WAVE
+  title: 'CLI docs wave: hilo-cli.md type list, --endpoint, init hook skip, empty-graph
+    stats'
+  criteria:
+  - 'DOC-3: grep -c "S3, git, local" docs/hilo-cli.md is 0 and every --type value
+    in hilo-cli.md backend rows appears in hilo backend mount --help. DOC-4: grep
+    -c endpoint docs/cli-reference.md is at least 3 including a flag example and the
+    hilo-cli.md backend mount row lists --endpoint. GAP-106: the hilo init section
+    of docs/cli-reference.md notes hook installation is skipped without a git repository
+    and mentions the warning. GAP-107: the graph stats section of docs/cli-reference.md
+    shows the empty-graph output.'
+  status: in_progress
+  created_at: '2026-09-28T20:13:23.857393+00:00'
+- id: SKILL-DOCS-WAVE
+  title: SKILL.md MCP tools table completes to all 17 registered vfs_ tools
+  criteria:
+  - 'DOC-5: grep -c vfs_workspace_ephemeral SKILL.md is at least 1 and grep -c vfs_workspace_wipe
+    SKILL.md is at least 1, and the SKILL.md MCP tools table row count equals the
+    count of name: "vfs_ entries in hilo-mcp/src/tools/mod.rs.'
+  status: in_progress
+  created_at: '2026-09-28T20:13:24.815561+00:00'
+- id: README-2
+  title: Add test suite documentation to README
+  criteria:
+  - README.md contains a 'Testing' or 'Development' section that documents how to
+    run tests (cargo test, make test, or similar)
+  status: complete
+  created_at: '2026-09-29T00:25:56.857009+00:00'
+  completed_at: '2026-09-29T00:37:48.748342+00:00'
+- id: README-3
+  title: Verify or correct Rust version claim in README
+  criteria:
+  - README.md badge and Requirements section either match the actual rust-version
+    in Cargo.toml or are corrected to reflect reality
+  status: complete
+  created_at: '2026-09-29T00:25:57.441341+00:00'
+  completed_at: '2026-09-29T00:37:49.867611+00:00'
+- id: DOCS-GAP-001
+  title: docs wave DOCS-GAP-001
+  criteria:
+  - Row pass_criteria greps pass at HEAD; full tier-1 guard PASS
+  status: complete
+  created_at: '2026-09-29T11:47:47.707524+00:00'
+  completed_at: '2026-09-29T11:47:48.256764+00:00'
+- id: DOCS-GAP-002
+  title: docs wave DOCS-GAP-002
+  criteria:
+  - Row pass_criteria greps pass at HEAD; full tier-1 guard PASS
+  status: complete
+  created_at: '2026-09-29T11:47:48.798259+00:00'
+  completed_at: '2026-09-29T11:47:49.366974+00:00'
+- id: DOCS-GAP-003
+  title: docs wave DOCS-GAP-003
+  criteria:
+  - Row pass_criteria greps pass at HEAD; full tier-1 guard PASS
+  status: complete
+  created_at: '2026-09-29T11:47:49.859197+00:00'
+  completed_at: '2026-09-29T11:47:50.464113+00:00'
+- id: DOCS-GAP-008
+  title: docs wave DOCS-GAP-008
+  criteria:
+  - Row pass_criteria greps pass at HEAD; full tier-1 guard PASS
+  status: complete
+  created_at: '2026-09-29T11:47:50.999390+00:00'
+  completed_at: '2026-09-29T11:47:51.649332+00:00'
+- id: DOCS-GAP-009
+  title: docs wave DOCS-GAP-009
+  criteria:
+  - Row pass_criteria greps pass at HEAD; full tier-1 guard PASS
+  status: complete
+  created_at: '2026-09-29T11:47:52.170588+00:00'
+  completed_at: '2026-09-29T11:47:52.781959+00:00'
+- id: DOCS-GAP-010
+  title: docs wave DOCS-GAP-010
+  criteria:
+  - Row pass_criteria greps pass at HEAD; full tier-1 guard PASS
+  status: complete
+  created_at: '2026-09-29T11:47:53.281862+00:00'
+  completed_at: '2026-09-29T11:47:53.857928+00:00'
+- id: DF-WARPFS-35
+  title: Java symbol pack noise
+  criteria:
+  - hilo graph understand on a Java corpus emits only real identifier symbols (no
+    '@Override'/'context)'/brace fragments); regression test in hilo_graph
+  status: complete
+  created_at: '2026-09-29T18:21:57.729386+00:00'
+  completed_at: '2026-09-29T20:10:17.554451+00:00'
+- id: REV-WARPFS-2
+  title: impact depth semantics docs
+  criteria:
+  - 'docs/cli-reference.md + --help explain impact --max-depth semantics (file->pkg:
+    chain needs depth>=2) and family expansion over-count; every command in the docs
+    section runs verbatim'
+  status: complete
+  created_at: '2026-09-29T18:21:58.481461+00:00'
+  completed_at: '2026-09-29T20:34:49.325103+00:00'
