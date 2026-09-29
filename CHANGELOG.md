@@ -6,6 +6,19 @@ All notable changes to Hilo are documented in this file.
 
 ### Fixed
 
+- **Java symbol packs no longer carry decorator noise** (DF-WARPFS-35): a Java
+  symbol name was the last whitespace token of the declaration's first line.
+  An annotation is part of a declaration's `modifiers`, so that first line IS
+  the annotation (`@Override`, `@SuppressWarnings({`), and a header that wraps
+  after a parameter — or ends in `;` — leaves a parameter behind: the dogfood
+  run read `@Override`, `context)`, `object);` straight out of the pack. On the
+  pinned Gson corpus (264 files) the pre-fix extractor produced 3757 unusable
+  names out of 3838 symbols (98%: `""` for every declaration whose first line
+  ends in `{`, `@Override`/`@Test` for every annotated one, `object);`/`f);`
+  for wrapped headers). Names now come from the AST `name` field, guarded to be
+  identifiers (a node without a name field yields no symbol), and the signature
+  is the declaration's own header with annotations stripped and wraps joined —
+  reported on the line that carries the name, not the annotation's line.
 - **`graph understand` now surfaces the named symbols of a flow** (GAP-098):
   the `MAP`/`SIGNATURES` symbol list was a flat `take(8)` in source order, so
   the definition a question was about could not appear once a file had more

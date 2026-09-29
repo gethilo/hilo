@@ -1540,24 +1540,122 @@ fn usable_js_name(name: &str) -> bool {
     )
 }
 
+/// Extract a Java declaration symbol: name from the AST, signature with the
+/// declaration's annotations stripped.
+///
+/// The name is NEVER derived from scanning the node's text (DF-WARPFS-35):
+/// an annotation is part of a declaration's `modifiers`, so the node — and
+/// therefore its first line — begins with the annotation
+/// (`@Override\n    public void handleRequest(`, `@SuppressWarnings({...})`),
+/// and a declaration that wraps its header (`public void f(Request context)`
+/// on one line, `throws IOException {` on the next) ends its first line on a
+/// parameter. The pre-fix last-whitespace-token heuristic turned both into
+/// symbol names: `@Override`, `@SuppressWarnings`, `context)`, `object);` —
+/// and `""` for every `class`/`interface` (their first line ends in `{`).
+///
+/// `method_declaration`, `class_declaration` and `interface_declaration` all
+/// declare `name` as a REQUIRED field (tree-sitter-java 0.23.5
+/// `node-types.json`), so a node without one is not a declaration this
+/// extractor serves and yields no symbol — a nameless bullet is worse than
+/// none (the GAP-075 rule, applied to Java).
 fn extract_java_signature(node: tree_sitter::Node, source: &[u8]) -> Option<Symbol> {
-    let text = node.utf8_text(source).ok()?;
-    let line = node.start_position().row + 1;
-    let first_line = text.lines().next().unwrap_or(text);
-    let trimmed = first_line.trim();
+    let name_node = node.child_by_field_name("name")?;
+    let name = name_node.utf8_text(source).ok()?.trim();
+    if !usable_java_name(name) {
+        return None;
+    }
 
-    let name = trimmed
-        .split_whitespace()
-        .rfind(|s| !s.ends_with(':') && !s.is_empty())
-        .unwrap_or(trimmed)
-        .trim_end_matches(['{', '('])
-        .to_string();
+    // Where the declaration's own text starts: past the annotations and the
+    // whitespace that separate them from it. Skipped newlines are also the
+    // line offset — an annotated declaration is reported on the line that
+    // carries its name, not on the annotation's line.
+    let base = node.start_byte();
+    let annotations = java_annotation_spans(node);
+    let in_annotation = |pos: usize| {
+        annotations
+            .iter()
+            .any(|(start, end)| pos >= *start && pos < *end)
+    };
+    let mut pos = base;
+    let mut skipped_lines = 0usize;
+    while pos < node.end_byte() {
+        let byte = source[pos];
+        if byte == b'\n' {
+            skipped_lines += 1;
+            pos += 1;
+        } else if byte.is_ascii_whitespace() || in_annotation(pos) {
+            pos += 1;
+        } else {
+            break;
+        }
+    }
+
+    let line = node.start_position().row + 1 + skipped_lines;
+
+    // The signature is the declaration's header on one line: joined across
+    // wraps up to the body brace or the `;` of an abstract method, whitespace
+    // collapsed. Annotations stripped above, so nothing decorator-shaped can
+    // lead it.
+    let remainder = String::from_utf8_lossy(&source[pos..node.end_byte()]);
+    let mut header = String::new();
+    for text_line in remainder.lines() {
+        match text_line.find(['{', ';']) {
+            Some(index) => {
+                header.push_str(&text_line[..=index]);
+                break;
+            }
+            None => {
+                header.push(' ');
+                header.push_str(text_line);
+            }
+        }
+    }
+    let signature = header.split_whitespace().collect::<Vec<_>>().join(" ");
+    if signature.is_empty() {
+        return None;
+    }
 
     Some(Symbol {
-        name,
+        name: name.to_string(),
         line,
-        signature: trimmed.to_string(),
+        signature,
     })
+}
+
+/// Byte ranges of the annotations in a Java declaration's `modifiers` child.
+///
+/// Annotations are `marker_annotation` (bare `@Override`) or `annotation`
+/// (with an argument list, possibly spanning lines) — the two arms of the
+/// grammar's `_annotation` (tree-sitter-java 0.23.5 `grammar.js`).
+fn java_annotation_spans(node: tree_sitter::Node) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() != "modifiers" {
+            continue;
+        }
+        let mut modifiers = child.walk();
+        for modifier in child.children(&mut modifiers) {
+            if matches!(modifier.kind(), "marker_annotation" | "annotation") {
+                spans.push((modifier.start_byte(), modifier.end_byte()));
+            }
+        }
+    }
+    spans
+}
+
+/// A usable Java symbol name is a real identifier: non-empty, starting with a
+/// letter, `_` or `$`, and containing nothing else — never an annotation
+/// (`@Override`), never a parameter or body fragment (`context)`, `object);`,
+/// `{`), never anything with whitespace in it. The DF-WARPFS-35 guard.
+fn usable_java_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if c.is_alphabetic() || c == '_' || c == '$' => {}
+        _ => return false,
+    }
+    name.chars()
+        .all(|c| c.is_alphanumeric() || c == '_' || c == '$')
 }
 
 fn extract_c_signature(node: tree_sitter::Node, source: &[u8]) -> Option<Symbol> {
@@ -1726,6 +1824,19 @@ where
     // - Top `seed_limit` files → Detail (get source)
     // - Next `seed_limit` files → Signature
     // - Remaining → Map
+    //
+    // DETAIL is therefore exactly the anchor band: anchors score 1.0 and every
+    // other file enters at ≤0.8 (a 1-hop neighbor), so a file whose PATH does
+    // not literally carry the task's words can never reach Detail no matter how
+    // exactly its SYMBOLS name the mechanism. Measured (DF-WARPFS-35, pinned
+    // Gson corpus, "how does gson serialize null fields"): DETAIL got 2 anchor
+    // files and the mechanism file (`gson/.../Gson.java`) stayed out of the
+    // pack entirely — on Java the import edges resolve to `pkg:` nodes, so
+    // nothing traverses into it (DF-WARPFS-34), and even once that resolves,
+    // a mechanism file matching fewer path words than `seed_limit` competitors
+    // cannot displace an anchor. The fix is promotion by symbol-name match
+    // (the symbols are already extracted below); it is a ranking change, not a
+    // symbol-extraction one.
     let detail_count = opts.seed_limit.min(n);
     let signature_count = (opts.seed_limit * 2).min(n);
 
@@ -3615,5 +3726,193 @@ use crate::private::Hidden;
             None,
             "from another directory the same string names a file the graph does not have"
         );
+    }
+
+    // ── DF-WARPFS-35: Java symbol names must come from the AST `name` ──
+    // ── field, and a declaration's annotations must not leak into    ──
+    // ── either the name or the signature.                            ──
+
+    /// Java fixture: every shape DF-WARPFS-35 named. On it the pre-fix
+    /// last-whitespace-token heuristic emitted `""` (class/interface — the
+    /// first line ends in `{`), `@Override` (an annotation is part of the
+    /// declaration's `modifiers`, so it IS the first line) and `context)`
+    /// (a header that wraps right after a parameter).
+    const JAVA_FIXTURE: &str = "\
+public class Handler {
+    @Override
+    public void handleRequest(HttpServletRequest context) throws IOException { response.getWriter().write(object); }
+
+    public void dispatch(HttpServletRequest context)
+            throws IOException {
+        sink.write(context);
+    }
+}
+
+public interface Sink {
+    void write(Object object);
+}
+";
+
+    /// Every extracted Java name must be a real identifier — never an
+    /// annotation (`@Override`), never a parameter/body fragment (`context)`,
+    /// `object);`, `{`), never empty.
+    fn assert_java_names_usable(symbols: &[Symbol]) {
+        assert!(
+            !symbols.is_empty(),
+            "expected at least one symbol from the fixture"
+        );
+        for s in symbols {
+            assert!(
+                usable_java_name(&s.name),
+                "unusable Java symbol name {:?} (signature: {:?})",
+                s.name,
+                s.signature
+            );
+        }
+    }
+
+    #[test]
+    fn extract_symbols_java_annotated_method_has_real_name_without_annotation_noise() {
+        let symbols = extract_symbols("src/main/java/com/example/Handler.java", JAVA_FIXTURE);
+        assert_java_names_usable(&symbols);
+
+        let names: Vec<&str> = symbols.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["Handler", "handleRequest", "dispatch", "Sink", "write"],
+            "names come from the AST `name` field, in source order"
+        );
+        // The noise fragments the dogfood run recorded, and the empty-class
+        // name, must be gone.
+        for noise in ["@Override", "context)", "object);", ""] {
+            assert!(
+                !names.contains(&noise),
+                "symbol names must not contain {noise:?}, got {names:?}"
+            );
+        }
+
+        let handle = symbols
+            .iter()
+            .find(|s| s.name == "handleRequest")
+            .expect("the annotated method must be a symbol");
+        assert_eq!(
+            handle.signature,
+            "public void handleRequest(HttpServletRequest context) throws IOException {",
+            "the signature is the declaration's own line, annotation-free"
+        );
+        assert_eq!(
+            handle.line, 3,
+            "the symbol is reported on the line that carries its name, not the annotation's line"
+        );
+
+        // The wrapper: the header's first line ends on a parameter, so the
+        // pre-fix heuristic named the symbol `context)`. The joined header is
+        // the declaration, whitespace-collapsed.
+        let dispatch = symbols
+            .iter()
+            .find(|s| s.name == "dispatch")
+            .expect("the wrapped-header method must be a symbol");
+        assert_eq!(
+            dispatch.signature,
+            "public void dispatch(HttpServletRequest context) throws IOException {"
+        );
+        assert_eq!(dispatch.line, 5);
+
+        // An abstract/interface method ends in `;` — the pre-fix heuristic
+        // named it `object);`.
+        let write = symbols
+            .iter()
+            .find(|s| s.name == "write")
+            .expect("the interface method must be a symbol");
+        assert_eq!(write.signature, "void write(Object object);");
+        assert_eq!(write.line, 12);
+    }
+
+    #[test]
+    fn extract_symbols_java_multiline_annotated_method_has_real_name() {
+        // The annotation and the declaration both wrap: the name still comes
+        // from the AST, and the signature is the declaration's own header —
+        // never `@Override`, never `public ResponseEntity<Void>` alone (the
+        // header is joined across the wrap).
+        let src = "\
+public class Controller {
+    @Override
+    public ResponseEntity<Void>
+        handleRequest(HttpServletRequest context, Binary binary)
+        throws IOException {
+        return null;
+    }
+}
+";
+        let symbols = extract_symbols("src/main/java/com/example/Controller.java", src);
+        assert_java_names_usable(&symbols);
+
+        let names: Vec<&str> = symbols.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["Controller", "handleRequest"], "got {names:?}");
+
+        let handle = symbols
+            .iter()
+            .find(|s| s.name == "handleRequest")
+            .expect("the multi-line annotated method must be a symbol");
+        assert_eq!(
+            handle.signature,
+            "public ResponseEntity<Void> handleRequest(HttpServletRequest context, Binary binary) throws IOException {"
+        );
+        assert_eq!(
+            handle.line, 3,
+            "the declaration line, not the `@Override` line above it"
+        );
+    }
+
+    #[test]
+    fn extract_symbols_java_multiline_annotation_arguments_do_not_bleed() {
+        // An annotation whose argument list spans lines: neither its own line
+        // nor the strings inside it may become the signature, and the
+        // declaration below it is still reported on its own line.
+        let src = "\
+public class Service {
+    @SuppressWarnings({
+        \"unchecked\",
+        \"rawtypes\",
+    })
+    public void run() {
+        start();
+    }
+}
+";
+        let symbols = extract_symbols("src/main/java/com/example/Service.java", src);
+        assert_java_names_usable(&symbols);
+
+        let names: Vec<&str> = symbols.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["Service", "run"], "got {names:?}");
+
+        let run = symbols.iter().find(|s| s.name == "run").unwrap();
+        assert_eq!(run.signature, "public void run() {");
+        assert_eq!(run.line, 6, "the annotation spans lines 2-5");
+        assert!(
+            symbols.iter().all(|s| !s.signature.contains('@')),
+            "no signature may carry an annotation: {:?}",
+            symbols.iter().map(|s| &s.signature).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn usable_java_name_accepts_identifiers_and_rejects_annotation_or_fragment_names() {
+        for good in ["handleRequest", "Foo", "_x", "$dollar", "Foo1", "Ünicode"] {
+            assert!(usable_java_name(good), "{good:?} must be usable");
+        }
+        for bad in [
+            "",
+            "@Override",
+            "@SuppressWarnings",
+            "context)",
+            "object);",
+            "{",
+            "foo bar",
+            "1Foo",
+            "foo-bar",
+        ] {
+            assert!(!usable_java_name(bad), "{bad:?} must be rejected");
+        }
     }
 }
