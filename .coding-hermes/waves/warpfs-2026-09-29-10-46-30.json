@@ -1,0 +1,14 @@
+{
+  "tick": "warpfs-2026-09-29-10-46-30",
+  "wave_budget": 9,
+  "workers": [
+    {"task": "DOCS-GAP-001", "worktree": "/home/kara/worktrees/warpfs-DOCS-GAP-001", "branch": "wt/DOCS-GAP-001", "base_sha": "5379b9f"},
+    {"task": "DOCS-GAP-002", "worktree": "/home/kara/worktrees/warpfs-DOCS-GAP-002", "branch": "wt/DOCS-GAP-002", "base_sha": "5379b9f"},
+    {"task": "DOCS-GAP-003", "worktree": "/home/kara/worktrees/warpfs-DOCS-GAP-003", "branch": "wt/DOCS-GAP-003", "base_sha": "5379b9f"},
+    {"task": "DOCS-GAP-008", "worktree": "/home/kara/worktrees/warpfs-DOCS-GAP-008", "branch": "wt/DOCS-GAP-008", "base_sha": "5379b9f"},
+    {"task": "DOCS-GAP-009", "worktree": "/home/kara/worktrees/warpfs-DOCS-GAP-009", "branch": "wt/DOCS-GAP-009", "base_sha": "5379b9f"},
+    {"task": "DOCS-GAP-010", "worktree": "/home/kara/worktrees/warpfs-DOCS-GAP-010", "branch": "wt/DOCS-GAP-010", "base_sha": "5379b9f"}
+  ],
+  "merge_order": ["DOCS-GAP-001","DOCS-GAP-002","DOCS-GAP-003","DOCS-GAP-008","DOCS-GAP-009","DOCS-GAP-010"],
+  "dispatched_at": "2026-09-29T10:50:00-05:00"
+}
