@@ -151,7 +151,7 @@ git push origin master
 
 From a deep real-use run on a fresh ripgrep clone (111 files): init 5ms,
 warm 1.2s/256 edges, classify 0.18s, FUSE `--daemon` mount instant + clean
-unmount, MCP 15 tools over stdio all responding with structured JSON. The
+unmount, MCP 17 tools over stdio all responding with structured JSON. The
 plumbing is real. The graph DATA has known gaps — read before querying:
 
 **The `pkg:` form is the only reliable blast-radius query.**
@@ -240,7 +240,7 @@ SKILL.md line 25 now uses the real package name; hilo-cli is the only
 hyphenated crate, `-p hilo_graph` for graph tests is correct.
 
 **Still-verified-clean (from run 1, re-confirmed):** FUSE `--daemon` mount
-instant + clean unmount; MCP 15 tools responding; meta/xattr round-trips;
+instant + clean unmount; MCP 17 tools responding; meta/xattr round-trips;
 graph clean → rewarm determinism (598/749 twice); git hooks incremental
 warm; 6-language corpus parses; release impact query 0.84s.
 
