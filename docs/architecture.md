@@ -55,9 +55,18 @@ Virtual folders map to real storage:
 
 | Backend | Example | Features |
 |---------|---------|----------|
-| Local disk | `src/` | Direct passthrough, writable |
-| Git remote | `github.com/org/repo` | Auto-pull, read-only or writable |
-| S3 bucket | `my-bucket/prefix/` | Read-only, write-through with auto-upload |
+| S3 bucket | `my-bucket/prefix/` | Read-only, write-through with auto-upload; S3-compatible endpoints (MinIO et al.) via `--endpoint` |
+| GDrive | `--remote gdrive:path` | Two-way sync via the detected sync tool |
+| OneDrive | `--remote onedrive:path` | Two-way sync via the detected sync tool |
+| Dropbox | `--remote dropbox:path` | Two-way sync via the detected sync tool |
+| External | `--remote <tool-remote>` | Sync delegated to an external tool |
+| Git remote *(library-only)* | `github.com/org/repo` | Not available via `hilo backend mount` — public library API only |
+| Local disk *(library-only)* | `src/` | Not available via `hilo backend mount` — public library API only |
+
+Only `s3`, `gdrive`, `onedrive`, `dropbox`, and `external` are accepted by
+`hilo backend mount`. The `git` and `local` backends remain public **library**
+APIs of `hilo-backends`; they are not reachable from the mount command
+(see `docs/hilo-backends.md`).
 
 ## Key Design Decisions
 
