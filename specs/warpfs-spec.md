@@ -177,7 +177,7 @@ metadata:
 graph:
   edges: .vfs/graph/edges.jsonl
   blob_index: .vfs/blobs/index.jsonl
-  duckdb_cache: .vfs/graph/graph.duckdb
+  duckdb_cache: .vfs/graph/graph.db
   auto_discover:
     enabled: true
     languages: [go, python, typescript, rust, javascript, java, c, cpp, ruby]
@@ -408,7 +408,7 @@ A top-level VFS mount that is NOT itself a git repo. Multiple repos, S3 buckets,
 │   │   └── edges.jsonl      ← CROSS-REPO edges
 │   ├── backends/
 │   │   └── mounts.yaml
-│   ├── graph.duckdb          ← DuckDB persisted indexes
+│   ├── graph.db             ← DuckDB persisted indexes
 │   └── plugins/
 └── datasets/                ← Local path mount
 ```
@@ -562,7 +562,7 @@ Edges stored in append-only JSONL (`.vfs/graph/edges.jsonl`). One JSON object pe
 
 ## 10. DuckDB Query Engine
 
-DuckDB reads JSONL inventory files directly — no import step required. The `.vfs/graph/graph.duckdb` file persists indexes and compiled query plans.
+DuckDB reads JSONL inventory files directly — no import step required. The `.vfs/graph/graph.db` file persists indexes and compiled query plans.
 
 ### 10.1 Direct JSONL Queries
 
@@ -762,7 +762,7 @@ All stored in `.vfs/` at the mount root (workspace-level for multi-repo, repo-le
 |---|---|---|
 | `.vfs/manifest.yaml` | YAML | Master configuration |
 | `.vfs/graph/edges.jsonl` | JSONL | Graph edges — append-only, streamable |
-| `.vfs/graph/graph.duckdb` | DuckDB | Persisted indexes and query plans |
+| `.vfs/graph/graph.db` | DuckDB | Persisted indexes and query plans |
 | `.vfs/backends/mounts.yaml` | YAML | Virtual mount table |
 | `.vfs/features/tags.yaml` | YAML | Feature/module groupings |
 | `.vfs/blobs/index.jsonl` | JSONL | Content-addressed blob index |
