@@ -5,7 +5,7 @@ pre-built map of every codebase it touches — dependencies, entrypoints,
 test coverage, blast radius — without burning context window on file reads.
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.80%2B-orange.svg)](https://rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-2021%2B-orange.svg)](https://rust-lang.org)
 
 ## Install
 
@@ -39,7 +39,7 @@ hilo --help
 
 Requirements:
 
-- **Rust 1.80+** — to build from source.
+- **Rust 2021 edition** (recent stable recommended) — to build from source.
 - **`libfuse3` runtime library** (Ubuntu/Debian package `libfuse3-4`) — the
   shipped `hilo` binary links it (`libfuse3.so.4`), so it must be present to
   run `hilo` at all, including commands that never mount. It is part of the
@@ -141,6 +141,19 @@ Notes on step 2–4:
 > `warm`, `stats` all pass. Warming hilo's own repo: 6.2s cold, 0.13s
 > incremental (102/103 parse-cache hits), 968 edges across 97 files. Full
 > evidence: `docs/dogfood/2026-09-20-integration.md`.
+
+## Testing
+
+```bash
+# Unit tests across all workspace crates (same as: cargo test --workspace)
+make test
+
+# S3 backend tests against a live MinIO — needs Docker; the stack is torn down automatically
+make test-integration
+```
+
+CI runs `cargo fmt --check`, the build, `cargo clippy --workspace -- -D warnings` and
+`cargo test --workspace` on every push (see `.github/workflows/ci.yml`).
 
 ## The Problem
 
