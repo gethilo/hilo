@@ -32,6 +32,9 @@ The `hilo` binary — entrypoint for all Hilo operations. Built with clap.
 | `hilo workspace mount <MOUNT_POINT> [--manifest <PATH>]` | Mount all repos and backends from the workspace manifest (default `.vfs/manifest.yaml`) |
 | `hilo workspace unmount <MOUNT_POINT>` | Unmount a workspace |
 | `hilo workspace sync --bucket <BUCKET> --at <DIR> [--prefix <PREFIX>] [--ignore <FILE>] [--dry-run]` | Two-way sync a local directory against an S3 prefix — non-ignored files mirrored both ways, ignored files (`.hiloignore`, git-ignore style) stay local-only |
+| `hilo workspace ephemeral [PATH...]` | List ephemeral (rebuildable/redownloadable) files in the workspace — TSV output `path<TAB>size<TAB>reason`; PATH arguments limit the listing to subtrees |
+| `hilo workspace wipe --ephemeral [--apply]` | Wipe ephemeral files — `--ephemeral` required (only wipe mode); default is a dry-run plan ("would remove ..."), `--apply` deletes and reports freed bytes |
+| `hilo ignore check <PATH> [--ignore-file <FILE>] [--no-default-ignores]` | Check whether a path is ignored by the workspace ignore stack, and which rule decided it |
 | `hilo classify [--dry-run]` | Auto-classify all files (role/status/feature metadata) |
 | `hilo plugin list` | List loaded WASM plugins |
 | `hilo plugin load <path>` | Load a plugin |
