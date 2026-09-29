@@ -352,6 +352,16 @@ disclosed, never silently consumed.
   `.vfs/backends/mounts.yaml`)
 - `hilo workspace mount` — mount all repos and backends from the manifest
 - `hilo workspace unmount` — unmount a workspace
+- `hilo workspace ephemeral [PATH...]` — list ephemeral (rebuildable /
+  redownloadable) files as TSV: `path`, size, and the reason each was
+  classified ephemeral (built-in catalog plus the workspace
+  `.hiloephemeral` file)
+- `hilo workspace wipe --ephemeral [--apply]` — plan a wipe of ephemeral
+  files (dry-run by default; `--apply` deletes them and reports freed
+  bytes); a file is protected only by `user.vfs.ephemeral = false`
+- `hilo ignore check <PATH>` — report whether a path is ignored by the
+  workspace ignore stack (built-in defaults plus `.hiloignore`) and which
+  rule line decided it
 - `hilo plugin load` — load a WASM plugin into the runtime
 - `hilo plugin list` — list plugins discovered in `.vfs/plugins/`
 
