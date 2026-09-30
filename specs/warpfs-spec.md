@@ -53,8 +53,8 @@ hilo plugin load ./scanner.wasm  # Plugin loader (same binary)
 
 | Crate | Version | Role |
 |---|---|---|
-| `fuser` | 0.16.0 | FUSE daemon — pure Rust, no libfuse required |
-| `petgraph` | 0.8.2 | Dependency graph — used in Rust's compiler |
+| `fuser` | 0.15.1 | FUSE daemon — requires libfuse3 at runtime (see README Requirements) |
+| `petgraph` | 0.6.5 | Dependency graph — traversal and impact queries |
 | `tree-sitter` | latest | AST parsing — official Rust bindings, zero-copy |
 | `xattr` | latest | Extended attributes — pure Rust |
 | `inotify` | latest | File event watching — idiomatic kernel wrapper |
@@ -63,11 +63,10 @@ hilo plugin load ./scanner.wasm  # Plugin loader (same binary)
 | `rayon` | 1.x | Parallel graph traversal |
 | `extism` | latest | Wasm plugin runtime — sandboxed, multi-language PDK |
 | `uniffi` | 0.28+ | FFI bindings generator — Go, Python, Kotlin, Swift |
-| `rmcp` | latest | MCP protocol implementation |
 | `clap` | 4.x | CLI argument parsing |
 | `serde` | 1.x | Serialization (manifest, JSONL, MCP responses) |
 | `git2` | latest | Git backend operations |
-| `rusoto` / `aws-sdk` | latest | S3 backend operations |
+| `aws-sdk` | 1.x | S3 backend operations |
 
 ### 3.2 Extensibility Surfaces
 
@@ -740,15 +739,15 @@ sandbox:
 ```
 hilo/                         ← single repo, pure Rust
 ├── hilo-core/                # Manifest parsing, config types, shared state
-├── hilo-fuse/                # FUSE daemon (fuser 0.16.0), inotify wiring
+├── hilo-fuse/                # FUSE daemon (fuser 0.15.1), inotify wiring
 ├── hilo-metadata/            # xattr read/write, inventory file I/O
 ├── hilo-graph/               # tree-sitter AST parsing, petgraph traversal, impact
-├── hilo-backends/            # Git (git2), S3 (rusoto/aws-sdk), remote, local
+├── hilo-backends/            # Git (git2), S3 (aws-sdk), remote, local
 ├── hilo-triggers/            # Trigger engine, debouncing, async execution
 ├── hilo-permissions/         # Mode bit enforcement, FUSE permission callbacks
 ├── hilo-plugins/             # extism wasm runtime, host function registry
 ├── hilo-cli/                 # CLI shim (hilo mount|meta|graph|plugin|serve)
-├── hilo-mcp/                 # MCP server (rmcp), tool implementations
+├── hilo-mcp/                 # MCP server (hand-written JSON-RPC over stdio), tool implementations
 └── hilo-ffi/                 # UniFFI .udl interface, generates bindings
 ```
 
@@ -840,7 +839,7 @@ user.vfs.last_tested="2026-06-14T09:33:14"
 [features]
 default = ["cli", "mcp", "graph"]
 cli = ["clap", "serde_yaml"]
-mcp = ["rmcp", "tokio"]
+mcp = ["tokio", "serde", "serde_json"]
 graph = ["tree-sitter", "petgraph", "duckdb", "xattr"]
 ```
 
