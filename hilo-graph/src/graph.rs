@@ -2516,6 +2516,20 @@ impl GraphDB {
             components.push(r?);
         }
 
+        // GAP-109: the parsed roster is anchored on edge sources, so every
+        // non-code top-level directory of the repo root is invisible to it
+        // (docs, packaging, deploy manifests, …). When this graph knows its
+        // repo root — every disk-backed open of `<root>/.vfs/graph/graph.db`
+        // does — the directory inventory joins the roster additively: parsed
+        // entries keep their edge-derived census, walked-only directories
+        // enter with their on-disk file count and zero edges, and the roster
+        // is re-sorted under the same contract (files DESC, name ASC).
+        // `:memory:` graphs have no root and keep the parsed-only roster.
+        if let Some(root) = &self.root {
+            merge_directory_components(&mut components, root);
+            components.sort_by(|a, b| b.files.cmp(&a.files).then_with(|| a.name.cmp(&b.name)));
+        }
+
         Ok(GraphStats {
             total_edges,
             total_files: unique_files,
@@ -2744,6 +2758,134 @@ impl GraphDB {
         self.ensure_parsed(start_path)?;
         // Delegate to existing BFS over the DuckDB edges cache.
         impact::compute_impact_at(&self.conn, start_path, max_depth, anchored)
+    }
+}
+
+// ── GAP-109: directory-inventory component enumeration ─────────────────────
+//
+// The SQL roster above buckets only parsed `from` files, so a top-level
+// directory carrying no parseable source (docs, packaging, deploy manifests,
+// …) never appears in `graph stats` — bake-off wave 9 measured 71% of real
+// top-level dirs named vs scc's 97%, missing SYSTEMATICALLY non-code dirs.
+// When the graph knows its repo root (a disk-backed open of
+// `<root>/.vfs/graph/graph.db` always does), the directory inventory joins
+// the roster additively: parsed entries keep their edge-derived census, and
+// walked-only directories enter with their on-disk file count and zero
+// edges.
+
+/// Directory names that are never components: build output, dependency and
+/// cache trees. Mirrors the discovery/prune vocabulary the rest of the
+/// system uses (`guard::DEFAULT_PRUNE_DIRS`, `exclusion_category`) — hilo-graph
+/// cannot depend on hilo-cli, so the shared names live here too. Dot-prefixed
+/// caches (`.venv`, `.cache`, `.scc`, …) need no entry: hidden entries are
+/// pruned wholesale below.
+const NON_COMPONENT_DIRS: &[&str] = &[
+    // Build output.
+    "target",
+    "dist",
+    "build",
+    "out",
+    "bin",
+    "obj",
+    // Dependency trees.
+    "node_modules",
+    "vendor",
+    "bower_components",
+    "jspm_packages",
+    // Language/runtime caches and virtualenvs (non-dot spellings).
+    "__pycache__",
+    "venv",
+    "site-packages",
+];
+
+/// Recursively count files under `dir`, pruning hidden entries,
+/// [`NON_COMPONENT_DIRS`] and symlinked directories. Symlinks to FILES count
+/// (they are visible tree content).
+///
+/// Unreadable entries are skipped (best-effort inventory — a directory that
+/// cannot be read yields a count of 0 and is then dropped by
+/// [`top_level_directory_counts`], which treats an unreadable dir the same as
+/// an empty one: no observable file stats, no component).
+fn count_files_pruned(dir: &Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut files = 0u64;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        // Hidden entries are pruned like build dirs (`.git`, `.vfs`, …).
+        if name_str.starts_with('.') || NON_COMPONENT_DIRS.contains(&name_str.as_ref()) {
+            continue;
+        }
+        if file_type.is_symlink() {
+            // Symlinked dirs are never descended (loop safety); symlinks to
+            // files count as one file each.
+            if entry.metadata().map(|m| m.is_file()).unwrap_or(false) {
+                files += 1;
+            }
+            continue;
+        }
+        if file_type.is_dir() {
+            files += count_files_pruned(&entry.path());
+        } else if file_type.is_file() {
+            files += 1;
+        }
+    }
+    files
+}
+
+/// Inventory the meaningful top-level directories of `root`: their recursive
+/// (pruned) file counts, name-sorted. Directories that are hidden, build/
+/// cache pruned, unreadable, or carry no files at all are not components and
+/// are left out entirely.
+fn top_level_directory_counts(root: &Path) -> Vec<(String, u64)> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy().into_owned();
+        if name_str.starts_with('.') || NON_COMPONENT_DIRS.contains(&name_str.as_str()) {
+            continue;
+        }
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+        let files = count_files_pruned(&entry.path());
+        if files == 0 {
+            continue;
+        }
+        out.push((name_str, files));
+    }
+    out.sort();
+    out
+}
+
+/// Merge the walked directory inventory into the parsed components list,
+/// in place: parsed entries are never touched (their edge-derived census is
+/// authoritative), directories whose name already exists as a parsed
+/// component are skipped, and every remaining directory is appended. The
+/// caller re-sorts afterwards.
+fn merge_directory_components(components: &mut Vec<ComponentStat>, root: &Path) {
+    let known: std::collections::HashSet<String> =
+        components.iter().map(|c| c.name.clone()).collect();
+    for (name, files) in top_level_directory_counts(root) {
+        if known.contains(name.as_str()) {
+            continue;
+        }
+        components.push(ComponentStat {
+            name,
+            files: files as i64,
+            edges: 0,
+        });
     }
 }
 
@@ -5153,6 +5295,147 @@ mod tests {
             stats.components.is_empty(),
             "an empty graph has no components, got: {:?}",
             stats.components
+        );
+    }
+
+    // ── GAP-109: the roster must also name non-code top-level directories ──
+    //
+    // Component enumeration anchored on parsed `from` files alone misses every
+    // directory that carries no parseable source (docs, packaging, manifests,
+    // …) — bake-off wave 9 measured 71% of real top-level dirs named vs scc's
+    // 97%, with the misses systematically non-code. When the graph knows its
+    // repo root, the directory inventory joins the roster.
+
+    /// Write a two-edge corpus for `src/api.rs`/`src/main.rs` and open the
+    /// disk-backed graph at `root` (`.vfs/graph/{graph.db,edges.jsonl}`).
+    fn open_src_graph(root: &Path) -> GraphDB {
+        let db_path = create_graph_path(root);
+        let jsonl = db_path.parent().unwrap().join("edges.jsonl");
+        let lines = [
+            Edge::new("src/api.rs", "pkg:std:fs", "imports"),
+            Edge::new("src/main.rs", "src/api.rs", "imports"),
+        ];
+        let rendered: Vec<String> = lines
+            .iter()
+            .map(|edge| serde_json::to_string(edge).unwrap())
+            .collect();
+        std::fs::write(&jsonl, rendered.join("\n") + "\n").unwrap();
+        GraphDB::open(db_path.to_str().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn stats_names_non_code_top_level_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        // The parsed source dir: two edge sources but only ONE real file on
+        // disk — the parsed census (2 files) must survive the merge untouched.
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+        // Non-code dirs: real files, zero parsed symbols.
+        for (name, file) in [
+            ("docs", "design.md"),
+            ("packaging", "hilo.spec"),
+            ("kubernetes-manifests", "deploy.yaml"),
+        ] {
+            std::fs::create_dir_all(dir.path().join(name)).unwrap();
+            std::fs::write(dir.path().join(name).join(file), "x\n").unwrap();
+        }
+
+        let db = open_src_graph(dir.path());
+        let stats = db.stats().unwrap();
+        let names: Vec<&str> = stats.components.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["src", "docs", "kubernetes-manifests", "packaging"],
+            "every non-code top-level dir joins the roster; ordering stays \
+             files DESC then name ASC"
+        );
+        // Parsed entry keeps its edge-derived census (NOT the on-disk count).
+        let src = &stats.components[0];
+        assert_eq!(
+            (src.name.as_str(), src.files, src.edges),
+            ("src", 2, 2),
+            "parsed components keep their census"
+        );
+        // Directory-inventory entries: walk-derived file count, no edges.
+        for name in ["docs", "kubernetes-manifests", "packaging"] {
+            let comp = stats
+                .components
+                .iter()
+                .find(|c| c.name == name)
+                .unwrap_or_else(|| panic!("{name} missing from components"));
+            assert_eq!(
+                (comp.files, comp.edges),
+                (1, 0),
+                "{name}: one walked file, zero parsed edges"
+            );
+        }
+    }
+
+    #[test]
+    fn merge_directory_components_skips_parsed_names_and_keeps_census() {
+        let dir = tempfile::tempdir().unwrap();
+        // A directory whose name already exists as a parsed component: the
+        // walk must NOT overwrite the parsed census.
+        std::fs::create_dir_all(dir.path().join("render")).unwrap();
+        std::fs::write(dir.path().join("render/sketch.txt"), "x\n").unwrap();
+        std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+        std::fs::write(dir.path().join("docs/a.md"), "x\n").unwrap();
+
+        let mut components = vec![ComponentStat {
+            name: "render".to_string(),
+            files: 2,
+            edges: 3,
+        }];
+        merge_directory_components(&mut components, dir.path());
+
+        assert_eq!(components.len(), 2, "only the new directory is added");
+        assert_eq!(
+            (
+                components[0].name.as_str(),
+                components[0].files,
+                components[0].edges
+            ),
+            ("render", 2, 3),
+            "parsed entry untouched and still ordered by files DESC"
+        );
+        assert_eq!(
+            (
+                components[1].name.as_str(),
+                components[1].files,
+                components[1].edges
+            ),
+            ("docs", 1, 0)
+        );
+    }
+
+    #[test]
+    fn top_level_directory_counts_excludes_hidden_and_build_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        // Kept: docs, with a nested file. Its own nested node_modules is
+        // pruned from the COUNT too (dependency trees never inflate docs).
+        std::fs::create_dir_all(dir.path().join("docs/guides")).unwrap();
+        std::fs::create_dir_all(dir.path().join("docs/node_modules")).unwrap();
+        std::fs::write(dir.path().join("docs/a.md"), "x\n").unwrap();
+        std::fs::write(dir.path().join("docs/guides/b.md"), "x\n").unwrap();
+        std::fs::write(dir.path().join("docs/node_modules/x.js"), "x\n").unwrap();
+        // Excluded by name: build output, dependency and cache trees.
+        for pruned in ["target", "node_modules", "dist", "build", "__pycache__"] {
+            std::fs::create_dir_all(dir.path().join(pruned)).unwrap();
+            std::fs::write(dir.path().join(pruned).join("artifact.bin"), "x\n").unwrap();
+        }
+        // Excluded as hidden: .git, .vfs, .scc, and any dotted dir.
+        for hidden in [".git", ".vfs", ".scc"] {
+            std::fs::create_dir_all(dir.path().join(hidden)).unwrap();
+            std::fs::write(dir.path().join(hidden).join("data"), "x\n").unwrap();
+        }
+        // An empty directory carries no file stats: not a component.
+        std::fs::create_dir_all(dir.path().join("empty-dir")).unwrap();
+
+        assert_eq!(
+            top_level_directory_counts(dir.path()),
+            vec![("docs".to_string(), 2)],
+            "hidden, build/cache and zero-file dirs are excluded; nested \
+             pruned trees do not inflate the count"
         );
     }
 
