@@ -3,9 +3,10 @@ members = ["hilo-core", "hilo-metadata", "hilo-graph", "hilo-cli", "hilo-mcp", "
 resolver = "2"
 
 # PERF-003: the dev binary linked every workspace crate plus duckdb with full
-# debuginfo and hit 1.22 GB (release: 118 MB). Keep line tables for workspace
+# debuginfo and hit 1.22 GB. Keep line tables for workspace
 # crates (backtrace symbols survive), drop debuginfo from dependencies
-# entirely. Same rebuild, ~90% smaller dev binary.
+# entirely. Same rebuild, ~90% smaller dev binary. Current release-artefact
+# sizes are stated at [profile.release] below.
 [profile.dev]
 debug = "line-tables-only"
 
@@ -19,7 +20,9 @@ debug = false
 # dependencies (duckdb worker threads included). `strip = "none"` is required:
 # without it the symbols we just emitted are stripped back out of the artefact.
 # A shippable artefact can still be stripped separately; the workspace default
-# stays symbolizable so future profiles are readable.
+# stays symbolizable so future profiles are readable. Measured cost of that
+# default: a `cargo build --release` binary is ~1.4 GB, and `make release`
+# strips the same build down to ~118 MB.
 [profile.release]
 debug = 1
 strip = "none"

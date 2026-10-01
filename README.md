@@ -32,10 +32,16 @@ Which path applies to your host?
 
 ```bash
 git clone https://github.com/gethilo/hilo.git
-cd hilo && cargo build --release
+cd hilo && make release                    # cargo build --release + strip
 cp target/release/hilo ~/.cargo/bin/hilo   # put hilo on PATH
 hilo --help
 ```
+
+> **Binary size:** the release profile keeps debug line tables and symbols on
+> purpose — `perf` and flamegraph need them to resolve frames (PERF-006) — so a
+> plain `cargo build --release` leaves a ~1.4 GB artefact on disk. `make
+> release` runs that same build and then `strip`s the binary to a shippable
+> **~118 MB**.
 
 Requirements:
 

@@ -1,4 +1,4 @@
-.PHONY: test test-integration test-integration-up test-integration-down fmt clippy check
+.PHONY: test test-integration test-integration-up test-integration-down fmt clippy check release
 
 test:
 	cargo test --workspace
@@ -21,6 +21,13 @@ test-integration-down:
 
 check:
 	cargo check --workspace
+
+# Shippable CLI artefact. The default release profile keeps debug line tables
+# and symbols on purpose (PERF-006 profiling), so build then strip.
+release:
+	cargo build --release -p hilo-cli
+	strip target/release/hilo
+	ls -lh target/release/hilo
 
 fmt:
 	cargo fmt --all
