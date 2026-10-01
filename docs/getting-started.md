@@ -83,6 +83,93 @@ hilo graph impact sys:some-header.h --max-depth 3
 hilo graph related src/main.rs --relation imports
 ```
 
+## Clone & rebuild (fresh clone of an already-initialized project)
+
+Hilo's inventory is split between what git carries and what is rebuilt on
+demand. If you clone a repository that is already Hilo-initialized (like
+hilo itself), `.vfs/manifest.yaml` and `.vfs/graph/edges.jsonl` arrive with
+the clone — but **`.vfs/graph/graph.db` does not**: it is a rebuildable
+DuckDB query cache and is gitignored (the managed block `hilo init` writes
+to `.gitignore`). That is by design, not data loss. What you have and what
+you need to regenerate:
+
+| Path | After `git clone` | What it is |
+|------|-------------------|------------|
+| `.vfs/manifest.yaml` | present (tracked) | project inventory truth |
+| `.vfs/graph/edges.jsonl` | present (tracked) | append-only edge inventory truth |
+| `.vfs/graph/graph.db` | **absent** (gitignored) | DuckDB query cache, rebuilt from `edges.jsonl` |
+
+### The rebuild commands
+
+From the clone root:
+
+```bash
+hilo init        # see note below — safe on a clone, but usually unnecessary
+hilo graph warm  # parse all sources, write .vfs/graph/graph.db + .last_warm
+hilo graph stats # verify: prints edge/file counts from the rebuilt cache
+```
+
+Expected `graph warm` output (hilo's own repo, v0.3.x): progress lines
+(`parsing 111/111 files...`), then:
+
+```
+Discovered 1167 edges across 104 files (4 languages)
+Coverage: 111 files = 104 contribute edges + 1 package facades (__init__.py) + 6 no imports + 0 unreadable + 0 unsupported extension
+```
+
+`graph warm` takes its time on a cold tree (roughly a minute for hilo-sized
+repos; it also writes `.vfs/graph/.last_warm`, the cutoff future incremental
+warms use). `graph stats` then reports e.g. `Total edges: 930 distinct / 555
+raw (edges.jsonl)` — the distinct-vs-raw delta is expected (DuckDB dedupes
+multi-provenance edges; see [inventory policy](inventory-policy.md)).
+
+**`hilo init` on a fresh clone is a no-op for hilo itself** — a manifest
+already exists and `init` never overwrites one. It only earns its keep when
+you clone a repo that is *not* yet Hilo-initialized, or want its side
+effects in a repo where the manifest was deleted: it creates `.vfs/` +
+`manifest.yaml`, appends the rebuildable-cache block to `.gitignore`, and
+installs the git hooks below (hooks are installed only when a fresh
+manifest is created).
+
+### Is `warm` actually required?
+
+Strictly, no — queries self-heal. `hilo graph related|impact|stats` rebuild
+the missing `graph.db` from the tracked `edges.jsonl` on first open
+(read-through reconcile), so a cold clone answers queries after a short
+rebuild pause. Running `hilo graph warm` up front is still the recommended
+first action after a clone: it parses every source file eagerly (catching
+drift between `edges.jsonl` and the working tree in one pass) instead of
+paying a rebuild on each first query, and it refreshes `.last_warm` so the
+post-commit hook's `--changed` incremental mode has a cutoff to work from.
+
+### Why the hooks won't have done it for you
+
+`hilo init` installs `post-commit` / `post-merge` hooks into the *clone
+target's* `.git/hooks/` — never into the repo you cloned from, and git does
+not transport hooks. The post-commit hook only runs `hilo graph warm
+--changed` (incremental since the last warm marker), and the post-merge hook
+runs a full warm only when a `.vfs/.dirty` marker exists — which nothing in
+a fresh clone creates. So on a brand-new clone neither hook fires a full
+warm: run `hilo graph warm` manually once, exactly as above. (Hook
+mechanics: [README → Git hooks](../README.md#git-hooks-installed-by-hilo-init).)
+
+### Fresh clone of a project you initialize yourself
+
+```bash
+git clone https://github.com/you/your-project.git
+cd your-project
+hilo init          # creates .vfs/manifest.yaml + .gitignore block + hooks
+hilo graph warm    # first full parse; writes edges.jsonl + graph.db
+git add .vfs/manifest.yaml .vfs/graph/edges.jsonl
+git commit -m "chore: initialize Hilo inventory"
+git push           # collaborators' clones now carry the inventory
+```
+
+Commit `manifest.yaml` and `edges.jsonl` (inventory truth — collaborators'
+clones get them via git), never `graph.db` (rebuilt locally; `hilo init`
+has already gitignored it for you). The full contract:
+[inventory policy](inventory-policy.md).
+
 ## Using with AI Agents
 
 ### Via MCP (Claude Desktop, Hermes, Continue)
