@@ -301,6 +301,12 @@ Note: `graph warm` may append newly discovered edges to the tracked
 commit it; everything else under `.vfs/graph/` is a rebuildable cache.
 [docs/inventory-policy.md](docs/inventory-policy.md) is the full contract.
 
+Cloning a repo that is already Hilo-initialized? `.vfs/manifest.yaml` and
+`.vfs/graph/edges.jsonl` arrive via git, but `graph.db` does not (it is a
+gitignored rebuild cache) — see
+[Fresh clone & rebuild](docs/getting-started.md#clone--rebuild-fresh-clone-of-an-already-initialized-project)
+in the getting-started guide for what to run first and what to expect.
+
 ### Git hooks installed by `hilo init`
 
 `hilo init` installs two hooks by appending a `### HILO` … `### /HILO` block to
