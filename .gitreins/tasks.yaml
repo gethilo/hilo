@@ -1924,3 +1924,30 @@ tasks:
   status: complete
   created_at: '2026-09-29T18:21:58.481461+00:00'
   completed_at: '2026-09-29T20:34:49.325103+00:00'
+- id: GAP-109
+  title: 'graph stats: back component enumeration with directory inventory'
+  criteria:
+  - graph stats A1 output names non-code top-level dirs (docs, examples, packaging,
+    deploy manifests) for the bake-off corpora; component enumeration comes from directory
+    inventory not just parsed source; cargo clippy -D warnings + cargo test -p hilo_graph
+    --lib pass
+  status: complete
+  created_at: '2026-09-30T10:50:26.673681+00:00'
+  completed_at: '2026-09-30T12:24:23.445678+00:00'
+- id: DOCS-GAP-005
+  title: "spec \xA73.1 Key Crates table matches Cargo.lock"
+  criteria:
+  - "every crate+version row in spec \xA73.1 matches Cargo.lock (fuser 0.15, petgraph\
+    \ 0.6, no rmcp row, aws-sdk named); libfuse sentence no longer contradicts README\
+    \ Requirements"
+  status: complete
+  created_at: '2026-09-30T16:56:50.651093+00:00'
+  completed_at: '2026-09-30T17:08:22.923819+00:00'
+- id: REV-WARPFS-1
+  title: 'Shippable release artifact: Makefile strip target + README note'
+  criteria:
+  - Makefile gains a release/dist target producing a stripped target/release/hilo
+    under ~120MB; default profile stays debug=1 strip=none (PERF-006 intact); README
+    documents the shippable-artifact path; clippy+tests green
+  status: complete
+  created_at: '2026-09-30T18:41:23.068431+00:00'
