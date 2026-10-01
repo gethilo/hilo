@@ -974,3 +974,71 @@ rows, this entry. Bunker agent 63217649 destroyed.
 **Rows filed:** 0 (nothing worth filing; product stable at HEAD c0da391).
 
 **Left behind:** docs/dogfood/2026-09-28-run27-perf009-verification.md (this entry), no board changes.
+
+## 2026-09-29 — warpfs (Hilo) — ✅ SHIPPABLE (run 29, fresh-corpus + real-corpus sanity)
+
+**Promise tested:** Does the installed debug binary (v0.3.1-dev, build v0.3.0-14-g2b26d3f, 2026-09-22) still work correctly on both a fresh 2-file corpus and the real warpfs repo?
+
+**Reality:** All core commands work correctly on both corpora. No new defects. Product stable at HEAD 3df75f1.
+
+**Fresh 2-file corpus (/tmp/hilo-dogfood-2026-09-29, main.rs + lib.rs, no imports between them):**
+- init: 5ms
+- graph warm: 40ms (parsed 2/2, 0 edges — correct, no imports)
+- graph related main.rs: 14ms (empty — correct)
+- graph impact lib.rs: 14ms (empty — correct)
+- graph search "compute": 15ms (empty — correct, no edges)
+- classify: 5ms (main.rs=entrypoint, lib.rs=library — correct)
+
+**Real warpfs corpus (83 files, 432 edges, .vfs/graph/graph.db 1MB):**
+- graph stats: 33ms (432 distinct edges, 83 files, most connected=pkg:std, 21 orphans)
+- graph search "rate limiter": 1.366s (returned 2 relevant hits: hilo-mcp/src/rate_limiter.rs + hilo-cli/src/commands/serve.rs — correct)
+- graph related hilo-cli/src/main.rs: 18ms (11 outgoing edges to command modules — correct)
+- graph impact hilo-graph/src/lib.rs: 50ms (17 dependents across 3 depth levels — correct)
+- classify: 210ms (111 files: 46 library, 35 test, 21 unknown, 4 entrypoint, 3 generated, 2 build — correct)
+
+**Install leg:** SKIPPED (13th consecutive run). Installed binary is 7 days stale (2026-09-22, pre-PERF-009 commit 75fdcdc). Full workspace release builds exceed tick budget on both local and bunker-las-03. Already tracked: DF-WARPFS-99 (stale binary), DF-WARPFS-100/103 (install-leg wall).
+
+**Perf (Step 2b, time -p, debug build, warm):**
+- graph stats: 0.033s real
+- graph search "rate limiter": 1.366s real (lexical TF-IDF, 2 hits)
+- graph related: 0.018s real
+- graph impact: 0.050s real
+- classify: 0.210s real
+
+**NO NEW PERF ROW** — numbers are consistent with run 27 (debug build, warm cache). The 1.37s search time is the same order as run 27's 1.73s understand time; both are dominated by parsing overhead, not query cost.
+
+**Rows filed:** 1 (DF-WARPFS-104, SKIPPED-install-bunker annotation).
+
+**Left behind:** this dogfood-log entry. No board changes beyond DF-WARPFS-104.
+
+## Run 30 — 2026-10-01 — MCP full 17-tool sweep + fresh-install leg (PASSED, 1648s)
+
+**Angle:** runs 12/15/26 touched 5 of 17 MCP tools; this run drove 11 more
+(rule_list, graph_untested, graph_module, resolve_path, backend_status both
+arms, workspace_ephemeral, workspace_wipe, rule_check, list_directory,
+get_metadata) plus the never-completed install leg.
+
+**New findings:**
+- DF-WARPFS-105 (P1): vfs_workspace_wipe response has no dry_run/mode flag —
+  a plan and an applied wipe are indistinguishable by shape; 48k-entry
+  removed[] is an LLM context bomb.
+- DF-WARPFS-106 (P2): user.vfs.ephemeral=true does not surface a file in the
+  ephemeral listing — ephemeral.rs:168 scan passes None for the xattr; the
+  false-protector (wipe time) works, the true-force half is dead. Live repro
+  via setfattr on CHANGELOG.md.
+- DF-WARPFS-107 (P2): README frictions — rustup minimal profile lacks a
+  linker (build-essential required); bare `hilo workspace wipe` errors
+  instead of planning (README implies plan-by-default).
+
+**Install leg (first pass in 30 runs):** bunker-las-03 agent 03fc2681
+(destroyed after). Debian 13, no sudo: rustup → network clone → make release
+= INSTALL_SECONDS=1648 → smoke (init/graph/classify/search/ephemeral/wipe
+plan) all correct. Closes the DF-WARPFS-104 stale-install / install-wall
+family as EXECUTED. Multi-tenant note: /tmp/smoke.sh was owned by another
+agent user (uid 1009) — use $HOME paths on shared bunker hosts.
+
+**Perf:** graph stats 28ms, search 508ms, workspace ephemeral 2.32s (19GB
+tree), MCP 3-message session 0.118s — all hyperfine warm, release binary.
+No PERF rows (nothing user-painful).
+
+Full report: `docs/dogfood/2026-10-01-run30-mcp-full-sweep-fresh-install.md`.
