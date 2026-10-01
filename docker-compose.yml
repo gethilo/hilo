@@ -1,14 +1,21 @@
 services:
   minio:
-    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772
+    # QA-WARPFS-16: the old quay.io/minio pin 401s anonymous pulls, and
+    # docker.io/minio/minio no longer exists on Docker Hub (repo removed).
+    # Bitnami moved minio to bitnamilegacy (see
+    # github.com/bitnami/containers/issues/83267); the image pulls
+    # anonymously. Image default cmd runs `minio server` on :9000 with
+    # console on :9001; curl is bundled for the healthcheck; mc is on PATH.
+    image: bitnamilegacy/minio:2025.7.23-debian-12-r5
     container_name: hilo-minio
-    command: server /data --console-address ":9001"
     ports:
       - "9000:9000"
       - "9001:9001"
     environment:
       MINIO_ROOT_USER: hilo_test
       MINIO_ROOT_PASSWORD: hilo_test
+      # bitnami image defaults the console OFF; keep :9001 (upstream behavior)
+      MINIO_BROWSER: "on"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 5s
@@ -16,7 +23,7 @@ services:
       retries: 12
       start_period: 5s
     volumes:
-      - minio-data:/data
+      - minio-data:/bitnami/minio/data
 
 volumes:
   minio-data:
