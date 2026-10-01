@@ -197,6 +197,8 @@ graph:
 
 # ── Permissions ──
 permissions:
+  # NOTE (v0.3.0): parsed by hilo-core but NOT consumed by FUSE —
+  # enforcement uses hardcoded default protections only (see §5).
   rules:
     - paths: [".vfs/**"]
       mode: 0444
@@ -363,6 +365,12 @@ performance:
 ---
 
 ## 5. Permission Model — FUSE-Enforced
+
+> **Status caveat (v0.3.0):** the `permissions.rules` block below is parsed
+> by `hilo-core` but NOT consumed by FUSE. Enforcement today uses hardcoded
+> default protections only (the §5.2 table); see
+> [docs/hilo-permissions.md](../docs/hilo-permissions.md) for the current
+> enforcement status.
 
 Permissions are NOT advisory. The VFS sets FUSE mode bits that the Linux kernel enforces. When the agent tries to write to a read-only file, the kernel returns `EACCES`. The model sees a real filesystem error — no injected warnings, no special tool calls.
 

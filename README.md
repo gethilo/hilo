@@ -258,6 +258,10 @@ stamped query cache): [docs/performance.md](docs/performance.md).
   `vfs_graph_understand`, `vfs_graph_search`, `vfs_resolve_path`, etc.) for direct agent integration
 - **FUSE mount** — standard `ls`, `cat`, `getfattr` through kernel
   filesystem
+- **Permissions (status caveat)** — the manifest `permissions.rules`
+  engine is parsed but NOT consumed: FUSE enforcement uses hardcoded
+  default protections only
+  ([details](docs/hilo-permissions.md))
 
 ## Quickstart
 
