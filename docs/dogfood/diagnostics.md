@@ -1118,7 +1118,7 @@ against a project with a LIVE MinIO backend, with CLI cross-checks on every
 answer.
 
 **How the surfaces were made to agree.** The backend was stood up from the
-repo's own docker-compose.yml (MinIO RELEASE.2025-09-07, bucket created with
+repo's own docker-compose.yml (MinIO 2025.7.23, bucket created with
 `mc` inside the container — an independent client kept as ground truth for
 every sync claim). The mount was created purely through the documented CLI
 (`backend mount --type s3 --bucket hilo-run20 --endpoint http://127.0.0.1:9000
