@@ -1,0 +1,26 @@
+{
+  "tick": "warpfs-foreman-2026-10-02-15-44-09",
+  "budget": 3,
+  "created_at": "2026-10-02T15:50:00Z",
+  "workers": [
+    {
+      "task_id": "DF-WARPFS-106",
+      "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-106",
+      "branch": "wt/DF-WARPFS-106",
+      "base": "origin/master",
+      "base_sha": "a7baa87",
+      "class": "code",
+      "scope": "hilo-backends/src/ephemeral.rs scan() + tests"
+    },
+    {
+      "task_id": "DF-WARPFS-107",
+      "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-107",
+      "branch": "wt/DF-WARPFS-107",
+      "base": "origin/master",
+      "base_sha": "a7baa87",
+      "class": "docs-only",
+      "scope": "README.md + docs/getting-started.md"
+    }
+  ],
+  "notes": "Two mutually independent tasks (disjoint file sets, no depends_on edges). Merged serially with gates after both workers finish."
+}
