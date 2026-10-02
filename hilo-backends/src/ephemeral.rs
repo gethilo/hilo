@@ -5,13 +5,16 @@
 //! ephemeral; a workspace `.hiloephemeral` file (same git-ignore-style
 //! syntax as `.hiloignore`) adds or (`!` negation) removes patterns. An
 //! `user.vfs.ephemeral` xattr overrides everything: `false` is the only wipe
-//! protector, `true` forces ephemeral even when no pattern matches.
+//! protector, `true` forces ephemeral even when no pattern matches. Because
+//! [`EphemeralMatcher::scan`] reads that xattr per file, the listed set
+//! matches what `workspace wipe` would actually remove.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use walkdir::WalkDir;
 
+use crate::planner::xattr_ephemeral_bool;
 use crate::sync::IgnoreMatcher;
 
 /// Built-in ephemeral catalog (spec §5.1) — exact pattern list.
@@ -144,10 +147,31 @@ impl EphemeralMatcher {
         self.builtin.decision(&rel).rule
     }
 
+    /// The deciding factor behind a classification, in the same precedence
+    /// order as [`Self::classify`]: cached override, then the
+    /// `user.vfs.ephemeral` xattr, then the matching pattern.
+    fn deciding_reason(&self, rel_path: &Path, xattr_ephemeral: Option<bool>) -> String {
+        if let Some(ephemeral) = self.overrides.get(rel_path) {
+            return format!("user.vfs.ephemeral={ephemeral} (cached override)");
+        }
+        if let Some(ephemeral) = xattr_ephemeral {
+            return format!("user.vfs.ephemeral={ephemeral}");
+        }
+        self.reason(rel_path)
+            .unwrap_or_else(|| "ephemeral".to_string())
+    }
+
     /// Walk `root`, classify every regular file, and return ephemeral
     /// entries with byte sizes. Symlinks are excluded (never ephemeral) and
     /// the walk never follows links, so it never crosses the workspace root.
     /// Paths in the returned entries are POSIX-relative to `root`.
+    ///
+    /// Each regular file's `user.vfs.ephemeral` xattr is read during the walk
+    /// (the wipe path already reads it per file) and passed to
+    /// [`Self::classify`], so the listing honours the full documented
+    /// override contract: `true` lists a file even when no pattern matches,
+    /// `false` keeps a pattern-matched file out. An absent, unreadable, or
+    /// unrecognised value falls back to pattern-based classification.
     pub fn scan(&self, root: &Path) -> Result<Vec<EphemeralEntry>, EphemeralError> {
         let mut out = Vec::new();
         for entry in WalkDir::new(root).follow_links(false) {
@@ -165,14 +189,15 @@ impl EphemeralMatcher {
                 Ok(r) if !r.as_os_str().is_empty() => r.to_path_buf(),
                 _ => continue,
             };
-            if self.classify(&rel, false, None) != EphemeralClass::Ephemeral {
+            let xattr_ephemeral = xattr_ephemeral_bool(entry.path());
+            if self.classify(&rel, false, xattr_ephemeral) != EphemeralClass::Ephemeral {
                 continue;
             }
             let size = entry
                 .metadata()
                 .map_err(|e| EphemeralError::Io(std::io::Error::from(e)))?
                 .len();
-            let reason = self.reason(&rel).unwrap_or_else(|| "ephemeral".to_string());
+            let reason = self.deciding_reason(&rel, xattr_ephemeral);
             out.push(EphemeralEntry {
                 path: rel,
                 size,
@@ -354,6 +379,99 @@ mod tests {
         assert!(entries
             .iter()
             .all(|e| e.reason.contains("node_modules") || e.reason.contains("target")));
+    }
+
+    /// Create `rel` (parents included) under `root` with `size` zero bytes
+    /// and, when given, a `user.vfs.ephemeral` xattr.
+    fn write_file_with_xattr(root: &Path, rel: &str, size: usize, xattr: Option<&str>) -> PathBuf {
+        let full = root.join(rel);
+        if let Some(parent) = full.parent() {
+            fs::create_dir_all(parent).expect("mkdir");
+        }
+        fs::write(&full, vec![0u8; size]).expect("write");
+        if let Some(value) = xattr {
+            hilo_metadata::xattr::set_vfs_xattr(&full, "ephemeral", value).expect("set xattr");
+        }
+        full
+    }
+
+    fn scan_paths(m: &EphemeralMatcher, root: &Path) -> Vec<PathBuf> {
+        let mut paths: Vec<PathBuf> = m
+            .scan(root)
+            .expect("scan")
+            .into_iter()
+            .map(|e| e.path)
+            .collect();
+        paths.sort();
+        paths
+    }
+
+    #[test]
+    fn scan_lists_xattr_true_file_with_no_pattern_match() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        write_file_with_xattr(root, "src/main.rs", 7, None);
+        write_file_with_xattr(root, "src/force-me.rs", 11, Some("true"));
+
+        let m = matcher();
+        let entries = m.scan(root).expect("scan");
+        assert_eq!(
+            scan_paths(&m, root),
+            vec![PathBuf::from("src/force-me.rs")],
+            "xattr=true must force a pattern-negative file into the listing"
+        );
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].size, 11);
+        assert_eq!(entries[0].reason, "user.vfs.ephemeral=true");
+    }
+
+    #[test]
+    fn scan_omits_xattr_false_file_even_when_pattern_matches() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        write_file_with_xattr(root, "target/protected.bin", 20, Some("false"));
+        write_file_with_xattr(root, "target/drop.bin", 30, None);
+
+        let m = matcher();
+        assert_eq!(
+            scan_paths(&m, root),
+            vec![PathBuf::from("target/drop.bin")],
+            "xattr=false must keep a pattern-matched file out of the listing"
+        );
+    }
+
+    #[test]
+    fn scan_lists_pattern_matched_file_without_xattr() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        write_file_with_xattr(root, "target/a.bin", 5, None);
+        write_file_with_xattr(root, "src/main.rs", 10, None);
+
+        let m = matcher();
+        let paths = scan_paths(&m, root);
+        assert!(
+            paths.contains(&PathBuf::from("target/a.bin")),
+            "pattern-matched file with no xattr must still be listed: {paths:?}"
+        );
+        assert!(
+            !paths.contains(&PathBuf::from("src/main.rs")),
+            "pattern-negative file with no xattr must stay out: {paths:?}"
+        );
+    }
+
+    #[test]
+    fn scan_ignores_unrecognised_xattr_value() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        write_file_with_xattr(root, "src/main.rs", 7, Some("maybe"));
+        write_file_with_xattr(root, "target/a.bin", 5, Some("maybe"));
+
+        let m = matcher();
+        assert_eq!(
+            scan_paths(&m, root),
+            vec![PathBuf::from("target/a.bin")],
+            "an unrecognised xattr value must fall back to pattern classification"
+        );
     }
 
     #[test]
