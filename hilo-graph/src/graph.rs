@@ -4537,7 +4537,7 @@ mod tests {
         let scaled_ceiling_ms = 4 * per_row_ms * RECONCILE_CHUNK_ROWS as u64 + budget_ms + 500;
         // Absolute hard ceiling no scaling may exceed — catches a genuine
         // budget-mechanism regression (loop no longer checking elapsed_ms).
-        let ceiling_ms = scaled_ceiling_ms.min(10_000).max(2_000);
+        let ceiling_ms = scaled_ceiling_ms.clamp(2_000, 10_000);
         assert!(
             report.elapsed_ms < ceiling_ms,
             "an open must return near its budget (baseline {baseline_ms}ms, \
