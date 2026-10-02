@@ -252,7 +252,7 @@ pub fn list_tools() -> Vec<Tool> {
         },
         Tool {
             name: "vfs_workspace_wipe".into(),
-            description: "Plan or apply a wipe of ephemeral files. dry_run defaults to true (planned only); pass dry_run=false to delete. Files with user.vfs.ephemeral=false are never removed.".into(),
+            description: "Plan or apply a wipe of ephemeral files. dry_run defaults to true (planned only); pass dry_run=false to delete. The response echoes the resolved mode as dry_run. Files with user.vfs.ephemeral=false are never removed. removed_count is the total number of matched entries; removed[] carries at most the first 200 entries and removed_truncated is true when it was cut off.".into(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -1151,6 +1151,14 @@ fn workspace_ephemeral(arguments: &serde_json::Value) -> McpResult<serde_json::V
 /// with `dry_run: false` the ephemeral files are deleted and the freed bytes
 /// reported. `user.vfs.ephemeral = false` is the only wipe protector (spec
 /// §5.2.2); the optional `path` argument limits the wipe to a subtree.
+///
+/// The response echoes the resolved `dry_run` mode so a consumer can tell a
+/// plan from an execution without remembering what it sent (DF-WARPFS-105).
+/// `removed_count` and `freed_bytes` are always totals over every matched
+/// entry, while the `removed` array is capped at the first [`REMOVED_CAP`]
+/// entries — `removed_truncated` is `true` whenever that cap bit.
+const REMOVED_CAP: usize = 200;
+
 fn workspace_wipe(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
     let root = std::env::current_dir().map_err(McpError::Io)?;
     let matcher = EphemeralMatcher::load(&root, None)
@@ -1164,6 +1172,7 @@ fn workspace_wipe(arguments: &serde_json::Value) -> McpResult<serde_json::Value>
 
     let mut removed = Vec::new();
     let mut freed_bytes: u64 = 0;
+    let mut total_removed: usize = 0;
     for e in entries {
         if let Some(f) = filter {
             if !e.path.starts_with(f) {
@@ -1185,11 +1194,22 @@ fn workspace_wipe(arguments: &serde_json::Value) -> McpResult<serde_json::Value>
             })?;
         }
         freed_bytes += e.size;
-        removed.push(serde_json::json!({
-            "path": e.path,
-            "bytes": e.size,
-        }));
+        total_removed += 1;
+        // Cap the array, never the totals: freed_bytes/removed_count stay
+        // whole-tree numbers so a truncated plan is still an honest plan.
+        if removed.len() < REMOVED_CAP {
+            removed.push(serde_json::json!({
+                "path": e.path,
+                "bytes": e.size,
+            }));
+        }
     }
 
-    Ok(serde_json::json!({ "removed": removed, "freed_bytes": freed_bytes }))
+    Ok(serde_json::json!({
+        "removed": removed,
+        "removed_count": total_removed,
+        "removed_truncated": total_removed > REMOVED_CAP,
+        "freed_bytes": freed_bytes,
+        "dry_run": dry_run,
+    }))
 }

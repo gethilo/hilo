@@ -1073,6 +1073,21 @@ fn test_workspace_wipe_dry_run_then_apply() {
     assert!(result["freed_bytes"].as_u64().unwrap() >= 4);
     assert!(marker.exists(), "dry-run must not delete");
 
+    // DF-WARPFS-105: the response echoes the resolved mode, so a consumer can
+    // tell a PLAN from an EXECUTION without remembering what it sent.
+    assert_eq!(
+        result["dry_run"], true,
+        "default args must echo dry_run:true (plan)"
+    );
+    assert!(
+        result["removed_count"].as_u64().unwrap() >= 1,
+        "removed_count (total) must be present on a plan"
+    );
+    assert!(
+        result.get("removed_truncated").is_some(),
+        "removed_truncated must be present unconditionally (state-independent output)"
+    );
+
     // dry_run=false: delete and report freed bytes.
     let req = r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"vfs_workspace_wipe","arguments":{"path":"target","dry_run":false}}}"#;
     let resp = rpc(req);
@@ -1082,7 +1097,78 @@ fn test_workspace_wipe_dry_run_then_apply() {
     assert!(removed
         .iter()
         .any(|r| r["path"].as_str().unwrap().ends_with("mcp-wipe-test.bin")));
+    assert_eq!(
+        result["dry_run"], false,
+        "explicit dry_run:false must echo dry_run:false (execution)"
+    );
+    assert!(
+        result["removed_count"].as_u64().unwrap() >= 1,
+        "removed_count (total) must be present on an apply"
+    );
     assert!(!marker.exists(), "apply must delete the ephemeral file");
+
+    fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn test_workspace_wipe_removed_capped_at_200_with_truncation_flag() {
+    let _guard = cwd_test_lock().lock().unwrap();
+    use std::fs;
+
+    // Fresh fixture dir (wiped first) so the counts below are exact and
+    // immune to ambient litter under target/.
+    let dir = std::path::Path::new("target").join("mcp-wipe-trunc");
+    fs::remove_dir_all(&dir).ok();
+    fs::create_dir_all(&dir).unwrap();
+    const TOTAL: usize = 210; // > REMOVED_CAP (200)
+    const PAYLOAD: &[u8] = b"trunc-payload"; // 13 bytes each
+    for i in 0..TOTAL {
+        fs::write(dir.join(format!("trunc-{i:03}.bin")), PAYLOAD).unwrap();
+    }
+
+    // Plan (default dry_run) limited to the fixture subtree so the scan sees
+    // exactly TOTAL entries.
+    let req = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"vfs_workspace_wipe","arguments":{"path":"target/mcp-wipe-trunc"}}}"#;
+    let resp = rpc(req);
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    let result: serde_json::Value = serde_json::from_str(text).unwrap();
+
+    // Totals stay whole: removed_count and freed_bytes count ALL entries,
+    // even though the array is capped.
+    assert_eq!(result["removed_count"].as_u64().unwrap(), TOTAL as u64);
+    assert_eq!(
+        result["freed_bytes"].as_u64().unwrap(),
+        (TOTAL * PAYLOAD.len()) as u64
+    );
+    let removed = result["removed"].as_array().unwrap();
+    assert_eq!(removed.len(), 200, "removed[] must cap at 200 entries");
+    assert_eq!(result["removed_truncated"], true);
+    assert_eq!(result["dry_run"], true, "default args plan (dry_run echo)");
+
+    // Control: an under-cap scan carries removed_truncated:false — the field
+    // is unconditional so probes are deterministic.
+    for i in 10..TOTAL {
+        fs::remove_file(dir.join(format!("trunc-{i:03}.bin"))).unwrap();
+    }
+    let req = r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"vfs_workspace_wipe","arguments":{"path":"target/mcp-wipe-trunc"}}}"#;
+    let resp = rpc(req);
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    let result: serde_json::Value = serde_json::from_str(text).unwrap();
+    assert_eq!(result["removed_count"].as_u64().unwrap(), 10);
+    assert_eq!(result["removed"].as_array().unwrap().len(), 10);
+    assert_eq!(result["removed_truncated"], false);
+
+    // Apply-phase echo: explicit dry_run:false echoes false and deletes.
+    let req = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"vfs_workspace_wipe","arguments":{"path":"target/mcp-wipe-trunc","dry_run":false}}}"#;
+    let resp = rpc(req);
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap();
+    let result: serde_json::Value = serde_json::from_str(text).unwrap();
+    assert_eq!(result["dry_run"], false);
+    assert_eq!(result["removed_count"].as_u64().unwrap(), 10);
+    assert!(
+        fs::read_dir(&dir).unwrap().next().is_none(),
+        "apply must delete the remaining fixture files"
+    );
 
     fs::remove_dir_all(&dir).ok();
 }
