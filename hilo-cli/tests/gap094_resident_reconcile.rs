@@ -7,7 +7,8 @@
 //! are those two numbers, so this test measures exactly them, against the real
 //! binary, in the real long-lived shape:
 //!
-//! * every tool call returns inside [`CALL_BOUND`] — the server arms a 2 s
+//! * every tool call returns inside the load-aware bound from
+//!   [`call_bound`] — the server arms a 2 s
 //!   request-path reconcile budget (`DEFAULT_REQUEST_PATH_RECONCILE_BUDGET_MS`)
 //!   and answers from the canonical JSONL stream when it is spent;
 //! * the process's peak RSS (`VmHWM`) does not scale with the corpus across the
