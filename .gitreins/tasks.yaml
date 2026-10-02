@@ -1951,3 +1951,21 @@ tasks:
     documents the shippable-artifact path; clippy+tests green
   status: complete
   created_at: '2026-09-30T18:41:23.068431+00:00'
+- id: QA-WARPFS-18
+  title: gap094 wall-clock test headroom
+  criteria:
+  - hilo-cli gap094 resident-reconcile wall-clock bound scales with a measured baseline
+    and keeps a hard ceiling; cargo test -p hilo-cli --test gap094_resident_reconcile
+    passes
+  status: complete
+  created_at: '2026-10-02T05:39:23.395989+00:00'
+  completed_at: '2026-10-02T05:39:38.847313+00:00'
+- id: QA-WARPFS-20
+  title: gap094 budget overshoot bound
+  criteria:
+  - hilo_graph gap094_budget_stops_inside_a_chunk_not_at_the_chunk_end scales its
+    bound with a measured baseline under a hard ceiling and passes deterministically;
+    rust-lint.sh gate green
+  status: complete
+  created_at: '2026-10-02T05:39:23.640773+00:00'
+  completed_at: '2026-10-02T06:16:00.717124+00:00'
