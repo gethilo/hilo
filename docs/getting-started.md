@@ -2,6 +2,11 @@
 
 ## Install
 
+> **Build prerequisite:** a C/C++ linker (`cc`/`g++` + `ld`) is required.
+> rustup's `--profile minimal` installs no linker, so the first build fails
+> with a linker error until you install one (`build-essential` on
+> Debian/Ubuntu).
+
 ```bash
 git clone https://github.com/gethilo/hilo.git
 cd hilo

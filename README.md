@@ -30,6 +30,11 @@ Which path applies to your host?
 
 ### Standard source build
 
+> **Build prerequisite:** a C/C++ linker (`cc`/`g++` + `ld`) is required.
+> rustup's `--profile minimal` installs no linker, so the first build fails
+> with a linker error until you install one (`build-essential` on
+> Debian/Ubuntu).
+
 ```bash
 git clone https://github.com/gethilo/hilo.git
 cd hilo && make release                    # cargo build --release + strip
@@ -374,7 +379,8 @@ disclosed, never silently consumed.
   `.hiloephemeral` file)
 - `hilo workspace wipe --ephemeral [--apply]` — plan a wipe of ephemeral
   files (dry-run by default; `--apply` deletes them and reports freed
-  bytes); a file is protected only by `user.vfs.ephemeral = false`
+  bytes); `--ephemeral` is required — it is the only wipe mode; a file is
+  protected only by `user.vfs.ephemeral = false`
 - `hilo ignore check <PATH>` — report whether a path is ignored by the
   workspace ignore stack (built-in defaults plus `.hiloignore`) and which
   rule line decided it
