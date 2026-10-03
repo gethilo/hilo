@@ -18,7 +18,7 @@ pub use sync_hook::{SyncHook, SyncHookConfig};
 pub use std::path::PathBuf;
 
 /// Trigger configuration from manifest.
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TriggerConfig {
     pub name: String,
     pub watch_pattern: String,
@@ -36,7 +36,7 @@ pub struct TriggerConfig {
     pub graph_db_path: Option<String>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum TriggerAction {
     SetXattr { key: String, value_template: String },
     Warn,
