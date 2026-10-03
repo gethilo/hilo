@@ -1042,3 +1042,36 @@ tree), MCP 3-message session 0.118s — all hyperfine warm, release binary.
 No PERF rows (nothing user-painful).
 
 Full report: `docs/dogfood/2026-10-01-run30-mcp-full-sweep-fresh-install.md`.
+
+## Run 31 — 2026-10-03 — hyperfine perf sweep on stale binary
+
+**Angle:** measure headline operations with hyperfine (5 runs, warm) on the
+installed binary. Previous runs used time -p; this run uses the proper
+benchmarking tool with warmup and stddev.
+
+**Binary state:** installed binary is v0.3.0-14-g2b26d3f (2026-09-22), 11 days
+stale. Pre-dates PERF-009, GAP-109, DF-WARPFS-105/106/107 fixes. HEAD is
+2480617 (2026-10-03).
+
+**Perf (hyperfine, warm, 5 runs, release binary):**
+- graph stats: 18.6ms ± 1.4ms — instant, no user-visible friction
+- graph search "rate limiter": 510ms ± 31ms — half a second, noticeable but
+  acceptable for lexical TF-IDF over 7549 files
+- classify: 17.938s ± 1.127s — 18s on 7549 files (20,681 project files
+  excluding target/.git/node_modules). This is the threshold where a user
+  checks if the command hung. Filed as PERF-010.
+
+**Install leg:** SKIPPED (14th consecutive run). Same wall as runs 16-30
+(DF-WARPFS-100, DF-WARPFS-103, DF-WARPFS-104). Filed as DF-WARPFS-108.
+
+**New findings:**
+- PERF-010 (P2): classify takes 18s on 7549-file repo. Fix direction: build
+  current HEAD and re-measure (PERF-009 symbol cache may help); if still
+  slow, profile with cargo flamegraph; consider parallelizing classify scan.
+- DF-WARPFS-108 (P3): SKIPPED-install-bunker annotation — 14th consecutive
+  run, installed binary 11 days stale.
+
+**Rows filed:** 2 (PERF-010, DF-WARPFS-108). Board now has 320 rows.
+
+**Left behind:** this dogfood-log entry. No code changes.
+

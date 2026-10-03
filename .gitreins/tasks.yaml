@@ -1969,3 +1969,27 @@ tasks:
   status: complete
   created_at: '2026-10-02T05:39:23.640773+00:00'
   completed_at: '2026-10-02T06:16:00.717124+00:00'
+- id: GAP-110
+  title: stats components include project dot directories
+  criteria:
+  - hilo graph stats on the hilo repo names docs/, examples/, .gitreins/ among components;
+    .git/.vfs excluded; hilo_graph lib tests pass
+  status: complete
+  created_at: '2026-10-03T12:31:23.255177+00:00'
+  completed_at: '2026-10-03T13:16:41.151258+00:00'
+- id: DOCS-GAP-006
+  title: spec install section builds from source
+  criteria:
+  - specs/warpfs-spec.md section 3 has no cargo install primary path; source-build
+    commands match README; no contradicting install text
+  status: complete
+  created_at: '2026-10-03T12:31:23.719083+00:00'
+  completed_at: '2026-10-03T13:16:42.547883+00:00'
+- id: DF-WARPFS-96
+  title: init gitignores the DuckDB cache
+  criteria:
+  - hilo init installs .vfs/graph/graph.db* wildcard; git check-ignore rejects graph.db
+    and sidecars, accepts manifest.yaml and edges.jsonl; full gate green
+  status: complete
+  created_at: '2026-10-03T12:31:24.221854+00:00'
+  completed_at: '2026-10-03T13:16:47.272709+00:00'

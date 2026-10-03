@@ -1,0 +1,43 @@
+{
+  "scheduler_tick_id": "warpfs-foreman-2026-10-03-12-13-08",
+  "created_at": "2026-10-03T12:20:00-05:00",
+  "wave_budget": 10,
+  "wave_type": "harvest (no live dispatch — 3 orphaned worker commits found and merged)",
+  "harvest_notes": "Worktrees were ORPHANED (workers died post-commit, pre-merge): worktree.sh new collided on warpfs-GAP-110, discovery via 'worktree list' + ahead/behind census. GAP-110 and DF-WARPFS-96 judged against AO live on bunker-las-03 (344/344 hilo_graph lib PASS both; clippy -D warnings clean); DOCS-GAP-006 docs-only validated by direct deliverable check at wt/DOCS-GAP-006 (section 3 rewrites verified in validate diff). All pushed as fix commits then merge-commit-tipped branches, master fs=0 at 062dd18, CI run 18377013299 success.",
+  "independence_note": "Crates disjoint: hilo-graph / docs-spec / hilo-cli+README+gitignore. No file overlap between worker diffs (README.md: DF-WARPFS-96 only; graph.rs: GAP-110 only). No depends_on edges between rows (verified from board). No wave dispatch this tick.",
+  "tasks": [
+    {
+      "id": "GAP-110",
+      "brief": "none: worker committed before foreman dispatch, brief never written",
+      "worktree": "reap /home/kara/worktrees/warpfs-GAP-110 (content preserved at commits a9ae087..e91c21b on origin/wt/GAP-110; dir dirtied by worker's local binary artifact runs)",
+      "branch": "wt/GAP-110",
+      "fix_commits": ["a9ae087"],
+      "merge_commit": "e91c21b",
+      "base_sha": "2480617",
+      "scope": "hilo-graph/src/graph.rs",
+      "worker_session": "orphan: wt/GAP-110 2026-10-02T22:09-05:00"
+    },
+    {
+      "id": "DOCS-GAP-006",
+      "brief": "none: worker committed before foreman dispatch, brief never written",
+      "worktree": "reap /home/kara/worktrees/warpfs-DOCS-GAP-006 (content preserved at commits 411aa26..cc47cd8 on origin/wt/DOCS-GAP-006)",
+      "branch": "wt/DOCS-GAP-006",
+      "fix_commits": ["411aa26"],
+      "merge_commit": "cc47cd8",
+      "base_sha": "2480617",
+      "scope": "specs/warpfs-spec.md",
+      "worker_session": "orphan: wt/DOCS-GAP-006 2026-10-02T22:13-05:00"
+    },
+    {
+      "id": "DF-WARPFS-96",
+      "brief": "none: worker committed before foreman dispatch, brief never written",
+      "worktree": "reap /home/kara/worktrees/warpfs-DF-WARPFS-96 (content preserved at commits 0aa56e7..062dd18 on origin/wt/DF-WARPFS-96)",
+      "branch": "wt/DF-WARPFS-96",
+      "fix_commits": ["0aa56e7"],
+      "merge_commit": "062dd18",
+      "base_sha": "2480617",
+      "scope": "hilo-cli/src/commands/init.rs, hilo-cli/src/lib.rs, hilo-cli/src/main.rs, README.md, .gitignore",
+      "worker_session": "orphan: wt/DF-WARPFS-96 2026-10-02T22:39-05:00"
+    }
+  ]
+}
