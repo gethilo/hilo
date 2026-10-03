@@ -9,11 +9,15 @@ use hilo_metadata::inventory;
 use crate::commands::guard;
 use crate::commands::hooks;
 
-/// Managed `.gitignore` block `hilo init` installs (DF-WARPFS-38).
+/// Dedicated `.gitignore` section for the derived DuckDB cache (DF-WARPFS-96).
 ///
-/// Covers only the rebuildable `.vfs/graph` cache state; `.vfs/manifest.yaml`
-/// and `.vfs/graph/edges.jsonl` are inventory truth and stay tracked. See
-/// `docs/inventory-policy.md`.
+/// The wildcard covers DuckDB sidecars as well as `graph.db` itself. Inventory
+/// truth (`.vfs/manifest.yaml` and `.vfs/graph/edges.jsonl`) stays tracked.
+pub const HILO_DUCKDB_IGNORE_HEADER: &str =
+    "# Hilo: derived DuckDB cache is rebuildable (edges.jsonl stays committed)";
+pub const HILO_DUCKDB_IGNORE_ENTRY: &str = ".vfs/graph/graph.db*";
+
+/// The remaining rebuildable `.vfs/graph` cache state managed by `hilo init`.
 pub const HILO_MANAGED_IGNORE_HEADER: &str =
     "# --- hilo managed: rebuildable .vfs cache state (installed by `hilo init`) ---";
 const HILO_MANAGED_IGNORE_ENTRIES: &[&str] = &[
@@ -27,12 +31,27 @@ const HILO_MANAGED_IGNORE_ENTRIES: &[&str] = &[
     ".vfs/graph/.last_reconcile",
 ];
 
-/// Ensure `<root>/.gitignore` carries the managed block of rebuildable
-/// `.vfs` cache entries.
+fn append_ignore_section(out: &mut String, header: &str, entries: &[&str]) {
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    out.push_str(header);
+    out.push('\n');
+    for entry in entries {
+        out.push_str(entry);
+        out.push('\n');
+    }
+}
+
+/// Ensure `<root>/.gitignore` carries the managed rebuildable-cache sections.
 ///
-/// Idempotent: a second call with the block already present leaves the file
-/// byte-identical. Pre-existing content is preserved verbatim (the block is
-/// appended at the end, separated by a newline when needed).
+/// Idempotent: a second call with both sections already present leaves the file
+/// byte-identical. Pre-existing content is preserved verbatim. Repositories
+/// initialized by an older Hilo release receive the new DuckDB wildcard even
+/// when they already carry the legacy managed-cache header.
 pub fn ensure_gitignore_entries(root: &Path) -> Result<()> {
     let gitignore = root.join(".gitignore");
     let existing = match std::fs::read_to_string(&gitignore) {
@@ -41,22 +60,30 @@ pub fn ensure_gitignore_entries(root: &Path) -> Result<()> {
         Err(e) => return Err(e).with_context(|| format!("failed to read {}", gitignore.display())),
     };
 
-    if existing.contains(HILO_MANAGED_IGNORE_HEADER) {
+    let has_duckdb_entry = existing
+        .lines()
+        .any(|line| line == HILO_DUCKDB_IGNORE_ENTRY);
+    let has_managed_section = existing
+        .lines()
+        .any(|line| line == HILO_MANAGED_IGNORE_HEADER);
+    if has_duckdb_entry && has_managed_section {
         return Ok(());
     }
 
     let mut out = existing;
-    if !out.is_empty() && !out.ends_with('\n') {
-        out.push('\n');
+    if !has_duckdb_entry {
+        append_ignore_section(
+            &mut out,
+            HILO_DUCKDB_IGNORE_HEADER,
+            &[HILO_DUCKDB_IGNORE_ENTRY],
+        );
     }
-    if !out.is_empty() {
-        out.push('\n');
-    }
-    out.push_str(HILO_MANAGED_IGNORE_HEADER);
-    out.push('\n');
-    for entry in HILO_MANAGED_IGNORE_ENTRIES {
-        out.push_str(entry);
-        out.push('\n');
+    if !has_managed_section {
+        append_ignore_section(
+            &mut out,
+            HILO_MANAGED_IGNORE_HEADER,
+            HILO_MANAGED_IGNORE_ENTRIES,
+        );
     }
 
     std::fs::write(&gitignore, out)
@@ -101,10 +128,10 @@ pub fn run_in(
     // Create the .vfs/ directory tree (idempotent — safe to call repeatedly).
     inventory::create_vfs_structure(cwd).context("failed to create .vfs directory structure")?;
 
-    // DF-WARPFS-38: install the managed .gitignore block for the rebuildable
-    // `.vfs/graph` cache state, so the first ordinary commit does not add a
-    // multi-megabyte graph.db. Inventory truth (manifest.yaml, edges.jsonl)
-    // stays tracked.
+    // DF-WARPFS-96: install a dedicated wildcard for the rebuildable DuckDB
+    // cache, so the first ordinary commit does not add a multi-megabyte
+    // graph.db or its sidecars. Inventory truth (manifest.yaml, edges.jsonl)
+    // stays tracked; the managed section below also covers other caches.
     ensure_gitignore_entries(cwd).context("failed to install .gitignore entries")?;
 
     let manifest_path = cwd.join(".vfs").join("manifest.yaml");
@@ -367,21 +394,76 @@ mod tests {
         run_in(project.path(), false, None, true).unwrap();
 
         let gi = std::fs::read_to_string(project.path().join(".gitignore")).unwrap();
+        let duckdb_section = format!("{HILO_DUCKDB_IGNORE_HEADER}\n{HILO_DUCKDB_IGNORE_ENTRY}\n");
+        assert!(
+            gi.contains(&duckdb_section),
+            "init must install the exact dedicated DuckDB section: {gi}"
+        );
         assert!(
             gi.contains(HILO_MANAGED_IGNORE_HEADER),
-            "init must install the managed block: {gi}"
+            "init must retain the managed cache section: {gi}"
         );
         for entry in [
+            HILO_DUCKDB_IGNORE_ENTRY,
             ".vfs/graph/graph.db",
+            ".vfs/graph/graph.db.wal",
+            ".vfs/graph/graph.duckdb",
+            ".vfs/graph/graph.duckdb.wal",
             ".vfs/graph/.parse_cache.json",
             ".vfs/graph/.symbols_cache.json",
             ".vfs/graph/.last_reconcile",
         ] {
-            assert!(gi.contains(entry), "managed block must cover {entry}");
+            assert!(
+                gi.lines().any(|line| line == entry),
+                "managed sections must contain the exact entry {entry}: {gi}"
+            );
         }
-        // Inventory truth stays tracked — never in the managed block.
+        // Inventory truth stays tracked — never in either managed section.
         assert!(!gi.contains(".vfs/manifest.yaml"));
         assert!(!gi.contains(".vfs/graph/edges.jsonl"));
+    }
+
+    #[test]
+    fn init_gitignore_ignores_duckdb_but_not_inventory() {
+        let project = TempDir::new().unwrap();
+        let git_init = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(project.path())
+            .status()
+            .unwrap();
+        assert!(git_init.success(), "git init must succeed for the fixture");
+
+        run_in(project.path(), false, None, true).unwrap();
+
+        for cache_path in [
+            ".vfs/graph/graph.db",
+            ".vfs/graph/graph.db.wal",
+            ".vfs/graph/graph.db.tmp",
+        ] {
+            let verdict = std::process::Command::new("git")
+                .args(["check-ignore", cache_path])
+                .current_dir(project.path())
+                .status()
+                .unwrap();
+            assert_eq!(
+                verdict.code(),
+                Some(0),
+                "{cache_path} must be ignored after init"
+            );
+        }
+
+        for inventory_path in [".vfs/manifest.yaml", ".vfs/graph/edges.jsonl"] {
+            let verdict = std::process::Command::new("git")
+                .args(["check-ignore", inventory_path])
+                .current_dir(project.path())
+                .status()
+                .unwrap();
+            assert_eq!(
+                verdict.code(),
+                Some(1),
+                "{inventory_path} is source-of-truth inventory and must stay visible"
+            );
+        }
     }
 
     #[test]
@@ -396,6 +478,7 @@ mod tests {
             first.starts_with(existing),
             "pre-existing content preserved verbatim"
         );
+        assert!(first.contains(HILO_DUCKDB_IGNORE_HEADER));
         assert!(first.contains(HILO_MANAGED_IGNORE_HEADER));
 
         // Re-init with an existing manifest → idempotent, byte-identical.
@@ -403,7 +486,36 @@ mod tests {
         let second = std::fs::read_to_string(project.path().join(".gitignore")).unwrap();
         assert_eq!(
             first, second,
-            "re-init must not duplicate or modify the block"
+            "re-init must not duplicate or modify either section"
         );
+        assert_eq!(
+            second.matches(HILO_DUCKDB_IGNORE_HEADER).count(),
+            1,
+            "re-init must leave one DuckDB section"
+        );
+        assert_eq!(
+            second.matches(HILO_DUCKDB_IGNORE_ENTRY).count(),
+            1,
+            "re-init must leave one DuckDB wildcard"
+        );
+    }
+
+    #[test]
+    fn init_upgrades_legacy_managed_block_with_duckdb_wildcard() {
+        let project = TempDir::new().unwrap();
+        let legacy =
+            format!("{HILO_MANAGED_IGNORE_HEADER}\n.vfs/graph/graph.db\n.vfs/graph/graph.db.wal\n");
+        std::fs::write(project.path().join(".gitignore"), &legacy).unwrap();
+
+        run_in(project.path(), false, None, true).unwrap();
+        let upgraded = std::fs::read_to_string(project.path().join(".gitignore")).unwrap();
+
+        assert!(
+            upgraded.starts_with(&legacy),
+            "legacy rules must be preserved"
+        );
+        assert_eq!(upgraded.matches(HILO_MANAGED_IGNORE_HEADER).count(), 1);
+        assert_eq!(upgraded.matches(HILO_DUCKDB_IGNORE_HEADER).count(), 1);
+        assert_eq!(upgraded.matches(HILO_DUCKDB_IGNORE_ENTRY).count(), 1);
     }
 }
