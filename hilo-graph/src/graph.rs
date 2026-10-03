@@ -2773,13 +2773,23 @@ impl GraphDB {
 // walked-only directories enter with their on-disk file count and zero
 // edges.
 
-/// Directory names that are never components: build output, dependency and
-/// cache trees. Mirrors the discovery/prune vocabulary the rest of the
-/// system uses (`guard::DEFAULT_PRUNE_DIRS`, `exclusion_category`) — hilo-graph
-/// cannot depend on hilo-cli, so the shared names live here too. Dot-prefixed
-/// caches (`.venv`, `.cache`, `.scc`, …) need no entry: hidden entries are
-/// pruned wholesale below.
+/// Directory names that are never components: repository internals, build
+/// output, dependency and cache trees. Mirrors the discovery/prune vocabulary
+/// the rest of the system uses (`guard::DEFAULT_PRUNE_DIRS`,
+/// `exclusion_category`) — hilo-graph cannot depend on hilo-cli, so the shared
+/// names live here too. Project-owned dot-prefixed directories (`.github`,
+/// `.gitreins`, `.coding-hermes`, …) are real components; only the internal and
+/// cache names below are excluded.
 const NON_COMPONENT_DIRS: &[&str] = &[
+    // Repository/tool internals.
+    ".git",
+    ".vfs",
+    ".scc",
+    // Dot-prefixed dependency and cache trees.
+    ".venv",
+    ".cache",
+    ".rustup",
+    ".npm",
     // Build output.
     "target",
     "dist",
@@ -2798,9 +2808,9 @@ const NON_COMPONENT_DIRS: &[&str] = &[
     "site-packages",
 ];
 
-/// Recursively count files under `dir`, pruning hidden entries,
-/// [`NON_COMPONENT_DIRS`] and symlinked directories. Symlinks to FILES count
-/// (they are visible tree content).
+/// Recursively count files under `dir`, pruning [`NON_COMPONENT_DIRS`] and
+/// symlinked directories. Symlinks to FILES count (they are visible tree
+/// content). Project-owned dot-prefixed entries count like any other content.
 ///
 /// Unreadable entries are skipped (best-effort inventory — a directory that
 /// cannot be read yields a count of 0 and is then dropped by
@@ -2817,8 +2827,7 @@ fn count_files_pruned(dir: &Path) -> u64 {
         let Ok(file_type) = entry.file_type() else {
             continue;
         };
-        // Hidden entries are pruned like build dirs (`.git`, `.vfs`, …).
-        if name_str.starts_with('.') || NON_COMPONENT_DIRS.contains(&name_str.as_ref()) {
+        if NON_COMPONENT_DIRS.contains(&name_str.as_ref()) {
             continue;
         }
         if file_type.is_symlink() {
@@ -2839,9 +2848,10 @@ fn count_files_pruned(dir: &Path) -> u64 {
 }
 
 /// Inventory the meaningful top-level directories of `root`: their recursive
-/// (pruned) file counts, name-sorted. Directories that are hidden, build/
-/// cache pruned, unreadable, or carry no files at all are not components and
-/// are left out entirely.
+/// (pruned) file counts, name-sorted. Project-owned dot-prefixed directories
+/// are included. Directories that match an explicit repository-internal,
+/// build, dependency or cache name, are unreadable, or carry no files at all
+/// are not components and are left out entirely.
 fn top_level_directory_counts(root: &Path) -> Vec<(String, u64)> {
     let mut out = Vec::new();
     let Ok(entries) = std::fs::read_dir(root) else {
@@ -2850,7 +2860,7 @@ fn top_level_directory_counts(root: &Path) -> Vec<(String, u64)> {
     for entry in entries.flatten() {
         let name = entry.file_name();
         let name_str = name.to_string_lossy().into_owned();
-        if name_str.starts_with('.') || NON_COMPONENT_DIRS.contains(&name_str.as_str()) {
+        if NON_COMPONENT_DIRS.contains(&name_str.as_str()) {
             continue;
         }
         let Ok(file_type) = entry.file_type() else {
@@ -5331,12 +5341,12 @@ mod tests {
         );
     }
 
-    // ── GAP-109: the roster must also name non-code top-level directories ──
+    // ── GAP-109/110: the roster names non-code and project dot directories ──
     //
     // Component enumeration anchored on parsed `from` files alone misses every
     // directory that carries no parseable source (docs, packaging, manifests,
-    // …) — bake-off wave 9 measured 71% of real top-level dirs named vs scc's
-    // 97%, with the misses systematically non-code. When the graph knows its
+    // …); GAP-109's blanket hidden-dir prune also missed project-owned
+    // directories such as `.github` and `.gitreins`. When the graph knows its
     // repo root, the directory inventory joins the roster.
 
     /// Write a two-edge corpus for `src/api.rs`/`src/main.rs` and open the
@@ -5363,11 +5373,13 @@ mod tests {
         // disk — the parsed census (2 files) must survive the merge untouched.
         std::fs::create_dir_all(dir.path().join("src")).unwrap();
         std::fs::write(dir.path().join("src/main.rs"), "fn main() {}\n").unwrap();
-        // Non-code dirs: real files, zero parsed symbols.
+        // Non-code dirs, including a dot-prefixed project directory: real
+        // files, zero parsed symbols.
         for (name, file) in [
             ("docs", "design.md"),
             ("packaging", "hilo.spec"),
             ("kubernetes-manifests", "deploy.yaml"),
+            (".gitreins", "config.yaml"),
         ] {
             std::fs::create_dir_all(dir.path().join(name)).unwrap();
             std::fs::write(dir.path().join(name).join(file), "x\n").unwrap();
@@ -5378,9 +5390,15 @@ mod tests {
         let names: Vec<&str> = stats.components.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(
             names,
-            vec!["src", "docs", "kubernetes-manifests", "packaging"],
-            "every non-code top-level dir joins the roster; ordering stays \
-             files DESC then name ASC"
+            vec![
+                "src",
+                ".gitreins",
+                "docs",
+                "kubernetes-manifests",
+                "packaging"
+            ],
+            "every non-code and dot-prefixed top-level dir joins the roster; \
+             ordering stays files DESC then name ASC"
         );
         // Parsed entry keeps its edge-derived census (NOT the on-disk count).
         let src = &stats.components[0];
@@ -5390,7 +5408,7 @@ mod tests {
             "parsed components keep their census"
         );
         // Directory-inventory entries: walk-derived file count, no edges.
-        for name in ["docs", "kubernetes-manifests", "packaging"] {
+        for name in [".gitreins", "docs", "kubernetes-manifests", "packaging"] {
             let comp = stats
                 .components
                 .iter()
@@ -5442,7 +5460,7 @@ mod tests {
     }
 
     #[test]
-    fn top_level_directory_counts_excludes_hidden_and_build_dirs() {
+    fn top_level_directory_counts_includes_project_dot_dirs_and_excludes_cache_dirs() {
         let dir = tempfile::tempdir().unwrap();
         // Kept: docs, with a nested file. Its own nested node_modules is
         // pruned from the COUNT too (dependency trees never inflate docs).
@@ -5456,19 +5474,23 @@ mod tests {
             std::fs::create_dir_all(dir.path().join(pruned)).unwrap();
             std::fs::write(dir.path().join(pruned).join("artifact.bin"), "x\n").unwrap();
         }
-        // Excluded as hidden: .git, .vfs, .scc, and any dotted dir.
-        for hidden in [".git", ".vfs", ".scc"] {
-            std::fs::create_dir_all(dir.path().join(hidden)).unwrap();
-            std::fs::write(dir.path().join(hidden).join("data"), "x\n").unwrap();
+        // A project-owned dot directory is a real component. Infrastructure
+        // and cache dot directories are excluded by explicit name, not by a
+        // blanket dot-prefix rule.
+        std::fs::create_dir_all(dir.path().join(".gitreins")).unwrap();
+        std::fs::write(dir.path().join(".gitreins/config.yaml"), "x\n").unwrap();
+        for pruned in [".git", ".vfs", ".scc", ".venv", ".cache", ".rustup", ".npm"] {
+            std::fs::create_dir_all(dir.path().join(pruned)).unwrap();
+            std::fs::write(dir.path().join(pruned).join("data"), "x\n").unwrap();
         }
         // An empty directory carries no file stats: not a component.
         std::fs::create_dir_all(dir.path().join("empty-dir")).unwrap();
 
         assert_eq!(
             top_level_directory_counts(dir.path()),
-            vec![("docs".to_string(), 2)],
-            "hidden, build/cache and zero-file dirs are excluded; nested \
-             pruned trees do not inflate the count"
+            vec![(".gitreins".to_string(), 1), ("docs".to_string(), 2)],
+            "project-owned dot dirs are kept; explicit build/cache and zero-file \
+             dirs are excluded; nested pruned trees do not inflate the count"
         );
     }
 
