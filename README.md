@@ -384,7 +384,9 @@ disclosed, never silently consumed.
 - `hilo ignore check <PATH>` — report whether a path is ignored by the
   workspace ignore stack (built-in defaults plus `.hiloignore`) and which
   rule line decided it
-- `hilo plugin load` — load a WASM plugin into the runtime
+- `hilo plugin load` — validate a WASM plugin's header/metadata and persist
+  it in `.vfs/plugins/` (execution is NOT IMPLEMENTED — DF-WARPFS-59: no
+  declared hook ever fires; see `docs/hilo-plugins.md`)
 - `hilo plugin list` — list plugins discovered in `.vfs/plugins/`
 
 ## License
