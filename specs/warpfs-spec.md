@@ -38,10 +38,20 @@ Hilo is a virtual filesystem for AI coding agents. Clone repos → mount with Hi
 
 ## 3. Language & Distribution
 
-**Pure Rust.** Single binary. Single repo.
+**Pure Rust.** Single binary. Single repo. No prebuilt binaries are published
+yet, and the project is not yet available on crates.io, so install by building
+from source:
 
 ```bash
-cargo install hilo
+git clone https://github.com/gethilo/hilo.git
+cd hilo && make release                    # cargo build --release + strip
+cp target/release/hilo ~/.cargo/bin/hilo   # put hilo on PATH
+hilo --help
+```
+
+The installed binary provides every interface:
+
+```bash
 hilo mount /mnt/vfs/workspace    # FUSE daemon
 hilo serve --mcp                 # MCP server (same binary)
 hilo meta login.go               # CLI shim (same binary)
