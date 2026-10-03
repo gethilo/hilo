@@ -1,45 +1,12 @@
-mod commands;
-
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-
-use commands::plugin::PluginCommand;
-use commands::{backend, classify, graph, ignore, init, meta, mount, plugin, serve, workspace};
-
-/// Shared sync-direction vocabulary (DF-WARPFS-12): `hilo workspace sync`
-/// and `hilo backend sync` speak the same --push/--pull/--both flags, and
-/// the resolved direction is printed on every run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SyncDirectionArg {
-    Push,
-    Pull,
-    Both,
-}
-
-impl SyncDirectionArg {
-    /// The exact string printed on the run header / plan lines.
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            SyncDirectionArg::Push => "push",
-            SyncDirectionArg::Pull => "pull",
-            SyncDirectionArg::Both => "two-way",
-        }
-    }
-}
-
-/// Flag resolution: --push / --pull / --both (default two-way). `_both` is
-/// the explicit spelling of the default and carries no extra state — the
-/// fallback branch serves both `--both` and no-flag-at-all.
-pub(crate) fn sync_direction(push: bool, pull: bool, _both: bool) -> SyncDirectionArg {
-    if push {
-        SyncDirectionArg::Push
-    } else if pull {
-        SyncDirectionArg::Pull
-    } else {
-        SyncDirectionArg::Both
-    }
-}
+use hilo_cli::commands;
+use hilo_cli::commands::plugin::PluginCommand;
+use hilo_cli::commands::{
+    backend, classify, graph, ignore, init, meta, mount, plugin, serve, workspace,
+};
+use hilo_cli::sync_direction;
 
 /// Hilo command-line interface.
 /// Provenance for `hilo --version` (item 47): the crate number alone made an

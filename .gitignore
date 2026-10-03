@@ -1,6 +1,9 @@
 # Rust build artifacts
 target/
 
+# Hilo: derived DuckDB cache is rebuildable (edges.jsonl stays committed)
+.vfs/graph/graph.db*
+
 # WarpFS local state — cache files (rebuildable)
 .vfs/graph/graph.db
 .vfs/graph/graph.db.wal

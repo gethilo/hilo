@@ -311,14 +311,19 @@ getfattr -n user.vfs.role /mnt/vfs/src/main.rs
 hilo serve --mcp
 ```
 
-Note: `graph warm` may append newly discovered edges to the tracked
-`.vfs/graph/edges.jsonl` (the inventory) — that diff is intentional refresh,
-commit it; everything else under `.vfs/graph/` is a rebuildable cache.
-[docs/inventory-policy.md](docs/inventory-policy.md) is the full contract.
+For the init-and-graph flow above, commit these source-of-truth paths:
 
-Cloning a repo that is already Hilo-initialized? `.vfs/manifest.yaml` and
-`.vfs/graph/edges.jsonl` arrive via git, but `graph.db` does not (it is a
-gitignored rebuild cache) — see
+- `.vfs/manifest.yaml`
+- `.vfs/graph/edges.jsonl`
+
+Do not commit `.vfs/graph/graph.db` or its sidecars. `hilo init` excludes them
+with `.vfs/graph/graph.db*`; the DuckDB cache is derived from the committed
+inventory and is rebuildable. Other workflows may add source-of-truth files
+such as `.vfs/backends/mounts.yaml`; see
+[docs/inventory-policy.md](docs/inventory-policy.md) for the full contract.
+
+Cloning a repo that is already Hilo-initialized? The manifest and edge
+inventory arrive via git, while the excluded DuckDB cache does not — see
 [Fresh clone & rebuild](docs/getting-started.md#clone--rebuild-fresh-clone-of-an-already-initialized-project)
 in the getting-started guide for what to run first and what to expect.
 
