@@ -1,5 +1,13 @@
 # hilo-plugins — WASM Plugin System
 
+> **NOT IMPLEMENTED — plugin execution does not exist (DF-WARPFS-59).**
+> Manifest `plugins:` blocks are accepted for backward compatibility, but
+> no code path connects declared hooks to the trigger engine or the FUSE
+> daemon: **a declared hook never fires.** `hilo plugin load|list` only
+> validate metadata and persist files — they never execute anything.
+> Loading a manifest that declares plugins prints a loud warning naming
+> each plugin and hook. `hilo init` no longer writes a `plugins:` block.
+
 WASM plugin runtime built on the Extism runtime types. Plugins are `.wasm` modules loaded from `.vfs/plugins/`. Written in any language with an Extism PDK (Rust, Go, Python, JS, C, Zig).
 
 **Status (2026-09-22, DF-WARPFS-22):** header validation and honest metadata are live — a module is accepted only when it carries the `\0asm` magic and version 1, and loaded instances report `0 hooks, 0 edge types` until real hook discovery exists. NOT yet implemented: real wasm execution (`PluginRuntime::dispatch_hook` currently *simulates* results from declared hooks — a plugin declaring `tested_by` yields a canned `AddEdge`), inotify hot-load on manifest change, and host-function registration as callable `extism::Function` instances (see `host_functions.rs`). Sandboxing is inherited from Extism once execution lands.

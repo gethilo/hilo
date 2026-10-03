@@ -584,9 +584,15 @@ hilo ignore check build/out.o
 
 Load and manage wasm plugins.
 
+> **NOT IMPLEMENTED (DF-WARPFS-59):** plugin execution does not exist.
+> `load`/`list` only validate metadata and persist files in
+> `.vfs/plugins/`; declared manifest hooks never fire (see
+> `docs/hilo-plugins.md`).
+
 ### `load`
 
-Load a .wasm plugin and register it in the runtime.
+Load a .wasm plugin and register it in the runtime. *(The "runtime" is a
+metadata registry — nothing is executed; DF-WARPFS-59.)*
 
 ```bash
 hilo plugin load ./my-plugin.wasm

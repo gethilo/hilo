@@ -73,7 +73,7 @@ hilo plugin load ./scanner.wasm  # Plugin loader (same binary)
 | Surface | Technology | For |
 |---|---|---|
 | **MCP protocol** | stdio/SSE JSON-RPC | Agents talk to the VFS |
-| **Wasm plugins** | extism + wasmtime | Custom hooks, new edge types, new triggers |
+| **Wasm plugins** | extism + wasmtime | Custom hooks, new edge types, new triggers — **NOT IMPLEMENTED (DF-WARPFS-59): declared hooks never fire** |
 | **UniFFI bindings** | Generated from `.udl` | Go/Python/Kotlin programs calling VFS functions |
 
 ---
@@ -296,6 +296,9 @@ rules:
       ORDER BY depth, to
 
 # ── Plugins ──
+# NOT IMPLEMENTED (DF-WARPFS-59): this block is a design target. It parses,
+# but declared hooks never fire; every load prints a NOT-IMPLEMENTED warning
+# and `hilo init` does not write it.
 plugins:
   - name: sql-scanner
     wasm: .vfs/plugins/sql-scanner.wasm
@@ -480,6 +483,14 @@ FILE WRITTEN → inotify event →
 
 ## 8. Plugin System (extism wasm)
 
+> **NOT IMPLEMENTED (DF-WARPFS-59).** Everything in this section is a
+> design target: plugin execution does not exist, and manifest-declared
+> hooks never fire. The `plugins:` manifest block is accepted for backward
+> compatibility only — loading a manifest that declares it prints a loud
+> NOT-IMPLEMENTED warning, and `hilo init` no longer writes the block.
+> See `docs/hilo-plugins.md` and `hilo-core/src/manifest.rs`
+> (`warn_unimplemented_plugins`).
+
 Plugins are `.wasm` modules loaded from `.vfs/plugins/`. Written in any language with an extism PDK (Rust, Go, Python, JS, C, Zig). The daemon hot-loads plugins on manifest change.
 
 ### 8.1 Host Functions (exposed to plugins)
@@ -504,6 +515,10 @@ Plugins CANNOT modify file content (FUSE-enforced) or access the host (wasm sand
 4. Daemon detects manifest change → hot-loads
 5. Hooks fire on matching file events
 ```
+
+> **NOT IMPLEMENTED (DF-WARPFS-59):** steps 4-5 do not happen. The daemon
+> contains no plugin runtime; a declared hook never fires and loading a
+> manifest that declares plugins only prints a NOT-IMPLEMENTED warning.
 
 ### 8.3 Example: SQL Injection Scanner
 

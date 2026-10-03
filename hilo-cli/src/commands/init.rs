@@ -137,6 +137,9 @@ pub fn run_in(
         permissions: Default::default(),
         triggers: Vec::new(),
         rules: Vec::new(),
+        // DF-WARPFS-59: plugins are NOT implemented — the field stays empty
+        // and `skip_serializing_if` omits the block entirely, so `hilo init`
+        // no longer advertises a plugin feature that never fires.
         plugins: Vec::new(),
         discovery: Default::default(),
         sandbox: Default::default(),

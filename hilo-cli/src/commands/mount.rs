@@ -413,9 +413,47 @@ fn load_triggers(project_dir: &Path) -> Vec<TriggerConfig> {
     default_triggers()
 }
 
+/// DF-WARPFS-59: loud NOT-IMPLEMENTED warnings for a manifest's `plugins:`
+/// block. The mount path parses the manifest via a triggers-only subset
+/// (not hilo_core's `Manifest::parse`), so plugin declarations would
+/// otherwise load SILENTLY here. Plugin execution is not implemented — a
+/// declared hook never fires — so the mount must be loud about it too
+/// (AC1: "at load/mount time; never silence"). Pure so the message content
+/// is unit-testable; the caller prints each line to stderr.
+fn plugin_not_implemented_warnings(doc: &serde_yaml::Value) -> Vec<String> {
+    let mut warnings = Vec::new();
+    if let Some(plugins) = doc.get("plugins").and_then(|v| v.as_sequence()) {
+        for plugin in plugins {
+            let name = plugin
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("(unnamed)");
+            let hooks: Vec<&str> = plugin
+                .get("hooks")
+                .and_then(|v| v.as_sequence())
+                .map(|seq| {
+                    seq.iter()
+                        .filter_map(|h| h.get("on").and_then(|v| v.as_str()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            warnings.push(format!(
+                "WARNING: plugin '{name}' declares hook(s) [{}] — plugin execution is NOT IMPLEMENTED; these hooks will never fire (see docs/hilo-plugins.md)",
+                hooks.join(", ")
+            ));
+        }
+    }
+    warnings
+}
+
 /// Parse `triggers[]` from a manifest YAML document.
 fn parse_manifest_triggers(yaml: &str) -> Option<Vec<TriggerConfig>> {
     let doc: serde_yaml::Value = serde_yaml::from_str(yaml).ok()?;
+
+    for line in plugin_not_implemented_warnings(&doc) {
+        eprintln!("{line}");
+    }
+
     let triggers_val = doc.get("triggers")?.as_sequence()?;
 
     let mut configs = Vec::with_capacity(triggers_val.len());
@@ -530,6 +568,38 @@ fn default_triggers() -> Vec<TriggerConfig> {
 mod tests {
     use super::*;
     use std::ffi::OsString;
+
+    // ───────── DF-WARPFS-59: plugin declarations warn, never silence ─────────
+
+    fn plugin_doc(yaml: &str) -> serde_yaml::Value {
+        serde_yaml::from_str(yaml).unwrap()
+    }
+
+    #[test]
+    fn mount_side_plugin_declaration_produces_warning() {
+        let doc = plugin_doc(
+            "project:\n  name: t\nplugins:\n  - name: sql-scanner\n    wasm: .vfs/plugins/sql-scanner.wasm\n    hooks:\n      - on: file_write\n        languages: [go]\n        priority: 10\n",
+        );
+        let warnings = plugin_not_implemented_warnings(&doc);
+        assert_eq!(warnings.len(), 1, "one plugin → one warning: {warnings:?}");
+        assert!(warnings[0].contains("sql-scanner"), "{warnings:?}");
+        assert!(warnings[0].contains("NOT IMPLEMENTED"), "{warnings:?}");
+        assert!(warnings[0].contains("file_write"), "{warnings:?}");
+    }
+
+    #[test]
+    fn mount_side_no_plugins_is_quiet() {
+        let doc = plugin_doc("project:\n  name: t\ntriggers: []\n");
+        assert!(plugin_not_implemented_warnings(&doc).is_empty());
+    }
+
+    #[test]
+    fn mount_side_triggers_still_parse_after_warning_pass() {
+        // The warning pass must not disturb the triggers-only contract of
+        // parse_manifest_triggers (DF-WARPFS-28: empty triggers → defaults).
+        let configs = parse_manifest_triggers("project:\n  name: t\ntriggers: []\n");
+        assert_eq!(configs, Some(Vec::new()));
+    }
 
     #[test]
     fn test_default_triggers_covers_all_languages() {

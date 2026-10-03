@@ -6,6 +6,17 @@ All notable changes to Hilo are documented in this file.
 
 ### Fixed
 
+- **Manifest `plugins:` blocks are now loud about being NOT-IMPLEMENTED**
+  (DF-WARPFS-59): the block was parsed but no code path ever connected a
+  declared hook to the trigger engine or the FUSE daemon — a user declaring
+  the spec's `sql-scanner` plugin got silent nothing. Loading a manifest
+  that declares plugins now prints a warning naming each plugin and hook
+  (both `hilo mount`'s subset parser and every `Manifest::parse` load),
+  `hilo init` no longer writes a `plugins:` block, and the spec/docs/README
+  plugin sections carry NOT-IMPLEMENTED notices. Existing manifests that
+  declare plugins keep parsing (removal under `deny_unknown_fields` would
+  hard-reject them); the block round-trips through serialize unchanged.
+
 - **Java symbol packs no longer carry decorator noise** (DF-WARPFS-35): a Java
   symbol name was the last whitespace token of the declaration's first line.
   An annotation is part of a declaration's `modifiers`, so that first line IS

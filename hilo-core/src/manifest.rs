@@ -178,7 +178,14 @@ pub struct Manifest {
     pub triggers: Vec<Trigger>,
     #[serde(default)]
     pub rules: Vec<QueryRule>,
-    #[serde(default)]
+    /// DEPRECATED — NOT-IMPLEMENTED (DF-WARPFS-59): parsed for backward
+    /// compatibility only (removal would hard-reject existing manifests
+    /// under `deny_unknown_fields`). Declared plugin hooks never dispatch:
+    /// the trigger engine and the FUSE daemon contain no plugin runtime.
+    /// Loading a manifest that declares plugins emits a loud warning, and
+    /// `hilo init` no longer writes this block (`skip_serializing_if`).
+    /// See `docs/hilo-plugins.md`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plugins: Vec<Plugin>,
     #[serde(default)]
     pub discovery: Discovery,
@@ -917,7 +924,31 @@ impl Manifest {
                 ManifestError::Parse(e)
             }
         })?;
+        Self::warn_unimplemented_plugins(&manifest);
         Ok(manifest)
+    }
+
+    /// DF-WARPFS-59: a manifest `plugins:` block is accepted for backward
+    /// compatibility, but plugin execution is NOT implemented — no code path
+    /// connects these declarations to the trigger engine or the FUSE daemon,
+    /// so declared hooks never fire. Never be silent about it: every load of
+    /// a plugin-declaring manifest prints a warning per plugin (stderr for
+    /// plain CLI use, `tracing::warn` for the daemons that install a
+    /// subscriber).
+    fn warn_unimplemented_plugins(manifest: &Manifest) {
+        for plugin in &manifest.plugins {
+            let hooks: Vec<&str> = plugin.hooks.iter().map(|h| h.on.as_str()).collect();
+            eprintln!(
+                "WARNING: plugin '{}' declares hook(s) [{}] — plugin execution is NOT IMPLEMENTED; these hooks will never fire (see docs/hilo-plugins.md)",
+                plugin.name,
+                hooks.join(", ")
+            );
+            tracing::warn!(
+                plugin = %plugin.name,
+                hooks = ?hooks,
+                "manifest declares plugin hooks — plugin execution is not implemented; hooks will never fire"
+            );
+        }
     }
 }
 
@@ -1131,6 +1162,68 @@ mod tests {
             let m = Manifest::parse(&yaml).unwrap();
             assert!(m.graph.include_paths.is_empty());
             assert!(!m.graph.cross_repo);
+        }
+    }
+
+    mod plugins_not_implemented {
+        use super::*;
+
+        // ───────────── DF-WARPFS-59: plugins are NOT-IMPLEMENTED ─────────────
+
+        fn manifest_with_plugin_yaml() -> String {
+            "project:\n  name: test\nplugins:\n  - name: sql-scanner\n    wasm: .vfs/plugins/sql-scanner.wasm\n    hooks:\n      - on: file_write\n        languages: [go]\n        priority: 10\n"
+            .to_string()
+        }
+
+        /// The block still PARSES (backward compatibility: removing the field
+        /// would hard-reject existing manifests under `deny_unknown_fields`).
+        #[test]
+        fn plugin_block_still_parses() {
+            let m = Manifest::parse(&manifest_with_plugin_yaml()).unwrap();
+            assert_eq!(m.plugins.len(), 1);
+            assert_eq!(m.plugins[0].name, "sql-scanner");
+            assert_eq!(m.plugins[0].hooks.len(), 1);
+            assert_eq!(m.plugins[0].hooks[0].on, "file_write");
+        }
+
+        /// AC1 (in-process half): declaring plugin hooks parses into the
+        /// surface the loud warning is derived from. The stderr assertion
+        /// itself lives in `tests/plugins_not_implemented.rs` (re-exec
+        /// pattern — eprintln output is process-global and cannot be
+        /// captured in-process).
+        #[test]
+        fn parse_surfaces_plugin_declarations_for_warning() {
+            let m = Manifest::parse(&manifest_with_plugin_yaml()).unwrap();
+            assert!(!m.plugins.is_empty(), "warning input: declared plugins");
+            for p in &m.plugins {
+                assert!(!p.hooks.is_empty(), "warning input: hooks for {}", p.name);
+            }
+        }
+
+        /// AC2 companion: `hilo init` no longer writes a `plugins:` block.
+        /// The empty field must OMIT entirely on serialization —
+        /// `skip_serializing_if = "Vec::is_empty"`.
+        #[test]
+        fn empty_plugins_omitted_from_serialization() {
+            let m = Manifest::parse("project:\n  name: test\n").unwrap();
+            assert!(m.plugins.is_empty());
+            let yaml = serde_yaml::to_string(&m).unwrap();
+            assert!(
+                !yaml.contains("plugins"),
+                "init-written manifest must not advertise a plugins block; got:\n{yaml}"
+            );
+        }
+
+        /// An existing manifest that declares plugins still round-trips
+        /// through parse → serialize → parse (backward compatibility).
+        #[test]
+        fn declaring_manifest_round_trips() {
+            let m = Manifest::parse(&manifest_with_plugin_yaml()).unwrap();
+            let yaml = serde_yaml::to_string(&m).unwrap();
+            assert!(yaml.contains("plugins:"), "non-empty block must survive");
+            let m2 = Manifest::parse(&yaml).unwrap();
+            assert_eq!(m2.plugins.len(), 1);
+            assert_eq!(m2.plugins[0].hooks[0].on, "file_write");
         }
     }
 }
