@@ -2,6 +2,7 @@
 
 pub mod backend;
 pub mod classify;
+pub mod coverage_links;
 pub mod graph;
 pub mod guard;
 pub mod hooks;

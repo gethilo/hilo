@@ -14,7 +14,8 @@ use clap::{Parser, Subcommand};
 
 use crate::commands::plugin::PluginCommand;
 use crate::commands::{
-    backend, classify, graph, ignore, init, meta, mount, plugin, serve, surfaces, workspace,
+    backend, classify, coverage_links, graph, ignore, init, meta, mount, plugin, serve, surfaces,
+    workspace,
 };
 use crate::sync_direction;
 
@@ -157,6 +158,27 @@ enum GraphCommand {
     /// verbs/flags, MCP tools, FFI exports, FUSE ops, config keys, and public
     /// API items — and write them to `.vfs/graph/surfaces.jsonl` (COV-1).
     Surfaces(SurfacesArgs),
+    /// Derive evidenced test→surface coverage links (COV-2): one row per
+    /// (test_file, target) with evidence kind, confidence, and direction,
+    /// written to `.vfs/graph/coverage_links.jsonl`. `--unlinked` lists
+    /// surfaces with no link at all, each with a cause.
+    CoverageLinks(CoverageLinksArgs),
+}
+
+#[derive(clap::Args)]
+struct CoverageLinksArgs {
+    /// Print the report as JSON (locked shape) instead of text.
+    #[arg(long)]
+    json: bool,
+
+    /// Restrict output to one surface (by surface_id or name) — answers
+    /// "what tests cover this surface".
+    #[arg(long)]
+    surface: Option<String>,
+
+    /// Show only the unlinked set (surfaces with no link at all).
+    #[arg(long)]
+    unlinked: bool,
 }
 
 #[derive(clap::Args)]
@@ -454,6 +476,9 @@ pub fn run() -> anyhow::Result<()> {
         Commands::Graph(GraphCommand::Clean) => graph::run_clean(),
         Commands::Graph(GraphCommand::Surfaces(args)) => {
             surfaces::run(args.json, args.kind.as_deref())
+        }
+        Commands::Graph(GraphCommand::CoverageLinks(args)) => {
+            coverage_links::run(args.json, args.surface.as_deref(), args.unlinked)
         }
         Commands::Serve(args) => serve::run(args.mcp),
         Commands::Backend(backend::BackendCommand::Mount(args)) => backend::run_mount(&args),

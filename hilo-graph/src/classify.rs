@@ -584,7 +584,9 @@ fn is_test_dir_component(comp: &str) -> bool {
     matches!(comp, "test" | "tests" | "benches" | "__tests__")
 }
 
-pub(crate) fn is_test_file(path: &str) -> bool {
+/// Whether `path` looks like a test file (COV-2 coverage-link derivation
+/// uses this too, so links and `tested_by` edges agree on what a test IS).
+pub fn is_test_file(path: &str) -> bool {
     let lower = path.to_lowercase();
     // Universal test patterns
     if lower.contains("_test.") || lower.contains(".test.") || lower.contains("_spec.") {

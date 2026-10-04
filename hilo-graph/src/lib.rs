@@ -8,6 +8,7 @@
 //! - `error` — error types for graph operations
 
 pub mod classify;
+pub mod coverage_links;
 pub mod duckdb;
 pub mod edges;
 pub mod error;
@@ -54,6 +55,11 @@ pub use semantic::{
 
 pub use surfaces::{
     append_surfaces_deduped, surface_id, KindCensus, Surface, SurfaceInventory, SurfaceKind,
+};
+
+pub use coverage_links::{
+    append_coverage_links_deduped, cause_census, link_id, merge_links, read_links, CoverageLink,
+    CoverageLinkReport, EvidenceKind, UnlinkedSurface,
 };
 
 /// Re-export of the shared [`Edge`] type from `hilo_metadata`.
