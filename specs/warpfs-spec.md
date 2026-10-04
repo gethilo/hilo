@@ -64,7 +64,7 @@ hilo plugin load ./scanner.wasm  # Plugin loader (same binary)
 | Crate | Version | Role |
 |---|---|---|
 | `fuser` | 0.15.1 | FUSE daemon — requires libfuse3 at runtime (see README Requirements) |
-| `petgraph` | 0.6.5 | Dependency graph — traversal and impact queries |
+| `petgraph` | 0.6.5 | **Transitive-only — NOT a direct workspace dependency**: no workspace `Cargo.toml` declares it, no crate uses it, and `wasm-compose` pulls it into `Cargo.lock`. Graph traversal is implemented internally (§9.2) |
 | `tree-sitter` | latest | AST parsing — official Rust bindings, zero-copy |
 | `xattr` | latest | Extended attributes — pure Rust |
 | `inotify` | latest | File event watching — idiomatic kernel wrapper |
@@ -465,7 +465,7 @@ inotify-wired. The core loop that keeps all metadata current. Every file event f
 FILE WRITTEN → inotify event →
   1. tree-sitter parse AST of changed file
   2. Diff against cached AST → changed edges detected
-  3. petgraph traversal → find impacted files (transitive, up to max_depth)
+  3. internal graph traversal (DuckDB-backed BFS; petgraph is transitive-only and unused) → find impacted files (transitive, up to max_depth)
   4. Parallel setxattr (user.vfs.impact) on all impacted files
   5. Append to edges.jsonl
   6. Set user.vfs.last_modified → now
@@ -575,9 +575,13 @@ Pure Rust tree-sitter bindings. Zero-copy AST traversal — nodes are `&[u8]` sl
 | C++ | tree-sitter-cpp | Production |
 | Ruby | tree-sitter-ruby | Production |
 
-### 9.2 petgraph — Dependency Graph
+### 9.2 Dependency Graph — internal BFS traversal (petgraph is transitive-only)
 
-In-memory directed graph. Node = file path, edge = relationship type. Parallel traversal via rayon for impact computation across independent subtrees.
+Traversal is implemented internally in `hilo-graph` — a breadth-first search over the
+DuckDB-loaded edge inventory, not an in-memory `petgraph` structure (petgraph is transitive-only:
+`wasm-compose` pulls it into `Cargo.lock` and no workspace crate declares or uses it).
+Node = file path, edge = relationship type. Parallel traversal via rayon for impact
+computation across independent subtrees.
 
 ### 9.3 Edge Types
 
@@ -774,7 +778,7 @@ hilo/                         ← single repo, pure Rust
 ├── hilo-core/                # Manifest parsing, config types, shared state
 ├── hilo-fuse/                # FUSE daemon (fuser 0.15.1), inotify wiring
 ├── hilo-metadata/            # xattr read/write, inventory file I/O
-├── hilo-graph/               # tree-sitter AST parsing, petgraph traversal, impact
+├── hilo-graph/               # tree-sitter AST parsing, internal BFS traversal (petgraph is transitive-only), impact
 ├── hilo-backends/            # Git (git2), S3 (aws-sdk), remote, local
 ├── hilo-triggers/            # Trigger engine, debouncing, async execution
 ├── hilo-permissions/         # Mode bit enforcement, FUSE permission callbacks
@@ -873,7 +877,7 @@ user.vfs.last_tested="2026-06-14T09:33:14"
 default = ["cli", "mcp", "graph"]
 cli = ["clap", "serde_yaml"]
 mcp = ["tokio", "serde", "serde_json"]
-graph = ["tree-sitter", "petgraph", "duckdb", "xattr"]
+graph = ["tree-sitter", "duckdb", "xattr"]  # petgraph is transitive-only (via wasm-compose), never a direct dependency
 ```
 
 ---
