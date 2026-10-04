@@ -19,6 +19,7 @@ pub mod resolution;
 pub mod rules;
 pub mod semantic;
 pub mod signal;
+pub mod surfaces;
 
 pub use classify::{
     classify_file, entry_symbols_for_classification, extract_entry_symbols, infer_feature,
@@ -49,6 +50,10 @@ pub use semantic::tokenize as semantic_tokenize;
 pub use semantic::{
     default_symbol_extractor, reciprocal_rank_fusion, search, search_with_symbols, SearchOpts,
     SearchResult, TfIdfIndex,
+};
+
+pub use surfaces::{
+    append_surfaces_deduped, surface_id, KindCensus, Surface, SurfaceInventory, SurfaceKind,
 };
 
 /// Re-export of the shared [`Edge`] type from `hilo_metadata`.

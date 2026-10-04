@@ -39,6 +39,9 @@ tree-sitter-elm = "5.9"
 duckdb = { version = "1.1", features = ["bundled"] }
 hilo_core = { path = "../hilo-core" }
 hilo_metadata = { path = "../hilo-metadata" }
+# COV-1: content-derived surface_id — sha256 of kind+owner_file+owner_symbol.
+# Already in the workspace lock via hilo-cli, so this adds no new crate.
+sha2 = "0.10"
 tree-sitter-nim = { git = "https://github.com/alaviss/tree-sitter-nim", version = "0.6.2" }
 
 [dev-dependencies]
