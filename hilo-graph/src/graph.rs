@@ -1259,7 +1259,7 @@ fn open_disk_connection(path: &str, access: GraphAccess) -> GraphResult<Connecti
 /// (missing db, writer holds the lock) — the file-level historical view
 /// applies (a missing db file is already caught above).
 fn ro_open_hot(path: &str, spill_watermark: u64, probe_rows: Option<u64>) -> bool {
-    if !Path::new(path).exists() {
+    if !Path::new(path).exists() || is_zero_byte_db(path) {
         return false;
     }
     let Some(jsonl) = Path::new(path).parent().map(|dir| dir.join("edges.jsonl")) else {
@@ -1286,7 +1286,7 @@ fn ro_open_hot(path: &str, spill_watermark: u64, probe_rows: Option<u64>) -> boo
 /// nothing needs verifying at all (no edges.jsonl, no checkpoint) — those
 /// states carry no stale-cache hazard.
 pub fn cache_matches_edges(path: &str) -> bool {
-    if !Path::new(path).exists() {
+    if !Path::new(path).exists() || is_zero_byte_db(path) {
         return false;
     }
     let Some(jsonl) = Path::new(path).parent().map(|dir| dir.join("edges.jsonl")) else {
@@ -1313,11 +1313,26 @@ pub fn cache_matches_edges(path: &str) -> bool {
 /// (DF-WARPFS-33)?
 ///
 /// Matched on the stable substrings DuckDB puts in the message (`IO Error` +
-/// `Conflicting lock is held`) rather than the whole sentence, so a future
-/// DuckDB that rewords the tail (paths, holder PIDs) still classifies.
+/// `Conflicting lock is held`) rather than the whole sentence, so a future DuckDB
+/// that rewords the tail (paths, holder PIDs) still classifies.
 fn is_conflicting_lock_error(err: &duckdb::Error) -> bool {
     let text = err.to_string();
     text.contains("IO Error") && text.contains("Conflicting lock")
+}
+
+/// Is the DuckDB database at `path` present but ZERO bytes (DF-WARPFS-79)?
+///
+/// A 0-byte graph.db happens when a disk-full crash or a killed copy leaves
+/// the file created but empty. DuckDB refuses to open it with the opaque
+/// `IO Error: The file ... exists, but it is not a valid DuckDB database
+/// file!` — an error the DF-WARPFS-61/64 self-heal (which only handles a
+/// DELETED db) never sees, because the file does exist. Since `.vfs/graph/`
+/// is a rebuildable cache (edges.jsonl is the source of truth), a 0-byte db
+/// is treated exactly like a missing one everywhere the missing case already
+/// heals: the next open deletes it and replays, and the read-only/verify
+/// fast paths answer false.
+fn is_zero_byte_db(path: &str) -> bool {
+    std::fs::metadata(path).is_ok_and(|m| m.len() == 0)
 }
 
 fn configure_disk_connection(conn: &Connection, perf: &DuckDbPerf) {
@@ -1431,6 +1446,21 @@ impl GraphDB {
         let conn = if path == ":memory:" {
             Connection::open_in_memory()?
         } else {
+            // DF-WARPFS-79: a 0-byte graph.db (disk-full crash, killed copy)
+            // is not a valid DuckDB database and would hard-fail every open
+            // with `IO Error: ... not a valid DuckDB database file!`. It is a
+            // rebuildable cache, so treat it exactly like a missing one:
+            // remove it and let this open recreate + replay from edges.jsonl.
+            if is_zero_byte_db(path) {
+                eprintln!(
+                    "warning: graph database at {path} is 0 bytes (crashed or truncated write); healing by replaying edges.jsonl"
+                );
+                if let Err(error) = std::fs::remove_file(path) {
+                    eprintln!(
+                        "warning: could not remove the 0-byte graph database: {error}; DuckDB may reject the open"
+                    );
+                }
+            }
             let (perf, spill_watermark) =
                 resolved_duckdb_perf(duckdb_perf_for_path(Path::new(path)));
             // DF-WARPFS-61/64: verify the reconcile checkpoint's row claim
@@ -4291,6 +4321,52 @@ mod tests {
         assert!(
             !cache_matches_edges(db_path_str),
             "an emptied db must fail verification"
+        );
+    }
+
+    /// DF-WARPFS-79: a ZERO-BYTE graph.db (disk-full crash, killed copy)
+    /// must behave exactly like a missing one — the next open heals it by
+    /// replaying edges.jsonl instead of failing with DuckDB's opaque
+    /// "not a valid DuckDB database file" IO error.
+    #[test]
+    fn df79_zero_byte_db_heals_on_next_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let (db_path, _jsonl, lines) = write_edge_corpus(dir.path(), 3);
+        let db_path_str = db_path.to_str().unwrap();
+
+        // Corrupt: truncate the db to 0 bytes while keeping the checkpoint.
+        std::fs::write(&db_path, b"").unwrap();
+        assert_eq!(std::fs::metadata(&db_path).unwrap().len(), 0);
+
+        // The next open must heal (replay), not fail.
+        let db = GraphDB::open(db_path_str).unwrap();
+        assert_eq!(db.count_edges().unwrap(), lines.len() as i64);
+    }
+
+    /// DF-WARPFS-79: the read-only fast path and the public verifier must
+    /// both answer false for a 0-byte db so read-only opens fall back to the
+    /// read-write heal path and warm never takes its "all cached" shortcut.
+    #[test]
+    fn df79_zero_byte_db_fails_hot_and_cache_verification() {
+        let dir = tempfile::tempdir().unwrap();
+        let (db_path, _jsonl, _lines) = write_edge_corpus(dir.path(), 3);
+        let db_path_str = db_path.to_str().unwrap();
+
+        let db = GraphDB::open_with_budget_ms(db_path_str, UNBOUNDED_RECONCILE_BUDGET_MS).unwrap();
+        drop(db);
+        assert!(
+            cache_matches_edges(db_path_str),
+            "a verified cache must match (control)"
+        );
+
+        std::fs::write(&db_path, b"").unwrap();
+        assert!(
+            !cache_matches_edges(db_path_str),
+            "a zero-byte db must fail verification"
+        );
+        assert!(
+            !ro_open_hot(db_path_str, 1024, None),
+            "a zero-byte db must never take the read-only hot path"
         );
     }
 

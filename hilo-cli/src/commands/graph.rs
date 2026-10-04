@@ -3699,6 +3699,38 @@ mod tests {
         );
     }
 
+    /// DF-WARPFS-79: a ZERO-BYTE graph.db (disk-full crash, killed copy)
+    /// must heal via `hilo graph warm` exactly like a deleted one — no
+    /// manual `rm` required, and the rebuilt db must verify.
+    #[test]
+    fn warm_heals_zero_byte_db() {
+        let home = TempDir::new().unwrap();
+        let project = TempDir::new().unwrap();
+        std::fs::write(project.path().join("a.rs"), "fn a() {}\n").unwrap();
+        std::fs::write(project.path().join("b.rs"), "fn b() { a(); }\n").unwrap();
+
+        warm_project_fixture(project.path(), home.path(), &no_manifest).unwrap();
+        let graph_db = project.path().join(".vfs/graph/graph.db");
+        assert!(graph_db.exists(), "first warm must create the db");
+
+        // The cache is emptied to zero bytes; the parse cache + checkpoint survive.
+        std::fs::write(&graph_db, b"").unwrap();
+        assert_eq!(std::fs::metadata(&graph_db).unwrap().len(), 0);
+
+        // Second warm: full parse-cache hit, but the db write MUST happen.
+        warm_project_fixture(project.path(), home.path(), &no_manifest).unwrap();
+
+        assert!(
+            std::fs::metadata(&graph_db).unwrap().len() > 0,
+            "warm must rebuild a zero-byte db instead of exiting 'graph unchanged'"
+        );
+        let verified = hilo_graph::cache_matches_edges(graph_db.to_str().unwrap());
+        assert!(
+            verified,
+            "the healed db must pass cache verification (stamped row claim met)"
+        );
+    }
+
     #[test]
     fn warm_normal_project_remains_green() {
         let home = TempDir::new().unwrap();
