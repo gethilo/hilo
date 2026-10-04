@@ -28,7 +28,7 @@ debug = 1
 strip = "none"
 
 [workspace.package]
-version = "0.3.1-dev"
+version = "0.4.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/gethilo/hilo"

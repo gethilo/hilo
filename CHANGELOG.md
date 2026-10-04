@@ -4,6 +4,8 @@ All notable changes to Hilo are documented in this file.
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-10-04
+
 ### Fixed
 
 - **Manifest `plugins:` blocks are now loud about being NOT-IMPLEMENTED**
@@ -65,8 +67,7 @@ All notable changes to Hilo are documented in this file.
 - **`hilo --version` now includes build provenance** (git describe + UTC
   build time, baked by `hilo-cli/build.rs`). A rebuilt binary is no longer
   indistinguishable from an 11-day-old one.
-- Workspace version is `0.3.1-dev` while HEAD sits between the `v0.3.0` tag
-  and the next release cut.
+- Workspace version bumped from `0.3.1-dev` to `0.4.0` for the release cut.
 
 ## [0.3.0] — 2026-09-21
 
