@@ -2001,11 +2001,3 @@ tasks:
     test still passes'
   status: in_progress
   created_at: '2026-10-03T17:19:15.838388+00:00'
-- id: COV-1
-  title: 'Surface enumeration: hilo graph surfaces'
-  criteria:
-  - New .vfs/graph/surfaces.jsonl artifact + hilo graph surfaces CLI with stable surface_ids,
-    honest per-kind denominators, fixture tests, own-repo run recorded
-  status: complete
-  created_at: '2026-10-04T04:15:15.057804+00:00'
-  completed_at: '2026-10-04T04:44:20.530419+00:00'
