@@ -1,5 +1,6 @@
 //! Shared implementation for the `hilo` CLI.
 
+pub mod cli;
 pub mod commands;
 
 /// Shared sync-direction vocabulary: `hilo workspace sync` and

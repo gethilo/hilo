@@ -11,4 +11,5 @@ pub mod meta;
 pub mod mount;
 pub mod plugin;
 pub mod serve;
+pub mod surfaces;
 pub mod workspace;
