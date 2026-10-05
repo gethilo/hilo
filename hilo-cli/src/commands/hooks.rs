@@ -15,7 +15,7 @@
 //! Both hooks use `### HILO` / `### /HILO` block markers so they can be safely
 //! appended to existing hooks without overwriting content.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
@@ -51,7 +51,49 @@ fi
 ### /HILO
 "#;
 
-/// Install both post-commit and post-merge hooks into `project_dir/.git/hooks/`.
+/// Resolve the hooks directory through Git so linked worktrees, submodules,
+/// and `core.hooksPath` are handled like Git itself handles them.
+fn resolve_hooks_dir(project_dir: &Path, git_dir: &Path) -> Result<PathBuf> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(project_dir)
+        .args(["rev-parse", "--path-format=absolute", "--git-path", "hooks"])
+        .output();
+
+    match output {
+        Ok(output) if output.status.success() => {
+            let path =
+                String::from_utf8(output.stdout).context("git returned a non-UTF-8 hooks path")?;
+            let path = path.trim();
+            if path.is_empty() {
+                anyhow::bail!("git returned an empty hooks path");
+            }
+            let path = PathBuf::from(path);
+            Ok(if path.is_absolute() {
+                path
+            } else {
+                project_dir.join(path)
+            })
+        }
+        Ok(_output) if git_dir.is_dir() => {
+            // Preserve the traditional `.git/hooks` behavior if Git is
+            // unavailable or the directory is a lightweight test fixture.
+            eprintln!("warning: could not resolve Git hooks path; using .git/hooks");
+            Ok(git_dir.join("hooks"))
+        }
+        Ok(output) => anyhow::bail!(
+            "failed to resolve Git hooks path: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
+        Err(error) if git_dir.is_dir() => {
+            eprintln!("warning: {error}; using .git/hooks");
+            Ok(git_dir.join("hooks"))
+        }
+        Err(error) => Err(error).context("failed to resolve Git hooks path for worktree"),
+    }
+}
+
+/// Install both post-commit and post-merge hooks into Git's resolved hooks directory.
 ///
 /// If `.git/` does not exist (not a git repo), prints a warning and returns
 /// `Ok(())` — `hilo init` should not fail when run outside a git repo.
@@ -63,7 +105,7 @@ pub fn install_hooks(project_dir: &Path) -> Result<()> {
         return Ok(());
     }
 
-    let hooks_dir = git_dir.join("hooks");
+    let hooks_dir = resolve_hooks_dir(project_dir, &git_dir)?;
     if !hooks_dir.exists() {
         std::fs::create_dir_all(&hooks_dir)
             .with_context(|| format!("failed to create {}", hooks_dir.display()))?;
@@ -184,8 +226,16 @@ mod tests {
     /// Create a temp project dir with a `.git/hooks/` subdirectory.
     fn make_temp_git_project() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
-        let git_hooks = dir.path().join(".git").join("hooks");
-        std::fs::create_dir_all(&git_hooks).unwrap();
+        let output = std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .arg(dir.path())
+            .output()
+            .expect("git must be available for hook tests");
+        assert!(
+            output.status.success(),
+            "git init failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         dir
     }
 
@@ -275,6 +325,82 @@ mod tests {
             !dir.path().join(".git").exists(),
             "should not create .git/ dir"
         );
+    }
+
+    #[test]
+    fn test_install_hooks_supports_custom_core_hooks_path() {
+        let repo = make_temp_git_project();
+        let config = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo.path())
+            .args(["config", "core.hooksPath", ".hilo-hooks"])
+            .output()
+            .unwrap();
+        assert!(
+            config.status.success(),
+            "git config failed: {}",
+            String::from_utf8_lossy(&config.stderr)
+        );
+
+        install_hooks(repo.path()).unwrap();
+
+        assert!(repo.path().join(".hilo-hooks/post-commit").is_file());
+        assert!(!repo.path().join(".git/hooks/post-commit").exists());
+    }
+
+    #[test]
+    fn test_install_hooks_supports_linked_worktree_gitfile() {
+        let repo = make_temp_git_project();
+        let commit = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo.path())
+            .args([
+                "-c",
+                "user.name=Hilo Test",
+                "-c",
+                "user.email=hilo-test@example.invalid",
+            ])
+            .args(["commit", "--allow-empty", "-m", "seed"])
+            .output()
+            .unwrap();
+        assert!(
+            commit.status.success(),
+            "seed commit failed: {}",
+            String::from_utf8_lossy(&commit.stderr)
+        );
+
+        let linked = repo.path().join("linked worktree");
+        let add = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo.path())
+            .args(["worktree", "add", "--detach"])
+            .arg(&linked)
+            .arg("HEAD")
+            .output()
+            .unwrap();
+        assert!(
+            add.status.success(),
+            "git worktree add failed: {}",
+            String::from_utf8_lossy(&add.stderr)
+        );
+        assert!(
+            linked.join(".git").is_file(),
+            "worktree .git must be a file"
+        );
+
+        install_hooks(&linked).unwrap();
+
+        let resolved = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&linked)
+            .args(["rev-parse", "--path-format=absolute", "--git-path", "hooks"])
+            .output()
+            .unwrap();
+        assert!(resolved.status.success());
+        let hooks_dir =
+            std::path::PathBuf::from(String::from_utf8(resolved.stdout).unwrap().trim());
+        assert!(hooks_dir.join("post-commit").is_file());
+        assert!(hooks_dir.join("post-merge").is_file());
     }
 
     #[test]

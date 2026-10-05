@@ -112,9 +112,8 @@ pub fn run(allow_home: bool, no_hooks: bool) -> Result<()> {
 ///
 /// When `no_hooks` is true the `.vfs/` tree and manifest are still created, but
 /// nothing under `.git/hooks/` is created or modified: pre-existing hook files
-/// stay byte-identical and `.git/hooks/` is not even created. Hook installation
-/// only ever accompanies a fresh manifest, so the opt-out is honored on an
-/// already-initialized project too.
+/// stay byte-identical when `no_hooks` is true. When hooks are enabled, their
+/// installation runs on both first init and retries of an existing manifest.
 pub fn run_in(
     root: &Path,
     allow_home: bool,
@@ -136,9 +135,14 @@ pub fn run_in(
 
     let manifest_path = cwd.join(".vfs").join("manifest.yaml");
 
-    // Idempotent: never overwrite an existing manifest.
+    // Idempotent: never overwrite an existing manifest. When hooks are
+    // enabled, retry their installation so a previous hook failure is
+    // recoverable by rerunning `hilo init`.
     if manifest_path.exists() {
         println!("Initialized Hilo in {}", cwd.display());
+        if !no_hooks {
+            hooks::install_hooks(cwd).context("failed to install git hooks")?;
+        }
         return Ok(());
     }
 
@@ -235,6 +239,70 @@ mod tests {
         )
         .unwrap();
         assert!(project.path().join(".vfs").join("manifest.yaml").exists());
+    }
+
+    #[test]
+    fn init_supports_linked_worktree_and_reruns_idempotently() {
+        let home = TempDir::new().unwrap();
+        let root = TempDir::new().unwrap();
+        let repo = root.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let init_git = std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .arg(&repo)
+            .output()
+            .unwrap();
+        assert!(init_git.status.success());
+        let commit = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args([
+                "-c",
+                "user.name=Hilo Test",
+                "-c",
+                "user.email=hilo-test@example.invalid",
+            ])
+            .args(["commit", "--allow-empty", "-m", "seed"])
+            .output()
+            .unwrap();
+        assert!(commit.status.success());
+
+        let linked = root.path().join("linked worktree");
+        let add = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(["worktree", "add", "--detach"])
+            .arg(&linked)
+            .arg("HEAD")
+            .output()
+            .unwrap();
+        assert!(add.status.success());
+        assert!(linked.join(".git").is_file());
+
+        run_in(&linked, false, Some(home.path().to_path_buf()), false).unwrap();
+        let manifest = linked.join(".vfs").join("manifest.yaml");
+        let manifest_before = std::fs::read(&manifest).unwrap();
+        let resolved = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&linked)
+            .args(["rev-parse", "--path-format=absolute", "--git-path", "hooks"])
+            .output()
+            .unwrap();
+        assert!(resolved.status.success());
+        let hooks = std::path::PathBuf::from(String::from_utf8(resolved.stdout).unwrap().trim());
+        for name in ["post-commit", "post-merge"] {
+            let path = hooks.join(name);
+            assert!(path.is_file(), "missing {name} hook at {}", path.display());
+            let content = std::fs::read_to_string(path).unwrap();
+            assert_eq!(content.matches("### HILO").count(), 1);
+        }
+
+        run_in(&linked, false, Some(home.path().to_path_buf()), false).unwrap();
+        assert_eq!(std::fs::read(&manifest).unwrap(), manifest_before);
+        for name in ["post-commit", "post-merge"] {
+            let content = std::fs::read_to_string(hooks.join(name)).unwrap();
+            assert_eq!(content.matches("### HILO").count(), 1);
+        }
     }
 
     // ─────────────────── GAP-087: --no-hooks opt-out ───────────────────
