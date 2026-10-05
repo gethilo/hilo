@@ -1076,6 +1076,29 @@ stale. Pre-dates PERF-009, GAP-109, DF-WARPFS-105/106/107 fixes. HEAD is
 **Left behind:** this dogfood-log entry. No code changes.
 
 
+## Run 33 — 2026-10-04 — COV-2 coverage-links on a FRESH HEAD build (correction of run 32's DF-WARPFS-109)
+
+**Angle:** verify run 32's P1 finding the honest way — fresh release build from
+HEAD ef5cdd5 (101m47s cold) instead of the 12-day-stale installed binary.
+
+**Key finding (DF-WARPFS-112, P2):** DF-WARPFS-109 is a staleness artifact. The
+subcommand ships in d11a14b itself (`git show d11a14b:hilo-cli/src/cli.rs` has
+CoverageLinks at line 165); the installed binary is 249 commits behind. At HEAD,
+`hilo graph coverage-links` works end to end: 1,026 links / 189 targets in --json,
+cause census, --surface and --unlinked all correct; one sampled link independently
+re-derived by hand and confirmed. Install leg SKIPPED (16th run, no new row —
+DF-WARPFS-111 covers; bunker-las-03 ssh timed out at tick time).
+
+**Perf:** classify 15.99s±0.28 warm (vs 17.9s stale — consistent with PERF-010
+closure); search 405.8ms±17.1; stats 182.9ms; coverage-links 0.24s. No new PERF
+row — nothing crossed the already-filed threshold.
+
+**Rows filed:** DF-WARPFS-112 (correction/cross-evidence; recommends closing
+DF-WARPFS-109 as duplicate-of-wall).
+
+**Left behind:** docs/dogfood/2026-10-04-run33-coverage-links-fresh-build.md +
+this log entry + DF-WARPFS-112. No code changes.
+
 ## Run 32 — 2026-10-04 — fresh-consumer pass + COV-2 feature verification (coding-hermes-tools-dogfood tick)
 
 **Angle:** previous runs covered CLI/graph, FUSE, MCP, backends, perf. This run
