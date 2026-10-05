@@ -1075,3 +1075,31 @@ stale. Pre-dates PERF-009, GAP-109, DF-WARPFS-105/106/107 fixes. HEAD is
 
 **Left behind:** this dogfood-log entry. No code changes.
 
+
+## Run 32 — 2026-10-04 — fresh-consumer pass + COV-2 feature verification (coding-hermes-tools-dogfood tick)
+
+**Angle:** previous runs covered CLI/graph, FUSE, MCP, backends, perf. This run
+takes the COV-2 surface that landed TODAY (d11a14b, closed 3e1a703) as its angle:
+a real consumer trying the brand-new flagship command, on a fresh tar-archive
+checkout at HEAD ef5cdd5.
+
+**Consumer pass (installed binary v0.3.0-14-g2b26d3f, 12 days stale):**
+- fresh checkout: `hilo init` instant; `hilo graph warm` 6.3s, 1218 edges/111 files
+- `graph stats` 973 distinct edges; `graph search "coverage links"` 32ms, correct
+  lexical hits incl. coverage_links.rs; `graph impact hilo-graph/src/lib.rs` correct
+- `hilo graph coverage-links` → "unrecognized subcommand" (NOT in CLI)
+- `hilo graph impact <nonexistent path>` → error that names id forms but not the
+  failure cause (typo vs no-dependents indistinguishable)
+
+**Rows filed (verified in tasks.jsonl, 332→335):**
+- DF-WARPFS-109 (P1): COV-2 flagship `coverage-links` CLI missing — feature closed
+  (d11a14b, verdict 0131b700) with the command existing only as library code.
+- DF-WARPFS-110 (P2): impact error conflates typo with no-dependents.
+- DF-WARPFS-111 (P3): SKIPPED-install-bunker, 15th consecutive run (local release
+  build still running at 2016s, 0 rustc procs, duckdb-sys build-script phase).
+
+**Perf:** nothing new slow enough to file — warm 6.3s init+warm matches run 1's
+numbers; search 32ms; stats instant. PERF-010 (classify 18s) already covers the
+only user-noticeable number; binary staleness caveat unchanged.
+
+**Left behind:** this log entry + 3 board rows. No code changes.
