@@ -2789,6 +2789,29 @@ impl GraphDB {
         // Delegate to existing BFS over the DuckDB edges cache.
         impact::compute_impact_at(&self.conn, start_path, max_depth, anchored)
     }
+
+    /// GAP-117: the impact REVIEW SET for `start_path` — the queried file
+    /// itself, its transitive dependents, and the bounded forward/reverse
+    /// neighbourhood that carries the change's helpers, tests, fixtures and
+    /// build targets.
+    ///
+    /// Same guard, JIT parse and degraded/streaming selection as
+    /// [`Self::impact_or_parse`]: the dependent set is computed by the existing
+    /// BFS (so pkg-family and `local:` resolution are unchanged), then
+    /// [`impact::expand_review_set`] runs the both-direction expansion over the
+    /// DuckDB cache. On the degraded streaming path the cache is not the
+    /// authority, so the expansion finds nothing and the answer is the subject
+    /// row plus the streaming dependents — a smaller, still self-describing
+    /// result rather than a wrong one.
+    pub fn review_or_parse(
+        &self,
+        start_path: &str,
+        max_depth: u32,
+    ) -> GraphResult<Vec<ImpactFile>> {
+        let dependents = self.impact_or_parse(start_path, max_depth)?;
+        let subject = strip_file_prefix(start_path);
+        impact::expand_review_set(&self.conn, subject, dependents)
+    }
 }
 
 // ── GAP-109: directory-inventory component enumeration ─────────────────────

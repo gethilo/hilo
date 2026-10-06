@@ -110,6 +110,8 @@ fn test_impact_not_in_graph() -> Result<(), Box<dyn std::error::Error>> {
 #[test]
 fn test_impact_json_format() -> Result<(), Box<dyn std::error::Error>> {
     let result = ImpactResult {
+        subject: "c.rs".to_string(),
+        total: 2,
         files: vec![
             ImpactFile {
                 path: "b.rs".to_string(),
@@ -134,6 +136,10 @@ fn test_impact_json_format() -> Result<(), Box<dyn std::error::Error>> {
 
     let json = serde_json::to_string_pretty(&result)?;
     assert!(json.contains("\"files\""));
+    // GAP-117: the subject and the row count are always serialized, so an
+    // empty dependent set can never be read as an answer about nothing.
+    assert!(json.contains("\"subject\": \"c.rs\""));
+    assert!(json.contains("\"total\": 2"));
     assert!(json.contains("\"path\": \"b.rs\""));
     assert!(json.contains("\"relation\": \"imports\""));
     assert!(json.contains("\"depth\": 1"));

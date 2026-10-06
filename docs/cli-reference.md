@@ -188,7 +188,10 @@ hilo graph related hilo-graph/tests/fixtures/handler.go --direction reverse --re
 
 ### `impact`
 
-Find all files that depend on a given file, directly or transitively.
+Find the review set for a changed file: the file itself, everything that
+depends on it (directly or transitively, up to `--max-depth`), and the bounded
+both-direction neighbourhood that carries its helpers, tests, fixtures and
+build targets.
 
 ```bash
 # Depth 1 = only edges that target this file itself (usually zero rows for a
@@ -248,6 +251,32 @@ To get just the direct importers of one file: filter the output to
 return crate-scoped rows, the text output ends with a one-line `note:` saying
 how many rows were crate-scoped and that family expansion is included.
 `--format json` adds no prose — every row carries `scope` and `via` instead.
+
+#### Review set (`GAP-117`)
+
+The answer leads with the queried file itself (`scope=self`, `depth: 0`), so an
+empty row list is never mistaken for "there is no such subject" and a file with
+no in-graph neighbours still answers with something.
+
+After the subject come the dependents (unchanged `scope=file` / `scope=crate`
+semantics), then a bounded both-direction expansion:
+
+- `scope=dependency` — files reached by an OUTGOING edge, from the subject or
+  from a node the expansion reached: the helper a rule calls, the header an
+  implementation defines, the properties class a configuration binds;
+- `scope=link` — files reached by an INCOMING edge during the expansion: the
+  test/fixture/build target that references a *dependency* rather than the
+  changed file (`alarm.cc → include/grpcpp/alarm.h ←
+  test/cpp/common/alarm_test.cc ← test/cpp/common/BUILD`).
+
+The expansion follows at most two forward hops and two reverse hops, so it
+stays a review set rather than the whole repository. `pkg:` / `sys:`
+pseudo-nodes are never emitted as rows — a review set is a list of files.
+
+`--format json` emits `{"subject": "<path>", "total": <row count>,
+"files": […]}`. On the degraded streaming path (the DuckDB cache skipped
+replay) the expansion is skipped and the answer is the subject row plus the
+streaming dependents — smaller, never wrong or empty.
 
 ### `understand`
 
