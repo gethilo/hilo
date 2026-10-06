@@ -1,6 +1,6 @@
 //! Transitive impact analysis — find all files that depend on a given file, directly or transitively.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use duckdb::{params, Connection};
 use serde::Serialize;
@@ -15,6 +15,242 @@ pub const SCOPE_FILE: &str = "file";
 /// GAP-083 `scope` value: the row was matched through a `pkg:<crate>` node
 /// rather than the queried file itself.
 pub const SCOPE_CRATE: &str = "crate";
+
+/// GAP-117 `scope` value: the queried (changed) file itself, always the first
+/// row of a review set at `depth: 0`.
+///
+/// The reverse-only BFS never named the subject, so on the Wave 11 impact
+/// bake-off the changed path itself was absent from 4/6 answers and a
+/// "0 files depend on this" result was indistinguishable from a path that
+/// does not exist. Reporting the subject makes every answer self-describing.
+pub const SCOPE_SELF: &str = "self";
+
+/// GAP-117 `scope` value: a file reached by following an OUTGOING edge — from
+/// the queried file (its imports, headers, helper modules, property classes)
+/// or from one of its dependents.
+///
+/// The historical [`compute_impact`] BFS is reverse-only ("who imports me"),
+/// so the artifacts a change forces an agent to open — the helper the changed
+/// rule calls, the header the changed implementation defines, the properties
+/// class the changed configuration binds — were invisible even when the graph
+/// held the edge.
+pub const SCOPE_DEPENDENCY: &str = "dependency";
+
+/// GAP-117 `scope` value: a file reached by following an INCOMING edge during
+/// review-set expansion — the tests, fixtures and build targets that reference
+/// a dependency rather than the changed file itself (`alarm.cc →
+/// include/grpcpp/alarm.h ← test/cpp/common/alarm_test.cc ←
+/// test/cpp/common/BUILD`).
+pub const SCOPE_LINK: &str = "link";
+
+/// Relation stamped on the review set's subject row.
+pub const REL_SELF: &str = "self";
+
+/// Forward hops the review-set expansion follows (GAP-117).
+///
+/// One hop from the subject reaches its own dependencies; one further hop from
+/// each directly-reached node reaches the test-only siblings a test harness
+/// declares (the module/registration file a rule is wired into). Two hops is
+/// the point where the forward closure stops being a review set and becomes
+/// "the whole repository"; the caller's `max_depth` still governs the
+/// reverse (blast-radius) direction.
+pub const REVIEW_FORWARD_DEPTH: u32 = 2;
+
+/// Reverse hops the review-set expansion follows once it has left the subject
+/// (GAP-117).
+///
+/// Reaching a shared artifact is a two-hop reverse walk from the forward edge:
+/// the test file that includes the header, then the build target that names
+/// the test file.
+pub const REVIEW_REVERSE_DEPTH: u32 = 2;
+
+/// True for graph nodes that are not reviewable file paths (`pkg:<crate>`,
+/// `sys:<module>`, `std:<module>`). A review set is a list of files an agent
+/// opens, so pseudo-nodes never enter it.
+fn is_symbol_node(path: &str) -> bool {
+    path.starts_with("pkg:") || path.starts_with("sys:") || path.starts_with("std:")
+}
+
+/// Row shape shared by the forward and reverse edge lookups: `(other, rel,
+/// provenance, confidence)` where `other` is the far endpoint.
+type NeighbourRow = (String, String, Option<String>, Option<f64>);
+
+/// Outgoing edges of `node` — the files `node` references.
+///
+/// `ORDER BY` keeps the expansion deterministic (DuckDB does not guarantee row
+/// order without it), which matters because the CLI compares full outputs.
+fn outgoing_rows(conn: &Connection, node: &str) -> GraphResult<Vec<NeighbourRow>> {
+    let mut stmt = conn.prepare(
+        r#"SELECT "to", rel, provenance, confidence FROM edges WHERE "from" = ? ORDER BY "to", rel"#,
+    )?;
+    let rows = stmt.query_map(params![node], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, Option<f64>>(3)?,
+        ))
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+/// Incoming edges of `node` — the files that reference `node`.
+fn incoming_rows(conn: &Connection, node: &str) -> GraphResult<Vec<NeighbourRow>> {
+    let mut stmt = conn.prepare(
+        r#"SELECT "from", rel, provenance, confidence FROM edges WHERE "to" = ? ORDER BY "from", rel"#,
+    )?;
+    let rows = stmt.query_map(params![node], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, Option<f64>>(3)?,
+        ))
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+/// Build the GAP-117 review set from an already-computed dependent set.
+///
+/// The result is, in order:
+/// 1. the subject row (`scope: self`, `depth: 0`) — omitted only when the
+///    subject is a `pkg:`/`sys:` pseudo-node, which is not a file;
+/// 2. `dependents`, unchanged (the reverse blast radius, with the historical
+///    pkg-family and `local:` semantics intact);
+/// 3. the bounded both-direction expansion: forward edges from the subject and
+///    from each node the expansion reaches, and incoming edges one step off
+///    those (up to [`REVIEW_FORWARD_DEPTH`] / [`REVIEW_REVERSE_DEPTH`]).
+///
+/// Rows are deduplicated by path (the first, nearest row wins) and the
+/// expansion rows are sorted by `(depth, path, relation)` so the output is
+/// byte-identical across runs and working directories.
+pub fn expand_review_set(
+    conn: &Connection,
+    start_path: &str,
+    dependents: Vec<ImpactFile>,
+) -> GraphResult<Vec<ImpactFile>> {
+    let mut files: Vec<ImpactFile> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+
+    if !is_symbol_node(start_path) {
+        seen.insert(start_path.to_string());
+        files.push(ImpactFile {
+            path: start_path.to_string(),
+            relation: REL_SELF.to_string(),
+            depth: 0,
+            scope: SCOPE_SELF.to_string(),
+            via: None,
+            provenance: None,
+            confidence: None,
+        });
+    }
+
+    for row in dependents {
+        if seen.insert(row.path.clone()) {
+            files.push(row);
+        }
+    }
+
+    // Best (forward_used, reverse_used) budget seen so far per node. A node is
+    // re-queued only when it is reached with more remaining budget in either
+    // direction, so the walk stays bounded by the two small depth budgets while
+    // still exploring every route within them.
+    let mut best: HashMap<String, (u32, u32)> = HashMap::new();
+    let mut queue: VecDeque<(String, u32, u32)> = VecDeque::new();
+    best.insert(start_path.to_string(), (0, 0));
+    queue.push_back((start_path.to_string(), 0, 0));
+
+    let mut expansion: Vec<ImpactFile> = Vec::new();
+    while let Some((node, fwd, rev)) = queue.pop_front() {
+        if is_symbol_node(&node) {
+            continue;
+        }
+        if fwd < REVIEW_FORWARD_DEPTH {
+            for (other, rel, prov, conf) in outgoing_rows(conn, &node)? {
+                if is_symbol_node(&other) {
+                    continue;
+                }
+                if seen.insert(other.clone()) {
+                    expansion.push(ImpactFile {
+                        path: other.clone(),
+                        relation: rel,
+                        depth: fwd + rev + 1,
+                        scope: SCOPE_DEPENDENCY.to_string(),
+                        via: None,
+                        provenance: prov,
+                        confidence: conf,
+                    });
+                }
+                // Re-queued only when this route leaves more forward budget.
+                let improved = best.get(&other).map(|(f, _)| fwd + 1 < *f).unwrap_or(true);
+                if improved {
+                    best.insert(other.clone(), (fwd + 1, rev));
+                    queue.push_back((other, fwd + 1, rev));
+                }
+            }
+        }
+        if rev < REVIEW_REVERSE_DEPTH {
+            for (other, rel, prov, conf) in incoming_rows(conn, &node)? {
+                if is_symbol_node(&other) {
+                    continue;
+                }
+                if seen.insert(other.clone()) {
+                    expansion.push(ImpactFile {
+                        path: other.clone(),
+                        relation: rel,
+                        depth: fwd + rev + 1,
+                        scope: SCOPE_LINK.to_string(),
+                        via: None,
+                        provenance: prov,
+                        confidence: conf,
+                    });
+                }
+                let improved = best.get(&other).map(|(_, r)| rev + 1 < *r).unwrap_or(true);
+                if improved {
+                    best.insert(other.clone(), (fwd, rev + 1));
+                    queue.push_back((other, fwd, rev + 1));
+                }
+            }
+        }
+    }
+
+    expansion.sort_by(|a, b| {
+        (a.depth, a.path.as_str(), a.relation.as_str()).cmp(&(
+            b.depth,
+            b.path.as_str(),
+            b.relation.as_str(),
+        ))
+    });
+    files.extend(expansion);
+
+    Ok(files)
+}
+
+/// GAP-117: the full impact REVIEW SET for a changed file.
+///
+/// Equivalent to `expand_review_set(conn, path, compute_impact_at(conn, path,
+/// max_depth)?)`: the subject, the reverse blast radius, and the bounded
+/// forward/reverse neighbourhood that carries the change's tests, helpers and
+/// build targets. The single-call form is what callers (and the Wave 11
+/// recall fixtures) use; [`expand_review_set`] exists so a caller that already
+/// holds the dependent set — e.g. the CLI's degraded streaming path — can reuse
+/// it without a second traversal.
+pub fn compute_review_set(
+    conn: &Connection,
+    start_path: &str,
+    max_depth: u32,
+) -> GraphResult<Vec<ImpactFile>> {
+    let dependents = compute_impact_at(conn, start_path, max_depth, None)?;
+    expand_review_set(conn, start_path, dependents)
+}
 
 /// A single file in the impact chain.
 #[derive(Debug, Clone, Serialize)]
@@ -73,6 +309,12 @@ struct Collector<'a> {
 /// Result of an impact analysis.
 #[derive(Debug, Clone, Serialize)]
 pub struct ImpactResult {
+    /// GAP-117: the queried subject, echoed so every answer names the file it
+    /// is about even when the dependent set is empty. A JSON consumer can then
+    /// never read "no rows" as "no subject".
+    pub subject: String,
+    /// Number of rows in `files`, subject row included.
+    pub total: usize,
     pub files: Vec<ImpactFile>,
 }
 
@@ -1266,5 +1508,97 @@ mod tests {
             via_pkg_a.iter().any(|f| f.path == main),
             "pkg:a impact must include a_derive importers, got: {via_pkg_a:?}"
         );
+    }
+
+    /// GAP-117: the review set is the subject, its dependents, and the bounded
+    /// both-direction neighbourhood that carries helpers, tests and build
+    /// targets — the shape the reverse-only BFS cannot express. A test that
+    /// includes a shared header the changed file defines is two reverse hops
+    /// away (header ← test ← BUILD), and must still be reported.
+    #[test]
+    fn review_set_carries_subject_dependencies_and_links() {
+        let conn = duckdb::Connection::open_in_memory().unwrap();
+        insert_edges_into(
+            &conn,
+            &[
+                crate::Edge::new("a.rs", "b.rs", "imports"),
+                crate::Edge::new("b.rs", "h.rs", "imports"),
+                crate::Edge::new("t.rs", "h.rs", "imports"),
+                crate::Edge::new("BUILD", "t.rs", "build_target"),
+            ],
+        )
+        .unwrap();
+
+        let rows = compute_review_set(&conn, "b.rs", 10).unwrap();
+        let find = |p: &str| {
+            rows.iter()
+                .find(|r| r.path == p)
+                .unwrap_or_else(|| panic!("{p} missing from the review set: {rows:?}"))
+        };
+
+        // The subject leads, at depth 0 — the row that makes an answer about
+        // something even when nothing depends on it.
+        assert_eq!(rows[0].path, "b.rs");
+        assert_eq!(rows[0].scope, SCOPE_SELF);
+        assert_eq!(rows[0].depth, 0);
+
+        // An importer of the subject keeps the historical dependent scope.
+        let a = find("a.rs");
+        assert_eq!(a.scope, SCOPE_FILE);
+        assert_eq!(a.depth, 1);
+
+        // A header the subject declares is a forward dependency.
+        let h = find("h.rs");
+        assert_eq!(h.scope, SCOPE_DEPENDENCY);
+        assert_eq!(h.relation, "imports");
+
+        // The test reaching that header, and the build target naming the test,
+        // are reverse-hop links.
+        assert_eq!(find("t.rs").scope, SCOPE_LINK);
+        let build = find("BUILD");
+        assert_eq!(build.scope, SCOPE_LINK);
+        assert_eq!(build.relation, "build_target");
+    }
+
+    /// GAP-117: the forward expansion is depth-bounded — a two-hop forward
+    /// closure is a review set, a three-hop one is the repository.
+    #[test]
+    fn review_set_forward_expansion_is_depth_bounded() {
+        let conn = duckdb::Connection::open_in_memory().unwrap();
+        insert_edges_into(
+            &conn,
+            &[
+                crate::Edge::new("s.rs", "f1.rs", "imports"),
+                crate::Edge::new("f1.rs", "f2.rs", "imports"),
+                crate::Edge::new("f2.rs", "f3.rs", "imports"),
+            ],
+        )
+        .unwrap();
+
+        let rows = compute_review_set(&conn, "s.rs", 10).unwrap();
+        assert!(rows.iter().any(|r| r.path == "f1.rs"));
+        assert!(
+            rows.iter().any(|r| r.path == "f2.rs"),
+            "two forward hops are inside the budget: {rows:?}"
+        );
+        assert!(
+            !rows.iter().any(|r| r.path == "f3.rs"),
+            "a third forward hop must not be followed: {rows:?}"
+        );
+    }
+
+    /// GAP-117: symbol (`pkg:`/`sys:`) subjects are not files — they keep the
+    /// historical dependent-only answer and never gain a fabricated self row.
+    #[test]
+    fn review_set_symbol_subject_has_no_self_row() {
+        let conn = duckdb::Connection::open_in_memory().unwrap();
+        insert_edges_into(&conn, &[crate::Edge::new("main.rs", "pkg:a", "imports")]).unwrap();
+
+        let rows = compute_review_set(&conn, "pkg:a", 10).unwrap();
+        assert!(
+            rows.iter().all(|r| r.scope != SCOPE_SELF),
+            "a symbol node must not produce a self row: {rows:?}"
+        );
+        assert!(rows.iter().any(|r| r.path == "main.rs"));
     }
 }
