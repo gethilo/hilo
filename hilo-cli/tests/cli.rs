@@ -3757,3 +3757,171 @@ fn graph_impact_from_subdirectory_matches_root_run() {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+// ─────────────────── graph test-classes (COV-3) ───────────────────
+
+/// COV-3: `hilo graph test-classes` reads the surface inventory and the
+/// coverage links and reports per-class totals plus a per-surface class mix,
+/// flagging a single-class surface as `class_gap`.
+#[test]
+fn graph_test_classes_reports_totals_and_flags_class_gap_surfaces() {
+    let dir = unique_tempdir("test-classes");
+    let graph = dir.join(".vfs").join("graph");
+    fs::create_dir_all(&graph).expect("failed to create .vfs/graph");
+    fs::create_dir_all(dir.join("src")).expect("failed to create src");
+    fs::create_dir_all(dir.join("tests")).expect("failed to create tests");
+
+    // One in-source unit test and one out-of-source integration test.
+    fs::write(
+        dir.join("src/widget.rs"),
+        "#[cfg(test)]\nmod tests {\n    #[test]\n    fn spins() {}\n}\n",
+    )
+    .expect("failed to write unit test");
+    fs::write(
+        dir.join("tests/integration_bar.rs"),
+        "#[test]\nfn bar() {}\n",
+    )
+    .expect("failed to write integration test");
+
+    // COV-1 surface inventory: a linked surface and an orphan surface.
+    let linked_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let orphan_id = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let surface = |id: &str, name: &str| {
+        serde_json::json!({
+            "surface_id": id,
+            "kind": "cli_verb",
+            "owner_file": "hilo-cli/src/cli.rs",
+            "owner_symbol": name,
+            "name": name,
+            "public": true,
+        })
+        .to_string()
+    };
+    fs::write(
+        graph.join("surfaces.jsonl"),
+        format!(
+            "{}\n{}\n",
+            surface(linked_id, "graph warm"),
+            surface(orphan_id, "graph stats")
+        ),
+    )
+    .expect("failed to write surfaces.jsonl");
+
+    // COV-2 link: the integration test reaches the linked surface.
+    let link = serde_json::json!({
+        "link_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "test_file": "tests/integration_bar.rs",
+        "target": linked_id,
+        "evidence_kind": "import",
+        "confidence": 0.7,
+        "direction": "test_to_target",
+    })
+    .to_string();
+    fs::write(graph.join("coverage_links.jsonl"), format!("{link}\n"))
+        .expect("failed to write coverage_links.jsonl");
+
+    // Text mode: totals name every class, the gap is flagged, and the orphan
+    // surface is reported as uncovered (never silently absent).
+    let text = run_hilo_ok(&dir, &["graph", "test-classes"]);
+    assert!(
+        text.contains("TEST-CLASS TOTALS (8 class(es))"),
+        "text must report all eight classes: {text}"
+    );
+    // Honest zero: a class with no tests prints 0 and still names itself.
+    assert!(
+        text.contains("chaos_fault"),
+        "a zero class must name itself: {text}"
+    );
+    assert!(
+        text.contains("CLASS-GAP") && text.contains("missing classes:"),
+        "a single-class surface must be flagged with its missing classes: {text}"
+    );
+    assert!(
+        text.contains("surfaces with no linked test (1)"),
+        "the orphan surface must be reported: {text}"
+    );
+
+    // JSON mode: the locked shape.
+    let json = run_hilo_ok(&dir, &["graph", "test-classes", "--json"]);
+    let v: serde_json::Value =
+        serde_json::from_str(&json).unwrap_or_else(|e| panic!("unparseable report {json}: {e}"));
+    assert_eq!(v["schema"].as_u64(), Some(1));
+    let totals = v["totals"].as_array().expect("totals array");
+    assert_eq!(totals.len(), 8, "every class has a totals row");
+    let total_of = |class: &str| {
+        totals
+            .iter()
+            .find(|t| t["class"].as_str() == Some(class))
+            .unwrap_or_else(|| panic!("missing totals row for {class}"))
+    };
+    assert_eq!(total_of("unit")["files"].as_u64(), Some(1));
+    assert_eq!(total_of("integration")["files"].as_u64(), Some(1));
+    assert_eq!(
+        total_of("chaos_fault")["files"].as_u64(),
+        Some(0),
+        "a class with no tests reports 0, not an absent key"
+    );
+
+    let surfaces = v["surfaces"].as_array().expect("surfaces array");
+    let row = |id: &str| {
+        surfaces
+            .iter()
+            .find(|s| s["surface_id"].as_str() == Some(id))
+            .unwrap_or_else(|| panic!("missing surface row {id}"))
+    };
+    let linked = row(linked_id);
+    assert_eq!(
+        linked["classes"].as_array().unwrap(),
+        &vec![serde_json::json!("integration")],
+        "the linked surface is reached by integration only"
+    );
+    assert_eq!(linked["class_gap"].as_bool(), Some(true));
+    assert_eq!(linked["missing_classes"].as_array().unwrap().len(), 7);
+
+    let orphan = row(orphan_id);
+    assert!(orphan["classes"].as_array().unwrap().is_empty());
+    assert_eq!(orphan["class_gap"].as_bool(), Some(false));
+
+    assert_eq!(
+        v["class_gap_surfaces"].as_array().unwrap(),
+        &vec![serde_json::json!(linked_id)]
+    );
+    assert_eq!(
+        v["uncovered_surfaces"].as_array().unwrap(),
+        &vec![serde_json::json!(orphan_id)]
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// COV-3: both inputs are named when missing — a bare empty report would be
+/// indistinguishable from a repo that genuinely has no tests.
+#[test]
+fn graph_test_classes_names_the_missing_prerequisite() {
+    let dir = unique_tempdir("test-classes-missing");
+    // No .vfs/graph at all: surfaces.jsonl is the first missing input.
+    let out = run_hilo_with_retry(hilo_cmd().args(["graph", "test-classes"]).current_dir(&dir));
+    assert!(!out.status.success(), "must fail without surfaces.jsonl");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("hilo graph surfaces"),
+        "the error must name the COV-1 command: {stderr}"
+    );
+
+    // With surfaces but no links, the error names the COV-2 command.
+    let graph = dir.join(".vfs").join("graph");
+    fs::create_dir_all(&graph).expect("failed to create .vfs/graph");
+    fs::write(graph.join("surfaces.jsonl"), "").expect("failed to write surfaces.jsonl");
+    let out = run_hilo_with_retry(hilo_cmd().args(["graph", "test-classes"]).current_dir(&dir));
+    assert!(
+        !out.status.success(),
+        "must fail without coverage_links.jsonl"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("hilo graph coverage-links"),
+        "the error must name the COV-2 command: {stderr}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}

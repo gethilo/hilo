@@ -22,6 +22,7 @@ The `hilo` binary — entrypoint for all Hilo operations. Built with clap.
 | `hilo graph rule-list` | List all rules defined in the manifest |
 | `hilo graph rule-check <NAME>` | Execute a named rule query against the dependency graph |
 | `hilo graph clean` | Delete the cached dependency graph (edges.jsonl + DuckDB cache) so the next `graph warm` re-parses from scratch |
+| `hilo graph test-classes [--json]` | Test-class taxonomy + per-surface class mix (COV-3) — totals per class and, per surface, the classes that reach it, flagging single-class surfaces as `class_gap` |
 | `hilo serve --mcp` | Start MCP server (stdio) — `--mcp` required (only implemented server mode); rate limit read from manifest `performance.rate_limit_rps` |
 | `hilo backend mount --type s3\|gdrive\|onedrive\|dropbox\|external --bucket <BUCKET> --at <PATH> [--prefix <PREFIX>] [--region <REGION>]` | Mount a virtual backend at a virtual path (see the next row for the backend-backed workspace form) |
 | `hilo backend mount --type s3|gdrive|onedrive|dropbox|external ... --at <PATH> [--endpoint <URL>] [--tool <T>] [--mode stream\|mirror] [--poll-secs <N>]` | Mount a backend-backed workspace (spec §9); writes `.vfs/backends/mounts.yaml` |
