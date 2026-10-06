@@ -1,0 +1,66 @@
+{
+  "tick_id": "warpfs-foreman-2026-10-06-12-56-13",
+  "project": "warpfs",
+  "workdir": "/home/kara/warpfs",
+  "wave_budget": 10,
+  "workers_dispatched": 5,
+  "tasks": [
+    {
+      "id": "GAP-112",
+      "title": "P2 — graph surfaces must declare Hilo-self scope on foreign repositories",
+      "priority": "P2",
+      "complexity": 4,
+      "worktree": "/home/kara/warpfs-wt-GAP-112",
+      "branch": "wt/GAP-112-conformance-edges",
+      "worker_model": "deepseek-v4-flash",
+      "worker_provider": "deepseek-foreman",
+      "dispatched_at": "2026-10-06T13:01:00-05:00"
+    },
+    {
+      "id": "COV-3",
+      "title": "P1 — TEST-CLASS TAXONOMY + PER-SURFACE CLASS MIX",
+      "priority": "P1",
+      "complexity": 3,
+      "worktree": "/home/kara/warpfs-wt-COV-3",
+      "branch": "wt/COV-3-test-class-taxonomy",
+      "worker_model": "deepseek-v4-flash",
+      "worker_provider": "deepseek-foreman",
+      "dispatched_at": "2026-10-06T13:01:00-05:00"
+    },
+    {
+      "id": "GAP-116",
+      "title": "P1 — graph search natural-language retrieval misses behavior-owning files",
+      "priority": "P1",
+      "complexity": 3,
+      "worktree": "/home/kara/warpfs-wt-GAP-116",
+      "branch": "wt/GAP-116-graph-search-nl",
+      "worker_model": "deepseek-v4-flash",
+      "worker_provider": "deepseek-foreman",
+      "dispatched_at": "2026-10-06T13:01:00-05:00"
+    },
+    {
+      "id": "GAP-117",
+      "title": "P2 — Improve impact path recall while preserving test/build target links",
+      "priority": "P2",
+      "complexity": 3,
+      "worktree": "/home/kara/warpfs-wt-GAP-117",
+      "branch": "wt/GAP-117-impact-path-recall",
+      "worker_model": "deepseek-v4-flash",
+      "worker_provider": "deepseek-foreman",
+      "dispatched_at": "2026-10-06T13:01:00-05:00"
+    },
+    {
+      "id": "GAP-101",
+      "title": "P2 — graph understand context packs omit task-critical implementation paths",
+      "priority": "P2",
+      "complexity": 2,
+      "worktree": "/home/kara/warpfs-wt-GAP-101",
+      "branch": "wt/GAP-101-context-packs",
+      "worker_model": "deepseek-v4-flash",
+      "worker_provider": "deepseek-foreman",
+      "dispatched_at": "2026-10-06T13:01:00-05:00"
+    }
+  ],
+  "status": "dispatched",
+  "created_at": "2026-10-06T13:01:00-05:00"
+}

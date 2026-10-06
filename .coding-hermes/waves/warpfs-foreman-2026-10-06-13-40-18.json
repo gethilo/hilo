@@ -1,0 +1,41 @@
+{
+  "tick_id": "warpfs-foreman-2026-10-06-13-40-18",
+  "project": "warpfs",
+  "recovery_from": "warpfs-foreman-2026-10-06-12-56-13",
+  "status": "recovery-incomplete",
+  "reason": "master tree has compile error (scope field missing in SurfaceInventory) — sibling foreman collision",
+  "workers_found": 5,
+  "workers_dispatched_in_manifest": 5,
+  "branches": {
+    "GAP-112": {
+      "status": "already-merged",
+      "commit": "ceae03f4",
+      "test": "FAIL-environmental"
+    },
+    "COV-3": {
+      "status": "committed-not-pushed",
+      "commit": "aad88113",
+      "compile": "FAIL"
+    },
+    "GAP-116": {
+      "status": "uncommitted-worker-killed",
+      "staged_files": 80
+    },
+    "GAP-117": {
+      "status": "committed-not-pushed",
+      "commit": "c1ee0eb6",
+      "compile": "FAIL"
+    },
+    "GAP-101": {
+      "status": "uncommitted-worker-killed",
+      "modified_files": 3
+    }
+  },
+  "next_tick_actions": [
+    "fix master compile error (scope field in SurfaceInventory)",
+    "rebase COV-3, GAP-117 onto fixed master",
+    "re-dispatch GAP-116, GAP-101 with fresh workers"
+  ],
+  "closed_at": "2026-10-06T13:45:00-05:00",
+  "finished_at": "2026-10-06T13:50:00-05:00"
+}
