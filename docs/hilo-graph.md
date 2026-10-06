@@ -31,6 +31,9 @@ The core dependency-graph engine. Builds a knowledge graph from source code usin
 | `ModuleStats` | Per-module edge counts — `{module, edge_count, files_count}` |
 | `Direction` | Query direction — `Forward` or `Reverse` |
 | `Classification` | File classification — `{role, status, feature}` |
+| `TestClass` | Test class (COV-3) — `unit`, `integration`, `e2e_process`, `conformance_golden`, `property_fuzz`, `chaos_fault`, `bench`, `doc_smoke` |
+| `TestClassReport` | Per-class totals + per-surface class mix (`class_gap`, `missing_classes`) joined through the COV-2 links |
+| `SurfaceClassMix` | One surface's reachable test-class set, its `class_gap` flag and named `missing_classes` |
 | `Rule` | A DuckDB rule — `{id, name, query}` |
 | `RuleEngine` | Rule execution engine over the graph |
 | `RuleCheckResult` | Per-rule result — `{rule, passed, details}` |
@@ -49,6 +52,10 @@ The core dependency-graph engine. Builds a knowledge graph from source code usin
 | `compute_impact(db, path) -> ImpactResult` | Transitive BFS — all files depending on path |
 | `compute_impact_with_external(db, path, ext) -> ImpactResult` | Impact with external dependency map |
 | `classify_file(path, source, lang) -> Classification` | Classify a single file (role/status/feature) |
+| `classify_test_file(path, source) -> Option<TestClass>` | Classify a test-bearing file into one class (COV-3); `None` for a non-test file |
+| `classify_test_functions(path, source) -> Vec<TestFunctionClass>` | Discover test functions (Rust/Go/Python) and their classes |
+| `test_classes::enumerate(root) -> Vec<TestFileClass>` | Walk a repo, classifying every test-bearing source file |
+| `test_classes::derive(surfaces, links, files) -> TestClassReport` | Join the class map onto the COV-2 coverage links |
 | `infer_feature(path) -> String` | Infer feature name from file path |
 | `understand(opts) -> SignalResult` | Build harmonic multi-resolution context |
 | `understand_with_source(opts, files) -> SignalResult` | Signal engine with pre-loaded source |

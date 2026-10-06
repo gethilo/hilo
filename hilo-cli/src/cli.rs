@@ -15,7 +15,7 @@ use clap::{Parser, Subcommand};
 use crate::commands::plugin::PluginCommand;
 use crate::commands::{
     backend, classify, coverage_links, graph, ignore, init, meta, mount, plugin, serve, surfaces,
-    workspace,
+    test_classes, workspace,
 };
 use crate::sync_direction;
 
@@ -163,6 +163,22 @@ enum GraphCommand {
     /// written to `.vfs/graph/coverage_links.jsonl`. `--unlinked` lists
     /// surfaces with no link at all, each with a cause.
     CoverageLinks(CoverageLinksArgs),
+    /// Report the test-class taxonomy (COV-3): totals per class and, per
+    /// surface, the set of test classes that reach it (joined through the
+    /// COV-2 coverage links). A surface reached by a single class is flagged
+    /// `class_gap` with the missing classes named — the signal that a surface
+    /// has forty unit tests and zero integration/e2e/conformance coverage.
+    ///
+    /// Requires `.vfs/graph/surfaces.jsonl` (run `hilo graph surfaces`) and
+    /// `.vfs/graph/coverage_links.jsonl` (run `hilo graph coverage-links`).
+    TestClasses(TestClassesArgs),
+}
+
+#[derive(clap::Args)]
+struct TestClassesArgs {
+    /// Print the report as JSON (locked shape) instead of text.
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(clap::Args)]
@@ -480,6 +496,7 @@ pub fn run() -> anyhow::Result<()> {
         Commands::Graph(GraphCommand::CoverageLinks(args)) => {
             coverage_links::run(args.json, args.surface.as_deref(), args.unlinked)
         }
+        Commands::Graph(GraphCommand::TestClasses(args)) => test_classes::run(args.json),
         Commands::Serve(args) => serve::run(args.mcp),
         Commands::Backend(backend::BackendCommand::Mount(args)) => backend::run_mount(&args),
         Commands::Backend(backend::BackendCommand::List) => backend::run_list(),

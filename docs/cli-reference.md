@@ -352,6 +352,51 @@ for a corrupted or stale graph database.
 hilo graph clean
 ```
 
+### `test-classes`
+
+Report the test-class taxonomy: how many tests of each **class** exist and,
+per surface, the set of classes that actually reach it (joined through the
+COV-2 coverage links). A surface with forty unit tests and zero
+integration/e2e/conformance coverage is no longer indistinguishable from a
+well-covered one — class diversity is the signal.
+
+Requires the COV-1 inventory (`.vfs/graph/surfaces.jsonl`, from
+`hilo graph surfaces`) and the COV-2 links (`.vfs/graph/coverage_links.jsonl`,
+from `hilo graph coverage-links`). Each missing input is named in the error.
+
+```bash
+hilo graph surfaces          # COV-1: enumerate the contract surfaces
+hilo graph coverage-links    # COV-2: link tests to surfaces with evidence
+hilo graph test-classes      # COV-3: per-class totals + per-surface class mix
+hilo graph test-classes --json
+```
+
+The eight classes. The rule is precedence-ordered (first match wins): the path
+component / file name is consulted first, then a code marker — and the marker
+layer applies only to a **test-bearing** file.
+
+| class | path component / file name | code marker |
+|-------|----------------------------|-------------|
+| `bench` | `benches/`, `benchmark/`, `benchmarks/`, `*bench*` | `#[bench]`, `criterion_*` |
+| `property_fuzz` | `fuzz/`, `fuzzers/`, `fuzz_targets/`, `*fuzz*` | `proptest!`, `quickcheck!`, `#[quickcheck]`, `fuzz_target!`, `libfuzzer_sys` |
+| `chaos_fault` | `chaos/`, `faults/`, `fault_injection/`, `*chaos*`, `*fault*` | `fault_inject`, `inject_fault` |
+| `conformance_golden` | `conformance/`, `golden/`, `goldens/`, `*golden*`, `*conformance*`, `*snapshot*` | `insta::assert*`, `assert_snapshot`, `expect_file!`, `expect_test` |
+| `e2e_process` | `e2e/`, `e2e_tests/`, `end_to_end/`, `*e2e*` | `assert_cmd`, `cargo_bin`, `process::Command`, `subprocess`, `pexpect`, `rexpect` |
+| `doc_smoke` | `doctests/`, `doc_tests/`, `smoke/`, `*smoke*`, `*doctest*` | `doctest` |
+| `integration` | any `tests/` / `test/` / `spec/` directory | — |
+| `unit` | any other test-bearing file (in-source / co-located) | — |
+
+A file is **test-bearing** when its path matches a test pattern or a
+class-specific directory, it declares a test function (`#[test]`, Go
+`func Test*`, Python `def test_*`), or its source carries a test-framework
+marker — so a production file that merely mentions `golden` in a comment is
+not a conformance test.
+
+A surface reached by exactly one class is flagged `CLASS-GAP` with the missing
+classes named; a class with zero tests reports `0` and still names itself
+(never an absent key). The rule is pinned by a test over a fixture tree that
+holds one test of each class (`hilo-graph/tests/fixtures/test_classes/`).
+
 ## `hilo classify`
 
 Auto-tag every source file with `user.vfs.role` and `user.vfs.status`

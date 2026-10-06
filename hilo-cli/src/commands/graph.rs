@@ -2,6 +2,12 @@
 //!
 //! Queries (`related`, `impact`, `stats`) are JIT — they auto-parse files on
 //! first access. `warm` is an optional batch pre-parse for CI / power users.
+//!
+//! The COV subcommands live in their own modules, beside this one: surface
+//! enumeration (COV-1) in [`crate::commands::surfaces`], evidenced test→surface
+//! links (COV-2) in [`crate::commands::coverage_links`], and the test-class
+//! taxonomy / per-surface class mix (COV-3) in
+//! [`crate::commands::test_classes`].
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::{Read, Write};
