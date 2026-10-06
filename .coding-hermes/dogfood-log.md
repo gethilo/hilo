@@ -1167,3 +1167,86 @@ cost users see once and AGENTS.md already directs heavy builds off-box; PERF-010
 
 **Left behind:** docs/dogfood/2026-10-06-run34-cov2-fresh-tip-consumer.md + this log
 entry + 2 board rows. No code changes.
+# Run 34 — 2026-10-06 — graph-understand relevance + cache-drift honesty (warpfs-dogfood tick)
+
+**Angle.** Runs 1-33 covered CLI/graph basics, FUSE, MCP (17 tools), S3 + git
+backends, FFI, plugins, triggers, permissions, coverage-links, workspace and
+perf sweeps. This run takes the newest user-facing query surface the earlier
+runs only touched once at 0.3.0: `hilo graph understand` — the README's
+"agent asks a natural-language question" flagship — as a REAL consumer with
+fresh corpora, plus a cache-drift honesty probe that no prior run attempted.
+
+**Binary.** Not the stale installed one this time: `/tmp/df59-target/debug/hilo`,
+built 2026-10-03 from HEAD v0.3.0-231-g67ceaad (17 days newer than the
+installed v0.3.0-14-g2b26d3f; matches DF-WARPFS-112's staleness lesson).
+This box has no local release build; a fresh one was not rebuilt this run
+(load avg 18 on the shared host), so debug profile is noted on every number.
+
+**Consumer corpus.** Scratch project /tmp/df-run34 (own git repo), fresh
+shallow clone of BurntSushi/ripgrep as rgtest/ — 111 files, 830 edges after
+`hilo init` + `graph warm` (9.9s cold). Time-to-first-success for the promise
+("agent gets a map without reading files"): first useful `graph search` hit at
+~12s total, well within a new-user patience window.
+
+**What a real user gets — VERIFIED WORKING:**
+- `graph search "ignore builder"`: warm 0.17s / first (post-warm, count-both) 2.1s;
+  correct lexical hits with symbols. Debug build caveat noted (README claims
+  0.02s on release — debug is ~8x but that is profile overhead, consistent
+  with DF-WARPFS-112's measurement discipline, NOT a regression).
+- `graph impact` 0.13s; `graph related` correct both directions incl. pkg:
+  external rows; orphan list, `graph module` (Tests: 0.0% — DF-WARPFS-37
+  reproduces on this corpus: 39 tested_by edges exist but coverage reads 0),
+  `graph untested` all correct.
+- `graph understand` ~1.05s warm (README claims ~1.5s on release — debug
+  meets the claim with headroom). BYTE-DETERMINISTIC confirmed across runs.
+  --budget honored: budget 1 → DETAIL tier correctly empty ("no detail block
+  fits the 2-char budget"), budget 100k → 207 KB output; monotone non-decreasing.
+- Task sensitivity: understand("glob option to ignore walker") vs
+  understand("fix decompression of pre-gzipped files") produce DIFFERENT MAP
+  file sets (60 files each, disjoint leading files — ignore/* vs cli/*). Not
+  hardcoded output; this closes the run-31-era "hardcoded Go snippet" concern
+  (DF-WARPFS-102) for the current HEAD: output is genuinely task-relevant.
+
+**DF-WARPFS-113 (P1, filed): `graph warm` is stale-cache-aware only if you
+remove the file; understand serves dead data when a file changes.**
+Repro: ran understand on the task, saved output; DELETED
+rgtest/crates/ignore/src/walk.rs (the single most task-central file); re-ran
+`graph warm`; re-ran understand. The output still contains
+`rgtest/crates/ignore/src/walk.rs → (no symbols extracted)` in the MAP tier,
+7 walk.rs mentions total — the flagship agent-facing command reports a file
+that no longer exists, with no staleness marker. Diff vs the with-file output
+shows the symbol lines correctly disappear (so the graph DOES re-parse) but
+the file row itself persists. An agent consuming understand output would
+attempt to read/edit a ghost file. Fix direction: warm should drop graph
+nodes whose source file vanished (or mark rows `stale`), and understand/related
+should not emit rows for non-existent paths. File: hilo-graph/src/signal.rs
+(emit path, `(no symbols extracted)` branch) + the warm reconcile path.
+Bumped the file back (git checkout inside the scratch clone), re-warmed,
+output byte-identical to the original run — scratch tree fully restored.
+Impact of deleting a file mid-session is a real user path (git pull removing
+a file, then asking the agent before re-warming).
+
+**Perf (Step 2b): nothing slow enough to file.** Warm+cold headline numbers
+above; everything user-visible is inside README claims even on the slower
+debug profile. No PERF row this run.
+
+**Install leg: SKIPPED-install-bunker — 17th consecutive run.** bunker-las-03
+ssh connect timeout at tick time (both `bunker3` and `bunker-las-03` aliases,
+rc=255, host 100.69.3.13 unreach). Same-day re-probe ×2 before skipping. This
+is cross-evidence on the standing DF-WARPFS-111 (P3) row — no new row filed
+per the duplicate-evidence rule.
+
+**Rows filed:** DF-WARPFS-115 (P1, stale-cache understand; id 113 was taken
+mid-run by a sibling lane and 114 by a sibling install-skip row — next free id
+derived from a fresh board census per the id-census rule) + this log entry.
+
+**Verdict: 🟡 PROMISING-BUT-ROUGH (understand surface).** The flagship NL
+query works, is fast, deterministic and genuinely task-relevant at HEAD —
+a real agent would get value today. But serving rows for deleted files with
+no staleness marker is exactly the failure an "agent-first" tool must never
+have, and `graph module`'s dead coverage stat (DF-WARPFS-37, 1744-test corpus
+reads 0.0%) remains unfixed. Rest of hilo unchanged: CLI/graph/FUSE/MCP
+shippable per runs 1-33.
+
+**Left behind:** this log entry, DF-WARPFS-115. No code changes; scratch
+corpus restored byte-identical.
