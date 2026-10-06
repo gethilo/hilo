@@ -55,6 +55,7 @@ pub use semantic::{
 
 pub use surfaces::{
     append_surfaces_deduped, surface_id, KindCensus, Surface, SurfaceInventory, SurfaceKind,
+    SurfaceScope,
 };
 
 pub use coverage_links::{

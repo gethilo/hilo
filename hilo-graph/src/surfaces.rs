@@ -181,14 +181,57 @@ impl KindCensus {
     }
 }
 
+/// The scope an inventory covers — whether the rows describe the Hilo
+/// repository itself, or a repository that is *not* Hilo.
+///
+/// `hilo graph surfaces` derives the `cli_verb` / `cli_flag` / `mcp_tool`
+/// rows from Hilo's **own** compiled registries, and the source-derived
+/// kinds from Hilo's own files, so on a *foreign* repository none of that
+/// describes the target. Rather than present Hilo self-data as target
+/// coverage, a foreign run carries this marker and **zero** rows: the marker
+/// is the whole result (GAP-112).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum SurfaceScope {
+    /// The inventory covers the Hilo repository itself.
+    #[default]
+    #[serde(rename = "self")]
+    SelfHosted,
+    /// The inventory covers a foreign repository: surface enumeration is
+    /// unsupported there, so `surfaces` and `census` are empty and this
+    /// marker is the entire result.
+    #[serde(rename = "foreign")]
+    Foreign,
+}
+
+impl SurfaceScope {
+    /// The snake_case wire form (`self` / `foreign`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SurfaceScope::SelfHosted => "self",
+            SurfaceScope::Foreign => "foreign",
+        }
+    }
+
+    /// True when the inventory describes the Hilo repository itself.
+    pub fn is_self(self) -> bool {
+        matches!(self, SurfaceScope::SelfHosted)
+    }
+}
+
 /// The full surface inventory: the rows plus the per-kind census that makes a
 /// zero count distinguishable from an unexercised parser.
 ///
 /// `schema` is a version number so a future reader can reject a shape it does
-/// not understand instead of misreading it.
+/// not understand instead of misreading it. `scope` says whether the rows
+/// describe the Hilo repository itself or a foreign repository — on a foreign
+/// repository `surfaces` and `census` are empty and `scope` is the entire
+/// answer (GAP-112).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct SurfaceInventory {
     pub schema: u32,
+    /// Whether these rows describe the Hilo repository itself (`self`) or a
+    /// repository that is not Hilo (`foreign`) — see [`SurfaceScope`].
+    pub scope: SurfaceScope,
     pub surfaces: Vec<Surface>,
     pub census: Vec<KindCensus>,
 }
@@ -356,9 +399,27 @@ mod tests {
     }
 
     #[test]
+    fn scope_serializes_self_and_foreign_and_defaults_to_self() {
+        assert_eq!(
+            serde_json::to_string(&SurfaceScope::SelfHosted).unwrap(),
+            "\"self\""
+        );
+        assert_eq!(
+            serde_json::to_string(&SurfaceScope::Foreign).unwrap(),
+            "\"foreign\""
+        );
+        assert_eq!(SurfaceScope::default(), SurfaceScope::SelfHosted);
+        assert!(SurfaceScope::SelfHosted.is_self());
+        assert!(!SurfaceScope::Foreign.is_self());
+        assert_eq!(SurfaceScope::SelfHosted.as_str(), "self");
+        assert_eq!(SurfaceScope::Foreign.as_str(), "foreign");
+    }
+
+    #[test]
     fn inventory_round_trips_through_json() {
         let inv = SurfaceInventory {
             schema: SurfaceInventory::SCHEMA,
+            scope: SurfaceScope::Foreign,
             surfaces: vec![sample()],
             census: vec![KindCensus {
                 kind: SurfaceKind::McpTool,
@@ -370,6 +431,7 @@ mod tests {
         let json = serde_json::to_string(&inv).unwrap();
         let back: SurfaceInventory = serde_json::from_str(&json).unwrap();
         assert_eq!(inv, back);
+        assert_eq!(back.scope, SurfaceScope::Foreign);
     }
 
     #[test]
