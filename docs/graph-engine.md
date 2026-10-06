@@ -190,3 +190,76 @@ When the signal engine's literal anchor discovery returns no files,
 it falls back to semantic search for anchor discovery. This enables
 the signal engine to find relevant files even when the task description
 doesn't contain literal path substrings.
+
+## Surface Inventory — `hilo graph surfaces` (COV-1)
+
+The graph engine also owns the **surface inventory**: one row per
+externally-visible contract point of the codebase, derived from code rather
+than hand-written. `hilo graph surfaces` enumerates seven kinds and persists
+them to `.vfs/graph/surfaces.jsonl` (append-only, deduplicated by a
+content-derived `surface_id`, the same identity discipline `edges.jsonl`
+follows).
+
+| kind | provider |
+|------|----------|
+| `cli_verb` | clap `CommandFactory` introspection of `hilo-cli/src/cli.rs` |
+| `cli_flag` | the same — the `--long` / `-s` args each subcommand registers |
+| `mcp_tool` | `hilo_mcp::tools::list_tools()` — the server's own registry |
+| `ffi_export` | `vfs_*` declarations in `hilo-ffi/src/hilo.udl` |
+| `fuse_op` | `fn` methods of `impl Filesystem for Hilo` in `hilo-fuse/src/ops.rs` |
+| `config_key` | top-level `pub` fields of `hilo_core::manifest::Manifest` |
+| `public_api_item` | `pub use` re-exports of `hilo-graph/src/lib.rs` |
+
+### JSON shape
+
+```json
+{
+  "schema": 1,
+  "scope": "self",
+  "surfaces": [
+    { "surface_id": "…", "kind": "mcp_tool",
+      "owner_file": "hilo-mcp/src/tools/mod.rs",
+      "owner_symbol": "vfs_get_metadata", "name": "vfs_get_metadata",
+      "public": true }
+  ],
+  "census": [
+    { "kind": "mcp_tool", "detected": 17, "expected": 17,
+      "rule": "hilo_mcp::tools::list_tools() registry (17 tools)" }
+  ]
+}
+```
+
+Every kind reports a census row: `detected` vs `expected` plus the rule that
+produced it, so a parser that finds nothing reads as a **gap**
+(`detected == 0`) rather than a silent empty success.
+
+### Scope contract (GAP-112)
+
+The `cli_verb` / `cli_flag` / `mcp_tool` providers run **unconditionally** —
+they describe the `hilo` binary that is executing, not the tree it is pointed
+at — and the source-derived kinds parse Hilo's own files. On a repository
+that is not Hilo, presenting that self-data as the target's surfaces is a
+confident wrong answer, so `graph surfaces` classifies the tree first and
+declares the scope it answered:
+
+- **`scope: "self"`** — the current directory (or an ancestor) is a Hilo
+  workspace: it carries all three marker files `hilo-cli/src/cli.rs`,
+  `hilo-mcp/src/tools/mod.rs`, and `hilo-graph/src/lib.rs`. The full
+  self-inventory is returned and appended to `.vfs/graph/surfaces.jsonl`.
+  This is the unchanged COV-1 behaviour on the Hilo repo itself.
+- **`scope: "foreign"`** — the tree is not Hilo. **No Hilo-owned row is
+  presented as the target's result**: `surfaces` and `census` are empty, the
+  `scope` marker is the entire answer, nothing is written to the tree, and
+  the command exits non-zero (a foreign run is a refusal, never a
+  success-shaped empty report). A foreign `--json` run still prints the
+  marker so a machine caller can branch on `scope` instead of inferring
+  "zero surfaces".
+
+The classification walks **up** from the current directory the way `cargo`
+finds `Cargo.toml`, so a run inside a Hilo subdirectory still reads as
+`self`. It stops at the first repository root (a `.git` entry) that is not
+Hilo, so a foreign checkout nested under a Hilo tree classifies as `foreign`
+rather than inheriting the ancestor's identity.
+
+`--kind <kind>` restricts both the rows and the census to one kind; an
+unknown kind is refused with the valid set named.

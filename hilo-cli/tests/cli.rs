@@ -1761,6 +1761,122 @@ fn graph_warm_after_init_still_warms() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+// ─────────────── graph surfaces scope (GAP-112) ───────────────
+
+/// Build a minimal tree carrying the Hilo workspace markers so `hilo graph
+/// surfaces` classifies it as `self` without touching the real checkout.
+fn hilo_marker_fixture(label: &str) -> PathBuf {
+    let dir = unique_tempdir(label);
+    for marker in [
+        "hilo-cli/src/cli.rs",
+        "hilo-mcp/src/tools/mod.rs",
+        "hilo-graph/src/lib.rs",
+    ] {
+        let path = dir.join(marker);
+        fs::create_dir_all(path.parent().expect("marker path has a parent"))
+            .expect("failed to create marker dir");
+        fs::write(&path, "").expect("failed to write marker");
+    }
+    dir
+}
+
+#[test]
+fn graph_surfaces_declares_self_scope_on_a_hilo_tree() {
+    // A tree carrying the Hilo workspace markers keeps the Hilo self-audit:
+    // the compiled rows are returned, `scope` is `self`, and the inventory is
+    // written into the tree's own `.vfs/graph/surfaces.jsonl`.
+    let dir = hilo_marker_fixture("surfaces-self");
+
+    let output = hilo_cmd()
+        .args(["graph", "surfaces", "--json"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo graph surfaces");
+
+    assert!(
+        output.status.success(),
+        "a Hilo tree must keep surfacing its self-inventory: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let value: serde_json::Value =
+        serde_json::from_str(&stdout).expect("graph surfaces --json must print JSON");
+    assert_eq!(value["scope"], "self", "Hilo tree scope: {stdout}");
+    let surfaces = value["surfaces"]
+        .as_array()
+        .expect("surfaces must be a JSON array");
+    assert!(!surfaces.is_empty(), "the self-inventory must not be empty");
+    for row in surfaces {
+        let owner = row["owner_file"].as_str().unwrap_or_default();
+        assert!(
+            owner.starts_with("hilo-"),
+            "every self row must be owned by a Hilo source file, got {owner:?}"
+        );
+    }
+    assert!(
+        dir.join(".vfs/graph/surfaces.jsonl").exists(),
+        "the self-inventory must be persisted"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn graph_surfaces_declares_foreign_scope_without_hilo_rows() {
+    // A repository that is not Hilo must never receive Hilo's own rows as its
+    // surfaces: the result is an explicit self-only scope, zero rows, no
+    // write, and a non-zero exit so a caller cannot read it as a passing
+    // empty report (GAP-112).
+    let dir = unique_tempdir("surfaces-foreign");
+    fs::create_dir_all(dir.join("src")).expect("failed to create src");
+    fs::write(dir.join("src/main.go"), "package main\n").expect("failed to write main.go");
+
+    let output = hilo_cmd()
+        .args(["graph", "surfaces", "--json"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo graph surfaces");
+
+    assert!(
+        !output.status.success(),
+        "a foreign repo must be refused, not answered with Hilo self-data"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let value: serde_json::Value = serde_json::from_str(&stdout)
+        .expect("a foreign --json run must still print the scope marker");
+    assert_eq!(value["scope"], "foreign", "foreign scope: {stdout}");
+    assert_eq!(
+        value["surfaces"].as_array().map(|a| a.len()),
+        Some(0),
+        "no Hilo-owned row may be presented as target coverage: {stdout}"
+    );
+    assert_eq!(value["census"].as_array().map(|a| a.len()), Some(0));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("not a Hilo workspace"),
+        "the refusal must name the reason, got: {stderr}"
+    );
+    assert!(
+        !dir.join(".vfs").exists(),
+        "a refused foreign run must not scatter .vfs state into the target tree"
+    );
+
+    // Text mode states the same explicit scope.
+    let text = hilo_cmd()
+        .args(["graph", "surfaces"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo graph surfaces");
+    assert!(!text.status.success(), "text mode must refuse too");
+    let text_stdout = String::from_utf8_lossy(&text.stdout);
+    assert!(
+        text_stdout.contains("scope: foreign"),
+        "text mode must declare the foreign scope, got: {text_stdout}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 // ─────────────── ignored cache artifacts (GAP-086) ───────────────
 
 /// The repository root — this crate lives in `<root>/hilo-cli`.

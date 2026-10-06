@@ -352,6 +352,43 @@ for a corrupted or stale graph database.
 hilo graph clean
 ```
 
+### `surfaces`
+
+Enumerate the repository's externally-visible contract surfaces (COV-1) —
+CLI verbs and flags, MCP tools, FFI exports, FUSE ops, manifest config keys,
+and public API items — and write them to `.vfs/graph/surfaces.jsonl`. Two
+different kinds of provider feed it: the `cli_verb` / `cli_flag` / `mcp_tool`
+rows come from the running binary's **own** registries, and the remaining
+kinds are parsed from **Hilo's own** source files.
+
+```bash
+hilo graph surfaces
+hilo graph surfaces --json
+hilo graph surfaces --kind mcp_tool
+```
+
+`--json` prints the inventory (`schema`, `scope`, `surfaces`, `census`);
+`--kind` restricts both the rows and the census to one kind.
+
+**Scope.** Because the compiled rows always describe the `hilo` binary
+itself, `graph surfaces` classifies the tree before enumerating it and
+declares which it answered:
+
+- `scope: "self"` — the tree is a Hilo checkout (it carries the workspace
+  markers: `hilo-cli/src/cli.rs`, `hilo-mcp/src/tools/mod.rs`,
+  `hilo-graph/src/lib.rs`), so the full self-inventory is returned and
+  written to `.vfs/graph/surfaces.jsonl`.
+- `scope: "foreign"` — the tree is not Hilo. **No** Hilo-owned row is
+  presented as the target's surfaces: the command prints the `scope: foreign`
+  marker with empty `surfaces` / `census`, writes nothing, and exits
+  non-zero. Hilo does not derive the surface inventory of an arbitrary
+  repository.
+
+The classification walks up from the current directory (like `cargo` finding
+`Cargo.toml`), so a run inside a Hilo subdirectory still reads as `self`; it
+stops at the first repository root that is not Hilo, so a foreign checkout
+nested under a Hilo tree reads as `foreign`.
+
 ## `hilo classify`
 
 Auto-tag every source file with `user.vfs.role` and `user.vfs.status`

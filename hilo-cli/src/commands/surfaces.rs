@@ -18,6 +18,18 @@
 //! never hand-written. Every provider reports a [`KindCensus`] —
 //! `detected` vs `expected` plus the rule that produced it — so a parser that
 //! finds nothing reads as a gap, never as a silent empty success.
+//!
+//! ## Scope (GAP-112)
+//!
+//! The compiled providers run **unconditionally**: they describe the `hilo`
+//! binary that is executing, not the tree it is pointed at. On a repository
+//! that is not Hilo that self-data is not the target's — presenting it as the
+//! target's surfaces is a confident wrong answer. So before anything is
+//! enumerated the repo is classified ([`detect_scope`]): a tree carrying the
+//! Hilo workspace markers (`self`) keeps the full inventory unchanged, and
+//! any other tree (`foreign`) gets an empty inventory whose `scope` marker is
+//! the entire result — no Hilo-owned row is ever presented as target output,
+//! and nothing is written to a foreign tree.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -26,17 +38,74 @@ use anyhow::{Context, Result};
 use clap::CommandFactory;
 
 use crate::cli::Cli;
-use hilo_graph::surfaces::{KindCensus, Surface, SurfaceInventory, SurfaceKind};
+use hilo_graph::surfaces::{KindCensus, Surface, SurfaceInventory, SurfaceKind, SurfaceScope};
 
 /// The source file that owns the CLI surface (the clap derive types).
 const CLI_OWNER: &str = "hilo-cli/src/cli.rs";
 /// The source file that owns the MCP surface (the tool registry).
 const MCP_OWNER: &str = "hilo-mcp/src/tools/mod.rs";
+/// The library crate root that owns the `public_api_item` surface — the third
+/// file (with the two owner constants above) that marks a Hilo workspace.
+const GRAPH_OWNER: &str = "hilo-graph/src/lib.rs";
+
+/// Files whose presence identifies a Hilo workspace root.
+///
+/// All three are provider-owned paths: without them the compiled
+/// `cli_verb`/`cli_flag`/`mcp_tool` rows (which the compiled registries emit
+/// regardless of the tree) would describe Hilo, not the target (GAP-112).
+const SELF_MARKERS: [&str; 3] = [CLI_OWNER, MCP_OWNER, GRAPH_OWNER];
+
+/// True when `dir` carries every Hilo workspace marker.
+fn is_hilo_workspace_root(dir: &Path) -> bool {
+    SELF_MARKERS.iter().all(|marker| dir.join(marker).is_file())
+}
+
+/// Classify the repository containing `start`: `SelfHosted` when a Hilo
+/// workspace root is `start` or one of its ancestors, `Foreign` otherwise.
+///
+/// The search walks **up** the way `cargo` finds `Cargo.toml`, so
+/// `graph surfaces` run from a subdirectory of a Hilo checkout still reads as
+/// Hilo. It stops at the first repository root (a `.git` entry) that is not
+/// Hilo, so a foreign checkout nested under a Hilo tree classifies as foreign
+/// rather than inheriting the ancestor's identity.
+pub fn detect_scope(start: &Path) -> SurfaceScope {
+    let mut dir = Some(start);
+    while let Some(d) = dir {
+        if is_hilo_workspace_root(d) {
+            return SurfaceScope::SelfHosted;
+        }
+        if d.join(".git").exists() {
+            return SurfaceScope::Foreign;
+        }
+        dir = d.parent();
+    }
+    SurfaceScope::Foreign
+}
+
+/// The empty, self-only inventory a foreign repository gets (GAP-112).
+fn foreign_inventory() -> SurfaceInventory {
+    SurfaceInventory {
+        schema: SurfaceInventory::SCHEMA,
+        scope: SurfaceScope::Foreign,
+        surfaces: Vec::new(),
+        census: Vec::new(),
+    }
+}
 
 /// Enumerate every surface kind, writing nothing. `root` is the repo root the
 /// source-derived providers (ffi/fuse/config/public_api) resolve their files
 /// against.
+///
+/// On a foreign repository this returns [`foreign_inventory`] — the scope
+/// marker with zero rows — instead of Hilo's own compiled inventory.
 pub fn enumerate(root: &Path) -> SurfaceInventory {
+    // GAP-112: decide scope before enumerating anything. The compiled
+    // providers cannot tell Hilo's registries from the target's, so without
+    // this guard a foreign repo would receive Hilo's own rows as its result.
+    if !detect_scope(root).is_self() {
+        return foreign_inventory();
+    }
+
     let cli_cmd = Cli::command();
 
     let (cli_verbs, cli_flags) = collect_cli(&cli_cmd);
@@ -88,27 +157,48 @@ pub fn enumerate(root: &Path) -> SurfaceInventory {
 
     SurfaceInventory {
         schema: SurfaceInventory::SCHEMA,
+        scope: SurfaceScope::SelfHosted,
         surfaces,
         census,
     }
 }
 
-/// The `hilo graph surfaces` command: enumerate, append to
-/// `.vfs/graph/surfaces.jsonl` (deduped by `surface_id`), and print the
-/// per-kind census plus the rows in text or JSON.
+/// The `hilo graph surfaces` command: classify the scope, enumerate (only on
+/// the Hilo repo itself), append to `.vfs/graph/surfaces.jsonl` (deduped by
+/// `surface_id`), and print the per-kind census plus the rows in text or JSON.
+///
+/// On a foreign repository the command declares its self-only scope and
+/// refuses: it prints the `scope: foreign` marker, writes **nothing**, and
+/// exits non-zero, so a caller can never read Hilo self-data as the target's
+/// surfaces and never gets a success-shaped empty report (GAP-112).
 pub fn run(json: bool, kind: Option<&str>) -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
-    let mut inventory = enumerate(&cwd);
 
-    if let Some(filter) = kind {
-        let parsed = SurfaceKind::parse(filter).ok_or_else(|| {
+    // A `--kind` typo is a usage error regardless of scope, so validate it
+    // before the scope check below can short-circuit.
+    let kind_filter = match kind {
+        Some(filter) => Some(SurfaceKind::parse(filter).ok_or_else(|| {
             let valid = SurfaceKind::ALL
                 .iter()
                 .map(|k| k.as_str())
                 .collect::<Vec<_>>()
                 .join(", ");
             anyhow::anyhow!("unknown surface kind '{filter}'. Valid kinds: {valid}")
-        })?;
+        })?),
+        None => None,
+    };
+
+    let mut inventory = enumerate(&cwd);
+
+    if !inventory.scope.is_self() {
+        report_foreign_scope(&cwd, json);
+        anyhow::bail!(
+            "hilo graph surfaces only inventories the Hilo repository itself; {} is not a Hilo workspace",
+            cwd.display()
+        );
+    }
+
+    if let Some(parsed) = kind_filter {
         inventory.surfaces.retain(|s| s.kind == parsed);
         inventory.census.retain(|c| c.kind == parsed);
     }
@@ -157,6 +247,29 @@ pub fn run(json: bool, kind: Option<&str>) -> Result<()> {
         eprintln!("appended {appended} surface row(s) to {}", path.display());
     }
     Ok(())
+}
+
+/// Print the foreign-repo scope declaration — the explicit self-only result
+/// (GAP-112). `--json` callers get the machine-readable inventory with an
+/// empty `surfaces`/`census` and `scope: "foreign"`; text callers get the
+/// same statement in words. Nothing is written to disk.
+fn report_foreign_scope(root: &Path, json: bool) {
+    let inventory = foreign_inventory();
+    if json {
+        match serde_json::to_string_pretty(&inventory) {
+            Ok(out) => println!("{out}"),
+            Err(e) => eprintln!("error: failed to serialize the foreign-scope marker: {e}"),
+        }
+    } else {
+        println!(
+            "scope: foreign — {} is not a Hilo workspace",
+            root.display()
+        );
+        println!(
+            "hilo graph surfaces inventories the Hilo repository's own contract surfaces only."
+        );
+        println!("No target-repo surfaces were derived and nothing was written to .vfs/graph/.");
+    }
 }
 
 // ─────────────────────────── CLI (clap) ───────────────────────────
@@ -652,12 +765,104 @@ mod tests {
         assert!(names.contains("alpha") && names.contains("beta") && names.contains("gamma"));
     }
 
+    // ─────────────── scope: Hilo-self vs foreign (GAP-112) ───────────────
+
+    /// Build a throwaway tree carrying every Hilo workspace marker so it
+    /// classifies as `self` without being the real repository.
+    fn hilo_marker_tree() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tempdir");
+        for marker in SELF_MARKERS {
+            let path = dir.path().join(marker);
+            std::fs::create_dir_all(path.parent().unwrap()).expect("create marker dir");
+            std::fs::write(&path, "").expect("write marker");
+        }
+        dir
+    }
+
+    #[test]
+    fn detect_scope_classifies_the_hilo_repo_and_a_foreign_tree() {
+        // Self: the real repository root.
+        assert_eq!(detect_scope(repo_root()), SurfaceScope::SelfHosted);
+
+        // A plain subdirectory of a Hilo checkout still reads as Hilo — the
+        // search walks up the way `cargo` finds `Cargo.toml`.
+        let hilo = hilo_marker_tree();
+        let sub = hilo.path().join("hilo-cli");
+        std::fs::create_dir_all(&sub).unwrap();
+        assert_eq!(detect_scope(&sub), SurfaceScope::SelfHosted);
+
+        // Foreign: a tree with sources of its own and no Hilo markers.
+        let foreign = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(foreign.path().join("src")).unwrap();
+        std::fs::write(foreign.path().join("src/main.go"), "package main\n").unwrap();
+        assert_eq!(detect_scope(foreign.path()), SurfaceScope::Foreign);
+
+        // A foreign checkout nested under a Hilo tree is still foreign: the
+        // `.git` stop beats the ancestor's markers.
+        let nested = hilo.path().join("bat");
+        std::fs::create_dir_all(nested.join(".git")).unwrap();
+        assert_eq!(detect_scope(&nested), SurfaceScope::Foreign);
+    }
+
+    #[test]
+    fn a_tree_carrying_the_hilo_markers_is_self_scope() {
+        let dir = hilo_marker_tree();
+        assert_eq!(detect_scope(dir.path()), SurfaceScope::SelfHosted);
+
+        let inv = enumerate(dir.path());
+        assert_eq!(inv.scope, SurfaceScope::SelfHosted);
+        // The compiled registries do not read the tree, so a self tree still
+        // yields its surface rows; the source-derived kinds honestly report
+        // their gaps rather than disappearing.
+        assert!(
+            !inv.surfaces.is_empty(),
+            "a self tree must still yield the compiled surface rows"
+        );
+        assert_eq!(inv.census.len(), SurfaceKind::ALL.len());
+        assert_eq!(serde_json::to_value(&inv).unwrap()["scope"], "self");
+    }
+
+    #[test]
+    fn enumerate_refuses_to_emit_hilo_rows_on_a_foreign_tree() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("README.md"), "# bat\n").unwrap();
+
+        let inv = enumerate(dir.path());
+        assert_eq!(inv.scope, SurfaceScope::Foreign);
+        assert!(
+            inv.surfaces.is_empty(),
+            "no Hilo-owned row may be presented as a foreign repo's result: {:?}",
+            inv.surfaces
+        );
+        assert!(inv.census.is_empty());
+
+        // The machine-readable result carries the scope marker explicitly,
+        // with no rows a caller could mistake for target coverage.
+        let value = serde_json::to_value(&inv).unwrap();
+        assert_eq!(value["scope"], "foreign");
+        assert_eq!(value["surfaces"].as_array().unwrap().len(), 0);
+        assert_eq!(value["census"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn enumerate_preserves_the_hilo_self_inventory_on_the_real_repo() {
+        let inv = enumerate(repo_root());
+        assert_eq!(inv.scope, SurfaceScope::SelfHosted);
+        // The self-audit is unchanged: every kind reports a census, and the
+        // compiled kinds are present.
+        assert_eq!(inv.census.len(), SurfaceKind::ALL.len());
+        assert!(inv.surfaces.iter().any(|s| s.kind == SurfaceKind::McpTool));
+        assert!(inv.surfaces.iter().any(|s| s.kind == SurfaceKind::CliVerb));
+        assert_eq!(serde_json::to_value(&inv).unwrap()["scope"], "self");
+    }
+
     #[test]
     fn json_shape_is_locked() {
         let inv = enumerate(repo_root());
         let value = serde_json::to_value(&inv).unwrap();
         let obj = value.as_object().unwrap();
         assert_eq!(obj.get("schema").and_then(|v| v.as_u64()), Some(1));
+        assert_eq!(obj.get("scope").and_then(|v| v.as_str()), Some("self"));
         assert!(obj.contains_key("surfaces"));
         assert!(obj.contains_key("census"));
         // Each surface row carries exactly the six contract fields.
