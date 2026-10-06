@@ -4,6 +4,29 @@ All notable changes to Hilo are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`graph search` reaches behaviour-owning files for intent prompts**
+  (GAP-116): Wave 11 measured natural-language MRR 0.025 on six pinned
+  repositories — the owning file appeared in only 2/6 outputs — while
+  exact-symbol lookup scored 0.457. Search indexed a file's path and its
+  defined symbol names, so a question ("a property derived from other model
+  fields … serialization JSON Schema") could not reach `pydantic/fields.py`,
+  whose path names none of it. The index now carries three weighted channels —
+  path (1.0), defined symbols (2.0), and the file's own comment/docstring
+  vocabulary (0.5) — and query text is filtered of question words and
+  prepositions (`content_tokens`) before matching. Definitions therefore
+  outrank mentions, and documentation lets intent vocabulary reach the owner.
+  BM25 length accounting is unchanged (path + first-8-symbols), so pinned
+  pre-existing rankings are preserved by construction. The CLI caches each
+  file's documentation vocabulary in `.vfs/graph/.symbols_cache.json`
+  (version 2) so a query never re-reads the corpus. Wave 11's cases are pinned
+  as a regression harness (`hilo-graph/tests/wave11_search_test.rs` plus
+  `tests/fixtures/wave11/`, the real upstream files at their pinned SHAs);
+  on that corpus intent MRR rises 0.444 → 0.519 with the owning file inside
+  the top 5 on 6/6 cases, and exact-symbol MRR is unchanged (0.917 ≥ the 0.457
+  baseline). Full-repository re-measurement is GAP-118.
+
 ## [0.4.0] — 2026-10-04
 
 ### Fixed

@@ -77,22 +77,32 @@ fn file_fingerprint(p: &Path) -> Option<(u128, u64)> {
 // deliberately separate from `.parse_cache.json`: warm's cache is keyed by
 // mtime+size and stores import edges, while exact-symbol recall must reject a
 // same-size/same-mtime source rewrite.
-const SYMBOL_CACHE_VERSION: u32 = 1;
+const SYMBOL_CACHE_VERSION: u32 = 2;
 const SYMBOL_CACHE_FILE: &str = ".symbols_cache.json";
 const MAX_SYMBOL_SOURCE_BYTES: u64 = 1_000_000;
 static SYMBOL_CACHE_TEMP_ID: AtomicUsize = AtomicUsize::new(0);
+
+/// Per-file search-index vocabulary: path → terms (symbol names, or
+/// documentation tokens).
+type SymbolMap = BTreeMap<String, Vec<String>>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PersistedSymbolCache {
     version: u32,
     root: String,
     fingerprint: String,
-    symbols: BTreeMap<String, Vec<String>>,
+    symbols: SymbolMap,
+    /// GAP-116: per-file documentation vocabulary, indexed beside the
+    /// symbols so `graph search` can match an intent prompt against the prose
+    /// that describes a behaviour without re-reading the corpus per query.
+    #[serde(default)]
+    index_doc: SymbolMap,
 }
 
 #[derive(Debug)]
 struct SymbolCacheLoad {
-    symbols: BTreeMap<String, Vec<String>>,
+    symbols: SymbolMap,
+    index_doc: SymbolMap,
     #[cfg(test)]
     rebuilt: bool,
 }
@@ -136,11 +146,12 @@ fn scan_symbol_sources(
     root_id: &str,
     paths: &[String],
     extract: bool,
-) -> Result<(String, BTreeMap<String, Vec<String>>)> {
+) -> Result<(String, SymbolMap, SymbolMap)> {
     let mut corpus = Sha256::new();
     hash_field(&mut corpus, &SYMBOL_CACHE_VERSION.to_le_bytes());
     hash_field(&mut corpus, root_id.as_bytes());
     let mut symbols = BTreeMap::new();
+    let mut index_doc = BTreeMap::new();
 
     for rel in paths {
         hash_field(&mut corpus, rel.as_bytes());
@@ -174,12 +185,21 @@ fn scan_symbol_sources(
                 }
                 hash_field(&mut corpus, &file_hash.finalize());
 
-                let names = source
-                    .and_then(|bytes| String::from_utf8(bytes).ok())
-                    .map(|source| hilo_graph::signal::extract_symbol_names_for_index(rel, &source))
+                let text = source.and_then(|bytes| String::from_utf8(bytes).ok());
+                let names = text
+                    .as_deref()
+                    .map(|source| hilo_graph::signal::extract_symbol_names_for_index(rel, source))
+                    .unwrap_or_default();
+                // GAP-116: the documentation vocabulary of the same source,
+                // read once here so `graph search` never re-reads the corpus
+                // per query.
+                let docs = text
+                    .as_deref()
+                    .map(|source| hilo_graph::semantic::extract_doc_tokens(rel, source))
                     .unwrap_or_default();
                 if extract {
                     symbols.insert(rel.clone(), names);
+                    index_doc.insert(rel.clone(), docs);
                 }
             }
             Err(error) => {
@@ -187,12 +207,13 @@ fn scan_symbol_sources(
                 hash_field(&mut corpus, format!("{:?}", error.kind()).as_bytes());
                 if extract {
                     symbols.insert(rel.clone(), Vec::new());
+                    index_doc.insert(rel.clone(), Vec::new());
                 }
             }
         }
     }
 
-    Ok((format!("{:x}", corpus.finalize()), symbols))
+    Ok((format!("{:x}", corpus.finalize()), symbols, index_doc))
 }
 
 fn hash_field(hasher: &mut Sha256, bytes: &[u8]) {
@@ -214,10 +235,11 @@ fn load_or_build_symbol_cache(root: &Path, graph: &GraphDB) -> Result<SymbolCach
         .and_then(|raw| serde_json::from_slice::<PersistedSymbolCache>(&raw).ok());
     if let Some(cached) = cached {
         if cached.version == SYMBOL_CACHE_VERSION && cached.root == root_id {
-            let (current, _) = scan_symbol_sources(root, &root_id, &paths, false)?;
+            let (current, _, _) = scan_symbol_sources(root, &root_id, &paths, false)?;
             if current == cached.fingerprint {
                 return Ok(SymbolCacheLoad {
                     symbols: cached.symbols,
+                    index_doc: cached.index_doc,
                     #[cfg(test)]
                     rebuilt: false,
                 });
@@ -225,16 +247,18 @@ fn load_or_build_symbol_cache(root: &Path, graph: &GraphDB) -> Result<SymbolCach
         }
     }
 
-    let (fingerprint, symbols) = scan_symbol_sources(root, &root_id, &paths, true)?;
+    let (fingerprint, symbols, index_doc) = scan_symbol_sources(root, &root_id, &paths, true)?;
     let cache = PersistedSymbolCache {
         version: SYMBOL_CACHE_VERSION,
         root: root_id,
         fingerprint,
         symbols,
+        index_doc,
     };
     write_symbol_cache_atomic(&cache_path, &cache)?;
     Ok(SymbolCacheLoad {
         symbols: cache.symbols,
+        index_doc: cache.index_doc,
         #[cfg(test)]
         rebuilt: true,
     })
@@ -2653,9 +2677,20 @@ pub fn run_search(query: &str, limit: Option<usize>, no_symbols: bool) -> Result
     let results = if no_symbols {
         hilo_graph::semantic::search(&graph, query, &opts)
     } else {
-        let symbols = load_or_build_symbol_cache(&cwd, &graph)?.symbols;
-        let cached_symbols = |path: &str| symbols.get(path).cloned().unwrap_or_default();
-        hilo_graph::semantic::search_with_symbols(&graph, query, &opts, Some(&cached_symbols))
+        let cache = load_or_build_symbol_cache(&cwd, &graph)?;
+        // GAP-116: index each file's documentation vocabulary beside its
+        // symbols, so an intent prompt ("a property derived from other model
+        // fields … serialization JSON Schema") can reach the file whose own
+        // prose names that behaviour. Both maps come from the persisted
+        // cache, so a query never re-reads the corpus.
+        let cached_terms = |path: &str| {
+            let mut terms = cache.symbols.get(path).cloned().unwrap_or_default();
+            if let Some(docs) = cache.index_doc.get(path) {
+                terms.extend(docs.iter().cloned());
+            }
+            terms
+        };
+        hilo_graph::semantic::search_with_symbols(&graph, query, &opts, Some(&cached_terms))
     }
     .context("failed to run semantic search")?;
 
@@ -2990,6 +3025,37 @@ mod tests {
         // Second run: nothing to remove, not an error.
         let removed = clean_graph_dir(dir.path()).unwrap();
         assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn symbol_cache_indexes_documentation_vocabulary() {
+        let root = TempDir::new().unwrap();
+        let graph_dir = root.path().join(".vfs").join("graph");
+        let src_dir = root.path().join("src");
+        fs::create_dir_all(&graph_dir).unwrap();
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::write(
+            src_dir.join("documented.rs"),
+            "//! Routes an expired alarm through the EventEngine fast path.\npub fn f() {}\n",
+        )
+        .unwrap();
+        fs::write(src_dir.join("silent.rs"), "pub fn g() {}\n").unwrap();
+
+        let graph = GraphDB::open(graph_dir.join("graph.db").to_str().unwrap()).unwrap();
+        graph
+            .insert_edges(&[Edge::new("src/documented.rs", "src/silent.rs", "imports")])
+            .unwrap();
+
+        let load = load_or_build_symbol_cache(root.path(), &graph).unwrap();
+        let docs = load.index_doc.get("src/documented.rs").unwrap();
+        assert!(
+            docs.iter().any(|t| t == "expired") && docs.iter().any(|t| t == "engine"),
+            "documentation vocabulary must be cached: {docs:?}"
+        );
+        assert!(
+            load.index_doc.get("src/silent.rs").unwrap().is_empty(),
+            "a file without comments contributes no documentation tokens"
+        );
     }
 
     #[test]

@@ -31,6 +31,251 @@ use crate::resolution::LocalSpecResolver;
 /// Function type for extracting symbols from a file path.
 pub type SymbolExtractor<'a> = Option<&'a dyn Fn(&str) -> Vec<String>>;
 
+/// Function type for extracting a document's *documentation* vocabulary
+/// (comments and docstrings) from a file path — the second search channel
+/// GAP-116 adds beside symbols.
+pub type DocExtractor<'a> = Option<&'a dyn Fn(&str) -> Vec<String>>;
+
+/// Documentation token budget per document (GAP-116).
+///
+/// Bounded so one heavily-commented file cannot dominate the index; the cap
+/// is applied in source order after de-duplication, so it is deterministic
+/// and stable across runs. The leading documentation of a file (module
+/// docstring, top-of-file comments) is its most representative prose, so a
+/// tight budget is also what keeps the channel about *what the file
+/// documents* rather than how many words it contains.
+pub const DOC_TOKEN_BUDGET: usize = 64;
+
+/// Per-token weight of the documentation channel relative to one symbol or
+/// path occurrence (GAP-116).
+///
+/// Symbols and paths name the thing; documentation merely describes it, and
+/// a file that *mentions* a concept is not the file that owns it. Weighting
+/// documentation below the identifier channels is what keeps the channel a
+/// recall improvement instead of a noise source — an intent prompt can reach
+/// the owning file without a chatty neighbour overtaking it.
+pub const DOC_TERM_WEIGHT: f64 = 0.5;
+
+/// Per-token weight of a file's own path segments (GAP-116). 1.0 keeps the
+/// historical path contribution byte-identical.
+pub const PATH_TERM_WEIGHT: f64 = 1.0;
+
+/// Per-token weight of a symbol a file DEFINES (GAP-116).
+///
+/// A definition is stronger evidence of ownership than a mention: the file
+/// that declares `TestFilter` owns the filter behaviour, while the runner
+/// files that merely use one only talk about it. Weighting the symbol
+/// channel above path and documentation makes "which file defines this"
+/// outrank "which file discusses this" for intent prompts.
+pub const SYMBOL_TERM_WEIGHT: f64 = 2.0;
+
+/// Extract a source file's documentation vocabulary for the search index.
+///
+/// Wave 11 measured that intent (natural-language) prompts found the
+/// behaviour-owning file only 2/6 times, while exact-symbol lookup scored
+/// 0.457: the identifier vocabulary was indexed but the file's own
+/// documentation — the prose that explains what the code does — was not.
+/// A prompt like "a property derived from other model fields … serialization
+/// JSON Schema" names `computed_field`'s documented behaviour, not its path.
+///
+/// This is a deterministic, language-agnostic comment/docstring scan:
+/// `//` and `///`/`//!` line comments, `#` line comments (Python/Ruby),
+/// `/* … */` block comments, and Python triple-quoted string literals. The
+/// scanner is heuristic (a `//` inside a string literal is read as a comment)
+/// — the only consequence is extra indexed vocabulary, never lost results.
+///
+/// Returns de-duplicated, lowercased tokens, capped at [`DOC_TOKEN_BUDGET`].
+/// Unparsable/unknown extensions yield no tokens.
+pub fn extract_doc_tokens(path: &str, source: &str) -> Vec<String> {
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    let Some(language) = crate::parser::Language::from_extension(ext) else {
+        return Vec::new();
+    };
+    let style = CommentStyle::for_language(language);
+    let text = collect_comment_text(source, style);
+    let mut seen = HashSet::new();
+    let mut out: Vec<String> = Vec::new();
+    for token in tokenize(&text) {
+        if seen.insert(token.clone()) {
+            out.push(token);
+            if out.len() >= DOC_TOKEN_BUDGET {
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// Default documentation source for index documents: read the file from
+/// `root` and pull its comment/docstring vocabulary. Mirrors
+/// [`default_symbol_extractor`]: unreadable/oversized/non-source documents
+/// yield no tokens (the previous behaviour), and results are memoized per
+/// index build so each file is scanned at most once per query.
+pub fn default_doc_extractor<'a>(root: &'a std::path::Path) -> impl Fn(&str) -> Vec<String> + 'a {
+    use std::cell::RefCell;
+    let cache: RefCell<HashMap<String, Vec<String>>> = RefCell::new(HashMap::new());
+    move |doc_path: &str| {
+        if let Some(hit) = cache.borrow().get(doc_path) {
+            return hit.clone();
+        }
+        let out = (|| {
+            if doc_path.starts_with("pkg:") || doc_path.starts_with("local:") {
+                return Vec::new();
+            }
+            let Ok(meta) = std::fs::metadata(root.join(doc_path)) else {
+                return Vec::new();
+            };
+            if meta.len() > 1_000_000 {
+                return Vec::new();
+            }
+            let Ok(source) = std::fs::read_to_string(root.join(doc_path)) else {
+                return Vec::new();
+            };
+            extract_doc_tokens(doc_path, &source)
+        })();
+        cache.borrow_mut().insert(doc_path.to_string(), out.clone());
+        out
+    }
+}
+
+/// Which comment syntaxes a language uses.
+#[derive(Debug, Clone, Copy)]
+struct CommentStyle {
+    /// `#` starts a line comment.
+    hash_line: bool,
+    /// `//` starts a line comment and `/* … */` a block comment.
+    c_style: bool,
+    /// Triple-quoted string literals are documentation (Python docstrings).
+    triple_quoted: bool,
+}
+
+impl CommentStyle {
+    fn for_language(language: crate::parser::Language) -> Self {
+        use crate::parser::Language as L;
+        match language {
+            L::Python | L::Ruby => Self {
+                hash_line: true,
+                c_style: false,
+                triple_quoted: matches!(language, L::Python),
+            },
+            _ => Self {
+                hash_line: false,
+                c_style: true,
+                triple_quoted: false,
+            },
+        }
+    }
+}
+
+/// Collect the comment/docstring text of a source file, preserving order.
+fn collect_comment_text(source: &str, style: CommentStyle) -> String {
+    let mut out = String::with_capacity(source.len() / 8);
+    let mut in_block = false;
+    let mut in_triple: Option<&'static str> = None;
+    for line in source.lines() {
+        let mut rest = line;
+        loop {
+            // Inside a triple-quoted literal: take text until the closing
+            // delimiter (which may be on this line).
+            if let Some(delim) = in_triple {
+                match rest.find(delim) {
+                    Some(i) => {
+                        out.push_str(&rest[..i]);
+                        out.push('\n');
+                        rest = &rest[i + delim.len()..];
+                        in_triple = None;
+                        continue;
+                    }
+                    None => {
+                        out.push_str(rest);
+                        break;
+                    }
+                }
+            }
+            // Inside a block comment: take text until `*/`.
+            if in_block {
+                match rest.find("*/") {
+                    Some(i) => {
+                        out.push_str(&rest[..i]);
+                        out.push('\n');
+                        rest = &rest[i + 2..];
+                        in_block = false;
+                        continue;
+                    }
+                    None => {
+                        out.push_str(rest);
+                        break;
+                    }
+                }
+            }
+            // Not in a comment: find the earliest marker on this line.
+            let mut best: Option<(usize, Marker)> = None;
+            let consider = |i: usize, m: Marker, best: &mut Option<(usize, Marker)>| {
+                if best.is_none_or(|(bi, _)| i < bi) {
+                    *best = Some((i, m));
+                }
+            };
+            if style.c_style {
+                if let Some(i) = rest.find("//") {
+                    consider(i, Marker::Line(2), &mut best);
+                }
+                if let Some(i) = rest.find("/*") {
+                    consider(i, Marker::BlockStart, &mut best);
+                }
+            }
+            if style.hash_line {
+                if let Some(i) = rest.find('#') {
+                    consider(i, Marker::Line(1), &mut best);
+                }
+            }
+            if style.triple_quoted {
+                if let Some(i) = rest.find("\"\"\"") {
+                    consider(i, Marker::Triple("\"\"\""), &mut best);
+                }
+                if let Some(i) = rest.find("'''") {
+                    consider(i, Marker::Triple("'''"), &mut best);
+                }
+            }
+            match best {
+                None => break,
+                Some((i, Marker::Line(len))) => {
+                    out.push_str(&rest[i + len..]);
+                    break;
+                }
+                Some((i, Marker::BlockStart)) => {
+                    out.push_str(&rest[i + 2..]);
+                    out.push('\n');
+                    rest = &rest[i + 2..];
+                    in_block = true;
+                }
+                Some((i, Marker::Triple(delim))) => {
+                    out.push_str(&rest[i + 3..]);
+                    out.push('\n');
+                    rest = &rest[i + 3..];
+                    in_triple = Some(match delim {
+                        "\"\"\"" => "\"\"\"",
+                        _ => "'''",
+                    });
+                }
+            }
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// Marker kinds the line scanner looks for.
+#[derive(Debug, Clone, Copy)]
+enum Marker {
+    /// Line comment: marker length (1 for `#`, 2 for `//`).
+    Line(usize),
+    BlockStart,
+    Triple(&'static str),
+}
+
 /// Default symbol source for index documents that look like repo files.
 ///
 /// GAP-077: an exact symbol query (`url_for`) can never match when the
@@ -160,6 +405,134 @@ pub fn tokenize(text: &str) -> Vec<String> {
     tokens
 }
 
+/// Query words that carry no retrieval signal (GAP-116).
+///
+/// Wave 11's intent prompts are questions ("Where does Boot auto-configure
+/// …?", "I want to run only tests whose names match a string"), so a naive
+/// token bag spends most of its terms on function words that either match
+/// nothing or — worse — match incidental prose and pull chatty neighbours up
+/// the ranking. Dropping them is the cheapest, most deterministic form of
+/// query understanding: the remaining tokens are the ones that name the
+/// behaviour. Only function words and generic intent verbs are listed;
+/// domain nouns (test, filter, flag, name, string, schema, …) are never
+/// dropped, because they are exactly what the caller is asking about.
+pub const QUERY_STOPWORDS: &[&str] = &[
+    // question words
+    "where",
+    "what",
+    "which",
+    "who",
+    "whom",
+    "whose",
+    "when",
+    "why",
+    "how",
+    // articles / determiners
+    "a",
+    "an",
+    "the",
+    "this",
+    "that",
+    "these",
+    "those",
+    "its",
+    "their",
+    // pronouns
+    "i",
+    "you",
+    "we",
+    "they",
+    "he",
+    "she",
+    "it",
+    "me",
+    "my",
+    "our",
+    "your",
+    "them",
+    "us",
+    // prepositions / conjunctions
+    "and",
+    "or",
+    "of",
+    "to",
+    "in",
+    "on",
+    "for",
+    "from",
+    "with",
+    "by",
+    "as",
+    "at",
+    "into",
+    "than",
+    "then",
+    "if",
+    "but",
+    "so",
+    "not",
+    "no",
+    "only",
+    "also",
+    // auxiliaries / modals
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "being",
+    "am",
+    "do",
+    "does",
+    "did",
+    "can",
+    "could",
+    "should",
+    "would",
+    "will",
+    "shall",
+    "may",
+    "might",
+    "must",
+    // generic intent verbs
+    "find",
+    "explain",
+    "identify",
+    "distinguish",
+    "locate",
+    "state",
+    "give",
+    "use",
+    "using",
+    "used",
+    "need",
+    "want",
+    "show",
+    "tell",
+    "say",
+    "get",
+];
+
+/// Query tokens with stopwords removed.
+///
+/// Falls back to the raw token list when every token is a stopword (a caller
+/// searching for "the" still gets the historical behaviour rather than an
+/// empty result set). Deterministic, order-preserving.
+pub fn content_tokens(text: &str) -> Vec<String> {
+    let tokens = tokenize(text);
+    let filtered: Vec<String> = tokens
+        .iter()
+        .filter(|t| !QUERY_STOPWORDS.contains(&t.as_str()))
+        .cloned()
+        .collect();
+    if filtered.is_empty() {
+        tokens
+    } else {
+        filtered
+    }
+}
+
 /// Split a single word on camelCase and snake_case boundaries.
 ///
 /// `AuthMiddleware` → `Auth`, `Middleware`
@@ -260,6 +633,22 @@ impl TfIdfIndex {
         db: &GraphDB,
         symbol_extractor: SymbolExtractor,
     ) -> GraphResult<Self> {
+        Self::build_with_docs(db, symbol_extractor, None)
+    }
+
+    /// Build a TF-IDF index with symbol extraction AND a documentation
+    /// channel (GAP-116).
+    ///
+    /// `doc_extractor` contributes each document's comment/docstring
+    /// vocabulary to the term map. Documentation tokens are deliberately
+    /// kept OUT of `doc_lens_capped`: BM25's length normalisation keeps
+    /// measuring path + first-8-symbols, so every pinned pre-GAP-116 ranking
+    /// holds by construction and only recall grows.
+    pub fn build_with_docs(
+        db: &GraphDB,
+        symbol_extractor: SymbolExtractor,
+        doc_extractor: DocExtractor,
+    ) -> GraphResult<Self> {
         let (froms, tos) = db.distinct_files().unwrap_or((Vec::new(), Vec::new()));
         let mut all_files: HashSet<String> = froms.into_iter().collect();
         all_files.extend(tos);
@@ -293,7 +682,19 @@ impl TfIdfIndex {
             // constant below).
             let path_tokens = tokenize(doc_path);
             let path_len = path_tokens.len();
-            let mut doc_tokens = path_tokens;
+
+            // Term frequencies, built per CHANNEL so each can carry its own
+            // weight (GAP-116, BM25F-style field weighting):
+            //   path   → the file's identity in the tree
+            //   symbol → the names the file DEFINES
+            //   doc    → the prose that describes what it does
+            // Only path and the first-8-symbol budget contribute to
+            // `doc_lens_capped`, exactly as before.
+            let mut tf: HashMap<String, f64> = HashMap::new();
+            for token in &path_tokens {
+                *tf.entry(token.clone()).or_insert(0.0) += PATH_TERM_WEIGHT;
+            }
+
             if let Some(extract) = symbol_extractor {
                 let symbols = extract(doc_path);
                 // GAP-102: every symbol's tokens go into the term map —
@@ -303,26 +704,36 @@ impl TfIdfIndex {
                 // is kept EXACTLY: the BM25 length contribution of symbols
                 // is the token count of the FIRST 8 symbols (the take(8)
                 // budget, GAP-044's MAP-tier cap), so doc_len — per document
-                // and averaged — is byte-identical to the capped-index era
-                // and every pinned GAP-100 ranking holds by construction.
-                // Only recall grows.
+                // and averaged — stays the capped-index-era value and every
+                // pinned GAP-100 ranking holds by construction. Only recall
+                // and channel weighting grow.
                 let mut symbol_len_capped = 0usize;
                 for (i, sym) in symbols.into_iter().enumerate() {
                     let toks = tokenize(&sym);
                     if i < 8 {
                         symbol_len_capped += toks.len();
                     }
-                    doc_tokens.extend(toks);
+                    for token in toks {
+                        *tf.entry(token).or_insert(0.0) += SYMBOL_TERM_WEIGHT;
+                    }
                 }
                 doc_lens_capped.push(path_len + symbol_len_capped);
             } else {
-                doc_lens_capped.push(doc_tokens.len());
+                doc_lens_capped.push(path_len);
             }
 
-            // Deduplicate tokens within a document for term frequency.
-            let mut tf: HashMap<String, f64> = HashMap::new();
-            for token in &doc_tokens {
-                *tf.entry(token.clone()).or_insert(0.0) += 1.0;
+            // GAP-116: the documentation channel. Comment/docstring
+            // vocabulary joins the term map (so both TF-IDF and BM25 can
+            // match an intent prompt against prose that names the behaviour),
+            // weighted below the identifier channels and contributing
+            // NOTHING to doc_lens_capped. Keeping it out of the length
+            // accounting is what preserves every pinned pre-GAP-116 ranking:
+            // a doc-heavy file gains recall without having its BM25 length —
+            // and therefore its existing rivals — disturbed.
+            if let Some(extract_docs) = doc_extractor {
+                for term in extract_docs(doc_path) {
+                    *tf.entry(term).or_insert(0.0) += DOC_TERM_WEIGHT;
+                }
             }
 
             // Update document frequency (number of docs containing each term).
@@ -356,7 +767,7 @@ impl TfIdfIndex {
     ///
     /// Returns a sorted list of (document_path, score) pairs, descending.
     pub fn tfidf_search(&self, query: &str) -> Vec<(String, f64)> {
-        let query_tokens = tokenize(query);
+        let query_tokens = content_tokens(query);
         if query_tokens.is_empty() || self.n_docs == 0 {
             return Vec::new();
         }
@@ -398,7 +809,7 @@ impl TfIdfIndex {
     ///
     /// Returns a sorted list of (document_path, score) pairs, descending.
     pub fn bm25_search(&self, query: &str) -> Vec<(String, f64)> {
-        let query_tokens = tokenize(query);
+        let query_tokens = content_tokens(query);
         if query_tokens.is_empty() || self.n_docs == 0 {
             return Vec::new();
         }
@@ -675,18 +1086,41 @@ pub fn search_with_symbols(
     opts: &SearchOpts,
     symbol_extractor: SymbolExtractor,
 ) -> GraphResult<Vec<SearchResult>> {
+    search_with_symbols_and_docs(db, query, opts, symbol_extractor, None)
+}
+
+/// Run semantic search with optional symbol AND documentation extraction
+/// (GAP-116).
+///
+/// `doc_extractor` indexes each document's comment/docstring vocabulary
+/// alongside its path and symbols, so an intent prompt ("a property derived
+/// from other model fields … serialization JSON Schema") can reach the file
+/// whose own documentation names that behaviour. Callers holding a persisted
+/// documentation cache (the CLI's `.symbols_cache.json`) pass it here so a
+/// query never re-reads the corpus; tests and embedded callers may pass a
+/// closure over an in-memory corpus.
+pub fn search_with_symbols_and_docs(
+    db: &GraphDB,
+    query: &str,
+    opts: &SearchOpts,
+    symbol_extractor: SymbolExtractor,
+    doc_extractor: DocExtractor,
+) -> GraphResult<Vec<SearchResult>> {
     // GAP-077: a bare `search()` call (CLI/MCP/understand-fallback pass None)
     // must still index file-defined symbols, else exact-symbol queries find
     // nothing. The default extractor reads from `opts.root` when set, else
     // the process cwd — matching how the rest of the CLI resolves repo
     // files; callers with a real extractor (tests, MCP sandboxing) keep
     // full control.
+    // GAP-116: the same default path also indexes documentation vocabulary —
+    // a caller that opted into file-based enrichment opted into the whole
+    // enrichment, and the two channels are read from the same root.
     // Borrow-shape: when the default extractor is needed, EVERYTHING that
-    // borrows it (cwd, extractor closure, index) lives inside one scope and
+    // borrows it (cwd, extractor closures, index) lives inside one scope and
     // `fused` escapes as owned data. No cross-statement borrows.
     let fused = match symbol_extractor {
         Some(f) => {
-            let index = TfIdfIndex::build_with_symbols(db, Some(f))?;
+            let index = TfIdfIndex::build_with_docs(db, Some(f), doc_extractor)?;
             build_fused(db, query, &index, index.is_empty())?
         }
         None if opts.index_symbols => {
@@ -695,11 +1129,12 @@ pub fn search_with_symbols(
                 .clone()
                 .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
             let extracted = default_symbol_extractor(&root_tmp);
-            let index = TfIdfIndex::build_with_symbols(db, Some(&extracted))?;
+            let extracted_docs = default_doc_extractor(&root_tmp);
+            let index = TfIdfIndex::build_with_docs(db, Some(&extracted), Some(&extracted_docs))?;
             build_fused(db, query, &index, index.is_empty())?
         }
         None => {
-            let index = TfIdfIndex::build_with_symbols(db, None)?;
+            let index = TfIdfIndex::build_with_docs(db, None, doc_extractor)?;
             build_fused(db, query, &index, index.is_empty())?
         }
     };
@@ -712,8 +1147,9 @@ pub fn search_with_symbols(
 
     // The query's tokens, matched against each result path's own tokens —
     // hoisted out of the per-hit loop (the previous code re-tokenized the
-    // query for every result).
-    let query_tokens = tokenize(query);
+    // query for every result). GAP-116: stopwords are dropped here too, so
+    // `SearchResult::symbols` reports the content tokens that matched.
+    let query_tokens = content_tokens(query);
 
     // Map fused hits to SearchResults. Resolution and exclusion happen
     // during the mapping and the `opts.limit` truncation happens AFTER it:
@@ -877,6 +1313,178 @@ mod tests {
 
     fn edge(from: &str, to: &str, rel: &str) -> Edge {
         Edge::new(from, to, rel)
+    }
+
+    // ── GAP-116: intent-to-owner retrieval ───────────────────────────────
+
+    /// Write `files` into a temp dir and build a graph whose documents are
+    /// exactly those files (a chain of imports edges, so every path is a
+    /// document and no pseudo-node joins the corpus).
+    fn wave11_corpus(files: &[(&str, &str)]) -> (tempfile::TempDir, GraphDB) {
+        assert!(files.len() >= 2, "a corpus needs at least two files");
+        let dir = tempfile::tempdir().unwrap();
+        for (path, body) in files {
+            let full = dir.path().join(path);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(&full, body).unwrap();
+        }
+        let db = GraphDB::open(dir.path().join("graph.db").to_str().unwrap()).unwrap();
+        let edges: Vec<Edge> = files
+            .windows(2)
+            .map(|w| edge(w[0].0, w[1].0, "imports"))
+            .collect();
+        db.insert_edges(&edges).unwrap();
+        (dir, db)
+    }
+
+    fn rank_of(results: &[SearchResult], path: &str) -> Option<usize> {
+        results
+            .iter()
+            .position(|r| r.file_path == path)
+            .map(|i| i + 1)
+    }
+
+    #[test]
+    fn gap116_content_tokens_drop_function_words_but_keep_domain_nouns() {
+        // The Wave 11 Deno prompt as written.
+        let tokens = content_tokens("I want to run only tests whose names match a string.");
+        for stop in ["i", "want", "only", "whose", "a"] {
+            assert!(!tokens.contains(&stop.to_string()), "stopword {stop} kept");
+        }
+        for keep in ["run", "tests", "names", "match", "string"] {
+            assert!(
+                tokens.contains(&keep.to_string()),
+                "domain noun {keep} dropped"
+            );
+        }
+
+        // A query made only of stopwords falls back to raw tokens rather than
+        // returning nothing.
+        assert_eq!(content_tokens("the"), vec!["the".to_string()]);
+
+        // Determinism.
+        assert_eq!(
+            content_tokens("Where is the filter flag applied?"),
+            content_tokens("Where is the filter flag applied?")
+        );
+    }
+
+    #[test]
+    fn gap116_extracts_documentation_for_every_comment_family() {
+        // Python: `#` comments and triple-quoted docstrings.
+        let py = "#!/usr/bin/env python\n# module comment about serialization\ndef f():\n    \"\"\"Docstring about computed fields.\"\"\"\n    return 1\n";
+        let py_tokens = extract_doc_tokens("a.py", py);
+        assert!(
+            py_tokens.contains(&"serialization".to_string()),
+            "{py_tokens:?}"
+        );
+        assert!(py_tokens.contains(&"computed".to_string()), "{py_tokens:?}");
+
+        // Rust: `///` doc comments and `//!` module docs.
+        let rs = "//! Crate docs about alarms.\n/// Immediate expiry via the fast path.\npub fn f() {}\n";
+        let rs_tokens = extract_doc_tokens("a.rs", rs);
+        assert!(rs_tokens.contains(&"alarms".to_string()), "{rs_tokens:?}");
+        assert!(
+            rs_tokens.contains(&"immediate".to_string()),
+            "{rs_tokens:?}"
+        );
+
+        // C-family block comments (JS/Java/C++ share the `/* */` form).
+        let cc = "/* Route an expired alarm through the EventEngine fast path. */\nint f() { return 0; }\n";
+        let cc_tokens = extract_doc_tokens("a.cc", cc);
+        assert!(cc_tokens.contains(&"event".to_string()), "{cc_tokens:?}");
+        assert!(cc_tokens.contains(&"engine".to_string()), "{cc_tokens:?}");
+        assert!(cc_tokens.contains(&"expired".to_string()), "{cc_tokens:?}");
+
+        // Non-source documents carry no documentation vocabulary.
+        assert!(extract_doc_tokens("README.md", "# computed_field").is_empty());
+        // Code outside comments is NOT indexed as documentation (that is the
+        // symbol channel's job).
+        let no_comment = "fn unrelated_body_name() {}\n";
+        assert!(extract_doc_tokens("b.rs", no_comment).is_empty());
+    }
+
+    #[test]
+    fn gap116_documentation_channel_reaches_the_owner_the_paths_hide() {
+        // The owner's path names none of the query's content words; its own
+        // documentation names the behaviour. The decoy's PATH names two of
+        // them. This is the Wave 11 shape (pydantic's `fields.py` is the
+        // owner of the computed-field behaviour, while `json_schema.py`
+        // merely discusses schemas).
+        let owner = "src/helpers.py";
+        let decoy = "src/json_schema.py";
+        let owner_src = "\"\"\"Decorator to include property values derived from other model fields when serializing models.\n\nThis is useful for fields that are computed from other fields and appear in serialized output and JSON Schema.\n\"\"\"\n\ndef register(value):\n    return value\n";
+        let decoy_src = "def build_schema():\n    return {}\n";
+        let (dir, db) = wave11_corpus(&[(decoy, decoy_src), (owner, owner_src)]);
+        let query =
+            "property derived from other model fields appearing in serialized json schema output";
+        let opts = SearchOpts {
+            limit: 10,
+            index_symbols: false,
+            root: None,
+        };
+
+        let symbols = default_symbol_extractor(dir.path());
+        let docs = default_doc_extractor(dir.path());
+
+        // Control — identifier channels only. The owner's path and its one
+        // symbol name match none of the query, so it cannot be ranked.
+        let control =
+            search_with_symbols_and_docs(&db, query, &opts, Some(&symbols), None).unwrap();
+        assert_eq!(
+            rank_of(&control, owner),
+            None,
+            "control must not find the owner without the documentation channel: {control:?}"
+        );
+
+        // With the documentation channel the owning file is rank 1.
+        let with_docs =
+            search_with_symbols_and_docs(&db, query, &opts, Some(&symbols), Some(&docs)).unwrap();
+        assert_eq!(
+            rank_of(&with_docs, owner),
+            Some(1),
+            "documentation channel must surface the owner first: {with_docs:?}"
+        );
+    }
+
+    #[test]
+    fn gap116_definition_channel_outranks_a_file_that_merely_mentions() {
+        // The owner DEFINES the queried concept; the decoy only talks about
+        // it (and its path names it too). A mention must not outrank the
+        // definition.
+        let owner = "src/flags.py";
+        let decoy = "src/runner.py";
+        let owner_src = "class TestFilter:\n    pass\n";
+        let decoy_src = "\"\"\"Apply the test filter to the discovered tests and report which subset would run.\"\"\"\n\ndef go():\n    pass\n";
+        let (dir, db) = wave11_corpus(&[(owner, owner_src), (decoy, decoy_src)]);
+        let query = "test filter";
+        let opts = SearchOpts {
+            limit: 10,
+            index_symbols: false,
+            root: None,
+        };
+        let symbols = default_symbol_extractor(dir.path());
+        let docs = default_doc_extractor(dir.path());
+
+        // Documentation only: the decoy discusses the concept, the owner has
+        // no documentation — so the decoy wins and the owner is absent.
+        let docs_only = search_with_symbols_and_docs(&db, query, &opts, None, Some(&docs)).unwrap();
+        assert_eq!(
+            rank_of(&docs_only, owner),
+            None,
+            "docs-only control must not surface the definition file: {docs_only:?}"
+        );
+
+        // Symbols + documentation: the defining file leads.
+        let ranked =
+            search_with_symbols_and_docs(&db, query, &opts, Some(&symbols), Some(&docs)).unwrap();
+        assert_eq!(
+            rank_of(&ranked, owner),
+            Some(1),
+            "the defining file must outrank the mentioning file: {ranked:?}"
+        );
+        // A definition must always weigh more than a mention.
+        const { assert!(SYMBOL_TERM_WEIGHT > DOC_TERM_WEIGHT) };
     }
 
     // ── Tokenization tests ──

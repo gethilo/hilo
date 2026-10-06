@@ -294,14 +294,26 @@ an empty row.
 
 ### `search`
 
-Deterministic semantic code search (TF-IDF + BM25).
+Deterministic semantic code search (TF-IDF + BM25 + RRF) over three weighted
+channels — path, the symbols a file defines, and the file's own
+documentation. Natural-language prompts therefore reach the file that *owns*
+a behaviour, not just the files that name it in their paths; query question
+words and prepositions are dropped before matching.
 
 ```bash
 # Top 20 matches (default)
 hilo graph search "rate limiter"
 
+# Natural-language intent — returns the defining file (indexing symbols and
+# the documentation vocabulary comments/docstrings carry), not just files
+# whose paths happen to contain the words
+hilo graph search "where is the rate limiter applied?"
+
 # Custom result limit
 hilo graph search "rate limiter" --limit 50
+
+# Cheap path-only index (skips symbol + documentation extraction)
+hilo graph search "rate limiter" --no-symbols
 ```
 
 ### `module`

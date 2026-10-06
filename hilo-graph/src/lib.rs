@@ -49,8 +49,9 @@ pub use signal::{
 
 pub use semantic::tokenize as semantic_tokenize;
 pub use semantic::{
-    default_symbol_extractor, reciprocal_rank_fusion, search, search_with_symbols, SearchOpts,
-    SearchResult, TfIdfIndex,
+    default_doc_extractor, default_symbol_extractor, extract_doc_tokens, reciprocal_rank_fusion,
+    search, search_with_symbols, search_with_symbols_and_docs, DocExtractor, SearchOpts,
+    SearchResult, TfIdfIndex, DOC_TOKEN_BUDGET,
 };
 
 pub use surfaces::{
