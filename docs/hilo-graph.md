@@ -26,7 +26,7 @@ The core dependency-graph engine. Builds a knowledge graph from source code usin
 | `Tier` | Signal tier — `Map`, `Signature`, `Detail` |
 | `Resolution` | Output resolution — `Harmonic` (3-tier) or `Flat` |
 | `SearchResult` | Semantic search hit — `{file_path, symbols, score, provenance}` |
-| `SearchOpts` | Search config — `{limit}` |
+| `SearchOpts` | Search config — `{limit, index_symbols, root}` |
 | `TfIdfIndex` | In-memory TF-IDF index over graph nodes |
 | `ModuleStats` | Per-module edge counts — `{module, edge_count, files_count}` |
 | `Direction` | Query direction — `Forward` or `Reverse` |
@@ -63,6 +63,39 @@ The core dependency-graph engine. Builds a knowledge graph from source code usin
 | `understand_with_source(opts, files) -> SignalResult` | Signal engine with pre-loaded source |
 | `search(query, graph) -> Vec<SearchResult>` | Semantic search via TF-IDF + BM25 + RRF |
 | `search_with_symbols(query, graph, symbols) -> Vec<SearchResult>` | Search with explicit symbol extraction |
+| `search_with_symbols_and_docs(query, graph, symbols, docs) -> Vec<SearchResult>` | Search with explicit symbol **and** documentation extraction |
+| `extract_doc_tokens(path, source) -> Vec<String>` | Comment/docstring vocabulary of a source file (search's documentation channel) |
+| `default_doc_extractor(root) -> impl Fn(&str) -> Vec<String>` | Default documentation source (reads files under `root`) |
+| `content_tokens(text) -> Vec<String>` | Candidate query tokens with function words removed |
+
+## Search ranking
+
+`graph search` ranks files by three weighted channels over one TF-IDF + BM25
+index, fused with Reciprocal Rank Fusion:
+
+| Channel | Weight | What it carries |
+|---|---|---|
+| path | `PATH_TERM_WEIGHT` (1.0) | the file's identity in the tree |
+| symbol | `SYMBOL_TERM_WEIGHT` (2.0) | the names the file **defines** |
+| documentation | `DOC_TERM_WEIGHT` (0.5) | the file's comments and docstrings |
+
+Definitions outrank mentions, and mentions outrank nothing: a file that
+declares `TestFilter` leads a file that merely discusses filters, while the
+documentation channel lets a natural-language prompt ("a property derived from
+other model fields … serialization JSON Schema") reach the file whose own
+prose names the behaviour — the file's path names none of it. Query text is
+run through [`content_tokens`] first, so question words and prepositions do
+not dilute the match. Both identifier channels keep the historical BM25 length
+accounting, so pre-existing rankings are preserved by construction.
+
+The CLI persists each file's documentation vocabulary in
+`.vfs/graph/.symbols_cache.json` (version 2) beside its symbols, so a query
+never re-reads the corpus. `--no-symbols` restores the path-only index.
+
+`tests/wave11_search_test.rs` pins the Wave 11 intent/exact cases over a
+checked-in corpus of the real upstream files (`tests/fixtures/wave11/`); see
+that directory's README for provenance and for re-running against full
+repository clones.
 
 ## Usage Example
 

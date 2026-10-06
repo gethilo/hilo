@@ -1,0 +1,642 @@
+[
+ {
+  "corpus": "deno",
+  "repo": "deno",
+  "repo_sha": "3d44d1d82fdaca0b4e776bfe89e46e026e29f72d",
+  "path": "cli/args/flags.rs",
+  "bytes": 39550,
+  "sha256": "266b88d266480799639ba875ac24fb6121f72b14b4e2cb957de0ca9ecea94ca2"
+ },
+ {
+  "corpus": "deno",
+  "repo": "deno",
+  "repo_sha": "3d44d1d82fdaca0b4e776bfe89e46e026e29f72d",
+  "path": "cli/args/mod.rs",
+  "bytes": 70295,
+  "sha256": "f4154661a8661fbfe5429c66c7dbeee533f741872d7e432ea9d26ca2c8953975"
+ },
+ {
+  "corpus": "deno",
+  "repo": "deno",
+  "repo_sha": "3d44d1d82fdaca0b4e776bfe89e46e026e29f72d",
+  "path": "cli/tools/run/mod.rs",
+  "bytes": 16288,
+  "sha256": "4d6c42bfecdb0e2f2397dffb354a864666f7d5816677a5f7039f008d1dd6df8a"
+ },
+ {
+  "corpus": "deno",
+  "repo": "deno",
+  "repo_sha": "3d44d1d82fdaca0b4e776bfe89e46e026e29f72d",
+  "path": "cli/tools/test/mod.rs",
+  "bytes": 97205,
+  "sha256": "4dd69c50d22f89b25c16446396186c01b28ef85e92c45888c01de8e86576ec97"
+ },
+ {
+  "corpus": "deno",
+  "repo": "deno",
+  "repo_sha": "3d44d1d82fdaca0b4e776bfe89e46e026e29f72d",
+  "path": "cli/worker.rs",
+  "bytes": 28286,
+  "sha256": "055707a709898c4faefe0795d48194631b12642b4c6c2eaf73684858cd5da366"
+ },
+ {
+  "corpus": "deno",
+  "repo": "deno",
+  "repo_sha": "3d44d1d82fdaca0b4e776bfe89e46e026e29f72d",
+  "path": "libs/cli_parser/src/completions.rs",
+  "bytes": 26760,
+  "sha256": "8ac1a07b18c63f0f74894cf01c376e1f11ba27860c1b7bbaa21eb77e5913719a"
+ },
+ {
+  "corpus": "deno",
+  "repo": "deno",
+  "repo_sha": "3d44d1d82fdaca0b4e776bfe89e46e026e29f72d",
+  "path": "libs/cli_parser/src/convert.rs",
+  "bytes": 105244,
+  "sha256": "e23d142641da0d92715d6106d871ace6e22e6202de641d729077e4bd18d23ca3"
+ },
+ {
+  "corpus": "deno",
+  "repo": "deno",
+  "repo_sha": "3d44d1d82fdaca0b4e776bfe89e46e026e29f72d",
+  "path": "libs/cli_parser/src/defs.rs",
+  "bytes": 136601,
+  "sha256": "158d4757193c85b60349d1c1ad1c19610e01edd327cabc0141afa70623803c43"
+ },
+ {
+  "corpus": "deno",
+  "repo": "deno",
+  "repo_sha": "3d44d1d82fdaca0b4e776bfe89e46e026e29f72d",
+  "path": "libs/cli_parser/src/env_vars.rs",
+  "bytes": 7017,
+  "sha256": "e194cd31f6e60157c95436f7f362a844d8e26d6d0b39c6d3e4be97bdcc795b99"
+ },
+ {
+  "corpus": "deno",
+  "repo": "deno",
+  "repo_sha": "3d44d1d82fdaca0b4e776bfe89e46e026e29f72d",
+  "path": "libs/cli_parser/src/error.rs",
+  "bytes": 3427,
+  "sha256": "679029a6033a619f584dc7b3d5842a38c5f976a03815915f300ad71b255e37a3"
+ },
+ {
+  "corpus": "deno",
+  "repo": "deno",
+  "repo_sha": "3d44d1d82fdaca0b4e776bfe89e46e026e29f72d",
+  "path": "libs/cli_parser/src/flags.rs",
+  "bytes": 29804,
+  "sha256": "00d57a71446d6f278ce72bdf33134900b5fbe0fc2b1c3f293d176176003519d3"
+ },
+ {
+  "corpus": "deno",
+  "repo": "deno",
+  "repo_sha": "3d44d1d82fdaca0b4e776bfe89e46e026e29f72d",
+  "path": "libs/cli_parser/src/help.rs",
+  "bytes": 5531,
+  "sha256": "b99da046286138fbe6249186d5d1cf7e8443099b97f03df8301971b3ee872b1c"
+ },
+ {
+  "corpus": "deno",
+  "repo": "deno",
+  "repo_sha": "3d44d1d82fdaca0b4e776bfe89e46e026e29f72d",
+  "path": "libs/cli_parser/src/lib.rs",
+  "bytes": 889,
+  "sha256": "cbcdbf38ecbf354ebb66945bd3fe5ec3e60ecc7902c703cc4f2716a4a003ee59"
+ },
+ {
+  "corpus": "deno",
+  "repo": "deno",
+  "repo_sha": "3d44d1d82fdaca0b4e776bfe89e46e026e29f72d",
+  "path": "libs/cli_parser/src/parse.rs",
+  "bytes": 23739,
+  "sha256": "64ee2b40f2b71842f5aa84097cd06b8a5bbe6ef01ea9b790e67b615d90beff69"
+ },
+ {
+  "corpus": "deno",
+  "repo": "deno",
+  "repo_sha": "3d44d1d82fdaca0b4e776bfe89e46e026e29f72d",
+  "path": "libs/cli_parser/src/types.rs",
+  "bytes": 11830,
+  "sha256": "3db9fea0d5b57ca89f7b5c564c5a592f22cdf35492116fb8568eec71739f7537"
+ },
+ {
+  "corpus": "grpc",
+  "repo": "grpc",
+  "repo_sha": "daa899ed7e3a0c2f12451c90fdc3eb4d7e03aa54",
+  "path": "include/grpcpp/alarm.h",
+  "bytes": 4180,
+  "sha256": "2644145777fba8fff7d238e01124ceeb30db9ce4332e44ce3f74c01eb527ff90"
+ },
+ {
+  "corpus": "grpc",
+  "repo": "grpc",
+  "repo_sha": "daa899ed7e3a0c2f12451c90fdc3eb4d7e03aa54",
+  "path": "src/cpp/common/alarm.cc",
+  "bytes": 7213,
+  "sha256": "56bbb1e564b647ca3d0505337de64159a95d618f7f7e092c6918c40408b26312"
+ },
+ {
+  "corpus": "grpc",
+  "repo": "grpc",
+  "repo_sha": "daa899ed7e3a0c2f12451c90fdc3eb4d7e03aa54",
+  "path": "src/cpp/common/alts_context.cc",
+  "bytes": 4814,
+  "sha256": "d90594388510466836ff0d6e3ed2a65c484611c87609bfa5130ff8708eb8cdbd"
+ },
+ {
+  "corpus": "grpc",
+  "repo": "grpc",
+  "repo_sha": "daa899ed7e3a0c2f12451c90fdc3eb4d7e03aa54",
+  "path": "src/cpp/common/channel_arguments.cc",
+  "bytes": 7534,
+  "sha256": "e1231dcf8f66a1b6ae9baee7dbd1e065e6f5c1cfc338544e8fadf965c09568a9"
+ },
+ {
+  "corpus": "grpc",
+  "repo": "grpc",
+  "repo_sha": "daa899ed7e3a0c2f12451c90fdc3eb4d7e03aa54",
+  "path": "src/cpp/common/completion_queue_cc.cc",
+  "bytes": 7256,
+  "sha256": "451387b3ab70ac83e347ed0617810b06152e09da0f8a4d4a7813504c66a598f9"
+ },
+ {
+  "corpus": "grpc",
+  "repo": "grpc",
+  "repo_sha": "daa899ed7e3a0c2f12451c90fdc3eb4d7e03aa54",
+  "path": "src/cpp/common/resource_quota_cc.cc",
+  "bytes": 1525,
+  "sha256": "4bc488246d45d39a7ca80a81ec16504608abe51c35c58a6d570ebdea1e2665c5"
+ },
+ {
+  "corpus": "grpc",
+  "repo": "grpc",
+  "repo_sha": "daa899ed7e3a0c2f12451c90fdc3eb4d7e03aa54",
+  "path": "src/cpp/common/rpc_method.cc",
+  "bytes": 677,
+  "sha256": "fa8f2e8eb685d1d296eb197a47a6b524916ef184a2f202eb56dd00ef82459b39"
+ },
+ {
+  "corpus": "grpc",
+  "repo": "grpc",
+  "repo_sha": "daa899ed7e3a0c2f12451c90fdc3eb4d7e03aa54",
+  "path": "src/cpp/common/secure_auth_context.cc",
+  "bytes": 3194,
+  "sha256": "3e27fadbab080a9926980ae3d7f3542cd34d2378925bc9ab7617c76819209d57"
+ },
+ {
+  "corpus": "grpc",
+  "repo": "grpc",
+  "repo_sha": "daa899ed7e3a0c2f12451c90fdc3eb4d7e03aa54",
+  "path": "src/cpp/common/tls_certificate_provider.cc",
+  "bytes": 6387,
+  "sha256": "eb66a0ae876b6fbd8cba5d1332b6bf3198a1d72727e9c956beea661fe9b64862"
+ },
+ {
+  "corpus": "grpc",
+  "repo": "grpc",
+  "repo_sha": "daa899ed7e3a0c2f12451c90fdc3eb4d7e03aa54",
+  "path": "src/cpp/common/tls_certificate_verifier.cc",
+  "bytes": 9264,
+  "sha256": "7447c4d93ab2af2a9b5ee490e46e2bd6ef1d129191751697f48a10cc8bc8c661"
+ },
+ {
+  "corpus": "grpc",
+  "repo": "grpc",
+  "repo_sha": "daa899ed7e3a0c2f12451c90fdc3eb4d7e03aa54",
+  "path": "src/cpp/common/tls_credentials_options.cc",
+  "bytes": 7369,
+  "sha256": "5d74e5cf2c0945411850a399c476dd995a098430739bbdde1bf8332f35bf0b23"
+ },
+ {
+  "corpus": "grpc",
+  "repo": "grpc",
+  "repo_sha": "daa899ed7e3a0c2f12451c90fdc3eb4d7e03aa54",
+  "path": "src/cpp/common/validate_service_config.cc",
+  "bytes": 1426,
+  "sha256": "6e5674c989b3deb73823663ab335bb8109d007d1fe268d4ece62e4e4347ce535"
+ },
+ {
+  "corpus": "grpc",
+  "repo": "grpc",
+  "repo_sha": "daa899ed7e3a0c2f12451c90fdc3eb4d7e03aa54",
+  "path": "src/cpp/common/version_cc.cc",
+  "bytes": 746,
+  "sha256": "514ebb824606a60c5aa29a85a955855363e1310ee38dfc67aef372af1338b774"
+ },
+ {
+  "corpus": "grpc",
+  "repo": "grpc",
+  "repo_sha": "daa899ed7e3a0c2f12451c90fdc3eb4d7e03aa54",
+  "path": "test/cpp/common/BUILD",
+  "bytes": 4622,
+  "sha256": "259488d6e84f1ce3db64244e127398aad099a14797f70b75dcbe90ccabba6d3c"
+ },
+ {
+  "corpus": "grpc",
+  "repo": "grpc",
+  "repo_sha": "daa899ed7e3a0c2f12451c90fdc3eb4d7e03aa54",
+  "path": "test/cpp/common/alarm_test.cc",
+  "bytes": 15655,
+  "sha256": "c4ebe80230118a3926e5062cbf981066dafc7bd4df5b9b32bb5b28b18a6809e7"
+ },
+ {
+  "corpus": "pydantic",
+  "repo": "pydantic",
+  "repo_sha": "0b2205799fb3735ed0639dd560d088d7858ebfe5",
+  "path": "pydantic/aliases.py",
+  "bytes": 4902,
+  "sha256": "7ca40cf66ee92d9d94a1322a2be6cca31b3971634836b1f1a61c73b01e9501df"
+ },
+ {
+  "corpus": "pydantic",
+  "repo": "pydantic",
+  "repo_sha": "0b2205799fb3735ed0639dd560d088d7858ebfe5",
+  "path": "pydantic/config.py",
+  "bytes": 44640,
+  "sha256": "ce6280cd61c4d3ce852122e3f75996711baed907ccab1b609a9aebf6f1a12171"
+ },
+ {
+  "corpus": "pydantic",
+  "repo": "pydantic",
+  "repo_sha": "0b2205799fb3735ed0639dd560d088d7858ebfe5",
+  "path": "pydantic/fields.py",
+  "bytes": 88258,
+  "sha256": "70538e4988a6748f96d7a991ace8ef8a56983bbd5f589afc13d31150531ebca7"
+ },
+ {
+  "corpus": "pydantic",
+  "repo": "pydantic",
+  "repo_sha": "0b2205799fb3735ed0639dd560d088d7858ebfe5",
+  "path": "pydantic/functional_serializers.py",
+  "bytes": 17929,
+  "sha256": "c1c17b977673638ac45c11b422453728b1abe7f34810a4baf8216ad7896e5522"
+ },
+ {
+  "corpus": "pydantic",
+  "repo": "pydantic",
+  "repo_sha": "0b2205799fb3735ed0639dd560d088d7858ebfe5",
+  "path": "pydantic/functional_validators.py",
+  "bytes": 33225,
+  "sha256": "ba78239e3ba03f1021eef3e153b629ee4eb374f51f299aed3856d1ccdd3ae1fc"
+ },
+ {
+  "corpus": "pydantic",
+  "repo": "pydantic",
+  "repo_sha": "0b2205799fb3735ed0639dd560d088d7858ebfe5",
+  "path": "pydantic/json_schema.py",
+  "bytes": 142965,
+  "sha256": "72d50c8763de9ea24e1f083fe23612066de49486c68e7ec596bc6af166698cdf"
+ },
+ {
+  "corpus": "pydantic",
+  "repo": "pydantic",
+  "repo_sha": "0b2205799fb3735ed0639dd560d088d7858ebfe5",
+  "path": "pydantic/main.py",
+  "bytes": 91376,
+  "sha256": "84335fc05a112a2834af4a048f71c6a7c46b90f4468bee541da36e438a387190"
+ },
+ {
+  "corpus": "pydantic",
+  "repo": "pydantic",
+  "repo_sha": "0b2205799fb3735ed0639dd560d088d7858ebfe5",
+  "path": "pydantic/root_model.py",
+  "bytes": 8703,
+  "sha256": "0e56557366fcc0b118403e999a6c4f48f30bc48f849ea1eca412b2b171994b2d"
+ },
+ {
+  "corpus": "pydantic",
+  "repo": "pydantic",
+  "repo_sha": "0b2205799fb3735ed0639dd560d088d7858ebfe5",
+  "path": "pydantic/type_adapter.py",
+  "bytes": 36246,
+  "sha256": "821e4ea9b5548afa82766da4c24baceeede6c94af6a2e30a5443aac0d1cea063"
+ },
+ {
+  "corpus": "pydantic",
+  "repo": "pydantic",
+  "repo_sha": "0b2205799fb3735ed0639dd560d088d7858ebfe5",
+  "path": "tests/test_computed_fields.py",
+  "bytes": 26096,
+  "sha256": "07dac23c9a0a2b93a61118dad26fc0207357e7040fec4c01032670c0e3576532"
+ },
+ {
+  "corpus": "ruff",
+  "repo": "ruff",
+  "repo_sha": "df78bcfc148681112a823b390f15e610d20b1bf6",
+  "path": "crates/ruff_linter/resources/test/fixtures/flake8_bugbear/B905.py",
+  "bytes": 738,
+  "sha256": "d71659fa665e6d30b6a4397bd918eb0c173c6ab089917ce18a30c858ee813509"
+ },
+ {
+  "corpus": "ruff",
+  "repo": "ruff",
+  "repo_sha": "df78bcfc148681112a823b390f15e610d20b1bf6",
+  "path": "crates/ruff_linter/src/rules/flake8_bugbear/helpers.rs",
+  "bytes": 2749,
+  "sha256": "9f32db9d0be616a57729f075adc11809165dd21eb1a3b0e5f6275d83c9c6dabf"
+ },
+ {
+  "corpus": "ruff",
+  "repo": "ruff",
+  "repo_sha": "df78bcfc148681112a823b390f15e610d20b1bf6",
+  "path": "crates/ruff_linter/src/rules/flake8_bugbear/mod.rs",
+  "bytes": 10533,
+  "sha256": "2b9dd44e394e9442d9f90f98ee1f2b6d2dd23721ca6c32fcf1beca6dfe995fe9"
+ },
+ {
+  "corpus": "ruff",
+  "repo": "ruff",
+  "repo_sha": "df78bcfc148681112a823b390f15e610d20b1bf6",
+  "path": "crates/ruff_linter/src/rules/flake8_bugbear/rules/assert_false.rs",
+  "bytes": 3009,
+  "sha256": "39008d64070ae826413df906253306390497194f63c6483605f44f8b842908f8"
+ },
+ {
+  "corpus": "ruff",
+  "repo": "ruff",
+  "repo_sha": "df78bcfc148681112a823b390f15e610d20b1bf6",
+  "path": "crates/ruff_linter/src/rules/flake8_bugbear/rules/batched_without_explicit_strict.rs",
+  "bytes": 2935,
+  "sha256": "3a9175dd7586160ac5c754abc4e806ab797ee6a0ed532101ead83fb7cde943b9"
+ },
+ {
+  "corpus": "ruff",
+  "repo": "ruff",
+  "repo_sha": "df78bcfc148681112a823b390f15e610d20b1bf6",
+  "path": "crates/ruff_linter/src/rules/flake8_bugbear/rules/function_uses_loop_variable.rs",
+  "bytes": 11058,
+  "sha256": "3093a3719fb0292d02905e62b815da0365bfd6541c90c26e945e8934e480a65b"
+ },
+ {
+  "corpus": "ruff",
+  "repo": "ruff",
+  "repo_sha": "df78bcfc148681112a823b390f15e610d20b1bf6",
+  "path": "crates/ruff_linter/src/rules/flake8_bugbear/rules/loop_iterator_mutation.rs",
+  "bytes": 17501,
+  "sha256": "3f7f8dfee2bef680f9099108d76c92ca977e48658b5428f5117b08b034bec7a2"
+ },
+ {
+  "corpus": "ruff",
+  "repo": "ruff",
+  "repo_sha": "df78bcfc148681112a823b390f15e610d20b1bf6",
+  "path": "crates/ruff_linter/src/rules/flake8_bugbear/rules/map_without_explicit_strict.rs",
+  "bytes": 3056,
+  "sha256": "67767e7bc81b90c249a96d666675e843fbb1cea8b884a999d309dd9f98501bca"
+ },
+ {
+  "corpus": "ruff",
+  "repo": "ruff",
+  "repo_sha": "df78bcfc148681112a823b390f15e610d20b1bf6",
+  "path": "crates/ruff_linter/src/rules/flake8_bugbear/rules/mutable_argument_default.rs",
+  "bytes": 9187,
+  "sha256": "017017f85b60a942be4a35dbf9dc7797c9185553315102dcb1715c6f96729db5"
+ },
+ {
+  "corpus": "ruff",
+  "repo": "ruff",
+  "repo_sha": "df78bcfc148681112a823b390f15e610d20b1bf6",
+  "path": "crates/ruff_linter/src/rules/flake8_bugbear/rules/re_sub_positional_args.rs",
+  "bytes": 3321,
+  "sha256": "472714fdcd515a82118b276f130965c796bb1b222de1b4d14811a953777b7ce9"
+ },
+ {
+  "corpus": "ruff",
+  "repo": "ruff",
+  "repo_sha": "df78bcfc148681112a823b390f15e610d20b1bf6",
+  "path": "crates/ruff_linter/src/rules/flake8_bugbear/rules/unreliable_callable_check.rs",
+  "bytes": 4594,
+  "sha256": "288b93b32a02f5c27cab6be9ba800b59b03c9f85c524992e64d8b8917d956a3a"
+ },
+ {
+  "corpus": "ruff",
+  "repo": "ruff",
+  "repo_sha": "df78bcfc148681112a823b390f15e610d20b1bf6",
+  "path": "crates/ruff_linter/src/rules/flake8_bugbear/rules/useless_comparison.rs",
+  "bytes": 3287,
+  "sha256": "67d7dd7130e5c2682802315f3ef12cb988122e88abcad14d8c10a73fc02b2041"
+ },
+ {
+  "corpus": "ruff",
+  "repo": "ruff",
+  "repo_sha": "df78bcfc148681112a823b390f15e610d20b1bf6",
+  "path": "crates/ruff_linter/src/rules/flake8_bugbear/rules/zip_without_explicit_strict.rs",
+  "bytes": 2742,
+  "sha256": "0ee4ce34b290df1df8d029cf1ea05712675f11c64614325720e2cc25e03f723f"
+ },
+ {
+  "corpus": "ruff",
+  "repo": "ruff",
+  "repo_sha": "df78bcfc148681112a823b390f15e610d20b1bf6",
+  "path": "crates/ruff_linter/src/rules/flake8_bugbear/snapshots/ruff_linter__rules__flake8_bugbear__tests__B905.py.snap",
+  "bytes": 3320,
+  "sha256": "556577d0a2976ea89def0e05547566e697ef23c04c11e0b3626090f26956aaf6"
+ },
+ {
+  "corpus": "ruff",
+  "repo": "ruff",
+  "repo_sha": "df78bcfc148681112a823b390f15e610d20b1bf6",
+  "path": "crates/ruff_linter/src/rules/pyupgrade/rules/use_pep604_annotation.rs",
+  "bytes": 15029,
+  "sha256": "5cb2633ed4eba72ed0a5d34825f4ed388f0806d8db43a47f3c793ab859c9d833"
+ },
+ {
+  "corpus": "spring-boot",
+  "repo": "spring-boot",
+  "repo_sha": "2ad19e44980bc1f31e119b81a838e9829295aa4f",
+  "path": "core/spring-boot-autoconfigure/src/main/java/org/springframework/boot/autoconfigure/AutoConfigurationImportSelector.java",
+  "bytes": 21576,
+  "sha256": "9ce25e0215ba98ee42538e5e76b113a80f366becfccf2a8a7240f1bba286dfe9"
+ },
+ {
+  "corpus": "spring-boot",
+  "repo": "spring-boot",
+  "repo_sha": "2ad19e44980bc1f31e119b81a838e9829295aa4f",
+  "path": "core/spring-boot-autoconfigure/src/main/java/org/springframework/boot/autoconfigure/SpringBootApplication.java",
+  "bytes": 6990,
+  "sha256": "c97a82e92735ffb9272a642a650b0b0fc7c682778922f50fd7783976e2b22c5f"
+ },
+ {
+  "corpus": "spring-boot",
+  "repo": "spring-boot",
+  "repo_sha": "2ad19e44980bc1f31e119b81a838e9829295aa4f",
+  "path": "module/spring-boot-restclient/src/main/java/org/springframework/boot/restclient/autoconfigure/AutoConfiguredRestClientSsl.java",
+  "bytes": 2106,
+  "sha256": "f6c2ac80218b4aab7e511ee5708322d28c70c96deaf8abd2b12dae0a8bcc3137"
+ },
+ {
+  "corpus": "spring-boot",
+  "repo": "spring-boot",
+  "repo_sha": "2ad19e44980bc1f31e119b81a838e9829295aa4f",
+  "path": "module/spring-boot-restclient/src/main/java/org/springframework/boot/restclient/autoconfigure/HttpMessageConvertersRestClientCustomizer.java",
+  "bytes": 1940,
+  "sha256": "611a055dbf0cc61969ced64c96cbd64e16dc0028528b3ab8ba0a7c22728429c0"
+ },
+ {
+  "corpus": "spring-boot",
+  "repo": "spring-boot",
+  "repo_sha": "2ad19e44980bc1f31e119b81a838e9829295aa4f",
+  "path": "module/spring-boot-restclient/src/main/java/org/springframework/boot/restclient/autoconfigure/RestClientAutoConfiguration.java",
+  "bytes": 5100,
+  "sha256": "e6256b7a38f95158f8e5ac607671f3a1051079cb92c4ddd2251099a86d0c4529"
+ },
+ {
+  "corpus": "spring-boot",
+  "repo": "spring-boot",
+  "repo_sha": "2ad19e44980bc1f31e119b81a838e9829295aa4f",
+  "path": "module/spring-boot-restclient/src/main/java/org/springframework/boot/restclient/autoconfigure/RestClientBuilderConfigurer.java",
+  "bytes": 2668,
+  "sha256": "7b262d6639f3b8f341b9ff078986e5af8bcd4cd1b750521118c48dc10a205af0"
+ },
+ {
+  "corpus": "spring-boot",
+  "repo": "spring-boot",
+  "repo_sha": "2ad19e44980bc1f31e119b81a838e9829295aa4f",
+  "path": "module/spring-boot-restclient/src/main/java/org/springframework/boot/restclient/autoconfigure/RestClientObservationAutoConfiguration.java",
+  "bytes": 2654,
+  "sha256": "543d8fdb1018a0a4e72b7be005fd6a65d0ff9619b549c02572875ae2bb9482c3"
+ },
+ {
+  "corpus": "spring-boot",
+  "repo": "spring-boot",
+  "repo_sha": "2ad19e44980bc1f31e119b81a838e9829295aa4f",
+  "path": "module/spring-boot-restclient/src/main/java/org/springframework/boot/restclient/autoconfigure/RestClientSsl.java",
+  "bytes": 2948,
+  "sha256": "79cee22fba334f7b04c6f95806f801d5aef59077ed5cdb4133f16c06abb0110d"
+ },
+ {
+  "corpus": "spring-boot",
+  "repo": "spring-boot",
+  "repo_sha": "2ad19e44980bc1f31e119b81a838e9829295aa4f",
+  "path": "module/spring-boot-restclient/src/main/java/org/springframework/boot/restclient/autoconfigure/RestTemplateAutoConfiguration.java",
+  "bytes": 3705,
+  "sha256": "cdd40fb99a20a4ba58c1b0db554d3f1798472dfa5dbd279128aa03dd56ea041e"
+ },
+ {
+  "corpus": "spring-boot",
+  "repo": "spring-boot",
+  "repo_sha": "2ad19e44980bc1f31e119b81a838e9829295aa4f",
+  "path": "module/spring-boot-restclient/src/main/java/org/springframework/boot/restclient/autoconfigure/RestTemplateBuilderConfigurer.java",
+  "bytes": 4611,
+  "sha256": "4cf10b201bcc182e2c09746bf97879ab44798127beed31ab1a59b677ab98db47"
+ },
+ {
+  "corpus": "spring-boot",
+  "repo": "spring-boot",
+  "repo_sha": "2ad19e44980bc1f31e119b81a838e9829295aa4f",
+  "path": "module/spring-boot-restclient/src/main/java/org/springframework/boot/restclient/autoconfigure/package-info.java",
+  "bytes": 788,
+  "sha256": "7c8c1c6e8f3092ae20861dfe00c38d8cdaeef73e6420ffd2716f77aebf69447a"
+ },
+ {
+  "corpus": "spring-boot",
+  "repo": "spring-boot",
+  "repo_sha": "2ad19e44980bc1f31e119b81a838e9829295aa4f",
+  "path": "module/spring-boot-restclient/src/test/java/org/springframework/boot/restclient/autoconfigure/RestClientAutoConfigurationTests.java",
+  "bytes": 14620,
+  "sha256": "6c0f25744bbcd292e43df6f761fb5384a1572fb347d72b6ddc1a5ec20b828db8"
+ },
+ {
+  "corpus": "svelte",
+  "repo": "svelte",
+  "repo_sha": "7c2fcdae6a29fb3b36855dc8e86eb7ce4c56b93a",
+  "path": "packages/svelte/src/compiler/index.js",
+  "bytes": 6738,
+  "sha256": "875855ca6aed120cd7b3919582ea67e62ec79ed2c03b60d5d6311cafdfd6ce0b"
+ },
+ {
+  "corpus": "svelte",
+  "repo": "svelte",
+  "repo_sha": "7c2fcdae6a29fb3b36855dc8e86eb7ce4c56b93a",
+  "path": "packages/svelte/src/internal/client/dom/blocks/async.js",
+  "bytes": 1913,
+  "sha256": "8b8b33f4fb8238c4d4624fad6765219f04b60133a58b3a76f8bcd6c2c0febcd2"
+ },
+ {
+  "corpus": "svelte",
+  "repo": "svelte",
+  "repo_sha": "7c2fcdae6a29fb3b36855dc8e86eb7ce4c56b93a",
+  "path": "packages/svelte/src/internal/client/dom/blocks/await.js",
+  "bytes": 4616,
+  "sha256": "75be74f9a6db1e9eaf8000e4577027ac090f874ec93576caa0b47377a672dcc3"
+ },
+ {
+  "corpus": "svelte",
+  "repo": "svelte",
+  "repo_sha": "7c2fcdae6a29fb3b36855dc8e86eb7ce4c56b93a",
+  "path": "packages/svelte/src/internal/client/dom/blocks/boundary.js",
+  "bytes": 14830,
+  "sha256": "1e6b7f40d4e55fd7d2ccfb2a8befff53de55891600750c48bc3b526ead7d6dd2"
+ },
+ {
+  "corpus": "svelte",
+  "repo": "svelte",
+  "repo_sha": "7c2fcdae6a29fb3b36855dc8e86eb7ce4c56b93a",
+  "path": "packages/svelte/src/internal/client/dom/blocks/branches.js",
+  "bytes": 5615,
+  "sha256": "01d3b5e6144a2f94456e09a794c16b53cf40d658cfbac1392fdeceb927dbf44c"
+ },
+ {
+  "corpus": "svelte",
+  "repo": "svelte",
+  "repo_sha": "7c2fcdae6a29fb3b36855dc8e86eb7ce4c56b93a",
+  "path": "packages/svelte/src/internal/client/dom/blocks/each.js",
+  "bytes": 18908,
+  "sha256": "d85ceac4751984001a8a92b88f894a397f017a43d45fb7b79ac45ee910a34c46"
+ },
+ {
+  "corpus": "svelte",
+  "repo": "svelte",
+  "repo_sha": "7c2fcdae6a29fb3b36855dc8e86eb7ce4c56b93a",
+  "path": "packages/svelte/src/internal/client/dom/blocks/html.js",
+  "bytes": 4759,
+  "sha256": "63baad7bbff3e85acde22c8db4435f0eefc61e1c6db61b478b5a7c5c2aaa4850"
+ },
+ {
+  "corpus": "svelte",
+  "repo": "svelte",
+  "repo_sha": "7c2fcdae6a29fb3b36855dc8e86eb7ce4c56b93a",
+  "path": "packages/svelte/src/internal/client/dom/blocks/if.js",
+  "bytes": 1794,
+  "sha256": "451a5e1d2633bf2c2bce6def8dbda815415205050ef8931d2c7ca4c93a23e86a"
+ },
+ {
+  "corpus": "svelte",
+  "repo": "svelte",
+  "repo_sha": "7c2fcdae6a29fb3b36855dc8e86eb7ce4c56b93a",
+  "path": "packages/svelte/src/internal/client/dom/blocks/key.js",
+  "bytes": 970,
+  "sha256": "9a76c14bf72d0412906b2fafaec99901171563b21a7f8dbdbe619ad4e2fdc1cb"
+ },
+ {
+  "corpus": "svelte",
+  "repo": "svelte",
+  "repo_sha": "7c2fcdae6a29fb3b36855dc8e86eb7ce4c56b93a",
+  "path": "packages/svelte/src/internal/client/dom/blocks/snippet.js",
+  "bytes": 3135,
+  "sha256": "cd1e11c8c4309758c9c7101641877810e8a15cdb73103380b46924e4eb813c17"
+ },
+ {
+  "corpus": "svelte",
+  "repo": "svelte",
+  "repo_sha": "7c2fcdae6a29fb3b36855dc8e86eb7ce4c56b93a",
+  "path": "packages/svelte/tests/runtime-runes/samples/async-each-await-stale-rows/main.svelte",
+  "bytes": 558,
+  "sha256": "2cd4a78b06b0feadcde0e55cac633a380c9a8b5da9212b97b5387deb860d7d55"
+ },
+ {
+  "corpus": "svelte",
+  "repo": "svelte",
+  "repo_sha": "7c2fcdae6a29fb3b36855dc8e86eb7ce4c56b93a",
+  "path": "packages/svelte/tests/runtime-runes/samples/async-each-keyed/main.svelte",
+  "bytes": 604,
+  "sha256": "7e8f28120098960d98affc1eddc5a0c6734b913fe32faa3e0a1b327ad1f747b4"
+ },
+ {
+  "corpus": "svelte",
+  "repo": "svelte",
+  "repo_sha": "7c2fcdae6a29fb3b36855dc8e86eb7ce4c56b93a",
+  "path": "packages/svelte/tests/runtime-runes/test.ts",
+  "bytes": 180,
+  "sha256": "e925c80761671cc973943d85062de9d923cd16593d8fb83d63821b76a6abb9e3"
+ }
+]
