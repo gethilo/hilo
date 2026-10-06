@@ -1126,3 +1126,44 @@ numbers; search 32ms; stats instant. PERF-010 (classify 18s) already covers the
 only user-noticeable number; binary staleness caveat unchanged.
 
 **Left behind:** this log entry + 3 board rows. No code changes.
+# Dogfood run 34 — 2026-10-06 — COV-2 flagship consumer pass on CURRENT HEAD (lane warpfs-dogfood)
+
+**Angle:** previous runs tested the flagship `coverage-links` via a 12-day-stale installed
+binary (DF-WARPFS-109) and were told the CLI "ships at d11a14b" (DF-WARPFS-112). This run
+is the first consumer pass on a binary built from the CURRENT tip (3954db07).
+
+**Environment note:** the local repo tree at /home/kara/warpfs builds into
+`CARGO_TARGET_DIR=/var/tmp/hermes-cargo-target` (env-set), so `target/debug/hilo` inside
+the repo is a 09-30 artifact of an older invocation — that is how runs 30-33 kept meeting
+a binary without the flagship. Real-user path: build fresh, run from a scratch checkout.
+
+**Consumer pass (scratch tar checkout at HEAD 3954db07, binary v0.3.0-269-g3954db07):**
+- scoped build `cargo build -p hilo-cli`: 21.1s incremental (prior runs' "local release
+  build hangs at duckdb-sys" was workspace-wide; the scoped path is fast).
+- `hilo init` 12ms; `hilo graph warm` 35.3s cold, 0.07s warm (parse cache hits).
+- `hilo graph coverage-links`: 1.5s, 945 links (evidence kinds: import conf 0.7,
+  symbol_name_match conf 0.5) + 28 unlinked surfaces each with a cause string; wrote
+  81 new/updated rows to .vfs/graph/coverage_links.jsonl. `--json` locked shape correct;
+  `--unlinked` correct; `--surface "graph warm"` returns 5 links for a real surface.
+- The flagship WORKS on the current tip. DF-WARPFS-109 was indeed a staleness artifact
+  (DF-WARPFS-112 confirmed by direct use, not just reading).
+- **DF-WARPFS-113 (P1, filed):** `--surface <typo>` returns rc=0, empty links, and the
+  misleading text "UNLINKED: none — every surface has at least one evidenced link" —
+  a typo is indistinguishable from a genuinely-unlinked surface. --json emits all-empty.
+- `graph stats`, `graph search`, `graph impact` all correct (0.03s search, instant stats).
+
+**Install leg:** SKIPPED-install-bunker (16th consecutive run) — bunker3
+(100.69.3.13) ssh connection timed out at 5s probe; no ephemeral host available. Not
+compensated by any other fresh-machine path this run.
+
+**Perf (Step 2b):** nothing slow enough to file. init 12ms, warm 0.07s warm-cache,
+coverage-links 1.5s (x3 runs: 1.55/1.50/1.50s). Cold `graph warm` 35.3s is a first-run
+cost users see once and AGENTS.md already directs heavy builds off-box; PERF-010
+(classify 18s) remains the only user-noticeable number on file.
+
+**Rows filed (verified: tasks.jsonl 338→339, tail id DF-WARPFS-113):**
+- DF-WARPFS-113 (P1): --surface typo silent rc=0 empty output (above).
+- DF-WARPFS-114 (P3): SKIPPED-install-bunker, bunker3 unreachable (ssh timeout to 100.69.3.13).
+
+**Left behind:** docs/dogfood/2026-10-06-run34-cov2-fresh-tip-consumer.md + this log
+entry + 2 board rows. No code changes.
