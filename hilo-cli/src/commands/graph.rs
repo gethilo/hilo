@@ -1101,18 +1101,31 @@ pub fn run_impact(path: &str, max_depth: u32, format: Option<&str>, external: bo
         }
         // For external: parse start file first, then use cross-repo BFS.
         graph.ensure_parsed(&path)?;
-        hilo_graph::impact::compute_impact_with_external(graph.conn(), &path, max_depth, true)
-            .context("failed to compute impact with external edges")?
+        let dependents =
+            hilo_graph::impact::compute_impact_with_external(graph.conn(), &path, max_depth, true)
+                .context("failed to compute impact with external edges")?;
+        // GAP-117: the review set wraps the same dependent rows — the subject
+        // plus the bounded forward/reverse neighbourhood (tests, helpers,
+        // build targets) — so the external and default answers agree on shape.
+        hilo_graph::impact::expand_review_set(graph.conn(), &path, dependents)
+            .context("failed to expand impact review set")?
     } else {
-        // JIT: parse start file on cache miss, then BFS over cache.
+        // JIT: parse start file on cache miss, then BFS over cache. GAP-117:
+        // `review_or_parse` returns the full review set — the queried file
+        // itself first, then its dependents, then the forward/reverse
+        // neighbourhood — never a bare "no dependents" for a real subject.
         graph
-            .impact_or_parse(&path, max_depth)
+            .review_or_parse(&path, max_depth)
             .context("failed to compute impact")?
     };
 
     match format {
         Some("json") => {
-            let result = ImpactResult { files: results };
+            let result = ImpactResult {
+                subject: path.clone(),
+                total: results.len(),
+                files: results,
+            };
             let json = hilo_graph::serde_json::to_string_pretty(&result)
                 .context("failed to serialize impact results as JSON")?;
             println!("{json}");
@@ -1131,18 +1144,31 @@ pub fn run_impact(path: &str, max_depth: u32, format: Option<&str>, external: bo
                         .as_deref()
                         .map(|v| format!(", via {v}"))
                         .unwrap_or_default();
+                    if file.scope == hilo_graph::impact::SCOPE_SELF {
+                        // GAP-117: the subject row — the file the query is
+                        // about, an anchor rather than an incoming edge.
+                        println!("{}  (subject, scope={})", file.path, file.scope);
+                        continue;
+                    }
                     println!(
                         "{}  ←  {}  (depth: {}, scope={}{})  [{} conf={:.2}]",
                         file.path, file.relation, file.depth, file.scope, via, prov, conf
                     );
                 }
-                // REV-WARPFS-2: a file-form query reaches its real importers
-                // through the crate's `pkg:` node, and GAP-048 family
-                // expansion folds in sibling pkg members — so the row count
-                // can exceed the direct importers of the file. Say so once,
-                // derived from the rows just printed so the note can never
-                // contradict them.
-                if let Some(note) = crate_scope_note(&results, &path) {
+                // GAP-117: a review set that is only the subject row is a
+                // real, self-describing answer — say so explicitly instead of
+                // printing nothing after the subject.
+                if results.len() == 1 {
+                    println!(
+                        "note: no dependents, dependencies, tests or build targets were found for '{path}'; the file itself is the only review row."
+                    );
+                } else if let Some(note) = crate_scope_note(&results, &path) {
+                    // REV-WARPFS-2: a file-form query reaches its real
+                    // importers through the crate's `pkg:` node, and GAP-048
+                    // family expansion folds in sibling pkg members — so the
+                    // row count can exceed the direct importers of the file.
+                    // Say so once, derived from the rows just printed so the
+                    // note can never contradict them.
                     println!("{note}");
                 }
             }

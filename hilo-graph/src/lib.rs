@@ -38,7 +38,9 @@ pub use graph::{
     UNRESOLVABLE_TARGET_HINT,
 };
 pub use impact::{
-    compute_impact, compute_impact_at, compute_impact_with_external, ImpactFile, ImpactResult,
+    compute_impact, compute_impact_at, compute_impact_with_external, compute_review_set,
+    expand_review_set, ImpactFile, ImpactResult, REL_SELF, REVIEW_FORWARD_DEPTH,
+    REVIEW_REVERSE_DEPTH, SCOPE_CRATE, SCOPE_DEPENDENCY, SCOPE_FILE, SCOPE_LINK, SCOPE_SELF,
 };
 pub use parser::{Language, Parser};
 pub use provenance::Provenance;

@@ -70,13 +70,36 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_edges_unique
 
 ## Impact Analysis
 
-BFS traversal from a starting node outward through `imports` edges:
+`compute_impact` walks the reverse edges from a starting node — every file that
+depends on it, directly or transitively:
 
 1. Start with file X
 2. Find all files that import X (`WHERE "to" = ?` in DuckDB)
 3. For each, find files that import *them*
 4. Repeat up to `max_depth` (default 5)
 5. Visited set prevents infinite loops from circular imports
+
+### Review set (`GAP-117`)
+
+A blast radius is not the same question as "what must I review": the changed
+file itself, the helper/header/properties class it points AT, and the tests,
+fixtures and build targets that reference those are all review targets the
+reverse-only walk never reported. `compute_review_set` returns that superset:
+
+1. the subject row (`scope: self`, `depth: 0`) — always first;
+2. the reverse dependents from `compute_impact_at` (pkg-family and `local:`
+   semantics unchanged);
+3. a bounded both-direction expansion — outgoing edges from the subject and
+   from each node the expansion reaches (`scope: dependency`), then incoming
+   edges off those (`scope: link`), at most `REVIEW_FORWARD_DEPTH` (2) forward
+   and `REVIEW_REVERSE_DEPTH` (2) reverse hops.
+
+Real repo evidence for the shape: a C++ implementation's change reaches its
+header at one forward hop, the test that includes the header at one reverse hop
+from there, and the BUILD target that names the test at the next reverse hop.
+
+`compute_impact` / `compute_impact_at` keep their reverse-only contract —
+callers that need the historical dependent set are unaffected.
 
 ## Classification
 

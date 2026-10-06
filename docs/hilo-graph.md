@@ -17,8 +17,8 @@ The core dependency-graph engine. Builds a knowledge graph from source code usin
 | `Edge` | Re-export from `hilo_metadata::inventory` — `{from, to, rel, provenance, confidence}` |
 | `Language` | Enum of 26 supported languages (Go, Rust, Python, TS, C#, Kotlin, PHP, Swift, Elixir, Haskell, Erlang, Scala, Zig, Lua, Dart, Clojure, OCaml, R, Julia, Elm, Nim, C, C++, Java, Ruby, ...) |
 | `Provenance` | Edge provenance level: `AstExact`(1.0), `AstInferred`(0.8), `Heuristic`(0.5), `Lexical`(0.3), `Latent`(0.3), `Unresolved`(0.0) |
-| `ImpactResult` | Impact analysis result — `{files: Vec<ImpactFile>}` |
-| `ImpactFile` | A file in the impact chain — `{path, depth, provenance, confidence}` |
+| `ImpactResult` | Impact analysis result — `{subject, total, files: Vec<ImpactFile>}` |
+| `ImpactFile` | A file in the impact chain — `{path, relation, depth, scope, via?, provenance?, confidence?}`; `scope` is `self` / `file` / `crate` / `dependency` / `link` (`GAP-117`) |
 | `SignalOpts` | Signal engine config — `{token_budget, seed_limit, depth, max_nodes, resolution}` |
 | `SignalResult` | Compressed codebase context — `{text, files, tokens_estimate, anchors}` |
 | `SignalFile` | File in signal output — `{path, symbols, tier, provenance, signal_score, detail}` |
@@ -50,6 +50,8 @@ The core dependency-graph engine. Builds a knowledge graph from source code usin
 | `GraphDB::insert_edges(&self, edges)` | Insert edges (deduped by from+to+rel+provenance) |
 | `GraphDB::related(&self, path, direction) -> Vec<Edge>` | Get forward/reverse edges for a file |
 | `compute_impact(db, path) -> ImpactResult` | Transitive BFS — all files depending on path |
+| `compute_review_set(conn, path, max_depth) -> Vec<ImpactFile>` | `GAP-117`: the subject row, the dependents, and the bounded forward/reverse neighbourhood (helpers, tests, fixtures, build targets) |
+| `expand_review_set(conn, path, dependents) -> Vec<ImpactFile>` | `GAP-117`: the same expansion over an already-computed dependent set (used by `GraphDB::review_or_parse`) |
 | `compute_impact_with_external(db, path, ext) -> ImpactResult` | Impact with external dependency map |
 | `classify_file(path, source, lang) -> Classification` | Classify a single file (role/status/feature) |
 | `classify_test_file(path, source) -> Option<TestClass>` | Classify a test-bearing file into one class (COV-3); `None` for a non-test file |
