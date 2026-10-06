@@ -7,6 +7,7 @@
 use crate::error::GraphResult;
 use crate::parser::Language;
 use crate::signal::extract_rust_name;
+use serde::{Deserialize, Serialize};
 use tree_sitter::Parser as TsParser;
 
 /// Classification labels written as xattrs (user.vfs.*).
@@ -712,6 +713,523 @@ pub fn is_test_file(path: &str) -> bool {
 fn classify_test_status(_path: &str) -> String {
     // Test files are inherently less stable than production code
     "beta".into()
+}
+
+// ── Test classes (COV-3) ────────────────────────────────────────────
+
+/// The eight test classes a test file — and, where discoverable, each test
+/// function — belongs to.
+///
+/// The pre-COV-3 model was binary: a file is a test (`role = "test"`) or it is
+/// not. A binary model cannot tell a surface backed by forty unit tests apart
+/// from one backed by a single integration/e2e/conformance test, and the fleet
+/// has already produced incidents (GAP-112, TRBL-084) where a green unit suite
+/// coexisted with an unwired production path. Class diversity is the signal;
+/// test COUNT is not.
+///
+/// ## The classification rule (precedence, first match wins)
+///
+/// A file is **test-bearing** when its path matches a test pattern
+/// ([`is_test_file`]) or a class-specific directory component, it declares a
+/// test function, or its source carries a test-framework marker (`#[test]`,
+/// `#[cfg(test)]`, `criterion_group!`, `proptest!`, `fuzz_target!`,
+/// `assert_snapshot`, `assert_cmd`, …). Markers are matched in CODE position —
+/// a comment or a quoted string that merely names one does not count, so this
+/// module's own marker table (and any fixture that quotes marker text) is not
+/// classified by the text it carries. Only a test-bearing file is classified: a
+/// production file that merely mentions `golden` in a comment is not a
+/// conformance test.
+///
+/// 1. `bench` — path component `benches`/`benchmark`/`benchmarks`, or file
+///    name contains `bench`; or markers `#[bench]`, `criterion_*`.
+/// 2. `property_fuzz` — path component `fuzz`/`fuzzers`/`fuzz_targets`, or
+///    file name contains `fuzz`; or markers `proptest!`, `quickcheck!`,
+///    `#[quickcheck]`, `fuzz_target!`, `libfuzzer_sys`.
+/// 3. `chaos_fault` — path component `chaos`/`faults`/`fault_injection`, or
+///    file name contains `chaos`/`fault`; or markers `fault_inject`,
+///    `inject_fault`.
+/// 4. `conformance_golden` — path component `conformance`/`golden`/`goldens`,
+///    or file name contains `golden`/`conformance`/`snapshot`; or markers
+///    `insta::assert*`, `assert_snapshot`, `expect_file!`, `expect_test`.
+/// 5. `e2e_process` — path component `e2e`/`end_to_end`, or file name
+///    contains `e2e`; or markers `assert_cmd`, `cargo_bin`, `process::Command`,
+///    `subprocess`, `pexpect`, `rexpect`.
+/// 6. `doc_smoke` — path component `doctests`/`doc_tests`/`smoke`, or file
+///    name contains `smoke`/`doctest`; or marker `doctest`.
+/// 7. `integration` — the file lives under a `tests`/`test`/`spec` directory
+///    (an out-of-source test tree).
+/// 8. `unit` — every other test-bearing file: co-located/in-source unit tests
+///    (`#[cfg(test)] mod tests`, Go `*_test.go`, Python `test_*.py`).
+///
+/// Function-level classes ([`classify_test_functions`]) are the file's class
+/// unless the function's own attribute overrides it (`#[bench]` → `bench`,
+/// `#[quickcheck]` → `property_fuzz`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TestClass {
+    /// In-source / co-located unit tests.
+    Unit,
+    /// Out-of-source test file under a `tests/` directory.
+    Integration,
+    /// The test spawns the built binary or a child process.
+    E2eProcess,
+    /// Golden / snapshot / conformance comparison.
+    ConformanceGolden,
+    /// Property-based or fuzz testing.
+    PropertyFuzz,
+    /// Chaos / fault-injection testing.
+    ChaosFault,
+    /// Benchmark harness.
+    Bench,
+    /// Documentation smoke test (doctest).
+    DocSmoke,
+}
+
+impl TestClass {
+    /// Every class in canonical order — the order totals and per-surface class
+    /// sets render in, so output is deterministic across runs.
+    pub const ALL: [TestClass; 8] = [
+        TestClass::Unit,
+        TestClass::Integration,
+        TestClass::E2eProcess,
+        TestClass::ConformanceGolden,
+        TestClass::PropertyFuzz,
+        TestClass::ChaosFault,
+        TestClass::Bench,
+        TestClass::DocSmoke,
+    ];
+
+    /// The snake_case name used in JSONL, `--json` output, and the rule text.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TestClass::Unit => "unit",
+            TestClass::Integration => "integration",
+            TestClass::E2eProcess => "e2e_process",
+            TestClass::ConformanceGolden => "conformance_golden",
+            TestClass::PropertyFuzz => "property_fuzz",
+            TestClass::ChaosFault => "chaos_fault",
+            TestClass::Bench => "bench",
+            TestClass::DocSmoke => "doc_smoke",
+        }
+    }
+
+    /// Parse a snake_case class name (the inverse of [`TestClass::as_str`]).
+    /// Returns `None` for anything outside the closed vocabulary.
+    pub fn parse(s: &str) -> Option<Self> {
+        TestClass::ALL.into_iter().find(|c| c.as_str() == s)
+    }
+}
+
+impl std::fmt::Display for TestClass {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Markers that prove a file contains tests at all (any class). Deliberately
+/// restricted to test-only APIs: production code uses `std::process::Command`
+/// and `subprocess`, so those live in the e2e *class* markers below, not in
+/// this gate.
+const TEST_FRAMEWORK_MARKERS: &[&str] = &[
+    "#[test]",
+    "#[cfg(test)]",
+    "#[tokio::test]",
+    "#[async_std::test]",
+    "#[test_case",
+    "#[bench]",
+    "criterion_group!",
+    "criterion_main!",
+    "proptest!",
+    "#[quickcheck]",
+    "quickcheck!",
+    "fuzz_target!",
+    "assert_snapshot",
+    "expect_file!",
+    "insta::assert",
+    "assert_cmd",
+    "cargo_bin",
+    "func Test",
+    "func Benchmark",
+];
+
+/// `bench` class markers.
+const BENCH_MARKERS: &[&str] = &[
+    "#[bench]",
+    "criterion_group!",
+    "criterion_main!",
+    "criterion::",
+];
+/// `property_fuzz` class markers.
+const PROPERTY_MARKERS: &[&str] = &[
+    "proptest!",
+    "prop_assert",
+    "proptest::",
+    "#[quickcheck]",
+    "quickcheck!",
+    "quickcheck::",
+    "fuzz_target!",
+    "libfuzzer_sys",
+];
+/// `chaos_fault` class markers.
+const CHAOS_MARKERS: &[&str] = &["fault_inject", "inject_fault", "turbulence"];
+/// `conformance_golden` class markers.
+const GOLDEN_MARKERS: &[&str] = &[
+    "insta::assert",
+    "assert_snapshot",
+    "assert_debug_snapshot",
+    "assert_json_snapshot",
+    "expect_file!",
+    "expect_test",
+    "golden_file",
+];
+/// `e2e_process` class markers.
+const E2E_MARKERS: &[&str] = &[
+    "assert_cmd",
+    "cargo_bin",
+    "std::process::Command",
+    "process::Command",
+    "subprocess.",
+    "subprocess(",
+    "pexpect",
+    "rexpect",
+    "escargot",
+];
+/// `doc_smoke` class markers.
+const DOC_SMOKE_MARKERS: &[&str] = &["doctest"];
+
+/// True when any marker is used in CODE position in `source`.
+///
+/// Comments and the contents of `"…"` string literals are stripped before the
+/// match, because a marker is a USE of a test API — not a mention of it. That
+/// distinction is load-bearing twice over: a repo's fixture data routinely
+/// quotes marker text, and this module's own marker tables quote every marker,
+/// so a naive `contains` classifies the classifier's own source as a benchmark
+/// or a fuzz suite.
+fn any_marker(source: &str, markers: &[&str]) -> bool {
+    let code = code_only(source);
+    markers.iter().any(|m| code.contains(m))
+}
+
+/// Strip a source down to its code: drop `//` comment tails and the contents of
+/// string literals.
+///
+/// String state is tracked ACROSS lines, because Rust's `\`-continued literal
+/// (`"…\` + newline + `…"`) is one string spanning several source lines — a
+/// per-line scanner treats the continuation lines as code and reads their
+/// contents as uses. Rust char literals (`'"'`, `'\n'`) are consumed whole,
+/// so a quote inside one cannot open a string; a lone `'` (a lifetime like
+/// `'a`) is left alone. Single-quoted strings in other languages are not
+/// modelled — no marker needs them, and treating `'` as a delimiter would
+/// mis-parse every Rust lifetime.
+fn code_only(source: &str) -> String {
+    let mut out = String::with_capacity(source.len());
+    let mut in_string = false;
+    for line in source.lines() {
+        let bytes = line.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            let c = bytes[i];
+            if !in_string && c == b'/' && i + 1 < bytes.len() && bytes[i + 1] == b'/' {
+                break;
+            }
+            if c == b'"' {
+                in_string = !in_string;
+                out.push(' ');
+                i += 1;
+                continue;
+            }
+            if !in_string && c == b'\'' {
+                // `'\x'` (4 bytes) and `'x'` (3 bytes) are char literals; a
+                // bare `'` is a lifetime. Either way its content is not code.
+                let skip = if i + 1 < bytes.len() && bytes[i + 1] == b'\\' {
+                    4
+                } else if i + 2 < bytes.len() && bytes[i + 2] == b'\'' {
+                    3
+                } else {
+                    1
+                };
+                out.push(' ');
+                i += skip;
+                continue;
+            }
+            if in_string {
+                // An escaped character inside the literal is not a delimiter.
+                i += if c == b'\\' { 2 } else { 1 };
+                continue;
+            }
+            out.push(c as char);
+            i += 1;
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// The last path component, lowercased (the file name).
+fn lower_file_name(path: &str) -> String {
+    let lower = path.to_lowercase();
+    lower.rsplit(['/', '\\']).next().unwrap_or("").to_string()
+}
+
+/// True when `lower_path` has a path component equal (case-insensitively) to
+/// any of `names`. Component equality — not substring — so `src/test_utils/`
+/// never matches a `test` class directory.
+fn path_has_component(lower_path: &str, names: &[&str]) -> bool {
+    lower_path
+        .split(['/', '\\'])
+        .any(|comp| names.contains(&comp))
+}
+
+/// True when the source declares a test function whose lines we can name
+/// cheaply: Rust `#[test]`-family attributes, Go `func Test*`/`Benchmark*`,
+/// Python `def test_*`.
+fn source_has_test_functions(source: &str) -> bool {
+    source.lines().any(|line| {
+        let t = line.trim_start();
+        t.starts_with("#[test]")
+            || t.starts_with("#[tokio::test]")
+            || t.starts_with("#[async_std::test]")
+            || t.starts_with("#[test_case")
+            || t.starts_with("func Test")
+            || t.starts_with("func Benchmark")
+            || t.starts_with("func Example")
+            || t.starts_with("def test_")
+            || t.starts_with("async def test_")
+    })
+}
+
+/// Directory components that by themselves make a file test-bearing: a file
+/// living in `benches/`, `fuzz/`, `conformance/`, `e2e/`, `smoke/`, … is a test
+/// by convention even before its source is read. (The generic `tests/`/`test`/
+/// `spec` and `benches/` components are already covered by [`is_test_file`].)
+const TEST_CLASS_PATH_COMPONENTS: &[&str] = &[
+    "benches",
+    "benchmark",
+    "benchmarks",
+    "fuzz",
+    "fuzzers",
+    "fuzz_targets",
+    "chaos",
+    "faults",
+    "fault_injection",
+    "conformance",
+    "golden",
+    "goldens",
+    "e2e",
+    "e2e_tests",
+    "end_to_end",
+    "doctests",
+    "doc_tests",
+    "smoke",
+];
+
+/// Whether a file carries tests at all — the gate every class rule sits
+/// behind. A file that is neither path-test-shaped, sitting in a
+/// class-specific directory, test-function-bearing, nor carries a
+/// test-framework marker is NOT a test and [`classify_test_file`] returns
+/// `None` for it.
+fn is_test_bearing(path: &str, source: &str) -> bool {
+    let lower = path.to_lowercase();
+    is_test_file(path)
+        || path_has_component(&lower, TEST_CLASS_PATH_COMPONENTS)
+        || source_has_test_functions(source)
+        || any_marker(source, TEST_FRAMEWORK_MARKERS)
+}
+
+/// Classify a test-bearing file into exactly one [`TestClass`].
+///
+/// Returns `None` when the file carries no tests at all (no test path pattern,
+/// no test function, no test-framework marker). The rule and its precedence are
+/// documented on [`TestClass`].
+pub fn classify_test_file(path: &str, source: &str) -> Option<TestClass> {
+    if !is_test_bearing(path, source) {
+        return None;
+    }
+    let lower = path.to_lowercase();
+    let file = lower_file_name(path);
+
+    // 1. bench
+    if path_has_component(&lower, &["benches", "benchmark", "benchmarks"]) || file.contains("bench")
+    {
+        return Some(TestClass::Bench);
+    }
+    // 2. property / fuzz
+    if path_has_component(&lower, &["fuzz", "fuzzers", "fuzz_targets"]) || file.contains("fuzz") {
+        return Some(TestClass::PropertyFuzz);
+    }
+    // 3. chaos / fault injection
+    if path_has_component(&lower, &["chaos", "faults", "fault_injection"])
+        || file.contains("chaos")
+        || file.contains("fault")
+    {
+        return Some(TestClass::ChaosFault);
+    }
+    // 4. conformance / golden
+    if path_has_component(&lower, &["conformance", "golden", "goldens"])
+        || file.contains("golden")
+        || file.contains("conformance")
+        || file.contains("snapshot")
+    {
+        return Some(TestClass::ConformanceGolden);
+    }
+    // 5. e2e / process
+    if path_has_component(&lower, &["e2e", "e2e_tests", "end_to_end"]) || file.contains("e2e") {
+        return Some(TestClass::E2eProcess);
+    }
+    // 6. documentation smoke
+    if path_has_component(&lower, &["doctests", "doc_tests", "smoke"])
+        || file.contains("smoke")
+        || file.contains("doctest")
+    {
+        return Some(TestClass::DocSmoke);
+    }
+    // Marker layer (the path named no class).
+    if any_marker(source, BENCH_MARKERS) {
+        return Some(TestClass::Bench);
+    }
+    if any_marker(source, PROPERTY_MARKERS) {
+        return Some(TestClass::PropertyFuzz);
+    }
+    if any_marker(source, CHAOS_MARKERS) {
+        return Some(TestClass::ChaosFault);
+    }
+    if any_marker(source, GOLDEN_MARKERS) {
+        return Some(TestClass::ConformanceGolden);
+    }
+    if any_marker(source, E2E_MARKERS) {
+        return Some(TestClass::E2eProcess);
+    }
+    if any_marker(source, DOC_SMOKE_MARKERS) {
+        return Some(TestClass::DocSmoke);
+    }
+    // 7. out-of-source test tree → integration
+    if path_has_component(&lower, &["tests", "test", "spec"]) {
+        return Some(TestClass::Integration);
+    }
+    // 8. anything else that is test-bearing is an in-source unit test.
+    Some(TestClass::Unit)
+}
+
+/// One discovered test function and the class it belongs to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TestFunctionClass {
+    pub name: String,
+    pub class: TestClass,
+}
+
+/// Discover the test functions in `path` and assign each a class.
+///
+/// Discovery is line-based and language-aware for the languages whose test
+/// functions are unambiguously marked (Rust test attributes, Go `func Test*`
+/// /`Benchmark*`/`Example*`, Python `def test_*`). A function inherits its
+/// file's class unless its own attribute overrides it (`#[bench]` → `bench`,
+/// `#[quickcheck]` → `property_fuzz`). Languages/cases where the test function
+/// cannot be named return an empty list — the file-level class is still
+/// reported, so nothing is lost, only the finer grain.
+pub fn classify_test_functions(path: &str, source: &str) -> Vec<TestFunctionClass> {
+    let file_class = classify_test_file(path, source).unwrap_or(TestClass::Unit);
+    let ext = path.rsplit('.').next().unwrap_or("");
+    let mut out: Vec<TestFunctionClass> = Vec::new();
+    match Language::from_extension(ext) {
+        Some(Language::Rust) => rust_test_functions(source, file_class, &mut out),
+        Some(Language::Go) => go_test_functions(source, file_class, &mut out),
+        Some(Language::Python) => python_test_functions(source, file_class, &mut out),
+        _ => {}
+    }
+    out
+}
+
+/// The class a Rust test attribute implies, or `None` for a non-test
+/// attribute (so `#[should_panic]` between `#[test]` and the `fn` does not
+/// clear the pending class).
+fn rust_test_attribute(trimmed: &str, file_class: TestClass) -> Option<TestClass> {
+    if trimmed.starts_with("#[test]")
+        || trimmed.starts_with("#[tokio::test]")
+        || trimmed.starts_with("#[async_std::test]")
+        || trimmed.starts_with("#[test_case")
+    {
+        Some(file_class)
+    } else if trimmed.starts_with("#[bench]") {
+        Some(TestClass::Bench)
+    } else if trimmed.starts_with("#[quickcheck]") {
+        Some(TestClass::PropertyFuzz)
+    } else {
+        None
+    }
+}
+
+/// The function name at the start of a Rust `fn` line, if any.
+fn rust_fn_name(trimmed: &str) -> Option<String> {
+    let rest = trimmed
+        .strip_prefix("pub(crate) fn ")
+        .or_else(|| trimmed.strip_prefix("pub fn "))
+        .or_else(|| trimmed.strip_prefix("pub async fn "))
+        .or_else(|| trimmed.strip_prefix("async fn "))
+        .or_else(|| trimmed.strip_prefix("fn "))?;
+    let name = rest.split(['(', '<', ' ', '{']).next().unwrap_or("");
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_string())
+    }
+}
+
+fn rust_test_functions(source: &str, file_class: TestClass, out: &mut Vec<TestFunctionClass>) {
+    let mut pending: Option<TestClass> = None;
+    for line in source.lines() {
+        let t = line.trim_start();
+        if let Some(attr) = rust_test_attribute(t, file_class) {
+            pending = Some(attr);
+            continue;
+        }
+        if pending.is_none() {
+            continue;
+        }
+        if let Some(name) = rust_fn_name(t) {
+            let class = pending.take().unwrap_or(file_class);
+            out.push(TestFunctionClass { name, class });
+        }
+    }
+}
+
+fn go_test_functions(source: &str, file_class: TestClass, out: &mut Vec<TestFunctionClass>) {
+    for line in source.lines() {
+        let t = line.trim_start();
+        let class = if t.starts_with("func Benchmark") {
+            TestClass::Bench
+        } else if t.starts_with("func Example") {
+            TestClass::DocSmoke
+        } else if t.starts_with("func Test") {
+            file_class
+        } else {
+            continue;
+        };
+        let rest = &t["func ".len()..];
+        let name = rest.split(['(', ' ']).next().unwrap_or("");
+        if !name.is_empty() {
+            out.push(TestFunctionClass {
+                name: name.to_string(),
+                class,
+            });
+        }
+    }
+}
+
+fn python_test_functions(source: &str, file_class: TestClass, out: &mut Vec<TestFunctionClass>) {
+    for line in source.lines() {
+        let t = line.trim_start();
+        let rest = t
+            .strip_prefix("async def ")
+            .or_else(|| t.strip_prefix("def "));
+        let Some(rest) = rest else { continue };
+        let name = rest.split('(').next().unwrap_or("").trim();
+        if name.starts_with("test_") && !name.is_empty() {
+            out.push(TestFunctionClass {
+                name: name.to_string(),
+                class: file_class,
+            });
+        }
+    }
 }
 
 // ── Build script detection ──────────────────────────────────────────
@@ -2161,5 +2679,203 @@ mod tests {
         assert!(!is_benchmark_file("a/benchmarks_extra/x.java"));
         assert!(!is_benchmark_file("a/src/main/java/M.java"));
         // (negative assertions check component equality, not substring)
+    }
+
+    // ── COV-3: test-class taxonomy ───────────────────────────────────
+
+    #[test]
+    fn test_class_names_match_serde_and_round_trip() {
+        for class in TestClass::ALL {
+            assert_eq!(TestClass::parse(class.as_str()), Some(class));
+            // The JSONL/`--json` wire form is the serde rename, so the
+            // hand-written `as_str` must agree with it byte for byte.
+            let wire = serde_json::to_value(class).unwrap();
+            assert_eq!(wire.as_str(), Some(class.as_str()), "{class:?}");
+        }
+        assert_eq!(TestClass::parse("telepathy"), None);
+        assert_eq!(TestClass::parse("Unit"), None, "vocabulary is snake_case");
+        assert_eq!(TestClass::ALL.len(), 8);
+    }
+
+    #[test]
+    fn test_class_path_rules_map_one_of_each() {
+        // The fixture-tree rule, restated inline: the path names the class.
+        let unit_source = "#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {}\n}\n";
+        let cases = [
+            ("src/widget.rs", unit_source, TestClass::Unit),
+            ("tests/integration_bar.rs", "", TestClass::Integration),
+            ("tests/e2e_cli.rs", "", TestClass::E2eProcess),
+            (
+                "conformance/golden_parse.rs",
+                "",
+                TestClass::ConformanceGolden,
+            ),
+            ("fuzz/fuzz_target_parse.rs", "", TestClass::PropertyFuzz),
+            ("chaos/fault_inject_db.rs", "", TestClass::ChaosFault),
+            ("benches/throughput.rs", "", TestClass::Bench),
+            ("tests/doc_smoke.rs", "", TestClass::DocSmoke),
+        ];
+        for (path, source, expected) in cases {
+            let got = classify_test_file(path, source);
+            assert_eq!(got, Some(expected), "path rule for {path}");
+        }
+    }
+
+    #[test]
+    fn test_class_marker_rules_when_path_names_no_class() {
+        let cases = [
+            (
+                "src/harness.rs",
+                "criterion_group!(benches, b);",
+                TestClass::Bench,
+            ),
+            (
+                "src/prop.rs",
+                "proptest! {\n    fn p(x: u8) { prop_assert!(x < 1); }\n}\n",
+                TestClass::PropertyFuzz,
+            ),
+            (
+                "src/c.rs",
+                "#[test]\nfn t() { fault_inject(); }\n",
+                TestClass::ChaosFault,
+            ),
+            (
+                "src/g.rs",
+                "#[test]\nfn t() { insta::assert_snapshot!(\"x\"); }\n",
+                TestClass::ConformanceGolden,
+            ),
+            (
+                "src/x.rs",
+                "#[test]\nfn t() { let _ = std::process::Command::new(\"hilo\"); }\n",
+                TestClass::E2eProcess,
+            ),
+            (
+                "src/d.rs",
+                "#[test]\nfn t() { /* doctest */ }\n",
+                TestClass::DocSmoke,
+            ),
+            ("src/plain_unit.rs", "#[test]\nfn t() {}\n", TestClass::Unit),
+        ];
+        for (path, source, expected) in cases {
+            assert_eq!(classify_test_file(path, source), Some(expected), "{path}");
+        }
+    }
+
+    #[test]
+    fn test_class_gate_rejects_production_files_that_merely_mention_the_words() {
+        // A production file is not a test just because a comment names a class
+        // word — the gate runs before any class marker.
+        for path in ["src/runner.rs", "src/golden_loader.rs"] {
+            assert_eq!(
+                classify_test_file(path, "// golden conformance snapshot\n"),
+                None
+            );
+        }
+        assert_eq!(
+            classify_test_file("src/spawn.rs", "std::process::Command::new(\"ls\");"),
+            None,
+            "process::Command alone is production, not e2e"
+        );
+    }
+
+    #[test]
+    fn test_class_markers_quoted_or_commented_are_not_uses() {
+        // A file that QUOTES a marker — fixture data, or a marker table like
+        // this module's own — is not classified by the text it carries.
+        let quoting =
+            "const TABLE: &[&str] = &[\"criterion_group!\", \"fuzz_target!\"];\n#[test]\nfn t() {}\n";
+        assert_eq!(
+            classify_test_file("src/table.rs", quoting),
+            Some(TestClass::Unit),
+            "a quoted marker is data, not a use"
+        );
+        // A comment mention is not a use either.
+        let commented = "// proptest! would go here\n#[test]\nfn t() {}\n";
+        assert_eq!(
+            classify_test_file("src/c.rs", commented),
+            Some(TestClass::Unit)
+        );
+        // A real marker in code position IS a use.
+        let used = "proptest! {\n    fn p(x: u8) { prop_assert!(x < 1); }\n}\n";
+        assert_eq!(
+            classify_test_file("src/p.rs", used),
+            Some(TestClass::PropertyFuzz)
+        );
+    }
+
+    #[test]
+    fn test_class_char_literal_quote_does_not_desync_the_scanner() {
+        // `b'"'` is a char literal, not a string opener. A scanner that treats
+        // it as one leaves the string state inverted for the rest of the file
+        // and then reads the CONTENTS of later strings as code — which is how
+        // this module once classified itself as a benchmark (its own marker
+        // tables quote every marker). RED: the assertion reads Some(Bench).
+        let source = "fn scan(c: u8) -> bool {\n    c == b'\"'\n}\n\n#[test]\nfn t() {\n    let _ = \"#[bench]\";\n}\n";
+        assert_eq!(
+            classify_test_file("src/scanner.rs", source),
+            Some(TestClass::Unit),
+            "a char literal's quote must not make the next string read as code"
+        );
+    }
+
+    #[test]
+    fn test_class_continued_multiline_string_is_not_code() {
+        // A `\`-continued Rust string literal spans several source lines. Its
+        // continuation lines are not code, so the marker text inside them is
+        // data — this is the shape that made the report module read as a
+        // benchmark before the scanner tracked string state across lines.
+        let continued = "fn rule() -> &'static str {\n    \"first \\\n     #[bench] -> bench; \\\n     criterion_group!\"\n}\n#[test]\nfn t() {}\n";
+        assert_eq!(
+            classify_test_file("src/rules.rs", continued),
+            Some(TestClass::Unit),
+            "continuation lines of a string literal are not code"
+        );
+    }
+
+    #[test]
+    fn test_class_functions_rust_go_python() {
+        let rust_unit = "#[cfg(test)]\nmod tests {\n    #[test]\n    fn unit_one() {}\n\n    #[test]\n    #[should_panic]\n    fn unit_two() { panic!(); }\n}\n";
+        let fns = classify_test_functions("src/thing.rs", rust_unit);
+        let by_name = |n: &str| fns.iter().find(|f| f.name == n).map(|f| f.class);
+        assert_eq!(by_name("unit_one"), Some(TestClass::Unit));
+        assert_eq!(
+            by_name("unit_two"),
+            Some(TestClass::Unit),
+            "an intervening non-test attribute must not clear the pending class"
+        );
+
+        // A function-level attribute overrides the file class: same file
+        // shape, but the `#[bench]` marker makes the file (and this fn) a
+        // benchmark.
+        let rust_bench = "#[bench]\nfn speed(b: &mut Bencher) {}\n";
+        let fns = classify_test_functions("src/harness.rs", rust_bench);
+        let by_name = |n: &str| fns.iter().find(|f| f.name == n).map(|f| f.class);
+        assert_eq!(by_name("speed"), Some(TestClass::Bench));
+
+        let go = "package foo\n\nfunc TestAlpha(t *testing.T) {}\n\nfunc BenchmarkBeta(b *testing.B) {}\n";
+        let fns = classify_test_functions("foo_test.go", go);
+        let by_name = |n: &str| fns.iter().find(|f| f.name == n).map(|f| f.class);
+        assert_eq!(by_name("TestAlpha"), Some(TestClass::Unit));
+        assert_eq!(by_name("BenchmarkBeta"), Some(TestClass::Bench));
+
+        let py = "def test_one():\n    pass\n\nasync def test_two():\n    pass\n\ndef helper():\n    pass\n";
+        let fns = classify_test_functions("test_mod.py", py);
+        let names: Vec<&str> = fns.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, vec!["test_one", "test_two"]);
+    }
+
+    #[test]
+    fn test_class_functions_undiscoverable_language_is_empty_not_wrong() {
+        // Ruby: no cheap marker scan — the function list is empty, the
+        // file-level class is still reported (nothing is silently dropped).
+        let fns = classify_test_functions(
+            "spec/foo_spec.rb",
+            "describe Foo do\n  it 'works' do\n  end\nend\n",
+        );
+        assert!(fns.is_empty());
+        assert_eq!(
+            classify_test_file("spec/foo_spec.rb", "describe Foo do\nend\n"),
+            Some(TestClass::Integration)
+        );
     }
 }
