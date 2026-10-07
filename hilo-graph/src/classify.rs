@@ -71,6 +71,15 @@ pub fn classify_file(
         });
     }
 
+    if language == Language::Terraform {
+        return Ok(Classification {
+            role: "infrastructure".into(),
+            status: "stable".into(),
+            reason: "Terraform/HCL infrastructure configuration".into(),
+            feature: None,
+        });
+    }
+
     // 1. Test detection by filename pattern (fastest, no parsing needed)
     if is_test_file(file_path) {
         return Ok(Classification {
@@ -212,6 +221,7 @@ fn language_to_ts(lang: Language) -> tree_sitter::Language {
         Language::Julia => tree_sitter_julia::LANGUAGE.into(),
         Language::Elm => tree_sitter_elm::LANGUAGE.into(),
         Language::Nim => tree_sitter_nim::language(),
+        Language::Terraform => tree_sitter_javascript::LANGUAGE.into(),
     }
 }
 
@@ -255,7 +265,8 @@ fn entrypoint_source_seeds(language: Language) -> &'static [&'static str] {
         | Language::OCaml
         | Language::R
         | Language::Elm
-        | Language::Nim => &[],
+        | Language::Nim
+        | Language::Terraform => &[],
     }
 }
 
@@ -1391,6 +1402,7 @@ fn has_entrypoint(node: tree_sitter::Node, source: &[u8], language: Language) ->
         Language::Julia => has_julia_entrypoint(node, source),
         Language::Elm => has_elm_entrypoint(node, source),
         Language::Nim => has_nim_entrypoint(node, source),
+        Language::Terraform => false,
     }
 }
 
@@ -1727,6 +1739,7 @@ fn has_public_api(node: tree_sitter::Node, source: &[u8], language: Language) ->
         Language::Julia => has_julia_public(node, source),
         Language::Elm => has_elm_public(node, source),
         Language::Nim => has_nim_public(node, source),
+        Language::Terraform => false,
     }
 }
 

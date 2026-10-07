@@ -1121,6 +1121,7 @@ fn extract_symbols(path: &str, source: &str) -> Vec<Symbol> {
         Language::Julia => tree_sitter_julia::LANGUAGE.into(),
         Language::Elm => tree_sitter_elm::LANGUAGE.into(),
         Language::Nim => tree_sitter_nim::language(),
+        Language::Terraform => tree_sitter_javascript::LANGUAGE.into(),
     };
     if ts_parser.set_language(&ts_lang).is_err() {
         return Vec::new();
@@ -1427,6 +1428,7 @@ fn extract_symbols_from_ast(node: tree_sitter::Node, source: &[u8], lang: Langua
                 extract_generic_signature,
             );
         }
+        Language::Terraform => {}
     }
 
     symbols

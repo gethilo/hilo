@@ -1,4 +1,4 @@
-//! AST parsing with tree-sitter for 26 languages.
+//! AST parsing with tree-sitter and static HCL scanning for 27 languages.
 //!
 //! Supports Go, Python, TypeScript, Rust, JavaScript, Java, C, C++, Ruby,
 //! C#, Kotlin, PHP, Swift, Elixir, Haskell, Erlang, Scala, Zig, Lua, Dart,
@@ -43,6 +43,7 @@ pub enum Language {
     Julia,
     Elm,
     Nim,
+    Terraform,
 }
 
 impl Language {
@@ -80,6 +81,7 @@ impl Language {
             "jl" => Some(Language::Julia),
             "elm" => Some(Language::Elm),
             "nim" => Some(Language::Nim),
+            "tf" | "hcl" => Some(Language::Terraform),
             _ => None,
         }
     }
@@ -90,8 +92,19 @@ impl Language {
             "go", "py", "ts", "tsx", "rs", "js", "jsx", "mjs", "cjs", "java", "c", "cpp", "cc",
             "cxx", "rb", "cs", "kt", "kts", "php", "phtml", "swift", "ex", "exs", "hs", "lhs",
             "erl", "hrl", "scala", "sc", "zig", "lua", "dart", "clj", "cljs", "cljc", "edn", "ml",
-            "mli", "r", "jl", "elm", "nim",
+            "mli", "r", "jl", "elm", "nim", "tf", "hcl",
         ]
+    }
+
+    /// Detect a language from a full path, including Terraform's `.tf.json`.
+    pub fn from_path(path: &Path) -> Option<Self> {
+        let name = path.file_name()?.to_str()?;
+        if name.ends_with(".tf.json") {
+            return Some(Language::Terraform);
+        }
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .and_then(Self::from_extension)
     }
 }
 
@@ -100,7 +113,7 @@ impl Language {
 /// Construct with [`Parser::for_language`] and reuse across files of the same
 /// language by calling [`Parser::parse_imports`] for each source file.
 pub struct Parser {
-    parser: TsParser,
+    parser: Option<TsParser>,
     language: Language,
 }
 
@@ -109,6 +122,12 @@ pub struct Parser {
 impl Parser {
     /// Create a new [`Parser`] for the given language.
     pub fn for_language(language: Language) -> GraphResult<Self> {
+        if language == Language::Terraform {
+            return Ok(Parser {
+                parser: None,
+                language,
+            });
+        }
         let mut parser = TsParser::new();
         let lang = match language {
             Language::Go => tree_sitter_go::LANGUAGE.into(),
@@ -137,9 +156,13 @@ impl Parser {
             Language::Julia => tree_sitter_julia::LANGUAGE.into(),
             Language::Elm => tree_sitter_elm::LANGUAGE.into(),
             Language::Nim => tree_sitter_nim::language(),
+            Language::Terraform => unreachable!("Terraform uses the static HCL scanner"),
         };
         parser.set_language(&lang)?;
-        Ok(Parser { parser, language })
+        Ok(Parser {
+            parser: Some(parser),
+            language,
+        })
     }
 
     /// Parse a source file and return the dependency edges it declares.
@@ -148,8 +171,13 @@ impl Parser {
     /// `rel = "imports"`. The `from` field is `file_path`, and `to` is the
     /// classified dependency target with a language-appropriate prefix.
     pub fn parse_imports(&mut self, file_path: &str, source: &str) -> GraphResult<Vec<Edge>> {
+        if self.language == Language::Terraform {
+            return Ok(crate::terraform::parse(file_path, source).edges);
+        }
         let tree = self
             .parser
+            .as_mut()
+            .expect("tree-sitter language parser")
             .parse(source.as_bytes(), None)
             .ok_or_else(|| GraphError::Other("tree-sitter produced no parse tree".to_string()))?;
 
@@ -209,6 +237,7 @@ impl Parser {
             }
             Language::Elm => extract_elm_imports(tree.root_node(), source.as_bytes(), &mut paths),
             Language::Nim => extract_nim_imports(tree.root_node(), source.as_bytes(), &mut paths),
+            Language::Terraform => unreachable!("handled before tree-sitter parsing"),
         }
 
         // GAP-052: a test file's imports are also coverage edges. Emit
@@ -1609,6 +1638,23 @@ mod tests {
             .into_iter()
             .map(|e| e.to)
             .collect()
+    }
+
+    #[test]
+    fn terraform_path_detection_includes_json_variant() {
+        assert_eq!(
+            Language::from_path(Path::new("main.tf")),
+            Some(Language::Terraform)
+        );
+        assert_eq!(
+            Language::from_path(Path::new("modules/api/main.hcl")),
+            Some(Language::Terraform)
+        );
+        assert_eq!(
+            Language::from_path(Path::new("main.tf.json")),
+            Some(Language::Terraform)
+        );
+        assert_eq!(Language::from_path(Path::new("main.json")), None);
     }
 
     #[test]

@@ -133,11 +133,7 @@ fn symbol_source_paths(graph: &GraphDB) -> Result<Vec<String>> {
         {
             return false;
         }
-        Path::new(path)
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .and_then(Language::from_extension)
-            .is_some()
+        Language::from_path(Path::new(path)).is_some()
     });
     Ok(paths.into_iter().collect())
 }
@@ -612,10 +608,8 @@ pub fn run_warm_in(
     // Count languages for summary output.
     let mut langs_seen: HashSet<Language> = HashSet::new();
     for file in &source_files {
-        if let Some(ext) = file.extension().and_then(|e| e.to_str()) {
-            if let Some(lang) = Language::from_extension(ext) {
-                langs_seen.insert(lang);
-            }
+        if let Some(lang) = Language::from_path(file) {
+            langs_seen.insert(lang);
         }
     }
 
@@ -635,8 +629,7 @@ pub fn run_warm_in(
     let parse_results: Vec<Result<(Vec<Edge>, FileOutcome)>> = source_files
         .par_iter()
         .map(|file| {
-            let ext = file.extension().and_then(|e| e.to_str());
-            let lang = match ext.and_then(Language::from_extension) {
+            let lang = match Language::from_path(file) {
                 Some(l) => l,
                 None => {
                     let rel = file
@@ -2500,10 +2493,8 @@ fn collect_source_files(
             let take = is_included(&rel_str, include_paths)
                 || (entry_category.is_none() && excluded_category.is_none());
             if take {
-                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                    if Language::from_extension(ext).is_some() {
-                        out.push(path);
-                    }
+                if Language::from_path(&path).is_some() {
+                    out.push(path);
                 }
             } else if let Some(category) = excluded_category.or(entry_category) {
                 exclusions.record_file(&path, category);

@@ -2601,7 +2601,7 @@ impl GraphDB {
         // 2. Detect language from extension.
         let path = Path::new(file_path);
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        let lang = match Language::from_extension(ext) {
+        let lang = match Language::from_path(path) {
             Some(l) => l,
             None => return Ok(Vec::new()),
         };

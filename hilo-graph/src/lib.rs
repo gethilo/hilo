@@ -21,6 +21,7 @@ pub mod rules;
 pub mod semantic;
 pub mod signal;
 pub mod surfaces;
+pub mod terraform;
 pub mod test_classes;
 
 pub use classify::{

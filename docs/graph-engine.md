@@ -36,6 +36,29 @@ relationships, and stores them in DuckDB for querying.
 | Elm | `tree-sitter-elm` | `import ...` |
 | Nim | `tree-sitter-nim` | `import ...`, `include ...` |
 
+## Terraform / HCL (static subset)
+
+`.tf` and `.hcl` files are recognized by the graph parser; `.tf.json` is
+recognized by full-path consumers. Terraform support is static and local: Hilo
+does not invoke Terraform, initialize providers, read cloud credentials, or
+evaluate expressions. The scanner reports provider, module, resource, data,
+variable, local, and output block declarations with source file and starting
+line. It emits typed relations for module `source`, `depends_on`, and explicit
+`var.`, `local.`, `module.`, and resource/data address references. Module
+addresses are scoped as `module.<name>`; indexes in references are retained.
+
+The implementation is deliberately a conservative block scanner, not a full
+HCL grammar. Heredocs, multiline strings, complex dynamic blocks, template
+control directives, automatic nested-module source loading, and `.tf.json`
+expression decoding are not fully modeled. A resolved nested module can be
+parsed with its source-derived `module.<name>` scope; paths and names alone are
+not used to assign scopes. Unsupported or malformed blocks emit unresolved
+`parse_coverage_gap` edges, and each Terraform file reports an unresolved
+`deployment_link_unknown` edge until explicit evidence is supplied. The
+`explicit_deployment_link` API requires caller-supplied evidence; name or
+directory similarity is never evidence for an application-to-infrastructure
+link.
+
 ## Edge Types
 
 | Relation | Direction | Meaning |
