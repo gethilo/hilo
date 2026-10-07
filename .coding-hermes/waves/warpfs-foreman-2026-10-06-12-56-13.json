@@ -7,7 +7,7 @@
   "tasks": [
     {
       "id": "GAP-112",
-      "title": "P2 — graph surfaces must declare Hilo-self scope on foreign repositories",
+      "title": "P2 \u2014 graph surfaces must declare Hilo-self scope on foreign repositories",
       "priority": "P2",
       "complexity": 4,
       "worktree": "/home/kara/warpfs-wt-GAP-112",
@@ -18,7 +18,7 @@
     },
     {
       "id": "COV-3",
-      "title": "P1 — TEST-CLASS TAXONOMY + PER-SURFACE CLASS MIX",
+      "title": "P1 \u2014 TEST-CLASS TAXONOMY + PER-SURFACE CLASS MIX",
       "priority": "P1",
       "complexity": 3,
       "worktree": "/home/kara/warpfs-wt-COV-3",
@@ -29,7 +29,7 @@
     },
     {
       "id": "GAP-116",
-      "title": "P1 — graph search natural-language retrieval misses behavior-owning files",
+      "title": "P1 \u2014 graph search natural-language retrieval misses behavior-owning files",
       "priority": "P1",
       "complexity": 3,
       "worktree": "/home/kara/warpfs-wt-GAP-116",
@@ -40,7 +40,7 @@
     },
     {
       "id": "GAP-117",
-      "title": "P2 — Improve impact path recall while preserving test/build target links",
+      "title": "P2 \u2014 Improve impact path recall while preserving test/build target links",
       "priority": "P2",
       "complexity": 3,
       "worktree": "/home/kara/warpfs-wt-GAP-117",
@@ -51,7 +51,7 @@
     },
     {
       "id": "GAP-101",
-      "title": "P2 — graph understand context packs omit task-critical implementation paths",
+      "title": "P2 \u2014 graph understand context packs omit task-critical implementation paths",
       "priority": "P2",
       "complexity": 2,
       "worktree": "/home/kara/warpfs-wt-GAP-101",
@@ -61,6 +61,9 @@
       "dispatched_at": "2026-10-06T13:01:00-05:00"
     }
   ],
-  "status": "dispatched",
-  "created_at": "2026-10-06T13:01:00-05:00"
+  "status": "recovered",
+  "created_at": "2026-10-06T13:01:00-05:00",
+  "finished_at": "2026-10-07T13:05:00-05:00",
+  "recovered_by": "warpfs-foreman-2026-10-07-17-55-26",
+  "recovery_note": "GAP-112/COV-3/GAP-116/GAP-117 merged+closed by ticks 10-06-13-40-18 and 10-07; GAP-101 branch 52622a1c re-gated and merged as 47446fe2 this tick."
 }
