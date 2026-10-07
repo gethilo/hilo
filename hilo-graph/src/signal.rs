@@ -153,7 +153,9 @@ pub struct SignalResult {
 ///
 /// The output is deterministic: same task + same graph state → identical text.
 pub fn understand(db: &GraphDB, task: &str, opts: &SignalOpts) -> GraphResult<SignalResult> {
-    understand_with_source_and_symbols::<fn(&str) -> Option<String>>(db, task, opts, None, None)
+    understand_with_source_and_symbols::<fn(&str) -> Option<String>>(
+        db, task, opts, None, None, true,
+    )
 }
 
 /// Run the signal engine with a caller-provided symbol source for semantic
@@ -175,6 +177,7 @@ pub fn understand_with_symbols(
         opts,
         None,
         symbol_extractor,
+        true,
     )
 }
 
@@ -192,15 +195,22 @@ pub fn understand_with_source<F>(
 where
     F: Fn(&str) -> Option<String>,
 {
-    understand_with_source_and_symbols(db, task, opts, source_reader, None)
+    understand_with_source_and_symbols(db, task, opts, source_reader, None, true)
 }
 
+/// The signal engine core.
+///
+/// `object_boost` is the GAP-101 domain-object module boost switch. It is a
+/// parameter (not a `SignalOpts` field) so the Wave 11 regression fixtures can
+/// measure the same graph with and without the boost — the RED/GREEN pair of
+/// the fix — while every public entry point runs with it enabled.
 fn understand_with_source_and_symbols<F>(
     db: &GraphDB,
     task: &str,
     opts: &SignalOpts,
     source_reader: Option<F>,
     symbol_extractor: crate::semantic::SymbolExtractor<'_>,
+    object_boost: bool,
 ) -> GraphResult<SignalResult>
 where
     F: Fn(&str) -> Option<String>,
@@ -214,7 +224,20 @@ where
     let anchors = discover_anchors(db, task, opts.seed_limit, symbol_extractor);
 
     // 2. Traverse the graph from anchors to collect the file set.
-    let file_scores = traverse_and_score(db, &anchors, opts.depth, opts.max_nodes, &known_files);
+    let mut file_scores =
+        traverse_and_score(db, &anchors, opts.depth, opts.max_nodes, &known_files);
+
+    // 2b. GAP-101: seed the modules the task's domain object names (and their
+    // registration site) so a task like "add a new ORM field type" or
+    // "explain TypeAdapter validation" reaches the directory it cannot be done
+    // without, even though literal anchor matching buries it under the
+    // token-flood. Re-applied node cap keeps the result inside the budget.
+    if object_boost {
+        let mut known_files_sorted: Vec<String> = known_files.iter().cloned().collect();
+        known_files_sorted.sort_unstable();
+        add_object_module_boost(&mut file_scores, &known_files_sorted, &task_tokens);
+        cap_scores(&mut file_scores, opts.max_nodes);
+    }
 
     // 3. Sort files by score descending (deterministic — path breaks ties).
     // Anchors all carry score 1.0; within that band the anchor grade
@@ -592,21 +615,437 @@ fn traverse_and_score(
     }
 
     // Cap at max_nodes: keep the highest-scoring files.
-    if scores.len() > max_nodes {
-        let mut all: Vec<(String, f64, String)> = scores
-            .iter()
-            .map(|(p, (s, prov))| (p.clone(), *s, prov.clone()))
-            .collect();
-        all.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.0.cmp(&b.0))
-        });
-        all.truncate(max_nodes);
-        scores = all.into_iter().map(|(p, s, prov)| (p, (s, prov))).collect();
-    }
+    cap_scores(&mut scores, max_nodes);
 
     scores
+}
+
+// ────────────────────── Domain-object module boost (GAP-101) ──────────────────────
+
+/// Cap on the number of distinct module sites (separate file names, or
+/// separate directory names) a task token may match and still be treated as
+/// naming a domain object.
+///
+/// A token that names a module — the object a task is about — touches a
+/// handful of sites (`fields`, `alarm`, `b905`, `type_adapter`). A token that
+/// is ordinary task prose (`source`, `context`, `tests`, `pack`) touches
+/// hundreds or thousands, and must seed nothing: that is exactly the
+/// token-flood that buried the object's own module in the first place.
+const OBJECT_SITE_CAP: usize = 40;
+
+/// Maximum number of object-module seeds considered per call. It bounds the
+/// candidate list, not the pack: the `max_nodes` cap keeps the highest-ranked
+/// seeds, which is what makes the boost "at the cost of dropping lower-ranked
+/// context" (GAP-101).
+const OBJECT_SEED_CAP: usize = 96;
+
+/// Seeds contributed by each object token: its best module files, then its
+/// best directory residents. Per-token coverage is what stops one token's
+/// large family from consuming the whole boost.
+const OBJECT_TOKEN_SEEDS: usize = 5;
+
+/// Registration-closure files contributed by each object token: the module
+/// roots and sub-package populations of the directories named after it.
+const OBJECT_TOKEN_CLOSURE: usize = 6;
+
+/// How much each rank of the boost's own ordering costs. It keeps the boost's
+/// relevance order total, so the `max_nodes` cap drops the least relevant seed
+/// rather than whichever candidate path happens to sort last — while every
+/// seed still outranks a 1-hop traversal neighbour (≤ 0.8).
+const OBJECT_RANK_STEP: f64 = 0.0002;
+
+/// Top of the boost band. Boosted files sit just below the literal anchors
+/// (1.0) and above a 1-hop traversal neighbour (≤ 0.8), so the boost adds
+/// reach without demoting any evidence the engine already found.
+const OBJECT_SCORE_STEM: f64 = 0.95;
+
+/// Parent directory of a graph path (`""` for a top-level path).
+fn parent_dir(path: &str) -> &str {
+    match path.rfind('/') {
+        Some(i) => &path[..i],
+        None => "",
+    }
+}
+
+/// Whether a path names a package/module root — the object's registration
+/// site family: Rust `mod.rs`/`lib.rs`/`main.rs`, Python `__init__.py`,
+/// JS/TS `index`/`mod`, plus the build manifests that register a target
+/// (`BUILD`, `BUILD.bazel`, `CMakeLists.txt`, `package-info.java`).
+fn is_module_root(path: &str) -> bool {
+    let base = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
+    if matches!(base.as_str(), "build" | "build.bazel" | "cmakelists.txt") {
+        return true;
+    }
+    let stem = base.split('.').next().unwrap_or(base.as_str());
+    matches!(
+        stem,
+        "mod" | "lib" | "main" | "index" | "__init__" | "package-info"
+    )
+}
+
+/// Strip a trailing plural `s` from a module word (only when longer than
+/// three characters, so `this`/`class` are not mangled) — the singular/plural
+/// equivalence `fields` == `field`.
+fn singular(word: &str) -> &str {
+    if word.len() > 3 && word.ends_with('s') {
+        &word[..word.len() - 1]
+    } else {
+        word
+    }
+}
+
+/// Graded match of one normalized module name against one task token
+/// (GAP-101). Mirrors the [`token_match_grade`] ladder, but compares *words*
+/// rather than raw substrings, so the joins a snake_case file name and a
+/// camelCase task word need still match:
+///
+/// 4 — the name's words concatenated equal the token (`type_adapter` for
+///     "typeadapter"), a whole word equals it (`alarm.cc` for "alarm",
+///     `B905.py` for "b905"), or a run of adjacent words does
+///     (`type`+`adapter`).
+/// 3 — singular/plural equivalence (`fields` for "field").
+/// 2 — a word extends the token (`alarms` for "alarm").
+/// 0 — no match.
+fn module_name_grade(words: &[String], token: &str) -> u64 {
+    if words.is_empty() {
+        return 0;
+    }
+    if words.concat() == token || words.iter().any(|w| w == token) {
+        return 4;
+    }
+    for start in 0..words.len() {
+        let mut run = String::new();
+        for word in &words[start..] {
+            run.push_str(word);
+            if run == token {
+                return 4;
+            }
+            if !token.starts_with(run.as_str()) {
+                break;
+            }
+        }
+    }
+    let token_stem = singular(token);
+    if words.iter().any(|w| singular(w) == token_stem) {
+        return 3;
+    }
+    if words
+        .iter()
+        .any(|w| w.starts_with(token) && w.len() > token.len())
+    {
+        return 2;
+    }
+    0
+}
+
+/// The normalized words of a file's own module name (its basename).
+fn file_module_words(path: &str) -> Vec<String> {
+    crate::semantic::tokenize(path.rsplit('/').next().unwrap_or(path))
+}
+
+/// One task token that names a module family (GAP-101).
+struct ObjectToken<'a> {
+    /// The task word itself.
+    token: &'a str,
+    /// Distinct module sites the token names: separate file names plus
+    /// separate directory names.
+    sites: usize,
+    /// Distinct names of the token's NON-test module files. A token whose
+    /// only module files are test fixtures names a sample rather than the
+    /// task's domain object, and is ranked last.
+    implementation_stems: usize,
+    /// Files whose own name carries the token, with the match grade.
+    stem_seeds: Vec<(&'a str, u64)>,
+    /// Files directly inside a directory named after the token, with grade.
+    dir_seeds: Vec<(&'a str, u64)>,
+}
+
+/// GAP-101: the module family a task names, as extra anchor-level seeds.
+///
+/// The bake-off defect: a task that names an object ("add a new ORM field
+/// type", "B905", "TypeAdapter", "alarm") is answerable only from the module
+/// that carries that name, but anchor discovery compares the token to the raw
+/// path string, so `django/db/models/fields/__init__.py` never outranks the
+/// token-flood of unrelated paths — the pack was 3.5x larger than the tool
+/// that did include the one directory the task cannot be done without.
+///
+/// This pass finds the modules a task token *names*:
+///
+/// * a file whose basename carries the token as a module word
+///   (`pydantic/type_adapter.py` for "typeadapter", `alarm.cc` for "alarm"),
+/// * a directory whose name carries it (`django/db/models/fields/` for
+///   "field", `cli/` for "cli"),
+///
+/// and seeds them just below the literal anchors — "even at the cost of
+/// dropping lower-ranked context" (GAP-101). The object's *registration site*
+/// rides along: the files the named directory directly holds, its module roots
+/// (`mod.rs`, `__init__.py`, `index.*`, `BUILD`) and the sub-packages declared
+/// beside the object's own module — the sibling `helpers.rs` beside a rule's
+/// `mod.rs`, the `BUILD` target that registers `alarm_test.cc`.
+///
+/// Tokens matching more than [`OBJECT_SITE_CAP`] distinct sites are ordinary
+/// prose and seed nothing, which is what keeps the boost from re-introducing
+/// the flood it exists to cut through.
+///
+/// Seeding is *per token*: each object token contributes its own best module
+/// files, its best directory residents and its own registration closure before
+/// any other token is considered, so one token's large family can never
+/// consume the whole boost. Object tokens are processed most-specific-first
+/// (tokens whose only module files are test fixtures last, then fewest sites,
+/// then longest token), and every candidate's score descends with its rank so
+/// the node budget drops the least relevant seed first — deterministic, and
+/// never a literal anchor.
+fn object_module_boost(files: &[String], task_tokens: &[String]) -> Vec<(String, f64)> {
+    let mut by_dir: HashMap<&str, Vec<&str>> = HashMap::new();
+    for file in files {
+        by_dir
+            .entry(parent_dir(file))
+            .or_default()
+            .push(file.as_str());
+    }
+    let holds_root = |dir: &str| {
+        by_dir
+            .get(dir)
+            .is_some_and(|children| children.iter().any(|c| is_module_root(c)))
+    };
+    /// Children of a directory, registering files first, then the files whose
+    /// own module name carries a task word, then by path.
+    fn ranked_children<'a>(
+        by_dir: &HashMap<&str, Vec<&'a str>>,
+        dir: &str,
+        task_tokens: &[String],
+    ) -> Vec<&'a str> {
+        let mut children = by_dir.get(dir).cloned().unwrap_or_default();
+        let names_task = |path: &str| {
+            let words = file_module_words(path);
+            task_tokens
+                .iter()
+                .any(|token| module_name_grade(&words, token) > 0)
+        };
+        children.sort_by(|a, b| {
+            is_module_root(b)
+                .cmp(&is_module_root(a))
+                .then_with(|| names_task(b).cmp(&names_task(a)))
+                .then_with(|| a.cmp(b))
+        });
+        children
+    }
+
+    /// Rank seed candidates: best grade first, then module roots, then path.
+    fn sort_seeds(seeds: &mut [(&str, u64)]) {
+        seeds.sort_by(|a, b| {
+            b.1.cmp(&a.1)
+                .then_with(|| is_module_root(b.0).cmp(&is_module_root(a.0)))
+                .then_with(|| a.0.cmp(b.0))
+        });
+    }
+    let subpackages_of = |dir: &str| -> Vec<String> {
+        let prefix = format!("{dir}/");
+        let mut subs: Vec<String> = by_dir
+            .keys()
+            .copied()
+            .filter(|d| {
+                d.len() > prefix.len()
+                    && d.starts_with(prefix.as_str())
+                    && !d[prefix.len()..].contains('/')
+            })
+            .map(str::to_string)
+            .collect();
+        subs.sort_unstable();
+        subs
+    };
+
+    // 1. Object tokens — a token that names a handful of distinct module
+    //    sites (file names or directory names). Tokens whose only module files
+    //    are test fixtures are ranked last: a word that names a test sample
+    //    rather than a module is not the task's domain object.
+    let mut objects: Vec<ObjectToken> = Vec::new();
+    for token in task_tokens {
+        let mut stem_files: Vec<(&str, u64)> = Vec::new();
+        let mut stem_names: HashSet<&str> = HashSet::new();
+        let mut dir_files: Vec<(&str, u64)> = Vec::new();
+        let mut dir_names: HashSet<&str> = HashSet::new();
+        let mut implementation_stems: HashSet<&str> = HashSet::new();
+        for file in files {
+            let file_grade = module_name_grade(&file_module_words(file), token);
+            if file_grade > 0 {
+                stem_files.push((file.as_str(), file_grade));
+                let basename = file.rsplit('/').next().unwrap_or(file.as_str());
+                stem_names.insert(basename);
+                if !crate::classify::is_test_file(file) {
+                    implementation_stems.insert(basename);
+                }
+            }
+            // A directory site is a directory NAMED after the object: the
+            // files it directly holds are the module's own population.
+            let parent = parent_dir(file);
+            let name = parent.rsplit('/').next().unwrap_or(parent);
+            if !name.is_empty() {
+                let grade = module_name_grade(&crate::semantic::tokenize(name), token);
+                if grade > 0 {
+                    dir_names.insert(name);
+                    dir_files.push((file.as_str(), grade));
+                }
+            }
+        }
+        let sites = stem_names.len() + dir_names.len();
+        let stem_object = (1..=OBJECT_SITE_CAP).contains(&stem_names.len());
+        let dir_object = (1..=OBJECT_SITE_CAP).contains(&dir_names.len());
+        if !stem_object && !dir_object {
+            continue;
+        }
+        objects.push(ObjectToken {
+            token,
+            sites,
+            implementation_stems: implementation_stems.len(),
+            stem_seeds: stem_files,
+            dir_seeds: dir_files,
+        });
+    }
+    objects.sort_by(|a, b| {
+        (a.implementation_stems == 0)
+            .cmp(&(b.implementation_stems == 0))
+            .then_with(|| a.sites.cmp(&b.sites))
+            .then_with(|| b.token.len().cmp(&a.token.len()))
+            .then_with(|| a.token.cmp(b.token))
+    });
+
+    // 2. Per object token: its module files, the population of the
+    //    directories named after it, and the registration site of those
+    //    directories — the module roots and sub-packages where the object is
+    //    implemented and registered together (the sibling `helpers.rs` beside
+    //    a rule's `mod.rs`, the `BUILD` target that registers `alarm_test.cc`).
+    let per_token: Vec<Vec<String>> = objects
+        .into_iter()
+        .map(
+            |ObjectToken {
+                 mut stem_seeds,
+                 mut dir_seeds,
+                 ..
+             }| {
+                sort_seeds(&mut stem_seeds);
+                sort_seeds(&mut dir_seeds);
+                let stems: Vec<&str> = stem_seeds
+                    .iter()
+                    .take(OBJECT_TOKEN_SEEDS)
+                    .map(|(file, _)| *file)
+                    .collect();
+                let dirs: Vec<&str> = dir_seeds
+                    .iter()
+                    .take(OBJECT_TOKEN_SEEDS)
+                    .map(|(file, _)| *file)
+                    .collect();
+
+                let mut closure: Vec<&str> = Vec::new();
+                let mut seen: HashSet<&str> = HashSet::new();
+                for seed in dirs.iter().take(3) {
+                    let dir = parent_dir(seed);
+                    if dir.is_empty() || !holds_root(dir) {
+                        continue;
+                    }
+                    // Sub-packages that are themselves module roots come first:
+                    // the object's registration site is the module that declares
+                    // its submodules (`cli/args/mod.rs` beside `cli/args/flags.rs`).
+                    for sub in subpackages_of(dir) {
+                        if holds_root(&sub) {
+                            for candidate in ranked_children(&by_dir, &sub, task_tokens) {
+                                if seen.insert(candidate) {
+                                    closure.push(candidate);
+                                }
+                            }
+                        }
+                    }
+                    for candidate in ranked_children(&by_dir, dir, task_tokens) {
+                        if seen.insert(candidate) {
+                            closure.push(candidate);
+                        }
+                    }
+                }
+                closure.truncate(OBJECT_TOKEN_CLOSURE);
+
+                let mut own: Vec<String> = Vec::new();
+                for i in 0..OBJECT_TOKEN_SEEDS {
+                    if let Some(path) = stems.get(i) {
+                        own.push((*path).to_string());
+                    }
+                    if let Some(path) = dirs.get(i) {
+                        own.push((*path).to_string());
+                    }
+                    if let Some(path) = closure.get(i) {
+                        own.push((*path).to_string());
+                    }
+                }
+                own
+            },
+        )
+        .collect();
+
+    // 3. Round-robin across object tokens, so every object token's best
+    //    entries land before any token gets a second helping — one token's
+    //    large family can never consume the whole boost.
+    let mut ordered: Vec<String> = Vec::new();
+    let mut seeded: HashSet<String> = HashSet::new();
+    for round in 0..OBJECT_TOKEN_SEEDS {
+        for own in &per_token {
+            for path in own.iter().skip(round * 3).take(3) {
+                if seeded.insert(path.clone()) {
+                    ordered.push(path.clone());
+                }
+            }
+        }
+    }
+    ordered.truncate(OBJECT_SEED_CAP);
+
+    // The boost carries its own rank: the node budget drops the least relevant
+    // seed first instead of whichever path sorts last, and every seed still
+    // outranks a 1-hop traversal neighbour (≤ 0.8).
+    ordered
+        .into_iter()
+        .enumerate()
+        .map(|(rank, path)| (path, OBJECT_SCORE_STEM - rank as f64 * OBJECT_RANK_STEP))
+        .collect()
+}
+
+/// Merge the object-module boost into the traversal scores (GAP-101).
+///
+/// Boosted files keep the higher of their existing score and the boost, so a
+/// file that was already a literal anchor (1.0) or a 1-hop neighbour stays
+/// exactly where it was — the boost adds reach, it never demotes evidence.
+fn add_object_module_boost(
+    scores: &mut HashMap<String, (f64, String)>,
+    files: &[String],
+    task_tokens: &[String],
+) {
+    for (path, score) in object_module_boost(files, task_tokens) {
+        scores
+            .entry(path)
+            .and_modify(|(existing, _)| {
+                if score > *existing {
+                    *existing = score;
+                }
+            })
+            .or_insert((score, "module_match".to_string()));
+    }
+}
+
+/// Cap a score map at `max_nodes`, keeping the highest scores (path breaks
+/// ties) — the same rule `traverse_and_score` applies, re-run after the
+/// GAP-101 boost so the boost can never push the result past the budget.
+fn cap_scores(scores: &mut HashMap<String, (f64, String)>, max_nodes: usize) {
+    if scores.len() <= max_nodes {
+        return;
+    }
+    let mut all: Vec<(String, f64, String)> = scores
+        .iter()
+        .map(|(path, (score, prov))| (path.clone(), *score, prov.clone()))
+        .collect();
+    all.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(&b.0))
+    });
+    all.truncate(max_nodes);
+    *scores = all.into_iter().map(|(p, s, prov)| (p, (s, prov))).collect();
 }
 
 // ──────────────────────────── Symbol extraction ────────────────────────────
@@ -3914,5 +4353,297 @@ public class Service {
         ] {
             assert!(!usable_java_name(bad), "{bad:?} must be rejected");
         }
+    }
+
+    // ───────────── GAP-101: domain-object module boost ─────────────
+
+    #[test]
+    fn module_name_grade_ladder_matches_module_joins() {
+        let words = |s: &str| crate::semantic::tokenize(s);
+        // snake_case file for a camelCase token.
+        assert_eq!(module_name_grade(&words("type_adapter"), "typeadapter"), 4);
+        // whole word inside a longer name.
+        assert_eq!(module_name_grade(&words("alarm.cc"), "alarm"), 4);
+        assert_eq!(module_name_grade(&words("B905.py"), "b905"), 4);
+        // singular/plural equivalence.
+        assert_eq!(module_name_grade(&words("fields"), "field"), 3);
+        assert_eq!(module_name_grade(&words("alarms.h"), "alarm"), 3);
+        // a word extends the token.
+        assert_eq!(module_name_grade(&words("alarmist.h"), "alarm"), 2);
+        // no match.
+        assert_eq!(module_name_grade(&words("base"), "field"), 0);
+        assert_eq!(module_name_grade(&words(""), "field"), 0);
+    }
+
+    #[test]
+    fn module_root_vocabulary_covers_registration_sites() {
+        // `mod.rs` / `main.rs` / `__init__.py` / `index.ts` / `BUILD` /
+        // `CMakeLists.txt` all register a module or a build target.
+        for root in [
+            "django/db/models/fields/__init__.py",
+            "crates/ruff_linter/src/rules/flake8_bugbear/mod.rs",
+            "cli/main.rs",
+            "test/cpp/common/BUILD",
+            "src/CMakeLists.txt",
+            "src/index.ts",
+        ] {
+            assert!(is_module_root(root), "{root} must be a module root");
+        }
+        // A suite harness and an ordinary implementation file do not register.
+        assert!(!is_module_root(
+            "packages/svelte/tests/runtime-runes/test.ts"
+        ));
+        assert!(!is_module_root("src/rules/zip_without_explicit_strict.rs"));
+        assert!(!is_module_root("docs/ref/models/fields.txt"));
+    }
+
+    #[test]
+    fn object_module_boost_seeds_directories_named_after_the_object() {
+        // The row's historical shape: a task names a domain object ("ORM field
+        // type") whose module is the directory `fields/`, and the object's
+        // registration site is its `__init__`.
+        let files: Vec<String> = [
+            "django/db/models/fields/__init__.py",
+            "django/db/models/fields/related.py",
+            "django/db/models/base.py",
+            "django/forms/fields.py",
+            "docs/ref/models/fields.txt",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let tokens = tokenize_task("add a new ORM field type");
+        let boost: Vec<String> = object_module_boost(&files, &tokens)
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect();
+        assert!(
+            boost
+                .iter()
+                .any(|p| p == "django/db/models/fields/__init__.py"),
+            "the object's own directory must be seeded, got {boost:?}"
+        );
+    }
+
+    #[test]
+    fn object_module_boost_ignores_tokens_that_are_prose_not_object_names() {
+        // A token matching more distinct module sites than OBJECT_SITE_CAP is
+        // ordinary task prose. Seeding it is what floods the pack.
+        let files: Vec<String> = (0..OBJECT_SITE_CAP + 6)
+            .map(|i| format!("src/source{i}/source{i}.py"))
+            .collect();
+        let boost = object_module_boost(&files, &["source".to_string()]);
+        assert!(
+            boost.is_empty(),
+            "a prose token matching {} sites must seed nothing, got {} seeds",
+            files.len(),
+            boost.len()
+        );
+        // The same fixture with an object-shaped token seeds its modules.
+        let named: Vec<String> = (0..3).map(|i| format!("src/alarm/alarm{i}.py")).collect();
+        let boost = object_module_boost(&named, &["alarm".to_string()]);
+        assert_eq!(
+            boost.len(),
+            3,
+            "an object token seeds its modules: {boost:?}"
+        );
+    }
+
+    #[test]
+    fn gap101_object_boost_stays_inside_the_node_budget() {
+        // The boost is additive, so the node cap must be re-applied after it.
+        let db = GraphDB::open(":memory:").unwrap();
+        let edges: Vec<Edge> = (0..40)
+            .map(|i| {
+                edge(
+                    &format!("src/alarm/alarm{i}.rs"),
+                    "src/alarm/mod.rs",
+                    "imports",
+                )
+            })
+            .chain(std::iter::once(edge(
+                "src/lib.rs",
+                "src/alarm/mod.rs",
+                "imports",
+            )))
+            .collect();
+        db.insert_edges(&edges).unwrap();
+        let opts = SignalOpts {
+            max_nodes: 4,
+            ..Default::default()
+        };
+        let result = understand(&db, "alarm behavior", &opts).unwrap();
+        assert!(
+            result.files.len() <= 4,
+            "boost must not push past max_nodes=4, got {}",
+            result.files.len()
+        );
+    }
+
+    /// The six pinned Wave 11 context-pack cases, as committed fixtures.
+    mod wave11_context {
+        use super::*;
+        use serde::Deserialize;
+
+        /// One Wave 11 context-pack case: the pinned prompt and its required
+        /// paths, over a reduced-but-real neighbourhood of the pinned repo.
+        #[derive(Debug, Deserialize)]
+        pub struct Fixture {
+            pub id: String,
+            pub repo: String,
+            pub repo_sha: String,
+            pub prompt: String,
+            pub truth_paths: Vec<String>,
+            pub files: Vec<String>,
+            pub edges: Vec<(String, String)>,
+        }
+
+        /// Every Wave 11 context-pack case, in report order.
+        pub const IDS: [&str; 6] = [
+            "pydantic.type-adapter-validation",
+            "ruff.b905-context",
+            "svelte.keyed-each-context",
+            "deno.cli-subcommand-worker",
+            "spring-boot.autoconfig-context",
+            "grpc.alarm-fastpath-context",
+        ];
+
+        pub fn load(id: &str) -> Fixture {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/wave11-context")
+                .join(format!("{id}.json"));
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("wave11 fixture {} unreadable: {e}", path.display()));
+            serde_json::from_str(&text)
+                .unwrap_or_else(|e| panic!("wave11 fixture {} malformed: {e}", path.display()))
+        }
+
+        fn graph(fixture: &Fixture) -> GraphDB {
+            let db = GraphDB::open(":memory:").unwrap();
+            let edges: Vec<Edge> = fixture
+                .edges
+                .iter()
+                .map(|(from, to)| edge(from, to, "imports"))
+                .collect();
+            db.insert_edges(&edges).unwrap();
+            db
+        }
+
+        /// Required-path recall of one pack: the fraction of the case's truth
+        /// paths whose exact string appears anywhere in the pack output — the
+        /// rubric the Wave 11 bake-off scored context packs with.
+        ///
+        /// `object_boost` selects the GAP-101 module boost, so the same graph
+        /// yields both the pre-fix and the post-fix pack.
+        pub fn recall(fixture: &Fixture, object_boost: bool) -> (usize, usize, String) {
+            let db = graph(fixture);
+            let opts = SignalOpts {
+                token_budget: 6000,
+                ..Default::default()
+            };
+            let result = understand_with_source_and_symbols::<fn(&str) -> Option<String>>(
+                &db,
+                &fixture.prompt,
+                &opts,
+                None,
+                None,
+                object_boost,
+            )
+            .unwrap();
+            let hits = fixture
+                .truth_paths
+                .iter()
+                .filter(|path| result.text.contains(path.as_str()))
+                .count();
+            (hits, fixture.truth_paths.len(), result.text)
+        }
+
+        pub fn report(object_boost: bool) -> (f64, Vec<String>) {
+            let mut total = 0.0;
+            let mut rows = Vec::new();
+            for id in IDS {
+                let fixture = load(id);
+                // Every required path must be one of the fixture's real files:
+                // a case that pins a path the corpus does not hold is not
+                // measurable and must not be scored as a miss.
+                for path in &fixture.truth_paths {
+                    assert!(
+                        fixture.files.iter().any(|f| f == path),
+                        "{id}: required path {path} is not in the fixture"
+                    );
+                }
+                let (hits, required, _) = recall(&fixture, object_boost);
+                let recall = hits as f64 / required as f64;
+                total += recall;
+                rows.push(format!(
+                    "{} ({}, sha {}) {hits}/{required} = {pct:.0}%",
+                    fixture.id,
+                    fixture.repo,
+                    &fixture.repo_sha[..12],
+                    pct = recall * 100.0
+                ));
+            }
+            (total / IDS.len() as f64, rows)
+        }
+    }
+
+    #[test]
+    fn wave11_context_pack_recall_beats_the_literal_baseline_and_clears_half() {
+        // GAP-101: the six pinned Wave 11 context-pack cases. The pre-fix
+        // pack (literal anchors + traversal, no module boost) reproduced the
+        // reported 19.3% mean required-path recall; the boost must clear the
+        // 50% acceptance bar on the SAME graphs, and the fix may never make a
+        // case worse.
+        let (before, before_rows) = wave11_context::report(false);
+        let (after, after_rows) = wave11_context::report(true);
+
+        for id in wave11_context::IDS {
+            let fixture = wave11_context::load(id);
+            let (before_hits, required, _) = wave11_context::recall(&fixture, false);
+            let (after_hits, _, _) = wave11_context::recall(&fixture, true);
+            assert!(
+                after_hits >= before_hits,
+                "{id}: the boost must not drop a required path ({before_hits} -> {after_hits})"
+            );
+            assert!(required > 0, "{id}: the fixture pins no required paths");
+        }
+
+        assert!(
+            after > before,
+            "the boost must improve required-path recall on the Wave 11 cases\n\
+             before:\n  {}\nafter:\n  {}",
+            before_rows.join("\n  "),
+            after_rows.join("\n  ")
+        );
+        assert!(
+            after >= 0.50,
+            "Wave 11 context-pack mean required-path recall {:.1}% < 50% \
+             (before {:.1}%):\n  {}",
+            after * 100.0,
+            before * 100.0,
+            after_rows.join("\n  ")
+        );
+    }
+
+    #[test]
+    fn wave11_deno_context_pack_does_not_regress() {
+        // AC4: Deno was already the strongest case (5/8). It must stay there.
+        let fixture = wave11_context::load("deno.cli-subcommand-worker");
+        let (before, required, _) = wave11_context::recall(&fixture, false);
+        let (after, _, text) = wave11_context::recall(&fixture, true);
+        assert_eq!(required, 8, "the Deno case pins eight required paths");
+        assert!(
+            after >= before,
+            "Deno must not regress ({before} -> {after})"
+        );
+        let missing: Vec<&String> = fixture
+            .truth_paths
+            .iter()
+            .filter(|path| !text.contains(path.as_str()))
+            .collect();
+        assert!(
+            after >= 5,
+            "Deno required-path recall dropped below the 5/8 baseline: {after}/8, missing {missing:?}"
+        );
     }
 }

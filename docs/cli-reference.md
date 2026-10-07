@@ -321,6 +321,36 @@ extension/`index` probing — and the resolved file takes its place. A
 specifier whose target is not in the graph is dropped rather than printed as
 an empty row.
 
+The pack also seeds the **modules the task's domain object names** (GAP-101).
+A task token that matches a handful of distinct module sites is an object
+name, and its modules are seeded just below the literal anchors:
+
+- a file whose own name carries the token as a module word —
+  `pydantic/type_adapter.py` for "TypeAdapter", `alarm.cc` for "alarm",
+  `B905.py` for "B905";
+- a directory named after it — `django/db/models/fields/` for "field",
+  `cli/` for "cli" — and the files that directory directly holds;
+- the object's **registration site**: module roots (`mod.rs`, `lib.rs`,
+  `main.rs`, `__init__.py`, `index.*`, `BUILD`, `CMakeLists.txt`) and the
+  sub-packages declared beside the object's own module — the `helpers.rs` next
+  to a rule's `mod.rs`, the `BUILD` target that registers `alarm_test.cc`.
+
+A token matching more than 40 distinct module sites is ordinary task prose
+(`source`, `context`, `tests`) and seeds nothing; so is a token whose only
+module files are test fixtures. Seeds are **additive**: a file that already
+anchored keeps rank `1.0` and a seeded file sits at `0.95` and below, above a
+one-hop traversal neighbour (≤ 0.8), and the whole result is re-capped at
+`max_nodes` — so the boost adds reach at the cost of the lowest-ranked
+traversal context, never at the cost of an anchor.
+
+Measured against the six pinned Wave 11 context-pack cases (Pydantic
+TypeAdapter, Ruff B905, Svelte keyed-each, Deno CLI/worker, Spring Boot
+auto-configuration, gRPC Alarm), with the committed reduced-corpus fixtures:
+mean required-path recall rises from 2.8% to 61.8%, and the strongest case
+(Deno) improves rather than regresses. The fixtures and their provenance live
+in `hilo-graph/tests/fixtures/wave11-context/`; the final full-corpus
+re-measurement is GAP-118.
+
 ### `search`
 
 Deterministic semantic code search (TF-IDF + BM25 + RRF) over three weighted

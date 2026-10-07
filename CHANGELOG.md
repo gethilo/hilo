@@ -26,6 +26,30 @@ All notable changes to Hilo are documented in this file.
   on that corpus intent MRR rises 0.444 → 0.519 with the owning file inside
   the top 5 on 6/6 cases, and exact-symbol MRR is unchanged (0.917 ≥ the 0.457
   baseline). Full-repository re-measurement is GAP-118.
+- **`graph understand` context packs omit the module the task is about**
+  (GAP-101): the Wave 11 six-repository bake-off scored context packs by
+  required-path recall and measured 19.3% — the pack for "add a new ORM field
+  type" was 3.5x larger than a competitor's yet did not contain
+  `django/db/models/fields/`, the one directory the task cannot be done
+  without, because anchor discovery compares task tokens to the raw path
+  string and drowned the object's own module in the token-flood. The signal
+  engine now seeds the **domain-object module family**: files whose own name
+  carries a task token as a module word (`type_adapter.py` for "TypeAdapter",
+  `alarm.cc` for "alarm"), directories named after it (`fields/` for "field",
+  `cli/` for "cli") and the files they directly hold, and the object's
+  registration site (module roots such as `mod.rs`/`__init__.py`/`BUILD` plus
+  the sub-packages declared beside it). Tokens matching more than 40 module
+  sites — ordinary task prose like "source", "context", "tests" — and tokens
+  whose only module files are test fixtures seed nothing, so the boost cannot
+  re-introduce the flood it exists to cut through. Seeds are additive and
+  ranked below every literal anchor, so the change adds reach at the cost of
+  the lowest-ranked traversal context and never at the cost of an anchor.
+  Measured on the committed Wave 11 fixtures (one per pinned repository, real
+  prompt and required paths, reduced real neighbourhoods and real edges): mean
+  required-path recall 2.8% → 61.8% on the same graphs, against a reported
+  bake-off baseline of 19.3% on the full corpora; the strongest case (Deno,
+  5/8) improves instead of regressing. The full-corpus re-measurement is
+  GAP-118.
 
 ## [0.4.0] — 2026-10-04
 
