@@ -2020,3 +2020,21 @@ tasks:
   status: complete
   created_at: '2026-10-08T04:06:21.368788+00:00'
   completed_at: '2026-10-08T05:03:00.689360+00:00'
+- id: DF-WARPFS-113
+  title: coverage-links --surface errors on unknown surface
+  criteria:
+  - hilo graph coverage-links --surface does-not-exist-xyz exits nonzero with an unknown-surface
+    error on a warmed repo; a known surface with zero links keeps rc=0 empty-output
+    behavior; cargo test -p hilo_cli green on merged tree
+  status: complete
+  created_at: '2026-10-08T06:13:58.681579+00:00'
+  completed_at: '2026-10-08T07:04:05.268817+00:00'
+- id: GAP-120
+  title: warm --language terraform mapping gap
+  criteria:
+  - 'hilo graph warm --language terraform no longer bails with ''unknown language:
+    terraform'' (tf/tf.json/hcl accepted); .tf files still parse; cargo check -p hilo-cli
+    passes'
+  status: complete
+  created_at: '2026-10-08T07:42:47.068724+00:00'
+  completed_at: '2026-10-08T08:38:50.635421+00:00'
