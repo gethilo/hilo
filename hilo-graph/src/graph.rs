@@ -4829,6 +4829,90 @@ mod tests {
     // GAP-066 — coverage consumers resolve `pkg:` nodes
     // -----------------------------------------------------------------------
 
+    #[test]
+    fn module_files_at_counts_java_pkg_resolved_coverage() {
+        // DF-WARPFS-37: the Java parser emits `tested_by` edges whose targets
+        // are `pkg:<FQCN>` nodes (DF-WARPFS-34), so a covered Java file is
+        // never the literal target of its test — `graph module` / stats must
+        // resolve the file to its `pkg:<FQCN>` node (rule ii) exactly as they
+        // already do for Python (GAP-064) and Go (GAP-057). A Java file whose
+        // pkg node is NOT targeted stays uncovered.
+        let dir = tempfile::tempdir().unwrap();
+        // Empty source bodies: resolution must come from the Maven source-root
+        // directory walk (`src/main/java` / `src/test/java`), mirroring repos
+        // where the graph was warmed without re-reading file contents.
+        touch(
+            dir.path(),
+            "src/main/java/com/example/app/service/Service.java",
+        );
+        touch(
+            dir.path(),
+            "src/main/java/com/example/app/service/Other.java",
+        );
+        touch(
+            dir.path(),
+            "src/test/java/com/example/app/service/ServiceTest.java",
+        );
+
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[
+            Edge::new(
+                "src/main/java/com/example/app/service/Service.java",
+                "pkg:java.base",
+                "imports",
+            ),
+            Edge::new(
+                "src/main/java/com/example/app/service/Other.java",
+                "pkg:java.base",
+                "imports",
+            ),
+            Edge::new(
+                "src/test/java/com/example/app/service/ServiceTest.java",
+                "pkg:org.junit.jupiter.api.Test",
+                "imports",
+            ),
+            Edge::new(
+                "src/test/java/com/example/app/service/ServiceTest.java",
+                "pkg:com.example.app.service.Service",
+                "imports",
+            ),
+            Edge::new(
+                "src/test/java/com/example/app/service/ServiceTest.java",
+                "pkg:com.example.app.service.Service",
+                "tested_by",
+            ),
+        ])
+        .unwrap();
+
+        let stats = db
+            .module_files_at(dir.path(), "src/main/java/com/example/app")
+            .unwrap();
+        assert_eq!(
+            stats.files,
+            vec![
+                "src/main/java/com/example/app/service/Other.java".to_string(),
+                "src/main/java/com/example/app/service/Service.java".to_string(),
+            ],
+            "file list must stay the file-level view of the module"
+        );
+        assert_eq!(stats.edges_count, 2);
+        assert_eq!(
+            stats.test_coverage_pct, 50.0,
+            "Service is covered via its pkg:<FQCN> tested_by target; Other is not"
+        );
+
+        // Rule (i) parity: an untested Java file stays listed as untested.
+        let untested = db.untested_files_at(dir.path()).unwrap();
+        assert!(
+            untested.contains(&"src/main/java/com/example/app/service/Other.java".to_string()),
+            "Java file with no tested_by target must stay untested, got: {untested:?}"
+        );
+        assert!(
+            !untested.contains(&"src/main/java/com/example/app/service/Service.java".to_string()),
+            "Java file covered via its pkg node must not be listed, got: {untested:?}"
+        );
+    }
+
     /// Create `dir/<rel>` (with parents) and return its path.
     fn touch(dir: &Path, rel: &str) -> PathBuf {
         let path = dir.join(rel);

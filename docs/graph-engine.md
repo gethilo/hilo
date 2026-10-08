@@ -45,6 +45,15 @@ relationships, and stores them in DuckDB for querying.
 | `tests` | A → B | Test file A tests source file B |
 | `tested_by` | A ← B | Source file A is tested by test file B |
 
+`imports`/`tested_by` targets are usually file paths, but for several
+languages the parser emits package/symbol nodes instead: Python emits
+`pkg:<dotted module>` (GAP-064), Go `pkg:<import path>` (GAP-057), and Java
+`pkg:<fully-qualified class name>` (DF-WARPFS-34); TypeScript/JavaScript emit
+`local:<relative specifier>`. Coverage consumers (`graph untested`,
+`graph module` stats) resolve a file to these nodes when counting test
+coverage, so a Java class covered via `tested_by -> pkg:com.example.Foo`
+counts as tested even though no edge names the file directly.
+
 ## How Discovery Works
 
 1. **Walk** — collect all source files, skip `target/`, `node_modules/`, etc.
