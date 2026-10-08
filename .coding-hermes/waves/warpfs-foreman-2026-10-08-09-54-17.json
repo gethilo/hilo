@@ -1,0 +1,21 @@
+{
+  "tick_id": "warpfs-foreman-2026-10-08-09-54-17",
+  "project": "warpfs",
+  "workdir": "/home/kara/warpfs",
+  "wave_budget": 12,
+  "workers_dispatched": 1,
+  "tasks": [
+    {
+      "id": "GAP-112",
+      "title": "graph conformance edges (implements) + silent-fallback wiring detector",
+      "priority": "P2",
+      "complexity": 4,
+      "worktree": "/home/kara/worktrees/warpfs-GAP-112",
+      "branch": "wt/GAP-112",
+      "worker_model": "deepseek-v4-flash",
+      "worker_provider": "deepseek-foreman",
+      "dispatched_at": "2026-10-08T10:00:00-05:00"
+    }
+  ],
+  "note": "GAP-113 (P1) depends_on GAP-112; zero other independent pending tasks -> serial single-worker tick."
+}
