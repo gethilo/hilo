@@ -6,6 +6,16 @@ All notable changes to Hilo are documented in this file.
 
 ### Fixed
 
+- **`graph impact` reaches flat (top-level) Python modules in file form**
+  (GAP-104): `app.py` doing `import util` emits the edge
+  `{from: app.py, to: pkg:util}`, but `hilo graph impact util.py` answered
+  "no dependents" (rc=0) because a flat module — no `__init__.py` package
+  ancestor — resolved to no `pkg:` node. `python_module_for_file` now maps a
+  file with no regular-package ancestor to its bare stem (`util.py` →
+  `util`), the exact node the parser emits for `import util`; the mapping is
+  stem-only, so host directory names never join the module. Packaged
+  modules (GAP-064, full dotted paths) and the loud not-in-the-graph error
+  (GAP-085) are unchanged and pinned by tests.
 - **`graph search` reaches behaviour-owning files for intent prompts**
   (GAP-116): Wave 11 measured natural-language MRR 0.025 on six pinned
   repositories — the owning file appeared in only 2/6 outputs — while
