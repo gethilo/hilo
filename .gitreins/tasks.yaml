@@ -2001,3 +2001,23 @@ tasks:
     test still passes'
   status: in_progress
   created_at: '2026-10-03T17:19:15.838388+00:00'
+- id: GAP-119
+  title: Terraform/HCL infrastructure-as-code graph support
+  criteria:
+  - hilo recognizes .tf/.tf.json as infrastructure surfaces, extracts typed entities
+    with canonical addresses, emits typed provenance-bearing relations, traverses
+    infra+app code together with evidence-backed links, fixture asserts exact node/edge
+    sets
+  status: in_progress
+  created_at: '2026-10-07T18:30:22.062828+00:00'
+- id: DF-WARPFS-37
+  title: 'Java tested_by edges exist but graph module reports Tests: 0.0%'
+  criteria:
+  - 'On a repo with Java tested_by edges targeting pkg: nodes, hilo graph module reports
+    non-zero test coverage: java files whose pkg: node is a tested_by target count
+    as covered; add/extend unit tests in hilo-graph covering java pkg-node coverage;
+    cargo check -p hilo_graph, clippy, fmt, and cargo test -p hilo_graph --lib all
+    pass'
+  status: complete
+  created_at: '2026-10-08T04:06:21.368788+00:00'
+  completed_at: '2026-10-08T05:03:00.689360+00:00'
