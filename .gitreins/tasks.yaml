@@ -2029,12 +2029,12 @@ tasks:
   status: complete
   created_at: '2026-10-08T06:13:58.681579+00:00'
   completed_at: '2026-10-08T07:04:05.268817+00:00'
-- id: GAP-120
-  title: warm --language terraform mapping gap
+- id: GAP-104
+  title: Flat top-level module file-form impact silently empty
   criteria:
-  - 'hilo graph warm --language terraform no longer bails with ''unknown language:
-    terraform'' (tf/tf.json/hcl accepted); .tf files still parse; cargo check -p hilo-cli
-    passes'
+  - hilo graph impact <flatmod>.py resolves importers via pkg:<module> node on a fixture
+    where a file imports the flat module; packaged resolution unregressed; clippy+fmt+scoped
+    tests green
   status: complete
-  created_at: '2026-10-08T07:42:47.068724+00:00'
-  completed_at: '2026-10-08T08:38:50.635421+00:00'
+  created_at: '2026-10-08T08:46:28.881850+00:00'
+  completed_at: '2026-10-08T09:31:45.196756+00:00'
