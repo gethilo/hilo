@@ -60,6 +60,8 @@ const SOURCE_EXTS: &[(&str, Language)] = &[
     ("ml", Language::OCaml),
     ("mli", Language::OCaml),
     ("r", Language::R),
+    ("tf", Language::Terraform),
+    ("hcl", Language::Terraform),
     ("jl", Language::Julia),
     ("elm", Language::Elm),
     ("nim", Language::Nim),
@@ -94,7 +96,18 @@ pub fn run_classify(dry_run: bool, verbose: bool, features: bool, limit: usize) 
             .unwrap_or("")
             .to_lowercase();
 
-        let Some(&(_, language)) = SOURCE_EXTS.iter().find(|(e, _)| e == &ext.as_str()) else {
+        let language = if path
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().ends_with(".tf.json"))
+        {
+            Some(Language::Terraform)
+        } else {
+            SOURCE_EXTS
+                .iter()
+                .find(|(e, _)| e == &ext.as_str())
+                .map(|(_, language)| *language)
+        };
+        let Some(language) = language else {
             return;
         };
 

@@ -430,6 +430,7 @@ fn lang_debug(lang: Language) -> &'static str {
         Language::Julia => "julia",
         Language::Elm => "elm",
         Language::Nim => "nim",
+        Language::Terraform => "terraform",
     }
 }
 
