@@ -465,6 +465,27 @@ fn collect_files(dir: &Path, rel: &Path, out: &mut Vec<String>) {
 /// The `hilo graph coverage-links` command: derive, persist to
 /// `.vfs/graph/coverage_links.jsonl` (deduped by `link_id`, upgrades in
 /// place), and print links + unlinked-with-cause in text or JSON.
+/// DF-WARPFS-113: an unknown surface id/name is almost always a typo — fail
+/// loudly (mirrors the GAP-085 unknown-module contract in graph.rs) instead of
+/// printing a success-shaped empty report. A KNOWN surface with zero links
+/// keeps the empty-output-with-cause path.
+fn ensure_surface_known(
+    surfaces: &[Surface],
+    filter: &str,
+    surfaces_path: &Path,
+) -> anyhow::Result<()> {
+    let known = surfaces
+        .iter()
+        .any(|s| s.surface_id == filter || s.name == filter);
+    if !known {
+        anyhow::bail!(
+            "unknown surface '{filter}': not found in {} (surface_id or name) — check `hilo graph surfaces` for valid names",
+            surfaces_path.display()
+        );
+    }
+    Ok(())
+}
+
 pub fn run(json: bool, surface: Option<&str>, unlinked_only: bool) -> anyhow::Result<()> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
 
@@ -491,6 +512,9 @@ pub fn run(json: bool, surface: Option<&str>, unlinked_only: bool) -> anyhow::Re
     let mut report = derive(&cwd, &surfaces);
 
     if let Some(filter) = surface {
+        // DF-WARPFS-113: a typo'd surface id/name must fail loudly, never
+        // masquerade as a resolved-but-unlinked surface.
+        ensure_surface_known(&surfaces, filter, &surfaces_path)?;
         // Accept either a full surface_id or a surface name.
         report.links.retain(|l| {
             l.target == filter
@@ -812,6 +836,27 @@ mod tests {
         assert_eq!(
             s.surface_id,
             surface_id(SurfaceKind::McpTool, "f.rs", "tool")
+        );
+    }
+
+    /// DF-WARPFS-113: an unknown surface id/name must be a loud error, never a
+    /// success-shaped empty report; a KNOWN surface (by id or by name) passes.
+    #[test]
+    fn unknown_surface_filter_is_a_loud_error_known_surfaces_pass() {
+        let s = Surface::new(SurfaceKind::PublicApiItem, "src/lib.rs", "f", "f", true);
+        let path = Path::new("/tmp/does-not-matter/surfaces.jsonl");
+
+        ensure_surface_known(std::slice::from_ref(&s), &s.surface_id, path)
+            .expect("full surface_id must resolve");
+        ensure_surface_known(std::slice::from_ref(&s), "f", path)
+            .expect("surface name must resolve");
+
+        let err = ensure_surface_known(std::slice::from_ref(&s), "does-not-exist-xyz", path)
+            .expect_err("unknown surface must error");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("does-not-exist-xyz") && msg.contains("unknown surface"),
+            "error must name the filter and say 'unknown surface': {msg}"
         );
     }
 }
