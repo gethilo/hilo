@@ -14,4 +14,7 @@ pub mod plugin;
 pub mod serve;
 pub mod surfaces;
 pub mod test_classes;
+pub mod wiring;
+#[cfg(test)]
+mod wiring_fixture;
 pub mod workspace;

@@ -138,6 +138,7 @@ hilo graph stats
 #   src: 61 files, 180 edges
 #   docs: 12 files, 8 edges
 #   render: 4 files, 3 edges
+# Conformance: 2 implements, 1 consumes (heuristic extraction — see `hilo graph wiring`)
 #   codec: 2 files, 2 edges
 #   .: 2 files, 1 edges
 # Most connected: pkg:std
@@ -167,6 +168,63 @@ earlier warm can linger in the census. When the two definitions disagree,
 the line states both numbers and names the difference instead of leaving
 two headline numbers that look contradictory. A missing or unreadable
 ledger degrades gracefully: the census line is simply omitted.
+
+### `wiring`
+
+GAP-112: detect silent-fallback wiring — the TRBL-084 shape. An interface
+consumed from at least one NON-test site (Go `x.(I)` type assertions, Rust
+`dyn Trait`, Python `isinstance`, TS/JS `instanceof`) whose ONLY satisfiers
+classify test-role is reported as a FINDING: tests stay green while every
+production run silently falls to a slow/absent path.
+
+Three-way verdict per consumed interface — never collapsed:
+
+- `pass` — a non-test satisfier exists.
+- `FINDING` — consumed from non-test code, satisfiers all test-role.
+- `unsupported` — the language has no conformance extraction. NEVER rendered
+  as `pass`.
+
+Conformance extraction (heuristic, not a type checker) exists for Go
+(method-set matching against named interfaces, directory = package), Rust
+(`impl Trait for Type`, `dyn Trait`), Python (ABC/Protocol subclassing,
+`isinstance`/`issubclass`), and TypeScript/JavaScript (`implements` clauses,
+`instanceof` against corpus-declared interfaces). Every other language seen
+in the scan prints `conformance: unsupported (<lang>)`.
+
+```bash
+hilo graph wiring            # scan the current directory
+hilo graph wiring --json path/to/project
+```
+
+Exit code is non-zero when findings exist, so CI can gate on it.
+
+`--json` locks this field set (schema `hilo.graph.wiring/1`):
+
+```json
+{
+  "schema": "hilo.graph.wiring/1",
+  "root": "/abs/path/scanned",
+  "scanned_files": 5,
+  "languages_unsupported": ["java"],
+  "results": [
+    {
+      "interface": "BatchWriter",
+      "state": "pass" | "finding" | "unsupported",
+      "consumers": ["batch/flush.go"],
+      "satisfiers": [
+        { "type": "FileSink", "file": "batch/filesink.go", "role": "production" },
+        { "type": "FakeSink", "file": "batch/sink_test.go", "role": "test" }
+      ]
+    }
+  ],
+  "finding_count": 0
+}
+```
+
+Warm emits the underlying edge families (provenance `ast_heuristic`,
+confidence 0.8): `type:<T> -[implements]-> iface:<I>`,
+`<file> -[consumes]-> iface:<I>`, and `<file> -[conformance_of]-> type:<T>`.
+`graph stats` shows them on a `Conformance:` line.
 
 ### `related`
 
