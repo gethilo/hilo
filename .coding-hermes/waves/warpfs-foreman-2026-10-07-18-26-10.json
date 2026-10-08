@@ -1,0 +1,18 @@
+{
+  "scheduler_tick_id": "warpfs-foreman-2026-10-07-18-26-10",
+  "created_at": "2026-10-07T18:35:00-05:00",
+  "wave_budget": 9,
+  "workers": [
+    {
+      "task_id": "GAP-119",
+      "title": "Terraform/HCL infrastructure-as-code graph support",
+      "worktree": "/home/kara/worktrees/warpfs-GAP-119",
+      "branch": "wt/GAP-119",
+      "base": "origin/master",
+      "base_sha": "9081d498",
+      "worker_model": "openai-codex/gpt-6-luna",
+      "status": "dispatched"
+    }
+  ],
+  "merge_order": ["GAP-119"]
+}
