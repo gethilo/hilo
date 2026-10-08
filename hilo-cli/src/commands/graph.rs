@@ -589,6 +589,10 @@ pub fn run_warm_in(
             "julia" | "jl" => "jl",
             "elm" => "elm",
             "nim" => "nim",
+            // GAP-120: Terraform/HCL is fully wired in hilo-graph (GAP-119) but
+            // this convenience filter had no mapping. Canonical ext is "tf"
+            // (hilo-graph/src/parser.rs:84 maps "tf" | "hcl").
+            "terraform" | "tf" | "hcl" => "tf",
             other => anyhow::bail!("unknown language: {other}"),
         };
         source_files.retain(|f| f.extension().and_then(|e| e.to_str()) == Some(ext));

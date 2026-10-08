@@ -7,7 +7,10 @@ guards:
   test_mode: full
   test_on_clean: true
   test_command: bash scripts/rust-lint.sh
-  test_timeout: 300
+  # 300 -> 900 (GAP-120 tick): rust-lint.sh (clippy --workspace --all-targets
+  # + hilo_graph lib tests) exceeds 300s under shared-host load; both green
+  # runs TIMED OUT at 300, which is a wall-clock limit, not a test failure.
+  test_timeout: 900
   hook_timeout: 600
   # Disabled: the native LSP leg fails open — engine/lsp.py run_lsp_check()
   # returns [] both when the tool is missing on PATH ("not found on PATH -
