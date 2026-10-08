@@ -2004,12 +2004,11 @@ tasks:
 - id: GAP-119
   title: Terraform/HCL infrastructure-as-code graph support
   criteria:
-  - hilo recognizes .tf/.tf.json as infrastructure surfaces, extracts typed entities
-    with canonical addresses, emits typed provenance-bearing relations, traverses
-    infra+app code together with evidence-backed links, fixture asserts exact node/edge
-    sets
-  status: in_progress
-  created_at: '2026-10-07T18:30:22.062828+00:00'
+  - hilo graph warm indexes .tf/.tf.json files and emits typed terraform edges; cargo
+    test -p hilo_graph --lib green on the merged tree
+  status: complete
+  created_at: '2026-10-08T05:57:00.829809+00:00'
+  completed_at: '2026-10-08T06:03:24.073644+00:00'
 - id: DF-WARPFS-37
   title: 'Java tested_by edges exist but graph module reports Tests: 0.0%'
   criteria:
