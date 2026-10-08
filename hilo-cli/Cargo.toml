@@ -37,6 +37,9 @@ glob = "0.3"
 # `cargo install --path hilo-cli --features vendored-openssl` builds the whole
 # binary with OpenSSL compiled from source — no system libssl needed.
 vendored-openssl = ["hilo_backends/vendored-openssl"]
+# GAP-112 AC3: neutering harness — forces every satisfier Production so the
+# fixture finding disappears; the neutered test must then FAIL.
+wiring-filter-neutered = ["hilo_graph/wiring-filter-neutered"]
 
 [dev-dependencies]
 tempfile = "3"

@@ -8,6 +8,7 @@
 //! - `error` — error types for graph operations
 
 pub mod classify;
+pub mod conformance;
 pub mod coverage_links;
 pub mod duckdb;
 pub mod edges;
@@ -23,11 +24,16 @@ pub mod signal;
 pub mod surfaces;
 pub mod terraform;
 pub mod test_classes;
+pub mod wiring;
 
 pub use classify::{
     classify_file, classify_test_file, classify_test_functions, entry_symbols_for_classification,
     extract_entry_symbols, infer_feature, Classification, TestClass, TestFunctionClass,
     ENTRY_SYMBOLS_CAP,
+};
+pub use conformance::{
+    conformance_supported, drain_go_assertion_sites, extract_conformance, ConformanceSite,
+    SiteKind, CONFORMANCE_CONFIDENCE, CONFORMANCE_PROVENANCE, CONSUMES_REL, IMPLEMENTS_REL,
 };
 pub use error::{GraphError, GraphResult};
 pub use graph::{
@@ -50,6 +56,9 @@ pub use rules::{Rule, RuleCheckResult, RuleEngine, RuleError};
 pub use signal::{
     extract_symbol_names_for_index, understand, understand_with_source, Resolution, SignalFile,
     SignalOpts, SignalResult, SymbolSignature, Tier,
+};
+pub use wiring::{
+    detect_wiring, language_state, Satisfier, SatisfierRole, WiringResult, WiringState,
 };
 
 pub use semantic::tokenize as semantic_tokenize;

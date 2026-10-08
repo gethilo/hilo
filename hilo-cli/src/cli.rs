@@ -15,7 +15,7 @@ use clap::{Parser, Subcommand};
 use crate::commands::plugin::PluginCommand;
 use crate::commands::{
     backend, classify, coverage_links, graph, ignore, init, meta, mount, plugin, serve, surfaces,
-    test_classes, workspace,
+    test_classes, wiring, workspace,
 };
 use crate::sync_direction;
 
@@ -172,6 +172,21 @@ enum GraphCommand {
     /// Requires `.vfs/graph/surfaces.jsonl` (run `hilo graph surfaces`) and
     /// `.vfs/graph/coverage_links.jsonl` (run `hilo graph coverage-links`).
     TestClasses(TestClassesArgs),
+    /// GAP-112: detect silent-fallback wiring — interfaces consumed from
+    /// non-test code whose ONLY satisfiers are test-role types (the TRBL-084
+    /// shape). Three-way verdict: pass / finding / unsupported (a language
+    /// with no conformance extraction, never rendered as pass).
+    Wiring(WiringArgs),
+}
+
+#[derive(clap::Args)]
+struct WiringArgs {
+    /// Print the report as JSON (locked field set — see README "graph wiring").
+    #[arg(long)]
+    json: bool,
+
+    /// Optional project root to scan (defaults to the current directory).
+    path: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -495,6 +510,9 @@ pub fn run() -> anyhow::Result<()> {
         }
         Commands::Graph(GraphCommand::CoverageLinks(args)) => {
             coverage_links::run(args.json, args.surface.as_deref(), args.unlinked)
+        }
+        Commands::Graph(GraphCommand::Wiring(args)) => {
+            wiring::run_wiring(args.json, args.path.clone())
         }
         Commands::Graph(GraphCommand::TestClasses(args)) => test_classes::run(args.json),
         Commands::Serve(args) => serve::run(args.mcp),

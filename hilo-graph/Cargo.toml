@@ -6,6 +6,10 @@ license = "MIT"
 repository = "https://github.com/gethilo/hilo"
 description = "Hilo graph engine — tree-sitter AST parsing and DuckDB graph queries"
 
+[features]
+# GAP-112 AC3 neutering harness (mirrors hilo-cli wiring-filter-neutered).
+wiring-filter-neutered = []
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

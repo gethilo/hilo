@@ -295,6 +295,7 @@ hilo classify
 
 # Query through CLI
 hilo graph stats
+hilo graph wiring   # silent-fallback conformance check (TRBL-084 shape)
 hilo graph impact <file> --max-depth 3
 hilo graph related <file> --relation imports
 

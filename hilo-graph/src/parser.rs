@@ -120,6 +120,15 @@ pub struct Parser {
 // ── Language detection ──────────────────────────────────────────────
 
 impl Parser {
+    /// Parse `source` into a tree-sitter syntax tree without interpreting
+    /// it as imports. Used by auxiliary analyses (e.g. conformance
+    /// extraction) that need raw AST access through the same grammar table.
+    /// Returns `None` for languages without a tree-sitter parser (Terraform)
+    /// or when parsing fails to produce a tree.
+    pub fn parse_tree(&mut self, source: &[u8]) -> Option<tree_sitter::Tree> {
+        self.parser.as_mut()?.parse(source, None)
+    }
+
     /// Create a new [`Parser`] for the given language.
     pub fn for_language(language: Language) -> GraphResult<Self> {
         if language == Language::Terraform {

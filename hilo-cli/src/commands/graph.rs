@@ -793,6 +793,16 @@ pub fn run_warm_in(
     // visible, where phase 1's Go-provider resolution has nothing to point at.
     let contract_edges = discover_service_contracts(&source_files, cwd, &include_paths);
     all_edges.extend(contract_edges.iter().cloned());
+    let t_conf = std::time::Instant::now();
+    // GAP-112: `implements` (type -> interface) + `consumes` (file ->
+    // interface) edges from the conformance extractors. Heuristic
+    // provenance — the wiring detector and `graph stats` conformance line
+    // consume these.
+    let conformance_edges = discover_conformance_edges(&source_files, cwd);
+    all_edges.extend(conformance_edges.iter().cloned());
+    if std::env::var("HILO_WARM_TIMING").is_ok() {
+        eprintln!("  [timing] conformance edges: {:?}", t_conf.elapsed());
+    }
     if std::env::var("HILO_WARM_TIMING").is_ok() {
         eprintln!("  [timing] service contracts: {:?}", t_contract.elapsed());
     }
@@ -851,7 +861,7 @@ pub fn run_warm_in(
     // never invalidate). Fall through to the append + DuckDB open while ANY
     // computed derived edge is absent; a re-warm of a corpus that already
     // carries them still skips.
-    let derived_edges: [&[Edge]; 2] = [&service_edges, &contract_edges];
+    let derived_edges: [&[Edge]; 3] = [&service_edges, &contract_edges, &conformance_edges];
     let full_cache_hit = cached_n == total_files && total_files > 0;
     // DF-WARPFS-61/64: "all cached, graph unchanged" is only safe when the
     // DuckDB cache provably still agrees with the inventory. A lost or
@@ -1421,6 +1431,16 @@ pub fn run_stats(limit: usize) -> Result<()> {
     if let Some(ref mc) = stats.most_connected {
         println!("Most connected: {mc}");
     }
+    // GAP-112: conformance line — the implements/consumes families at a
+    // glance. Absent families print 0 only when other edge data exists,
+    // so an empty graph stays the "cache is empty" case above.
+    {
+        let impl_n = stats.edge_types.get("implements").copied().unwrap_or(0);
+        let cons_n = stats.edge_types.get("consumes").copied().unwrap_or(0);
+        if impl_n > 0 || cons_n > 0 {
+            println!("Conformance: {impl_n} implements, {cons_n} consumes (heuristic extraction — see `hilo graph wiring`)");
+        }
+    }
     println!("Edge types:");
     // BTree ordering: stats.edge_types is a HashMap, whose iteration order is
     // randomized per process — unsorted print made `graph stats` output
@@ -1758,6 +1778,66 @@ impl NonGoAnchorRes {
 ///
 /// Only `source_files` (the discovered set) is scanned — this pass never walks
 /// the tree itself, so the repo's exclusion rules and `include_paths` apply.
+/// GAP-112: `implements` + `consumes` edges from the hilo-graph conformance
+/// extractors. Edge shapes:
+/// - `type:<T>` -[implements]-> `iface:<I>` (provenance ast_heuristic)
+/// - `<file>` -[consumes]-> `iface:<I>`
+/// - `<file>` -[conformance_of]-> `type:<T>` (so the type node resolves to a
+///   file for impact/related traversal)
+///
+/// Go matching is directory-scoped (one directory = one package), matching
+/// Go semantics; other languages match corpus-wide.
+fn discover_conformance_edges(source_files: &[PathBuf], cwd: &Path) -> Vec<Edge> {
+    let mut corpora: Vec<(hilo_graph::Language, String, String)> = Vec::new();
+    for file in source_files {
+        let Some(lang) = hilo_graph::Language::from_path(file) else {
+            continue;
+        };
+        let rel = file
+            .strip_prefix(cwd)
+            .unwrap_or(file)
+            .to_string_lossy()
+            .replace('\\', "/");
+        let Ok(src) = std::fs::read_to_string(file) else {
+            continue;
+        };
+        corpora.push((lang, rel, src));
+    }
+    let sites = hilo_graph::extract_conformance(&corpora);
+    let mut edges: Vec<Edge> = Vec::new();
+    for site in &sites {
+        match site.kind {
+            hilo_graph::SiteKind::Implements => {
+                let ty = site.type_name.clone().unwrap_or_default();
+                edges.push(Edge {
+                    from: format!("type:{ty}"),
+                    to: format!("iface:{}", site.interface),
+                    rel: hilo_graph::IMPLEMENTS_REL.to_string(),
+                    provenance: hilo_graph::CONFORMANCE_PROVENANCE.to_string(),
+                    confidence: hilo_graph::CONFORMANCE_CONFIDENCE,
+                });
+                edges.push(Edge {
+                    from: site.file.clone(),
+                    to: format!("type:{ty}"),
+                    rel: "conformance_of".to_string(),
+                    provenance: hilo_graph::CONFORMANCE_PROVENANCE.to_string(),
+                    confidence: hilo_graph::CONFORMANCE_CONFIDENCE,
+                });
+            }
+            hilo_graph::SiteKind::Consumes => {
+                edges.push(Edge {
+                    from: site.file.clone(),
+                    to: format!("iface:{}", site.interface),
+                    rel: hilo_graph::CONSUMES_REL.to_string(),
+                    provenance: hilo_graph::CONFORMANCE_PROVENANCE.to_string(),
+                    confidence: hilo_graph::CONFORMANCE_CONFIDENCE,
+                });
+            }
+        }
+    }
+    edges
+}
+
 fn discover_service_calls(source_files: &[PathBuf], cwd: &Path) -> Vec<Edge> {
     let sites = collect_service_call_sites(source_files, cwd);
     let callers = sites.callers;
@@ -2337,7 +2417,7 @@ const EXCLUSION_CATEGORY_ORDER: &[&str] = &[
 ];
 
 #[derive(Debug, Default, PartialEq, Eq)]
-struct ExclusionReport {
+pub(crate) struct ExclusionReport {
     counts: BTreeMap<&'static str, usize>,
 }
 
@@ -2441,7 +2521,7 @@ fn is_include_ancestor(rel: &str, include_paths: &[String]) -> bool {
         .any(|inc| inc.trim_end_matches('/').starts_with(&format!("{rel}/")))
 }
 
-fn collect_source_files(
+pub(crate) fn collect_source_files(
     dir: &Path,
     rel: &Path,
     excluded_category: Option<&'static str>,
