@@ -76,4 +76,4 @@ edges.jsonl (fixture):
 - cargo clippy --workspace --all-targets -- -D warnings — PASS
 - cargo test -p hilo_graph --lib — 423 passed
 - cargo test -p hilo-cli --lib — 139 passed
-- bunker3 full build: `ssh bunker3 'cd ~/warpfs && git fetch && git checkout wt/GAP-112 && ~/.cargo/bin/cargo build --workspace'` — see commit/push note in report
+- Full workspace build: bunker-las-02 fallback (bunker-las-03 offline 3d): `cargo build --workspace` PASS 37.5s; `cargo clippy --workspace --all-targets -- -D warnings` PASS; `cargo test -p hilo_graph --lib` 423 passed (112s)
