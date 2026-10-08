@@ -3661,6 +3661,61 @@ mod tests {
         assert_eq!(results.len(), 2, "pkg:fmt should have 2 dependents");
     }
 
+    #[test]
+    fn flat_python_module_file_form_reaches_its_importers_gap104() {
+        // GAP-104: app.py does `import util` → the parser emits the edge
+        // {"from":"app.py","to":"pkg:util"}. `pkg:util` resolves, but the
+        // file form used to answer "no dependents" (rc=0) because the flat
+        // module had no pkg-node alias. Both forms must now agree — exactly
+        // the /tmp/hilo-pm2 repro shape (graph rooted at the repo dir).
+        let dir = tempfile::tempdir().unwrap();
+        write_go_file(dir.path(), "util.py", "def help() -> int:\n    return 1\n");
+        write_go_file(dir.path(), "app.py", "import util\nprint(util)\n");
+        let db_path = dir.path().join(".vfs/graph/graph.db");
+        std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
+        let db = GraphDB::open(&db_path.to_string_lossy()).unwrap();
+        db.insert_edges(&[Edge::new("app.py", "pkg:util", "imports")])
+            .unwrap();
+
+        // File form (repo-relative, the shape the CLI normalizes to).
+        let file_form = db.impact_or_parse("util.py", 3).unwrap();
+        assert!(
+            file_form.iter().any(|f| f.path == "app.py"),
+            "file form must list app.py as a dependent via pkg:util, got: {file_form:?}"
+        );
+
+        // Pkg form (already worked before GAP-104) — must stay identical.
+        let pkg_form = db.impact_or_parse("pkg:util", 3).unwrap();
+        assert!(
+            pkg_form.iter().any(|f| f.path == "app.py"),
+            "pkg form still works, got: {pkg_form:?}"
+        );
+
+        // The resolver itself: the anchored flat file aliases to pkg:util.
+        let root = crate::resolution::AnchoredRoot::new(dir.path());
+        let mut resolver = crate::resolution::PkgResolver::new();
+        assert_eq!(
+            resolver.pkg_node_at(&root, "util.py").as_deref(),
+            Some("pkg:util")
+        );
+    }
+
+    #[test]
+    fn unknown_file_form_still_fails_loudly_gap104() {
+        // GAP-104 criterion 5 (loud-error precedent GAP-085/DF-WARPFS-113):
+        // a file-form argument that exists neither on disk nor in the graph
+        // must error, never print a silent "no dependents". Note the flat
+        // alias applies only to paths whose FILE exists — a typo'd module
+        // name has no file to stem from.
+        let db = GraphDB::open(":memory:").unwrap();
+        let err = db.impact_or_parse("does_not_exist_xyz.py", 3).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("not in the graph") && msg.contains("does_not_exist_xyz.py"),
+            "unknown flat name must fail loudly, got: {msg}"
+        );
+    }
+
     // ── DF-WARPFS-2: `file:` id-prefix normalization + teaching errors ──
 
     #[test]

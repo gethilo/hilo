@@ -72,7 +72,10 @@ link.
 languages the parser emits package/symbol nodes instead: Python emits
 `pkg:<dotted module>` (GAP-064), Go `pkg:<import path>` (GAP-057), and Java
 `pkg:<fully-qualified class name>` (DF-WARPFS-34); TypeScript/JavaScript emit
-`local:<relative specifier>`. Coverage consumers (`graph untested`,
+`local:<relative specifier>`. A Python file with no package ancestor is a
+flat (top-level) module and maps to its bare stem (`util.py` → `pkg:util`,
+GAP-104), matching the node the parser emits for `import util`. Coverage
+consumers (`graph untested`,
 `graph module` stats) resolve a file to these nodes when counting test
 coverage, so a Java class covered via `tested_by -> pkg:com.example.Foo`
 counts as tested even though no edge names the file directly.

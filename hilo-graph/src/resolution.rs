@@ -441,15 +441,21 @@ fn import_path(module: &str, rel: &Path) -> String {
 ///   (never `fastapi.__init__`), `fastapi/dependencies/__init__.py` →
 ///   `fastapi.dependencies`. An `__init__.py` never sits in a namespace
 ///   directory — its presence is what makes a directory regular.
-/// - A file with **no regular-package ancestor at all** → `None`
-///   (standalone scripts: the tempdir root, `scripts/`, the host tree are
-///   not importable packages and never contribute path components — a
-///   tempdir file resolves to `fastapi.routing`, never to
-///   `tmp.<random>.fastapi.routing`).
+/// - A file with **no regular-package ancestor at all** is a **flat
+///   (top-level) module** (GAP-104): it resolves to its bare stem —
+///   `util.py` at the repo root (or beside its importers in a flat
+///   directory, sys.path-injected by running a script there) → `util`,
+///   which is exactly the `pkg:<module>` node the parser emits for
+///   `import util`. Host directory names never contribute: a tempdir
+///   packaged file still resolves to `fastapi.routing`, never to
+///   `tmp.<random>.fastapi.routing`, and the flat alias is stem-only.
 ///
 /// Returns `None` for a path with no module name at all.
 pub fn python_module_for_file(file: &Path) -> Option<String> {
     let stem = file.file_stem()?.to_str()?;
+    if stem.is_empty() {
+        return None;
+    }
     let is_init = stem == "__init__";
 
     // Climb to the nearest regular-package ancestor, remembering any PEP
@@ -461,11 +467,12 @@ pub fn python_module_for_file(file: &Path) -> Option<String> {
             break;
         }
         let Some(name) = current.file_name().and_then(|n| n.to_str()) else {
-            // Relative path exhausted (`a/b.py` → parent `a` → parent ``)
-            // or filesystem root: no regular package above, so this file is
-            // a standalone script — `None`, and no host path component ever
-            // leaks into a module name.
-            return None;
+            // Walk exhausted without a regular package (relative path
+            // components used up, or filesystem root): GAP-104 — this file
+            // is a flat (top-level) module, importable exactly by its stem
+            // when a sibling script runs (sys.path[0]). Stem only — a host
+            // directory name never joins the module.
+            return Some(stem.to_string());
         };
         // PEP 420 namespace candidate: importable without `__init__.py`.
         namespace.push(name.to_string());
@@ -493,8 +500,10 @@ pub fn python_module_for_file(file: &Path) -> Option<String> {
         // directory — its presence is what makes a directory regular.)
         return (!parts.is_empty()).then(|| parts.join("."));
     }
-    if parts.is_empty() || stem.is_empty() {
-        // Standalone file: not a member of any package.
+    if parts.is_empty() {
+        // No regular-package chain above (flat layout already returned
+        // earlier; reaching here with an empty chain is unreachable, but
+        // stay defensive — never emit a bare-dot module).
         return None;
     }
     parts.extend(namespace);
@@ -1606,19 +1615,101 @@ mod tests {
     }
 
     #[test]
-    fn standalone_python_files_resolve_none() {
+    fn flat_python_modules_resolve_to_their_stem_gap104() {
+        // GAP-104: a file with no regular-package ancestor is a flat
+        // (top-level) module — the parser emits `import util` edges to
+        // `pkg:util`, so file-form impact must reach that same node.
         let dir = tempfile::tempdir().unwrap();
-        // A script in a directory that is not a package.
-        let script = write(dir.path(), "scripts/run.py", "print('hi')\n");
-        assert_eq!(python_module_for_file(Path::new(&script)), None);
-        assert_eq!(PkgResolver::new().pkg_node(&script), None);
+        // Repo-root layout: app.py + util.py, no package anywhere.
+        let util = write(dir.path(), "util.py", "def help() -> int:\n    return 1\n");
+        let app = write(dir.path(), "app.py", "import util\nprint(util)\n");
+        assert_eq!(
+            python_module_for_file(Path::new(&util)).as_deref(),
+            Some("util"),
+            "flat module resolves to its bare stem"
+        );
+        let mut resolver = PkgResolver::new();
+        assert_eq!(
+            resolver.pkg_node(&util).as_deref(),
+            Some("pkg:util"),
+            "flat file aliases to the pkg:<stem> node the parser emits for `import util`"
+        );
+
+        // Flat layout in a subdirectory: scripts/ is not a package, so
+        // `a.py` beside `b.py` still imports plain `a` at runtime
+        // (sys.path[0] is the script's own directory).
+        let flat_a = write(dir.path(), "scripts/a.py", "X = 1\n");
+        write(dir.path(), "scripts/b.py", "import a\nprint(a)\n");
+        assert_eq!(
+            python_module_for_file(Path::new(&flat_a)).as_deref(),
+            Some("a")
+        );
+
+        // Host directory names NEVER leak into the module: a tempdir root
+        // (`/tmp/.tmpXXXX`) must not become part of the dotted name.
+        let module = python_module_for_file(Path::new(&util)).unwrap();
+        assert!(
+            !module.contains(dir.path().to_string_lossy().as_ref()),
+            "host path must never join the module name: {module}"
+        );
+        assert!(
+            !module.contains('/'),
+            "module is dotted, never a path: {module}"
+        );
+
+        // Orphan relative name (no directory at all) resolves by stem too.
+        assert_eq!(
+            python_module_for_file(Path::new("orphan.py")).as_deref(),
+            Some("orphan")
+        );
+
+        // The packaged path is untouched by the flat rule.
+        let (pkg_dir, _, _) = fastapi_fixture();
+        let routing = write(pkg_dir.path(), "fastapi/dependencies/utils.py", "X = 1\n");
+        assert_eq!(
+            python_module_for_file(Path::new(&routing)).as_deref(),
+            Some("fastapi.dependencies.utils"),
+            "packaged modules keep their full dotted module (no regression)"
+        );
+        let _ = app; // flat importer content documented above
+    }
+
+    #[test]
+    fn extensionless_and_root_paths_still_resolve_none() {
+        // A path with no stem has nothing to alias to (unchanged behavior).
+        assert_eq!(python_module_for_file(Path::new("")), None);
+        assert_eq!(python_module_for_file(Path::new("/")), None);
+    }
+
+    #[test]
+    fn flat_and_orphan_names_resolve_by_stem() {
+        // GAP-104: a bare relative filename (no directory component) —
+        // the shape a repo-relative edge endpoint takes for a root-level
+        // file — also resolves by stem, so `hilo graph impact util.py`
+        // from the repo root finds `pkg:util`.
+        assert_eq!(
+            python_module_for_file(Path::new("orphan.py")).as_deref(),
+            Some("orphan")
+        );
+        assert_eq!(
+            PkgResolver::new().pkg_node("orphan.py").as_deref(),
+            Some("pkg:orphan")
+        );
+    }
+
+    #[test]
+    fn packaged_python_files_keep_dotted_module_resolution() {
+        let dir = tempfile::tempdir().unwrap();
+        // GAP-104: `scripts/run.py` is a flat module now (`run`), not None —
+        // covered by `flat_python_modules_resolve_to_their_stem_gap104`.
 
         // GAP-082 semantic change: `outer/plain/` has no `__init__.py`, so
         // under the old stop-at-first-non-package rule `outer/plain/mod.py`
         // resolved to `None`. Under PEP 420 that directory IS an importable
         // namespace package (importable without `__init__.py`), and `outer`
-        // is a regular package — so the file now resolves to its full dotted
-        // module. (True standalone scripts below still resolve to `None`.)
+        // is a regular package — so the file resolves to its full dotted
+        // module. The FLAT rule (GAP-104) must not change this: the chain
+        // still extends through namespace components, never host paths.
         write(dir.path(), "outer/__init__.py", "");
         let nested_plain = write(dir.path(), "outer/plain/mod.py", "");
         assert_eq!(
@@ -1631,11 +1722,16 @@ mod tests {
             Some("pkg:outer.plain.mod")
         );
 
-        // A bare relative filename has no package above it in this crate
-        // (and no name component at all once the walk reaches the empty
-        // parent path).
-        assert_eq!(python_module_for_file(Path::new("orphan.py")), None);
-        assert_eq!(PkgResolver::new().pkg_node("orphan.py"), None);
+        // A flat subdirectory layout must never let a HOST directory name
+        // join the module: tempdir `scripts/run.py` → `run`, never
+        // `tmp.<random>.scripts.run` and never `scripts.run`.
+        let script = write(dir.path(), "scripts/run.py", "print('hi')\n");
+        let module = python_module_for_file(Path::new(&script)).unwrap();
+        assert_eq!(module, "run");
+        assert!(
+            !module.contains('.'),
+            "no host or dir component leaks: {module}"
+        );
     }
 
     #[test]
@@ -1881,14 +1977,21 @@ mod tests {
     }
 
     #[test]
-    fn plain_dir_without_any_package_ancestor_still_resolves_none() {
+    fn plain_dir_without_any_package_ancestor_resolves_by_stem() {
         let dir = tempfile::tempdir().unwrap();
-        // Namespace directories all the way up to the filesystem root: no
-        // regular package anywhere, so this is a standalone script — the
-        // tempdir/host tree must never leak into a module name.
+        // Namespace directories all the way up to the filesystem root — GAP-104:
+        // this is a flat (top-level) module, importable by its stem (sys.path[0]
+        // is the script's own directory). Host directory names must never leak
+        // into the module name.
         let orphan = write(dir.path(), "scripts/tools/run.py", "print('hi')\n");
-        assert_eq!(python_module_for_file(Path::new(&orphan)), None);
-        assert_eq!(PkgResolver::new().pkg_node(&orphan), None);
+        assert_eq!(
+            python_module_for_file(Path::new(&orphan)).as_deref(),
+            Some("run")
+        );
+        assert_eq!(
+            PkgResolver::new().pkg_node(&orphan).as_deref(),
+            Some("pkg:run")
+        );
     }
 
     #[test]
@@ -1918,8 +2021,14 @@ mod tests {
         // Rust resolution is untouched ...
         assert_eq!(resolver.pkg_node(&lib).as_deref(), Some("pkg:rustdemo"));
         // ... but a Python file is never a Cargo package member, because the
-        // Python parser emits `pkg:<module>` edges, not crate edges.
-        assert_eq!(resolver.pkg_node(&script), None);
+        // Python parser emits `pkg:<module>` edges, not crate edges — even
+        // after GAP-104, where the flat module resolves to `pkg:script`
+        // (its own stem), never to the enclosing crate.
+        assert_eq!(
+            resolver.pkg_node(&script).as_deref(),
+            Some("pkg:script"),
+            "flat Python resolves by stem, never to the Cargo crate"
+        );
     }
 
     #[test]
