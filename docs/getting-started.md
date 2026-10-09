@@ -20,7 +20,9 @@ hilo --help
 - Rust 1.80+ — `cargo` is required by every install path (no prebuilt
   binaries are published yet)
 - `libfuse3-dev` and `pkg-config` — needed to **build** (the FUSE bindings);
-  a prebuilt binary needs only the `libfuse3-4` runtime library
+  a prebuilt binary needs only the `libfuse3-4` runtime library. Building with
+  `--no-default-features` (see [No sudo?](#no-sudo-install-without-root) below)
+  needs neither, and the binary it produces needs no `libfuse3-4` either
 - `attr` package — *optional*, only for the `getfattr` / `setfattr`
   inspection commands (Hilo itself uses xattr syscalls)
 
@@ -34,8 +36,45 @@ sudo apt install build-essential pkg-config libssl-dev libfuse3-dev attr
 
 ### No sudo? Install without root
 
-A bare image or sandbox with no `sudo` can still build the CLI — nothing in
-this path needs privileges:
+A bare image or sandbox with no `sudo` **and no `pkg-config`** can still build
+the CLI — nothing in this path needs privileges, and nothing needs
+`pkg-config`:
+
+```bash
+# 1. Rust into ~/.cargo (no root)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --profile minimal
+source "$HOME/.cargo/env"
+
+# 2. Userspace C/C++ compiler when the image has no gcc/g++ —
+#    agent images commonly bootstrap `zig cc` wrappers instead
+export CC="zig cc" CXX="zig c++"
+
+# 3. Build: vendored OpenSSL + fuser's pure-Rust mount implementation
+git clone https://github.com/gethilo/hilo.git && cd hilo
+cargo build --release -p hilo-cli --no-default-features --features vendored-openssl
+cp target/release/hilo ~/.cargo/bin/hilo
+```
+
+- `--features vendored-openssl` removes the OpenSSL / `libssl-dev` requirement
+  (openssl is compiled from source; `perl` + a C compiler is all it needs).
+- `--no-default-features` removes the `pkg-config` / `libfuse3-dev` one. It
+  turns off the default `libfuse` feature on `hilo-cli`/`hilo-fuse`, which is
+  the **only** thing that makes `fuser`'s build script probe `pkg-config` for
+  `fuse3.pc` — with no `pkg-config` present that probe panics
+  (`fuser/build.rs:47`). Off, `fuser` uses its own pure-Rust mount
+  implementation instead.
+- The resulting binary **links no `libfuse3.so`**, so the `libfuse3-4` runtime
+  package is not needed either. Only `hilo mount` still needs the
+  `fusermount3` helper (package `fuse3`); `init`, `graph`, `classify` and
+  `serve --mcp` do not.
+- A plain `cargo build --release` is unchanged — `libfuse` is on by default,
+  so release/default builds still link the C `libfuse3`.
+
+#### Alternative: keep the `libfuse3` link without root
+
+If you want the `libfuse3`-linked binary and you *do* have `apt`/`apt-get`
+plus network access (`apt-get download` fetches without privileges), unpack the
+FUSE dev files under `$HOME` instead of turning `libfuse` off:
 
 ```bash
 # 1. Rust into ~/.cargo (no root)
@@ -56,11 +95,9 @@ env PKG_CONFIG="$HOME/.local/hilo-deps/root/usr/bin/pkg-config" \
 cp target/release/hilo ~/.cargo/bin/hilo
 ```
 
-`--features vendored-openssl` removes the OpenSSL / `libssl-dev` requirement,
-and unpacking the two FUSE `.deb`s removes the `pkg-config` / `libfuse3-dev`
-one — the vendored feature alone is **not** enough, because `fuser`'s build
-script probes `pkg-config` for `fuse3.pc`. Full rationale, caveats and the
-Docker alternative: README →
+Path 3 unpacks `pkg-config` itself, which is why this variant still needs
+`apt`. Full rationale, caveats and the Docker alternative: README →
+[No-sudo install](../README.md#no-sudo-install-bare-images-no-pkg-config) and
 [Source build without sudo](../README.md#source-build-without-sudo).
 
 > ⚠️ **Build time:** the first build compiles `duckdb-sys`/`arrow` from

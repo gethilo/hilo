@@ -25,7 +25,7 @@ hilo_metadata = { path = "../hilo-metadata" }
 hilo_graph = { path = "../hilo-graph" }
 hilo_mcp = { path = "../hilo-mcp" }
 hilo_backends = { path = "../hilo-backends" }
-hilo_fuse = { path = "../hilo-fuse" }
+hilo_fuse = { path = "../hilo-fuse", default-features = false }
 hilo_triggers = { path = "../hilo-triggers" }
 hilo_plugins = { path = "../hilo-plugins" }
 duckdb = { version = "1.1", features = ["bundled"] }
@@ -33,6 +33,15 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "time"] }
 glob = "0.3"
 
 [features]
+# DF-WARPFS-44: `libfuse` (ON by default) is the C `libfuse3` mount path that
+# `cargo build -p hilo-cli` has always produced. `--no-default-features`
+# switches the whole binary to fuser's pure-Rust mount implementation so it
+# builds on a bare, non-root image with no pkg-config and no libfuse3-dev.
+# Keep this list to mount-path selection only: `--no-default-features` drops
+# every entry here, so anything else added to `default` needs its own
+# explicit feature on the no-sudo build line.
+default = ["libfuse"]
+libfuse = ["hilo_fuse/libfuse"]
 # DF-WARPFS-25: passthrough to hilo_backends (which owns the git2 dependency).
 # `cargo install --path hilo-cli --features vendored-openssl` builds the whole
 # binary with OpenSSL compiled from source — no system libssl needed.

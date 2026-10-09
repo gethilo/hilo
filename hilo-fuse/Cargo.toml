@@ -8,7 +8,13 @@ description = "Hilo FUSE daemon — kernel-level virtual filesystem with permiss
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
-fuser = "0.15"
+# DF-WARPFS-44: `default-features = false` drops fuser's `libfuse` feature — the
+# one that makes its build script probe pkg-config for `fuse3.pc` and panic
+# (`build.rs:47`) when pkg-config is absent. Without it fuser uses its own
+# pure-Rust mount implementation: no pkg-config, no `libfuse3-dev`, and no
+# `libfuse3.so` at run time. The `libfuse` feature below re-enables the C
+# library, and it is ON by default so existing builds are unchanged.
+fuser = { version = "0.15", default-features = false }
 anyhow = "1"
 tracing = "0.1"
 tokio = { version = "1", features = ["full"] }
@@ -18,6 +24,15 @@ hilo_metadata = { path = "../hilo-metadata" }
 hilo_core = { path = "../hilo-core" }
 hilo_permissions = { path = "../hilo-permissions" }
 hilo_backends = { path = "../hilo-backends" }
+
+[features]
+# DF-WARPFS-44: `libfuse` is the C `libfuse3` mount path and stays ON by
+# default so every existing build is unchanged. Turning it off (build with
+# `--no-default-features`) selects fuser's pure-Rust mount implementation,
+# which needs no pkg-config, no `libfuse3-dev` headers and no `libfuse3.so`
+# at run time — the one path that works on a bare, non-root image.
+default = ["libfuse"]
+libfuse = ["fuser/libfuse"]
 
 [dev-dependencies]
 tempfile = "3"
