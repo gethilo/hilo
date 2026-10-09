@@ -2030,11 +2030,11 @@ tasks:
   created_at: '2026-10-08T06:13:58.681579+00:00'
   completed_at: '2026-10-08T07:04:05.268817+00:00'
 - id: GAP-104
-  title: Flat top-level module file-form impact silently empty
+  title: graph impact on flat top-level modules returns empty
   criteria:
-  - hilo graph impact <flatmod>.py resolves importers via pkg:<module> node on a fixture
-    where a file imports the flat module; packaged resolution unregressed; clippy+fmt+scoped
-    tests green
+  - "hilo graph impact <mod>.py on a top-level module (not in a package) returns 'No\
+    \ dependents found' even when other files import it; must emit file\u2192file\
+    \ edges for top-level modules"
   status: complete
-  created_at: '2026-10-08T08:46:28.881850+00:00'
-  completed_at: '2026-10-08T09:31:45.196756+00:00'
+  created_at: '2026-10-09T18:58:02.708353+00:00'
+  completed_at: '2026-10-09T19:28:02.294447+00:00'

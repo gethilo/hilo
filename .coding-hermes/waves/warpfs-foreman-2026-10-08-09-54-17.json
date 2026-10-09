@@ -17,5 +17,7 @@
       "dispatched_at": "2026-10-08T10:00:00-05:00"
     }
   ],
-  "note": "GAP-113 (P1) depends_on GAP-112; zero other independent pending tasks -> serial single-worker tick."
+  "note": "GAP-113 (P1) depends_on GAP-112; zero other independent pending tasks -> serial single-worker tick.",
+  "finished_at": "2026-10-09T17:05:00-05:00",
+  "recovery_status": "complete"
 }
