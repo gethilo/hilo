@@ -873,19 +873,33 @@ Load and manage wasm plugins.
 > `.vfs/plugins/`; declared manifest hooks never fire (see
 > `docs/hilo-plugins.md`).
 
+See [`docs/hilo-plugins.md` §CLI](hilo-plugins.md#cli) for the full
+validate-and-persist behaviour, or load the checked-in example at
+[`examples/plugins/minimal.wasm`](../examples/plugins/README.md).
+
 ### `load`
 
 Load a .wasm plugin and register it in the runtime. *(The "runtime" is a
-metadata registry — nothing is executed; DF-WARPFS-59.)*
+metadata registry — nothing is executed; DF-WARPFS-59.)* Validates the
+`\0asm` magic + version 1 header, then persists the file to
+`.vfs/plugins/`.
 
 ```bash
-hilo plugin load ./my-plugin.wasm
+hilo plugin load examples/plugins/minimal.wasm
+# loaded plugin: minimal
+#   hooks: 0
+#   edge_types: []
+# persisted to: .vfs/plugins/minimal.wasm
 ```
 
 ### `list`
 
-List plugins discovered in `.vfs/plugins/`.
+List plugins discovered in `.vfs/plugins/`. Invalid files (bad magic or
+version) are skipped, and the version is reported as the unknown marker `?`
+— no manifest is parsed yet.
 
 ```bash
 hilo plugin list
+# plugins in .vfs/plugins:
+#   minimal v? — 0 hooks, 0 edge types
 ```
