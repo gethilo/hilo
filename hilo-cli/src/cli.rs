@@ -172,21 +172,35 @@ enum GraphCommand {
     /// Requires `.vfs/graph/surfaces.jsonl` (run `hilo graph surfaces`) and
     /// `.vfs/graph/coverage_links.jsonl` (run `hilo graph coverage-links`).
     TestClasses(TestClassesArgs),
-    /// GAP-112: detect silent-fallback wiring — interfaces consumed from
-    /// non-test code whose ONLY satisfiers are test-role types (the TRBL-084
-    /// shape). Three-way verdict: pass / finding / unsupported (a language
-    /// with no conformance extraction, never rendered as pass).
+    /// GAP-112/GAP-113: the wiring report. Detects silent-fallback wiring
+    /// (interfaces consumed from non-test code whose ONLY satisfiers are
+    /// test-role types — the TRBL-084 shape) as `pass` / `finding` /
+    /// `unsupported`, and emits the aggregate per-module wiring report:
+    /// public surfaces, inbound/outbound connection counts, deltas against a
+    /// stored baseline, untested surfaces, and a module classification
+    /// (entrypoint/service/lib/test/dead).
     Wiring(WiringArgs),
 }
 
 #[derive(clap::Args)]
 struct WiringArgs {
-    /// Print the report as JSON (locked field set — see README "graph wiring").
+    /// Print the report as JSON (versioned field set — see docs/cli-reference.md
+    /// "wiring", schema `hilo.graph.wiring/2`).
     #[arg(long)]
     json: bool,
 
     /// Optional project root to scan (defaults to the current directory).
     path: Option<String>,
+
+    /// Compare the current module snapshots against a stored baseline file
+    /// and report the added/removed surfaces and edges per module.
+    #[arg(long, value_name = "FILE")]
+    baseline: Option<String>,
+
+    /// Write the CURRENT module snapshots to FILE as a baseline, for a later
+    /// `--baseline FILE` comparison.
+    #[arg(long, value_name = "FILE")]
+    write_baseline: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -511,9 +525,12 @@ pub fn run() -> anyhow::Result<()> {
         Commands::Graph(GraphCommand::CoverageLinks(args)) => {
             coverage_links::run(args.json, args.surface.as_deref(), args.unlinked)
         }
-        Commands::Graph(GraphCommand::Wiring(args)) => {
-            wiring::run_wiring(args.json, args.path.clone())
-        }
+        Commands::Graph(GraphCommand::Wiring(args)) => wiring::run_wiring(
+            args.json,
+            args.path.clone(),
+            args.baseline.clone(),
+            args.write_baseline.clone(),
+        ),
         Commands::Graph(GraphCommand::TestClasses(args)) => test_classes::run(args.json),
         Commands::Serve(args) => serve::run(args.mcp),
         Commands::Backend(backend::BackendCommand::Mount(args)) => backend::run_mount(&args),

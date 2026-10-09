@@ -171,8 +171,45 @@ ledger degrades gracefully: the census line is simply omitted.
 
 ### `wiring`
 
-GAP-112: detect silent-fallback wiring — the TRBL-084 shape. An interface
-consumed from at least one NON-test site (Go `x.(I)` type assertions, Rust
+The wiring report: the aggregate per-module view an external scorer reads
+(GAP-113) plus the silent-fallback interface detector (GAP-112).
+
+**GAP-113 — the report.** `hilo graph wiring` groups every module (the first
+path component of a repo-relative path: `hilo-graph`, `hilo-cli`, …) and
+emits, per module: its public surfaces (read from `.vfs/graph/surfaces.jsonl`),
+inbound/outbound connection counts (from `.vfs/graph/edges.jsonl`), the
+surfaces and edges added or removed against a stored baseline, the surfaces
+with no coverage link (from `.vfs/graph/coverage_links.jsonl`), and a
+classification:
+
+- `entrypoint` — the module declares an executable entry (`main`).
+- `service` — a non-test, non-entrypoint module another module imports.
+- `lib` — a non-test, non-entrypoint leaf that still exports/imports.
+- `test` — every source file in the module is a test file.
+- `dead` — no edges in, none out, no public surfaces.
+
+Baselines record the current per-module snapshot (surfaces + edge identities)
+so a later run reports exactly what moved. Non-code top-level directories
+(docs, hidden trees, dependency caches) are named in the report's `excluded`
+list with the reason they are not modules — nothing is dropped silently. An
+absent input artifact is a `notes` entry, never a silent zero.
+
+```bash
+hilo graph wiring                                   # scan the current directory
+hilo graph wiring --json path/to/project
+hilo graph wiring --write-baseline .wiring-base.json   # record the current state
+hilo graph wiring --baseline .wiring-base.json --json  # report the delta
+```
+
+Baseline comparison keys on the content-derived `surface_id` (COV-1) and on
+the edge identity `from|rel|to`, so a delta moves only when a surface's
+identity or the edge set moves. A `pkg:<crate>` edge endpoint resolves to the
+module that owns that crate when the name matches one (`pkg:hilo_metadata` →
+`hilo-metadata`), and stays an external dependency otherwise.
+
+**GAP-112 — the findings.** Detect silent-fallback wiring — the TRBL-084
+shape. An interface consumed from at least one NON-test site (Go `x.(I)` type
+assertions, Rust
 `dyn Trait`, Python `isinstance`, TS/JS `instanceof`) whose ONLY satisfiers
 classify test-role is reported as a FINDING: tests stay green while every
 production run silently falls to a slow/absent path.
@@ -198,15 +235,40 @@ hilo graph wiring --json path/to/project
 
 Exit code is non-zero when findings exist, so CI can gate on it.
 
-`--json` locks this field set (schema `hilo.graph.wiring/1`):
+`--json` locks this field set (schema `hilo.graph.wiring/2`, exposed on both
+the `version` and the retained `schema` field):
 
 ```json
 {
-  "schema": "hilo.graph.wiring/1",
+  "version": "hilo.graph.wiring/2",
+  "schema": "hilo.graph.wiring/2",
   "root": "/abs/path/scanned",
-  "scanned_files": 5,
+  "scope": "self" | "foreign",
+  "scanned_files": 215,
   "languages_unsupported": ["java"],
-  "results": [
+  "modules": [
+    {
+      "module": "hilo-graph",
+      "classification": "service" | "entrypoint" | "lib" | "test" | "dead",
+      "surfaces": [
+        { "surface_id": "…", "name": "GraphDB", "owner_file": "hilo-graph/src/lib.rs" }
+      ],
+      "surface_count": 66,
+      "inbound_edges": 3,
+      "outbound_edges": 113,
+      "untested_surfaces": [
+        { "surface_id": "…", "name": "…", "owner_file": "…" }
+      ],
+      "untested_count": 0,
+      "delta": null
+    }
+  ],
+  "excluded": [
+    { "path": "docs", "reason": "no supported source files" }
+  ],
+  "baseline": { "path": "/abs/baseline.json", "compared": true, "written": null },
+  "notes": [],
+  "interfaces": [
     {
       "interface": "BatchWriter",
       "state": "pass" | "finding" | "unsupported",
@@ -217,9 +279,21 @@ Exit code is non-zero when findings exist, so CI can gate on it.
       ]
     }
   ],
-  "finding_count": 0
+  "finding_count": 0,
+  "totals": {
+    "modules": 16,
+    "surfaces": 208,
+    "untested_surfaces": 28,
+    "inbound_edges": 5,
+    "outbound_edges": 422,
+    "findings": 0
+  }
 }
 ```
+
+With a compared baseline, each module's `delta` becomes an object with
+`surfaces_added`, `surfaces_removed` (each `{surface_id, name, owner_file}`),
+`edges_added` and `edges_removed` (edge identities).
 
 Warm emits the underlying edge families (provenance `ast_heuristic`,
 confidence 0.8): `type:<T> -[implements]-> iface:<I>`,

@@ -296,6 +296,30 @@ pub fn append_surfaces_deduped(path: &Path, surfaces: &[Surface]) -> std::io::Re
     Ok(new.len())
 }
 
+/// Read surfaces from a `surfaces.jsonl`-shaped file (the append-only COV-1
+/// inventory). Malformed lines are SKIPPED — the file may have interleaved
+/// writers — so a torn row degrades to "not seen" rather than aborting the
+/// read. A missing file is an empty inventory, not an error.
+///
+/// Used by the GAP-113 wiring report, which groups the inventory by owning
+/// module and diffs it against a baseline.
+pub fn read_surfaces(path: &Path) -> std::io::Result<Vec<Surface>> {
+    let mut surfaces = Vec::new();
+    if !path.exists() {
+        return Ok(surfaces);
+    }
+    let contents = std::fs::read_to_string(path)?;
+    for line in contents.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Ok(surface) = serde_json::from_str::<Surface>(line) {
+            surfaces.push(surface);
+        }
+    }
+    Ok(surfaces)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

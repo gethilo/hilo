@@ -25,6 +25,7 @@ pub mod surfaces;
 pub mod terraform;
 pub mod test_classes;
 pub mod wiring;
+pub mod wiring_report;
 
 pub use classify::{
     classify_file, classify_test_file, classify_test_functions, entry_symbols_for_classification,
@@ -59,6 +60,14 @@ pub use signal::{
 };
 pub use wiring::{
     detect_wiring, language_state, Satisfier, SatisfierRole, WiringResult, WiringState,
+};
+
+pub use wiring_report::{
+    build_report, classify_module, compute_delta, edge_id, module_index, module_of, read_edges,
+    snapshot, BaselineInfo, ExcludedDir, InterfaceResult, InterfaceSatisfier, ModuleClass,
+    ModuleDelta, ModuleFile, ModuleIndex, ModuleSnapshot, ModuleWiring, SurfaceRef, WiringBaseline,
+    WiringInputs, WiringReport, WiringTotals, ROOT_MODULE, WIRING_BASELINE_VERSION,
+    WIRING_REPORT_VERSION,
 };
 
 pub use semantic::tokenize as semantic_tokenize;
