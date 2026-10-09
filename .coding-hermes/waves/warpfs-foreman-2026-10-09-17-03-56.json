@@ -1,0 +1,76 @@
+{
+  "tick_id": "warpfs-foreman-2026-10-09-17-03-56",
+  "project": "warpfs",
+  "workdir": "/home/kara/warpfs",
+  "wave_budget": 10,
+  "workers_dispatched": 6,
+  "tasks": [
+    {
+      "id": "GAP-113",
+      "title": "graph wiring report: export connection counts, deltas, untested surfaces as JSON",
+      "priority": "P1",
+      "complexity": 4,
+      "worktree": "/home/kara/worktrees/warpfs-GAP-113",
+      "branch": "wt/GAP-113",
+      "worker_model": "deepseek-v4-flash",
+      "worker_provider": "deepseek-foreman",
+      "dispatched_at": "2026-10-09T17:05:00-05:00"
+    },
+    {
+      "id": "DF-WARPFS-44",
+      "title": "INSTALL-BUNKER: pkg-config absent + no sudo kills -sys crate build",
+      "priority": "P2",
+      "complexity": 2,
+      "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-44",
+      "branch": "wt/DF-WARPFS-44",
+      "worker_model": "deepseek-v4-flash",
+      "worker_provider": "deepseek-foreman",
+      "dispatched_at": "2026-10-09T17:05:00-05:00"
+    },
+    {
+      "id": "GAP-098",
+      "title": "graph understand does not surface named symbols of a flow on some repos",
+      "priority": "P2",
+      "complexity": 3,
+      "worktree": "/home/kara/worktrees/warpfs-GAP-098",
+      "branch": "wt/GAP-098",
+      "worker_model": "deepseek-v4-flash",
+      "worker_provider": "deepseek-foreman",
+      "dispatched_at": "2026-10-09T17:05:00-05:00"
+    },
+    {
+      "id": "COV-4",
+      "title": "SURFACE GROUPING + ROLLUP: group surfaces into features/components",
+      "priority": "P2",
+      "complexity": 2,
+      "worktree": "/home/kara/worktrees/warpfs-COV-4",
+      "branch": "wt/COV-4",
+      "worker_model": "deepseek-v4-flash",
+      "worker_provider": "deepseek-foreman",
+      "dispatched_at": "2026-10-09T17:05:00-05:00"
+    },
+    {
+      "id": "COV-5",
+      "title": "SYMBOL-LEVEL CONNECTION + TEST AUDIT: every public function reachable + tested",
+      "priority": "P2",
+      "complexity": 2,
+      "worktree": "/home/kara/worktrees/warpfs-COV-5",
+      "branch": "wt/COV-5",
+      "worker_model": "deepseek-v4-flash",
+      "worker_provider": "deepseek-foreman",
+      "dispatched_at": "2026-10-09T17:05:00-05:00"
+    },
+    {
+      "id": "DF-WARPFS-27",
+      "title": "plugin affordances: example .wasm + CLI docs",
+      "priority": "P3",
+      "complexity": 1,
+      "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-27",
+      "branch": "wt/DF-WARPFS-27",
+      "worker_model": "deepseek-v4-flash",
+      "worker_provider": "deepseek-foreman",
+      "dispatched_at": "2026-10-09T17:05:00-05:00"
+    }
+  ],
+  "note": "Wave recovery complete (GAP-112 merged). Dispatching 6 independent tasks."
+}
