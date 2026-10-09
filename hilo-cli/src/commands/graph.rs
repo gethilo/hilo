@@ -5,9 +5,10 @@
 //!
 //! The COV subcommands live in their own modules, beside this one: surface
 //! enumeration (COV-1) in [`crate::commands::surfaces`], evidenced test→surface
-//! links (COV-2) in [`crate::commands::coverage_links`], and the test-class
+//! links (COV-2) in [`crate::commands::coverage_links`], the test-class
 //! taxonomy / per-surface class mix (COV-3) in
-//! [`crate::commands::test_classes`].
+//! [`crate::commands::test_classes`], and surface grouping + rollup (COV-4) in
+//! [`crate::commands::rollup`].
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::{Read, Write};

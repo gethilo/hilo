@@ -8,7 +8,10 @@ pub use inventory::{
     append_edge, append_edges, append_edges_deduped, create_vfs_structure, edge_to_jsonl,
     read_mounts, write_mounts, BackendMount, Edge,
 };
-pub use xattr::{get_vfs_xattr, list_vfs_xattrs, remove_vfs_xattr, set_vfs_xattr};
+pub use xattr::{
+    get_vfs_xattr, group_annotations, list_vfs_xattrs, remove_vfs_xattr, set_vfs_xattr,
+    GroupAnnotations,
+};
 
 /// Errors that can arise during metadata operations.
 #[derive(Debug, thiserror::Error)]

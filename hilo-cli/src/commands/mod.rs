@@ -11,6 +11,7 @@ pub mod init;
 pub mod meta;
 pub mod mount;
 pub mod plugin;
+pub mod rollup;
 pub mod serve;
 pub mod surfaces;
 pub mod test_classes;
