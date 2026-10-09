@@ -97,3 +97,71 @@ for manifest in manifests {
     }
 }
 ```
+
+## CLI
+
+The `hilo plugin` subcommands expose the validate-and-persist path from the
+shell. They are **metadata operations only** — neither command executes
+plugin code (DF-WARPFS-59).
+
+Run them from the workspace root: both resolve `.vfs/plugins/` relative to
+the current directory. A ready-made module to try is checked in at
+[`examples/plugins/minimal.wasm`](../examples/plugins/README.md).
+
+### `hilo plugin load <file>.wasm`
+
+Load a `.wasm` file, validate its header, and persist it into
+`.vfs/plugins/` so `hilo plugin list` can find it.
+
+```bash
+hilo plugin load examples/plugins/minimal.wasm
+# loaded plugin: minimal
+#   path: /abs/path/to/examples/plugins/minimal.wasm
+#   hooks: 0
+#   edge_types: []
+# persisted to: .vfs/plugins/minimal.wasm
+```
+
+Behaviour:
+
+- **Validation is a header check, not execution.** The file must start with
+  the `\0asm` magic at byte 0 and carry wasm version 1 at bytes 4–8. A text
+  file (even one named `.wasm`) is rejected *before* anything is registered:
+  `failed to load plugin: invalid wasm module <path>: missing \0asm magic at
+  byte 0 (file is N bytes)`. An unsupported version fails with
+  `... unsupported version at bytes 4-8`.
+- **Pre-flight errors:** `plugin file not found: <path>` when the file is
+  missing, and `plugin file must have a .wasm extension: <path>` when the
+  extension is not `.wasm`.
+- **Persistence:** the file is copied to `.vfs/plugins/<basename>` (a load
+  that only registered in memory would be a silent no-op). If the source is
+  already inside `.vfs/plugins/`, the copy is skipped and the command prints
+  `already in .vfs/plugins: <path>` instead of truncating the file onto
+  itself.
+- **Honest output:** a validated module reports `hooks: 0` and
+  `edge_types: []` — no manifest is parsed yet, so nothing is fabricated
+  (DF-WARPFS-22). The plugin name is the file stem (`minimal.wasm` →
+  `minimal`).
+
+### `hilo plugin list`
+
+Scan `.vfs/plugins/` (non-recursive) for `.wasm` files and print one line
+per discoverable plugin.
+
+```bash
+hilo plugin list
+# plugins in .vfs/plugins:
+#   minimal v? — 0 hooks, 0 edge types
+```
+
+Behaviour:
+
+- **Invalid files are skipped, not errors.** Any file failing the same
+  header check `load` enforces (bad magic, wrong version, too short) is
+  omitted from the listing — the plugins directory may hold
+  work-in-progress files, and listing must never report metadata for them.
+- **Version is `?`.** No manifest is parsed yet, so the version is always
+  the unknown marker `?`; hooks and edge types are likewise reported as
+  `0`. Fabricated metadata is never printed.
+- An empty (or missing) plugins directory prints
+  `no plugins found in .vfs/plugins`. Manifests are sorted by name.
