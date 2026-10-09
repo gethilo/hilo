@@ -369,6 +369,7 @@ hilo classify
 
 # Query through CLI
 hilo graph stats
+hilo graph surfaces # Hilo's OWN contract surfaces (self-scope only — refuses on a foreign repo)
 hilo graph wiring   # wiring report: per-module surfaces + deltas (GAP-113) + silent-fallback findings (GAP-112)
 hilo graph impact <file> --max-depth 3
 hilo graph related <file> --relation imports
