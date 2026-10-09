@@ -72,5 +72,8 @@
       "dispatched_at": "2026-10-09T17:05:00-05:00"
     }
   ],
-  "note": "Wave recovery complete (GAP-112 merged). Dispatching 6 independent tasks."
+  "note": "Wave recovery complete (GAP-112 merged). Dispatching 6 independent tasks.",
+  "status": "recovered_partial",
+  "finished_at": "2026-10-09T18:45:00-05:00",
+  "recovery_notes": "Merged 4/6 tasks (GAP-113, DF-WARPFS-44, GAP-098, DF-WARPFS-27). COV-4 and COV-5 had merge conflicts after rebase, aborted per wave-tick-recovery doctrine (no hand-resolution)."
 }
