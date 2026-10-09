@@ -81,8 +81,8 @@ fn test_tools_list() {
         .expect("tools should be an array");
     assert_eq!(
         tools.len(),
-        17,
-        "expected exactly 17 tools, got {}",
+        18,
+        "expected exactly 18 tools, got {}",
         tools.len()
     );
 
@@ -104,6 +104,7 @@ fn test_tools_list() {
     assert!(names.contains(&"vfs_graph_impact"));
     assert!(names.contains(&"vfs_graph_understand"));
     assert!(names.contains(&"vfs_graph_search"));
+    assert!(names.contains(&"vfs_graph_audit"));
     assert!(names.contains(&"vfs_workspace_ephemeral"));
     assert!(names.contains(&"vfs_workspace_wipe"));
 }
@@ -258,7 +259,7 @@ fn documented_tools_mirror_tools_list() {
 /// dummies; the response may fail for any environmental reason (no graph, no
 /// such file), but it must never be the handler's "missing argument" error.
 ///
-/// The probe drives all 17 tools, and the graph and workspace tools resolve
+/// The probe drives all 18 tools, and the graph and workspace tools resolve
 /// their paths against the process CWD, so it runs in the same throwaway-CWD
 /// fixture the graph tests use (holding `cwd_test_lock`): that keeps
 /// `.vfs/graph/graph.db` out of the crate directory and keeps a fixture graph

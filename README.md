@@ -339,8 +339,8 @@ stamped query cache): [docs/performance.md](docs/performance.md).
 - **Metadata-first** — xattrs + JSONL inventory. File content is
   never modified
 - **Parallel parsing** — rayon-powered, 800+ files in seconds
-- **MCP server** — 17 tools (`vfs_graph_impact`, `vfs_graph_related`,
-  `vfs_graph_understand`, `vfs_graph_search`, `vfs_resolve_path`, etc.) for direct agent integration
+- **MCP server** — 18 tools (`vfs_graph_impact`, `vfs_graph_related`,
+  `vfs_graph_understand`, `vfs_graph_search`, `vfs_graph_audit`, `vfs_resolve_path`, etc.) for direct agent integration
 - **FUSE mount** — standard `ls`, `cat`, `getfattr` through kernel
   filesystem
 - **Permissions (status caveat)** — the manifest `permissions.rules`
@@ -371,6 +371,7 @@ hilo classify
 hilo graph stats
 hilo graph surfaces # Hilo's OWN contract surfaces (self-scope only — refuses on a foreign repo)
 hilo graph wiring   # wiring report: per-module surfaces + deltas (GAP-113) + silent-fallback findings (GAP-112)
+hilo graph audit    # symbol-level connection + test audit (COV-5) (feat(graph): COV-5 symbol-level connection + test audit)
 hilo graph impact <file> --max-depth 3
 hilo graph related <file> --relation imports
 

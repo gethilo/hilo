@@ -281,8 +281,8 @@ follows).
       "public": true }
   ],
   "census": [
-    { "kind": "mcp_tool", "detected": 17, "expected": 17,
-      "rule": "hilo_mcp::tools::list_tools() registry (17 tools)" }
+    { "kind": "mcp_tool", "detected": 18, "expected": 18,
+      "rule": "hilo_mcp::tools::list_tools() registry (18 tools)" }
   ]
 }
 ```

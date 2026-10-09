@@ -1,12 +1,12 @@
 # hilo-mcp — MCP Server
 
-A Model Context Protocol server that exposes 17 tools over stdio JSON-RPC 2.0.
+A Model Context Protocol server that exposes 18 tools over stdio JSON-RPC 2.0.
 Agents query the dependency graph, search semantically, read/write metadata, and
 manage backends and workspace files through MCP without file reads.
 
 **Crate:** `hilo-mcp`
 **Transport:** stdio — newline-delimited JSON-RPC 2.0 on stdin/stdout
-**Tools:** 17 — `hilo_mcp::tools::list_tools()`, the exact descriptor list `tools/list` returns
+**Tools:** 18 — `hilo_mcp::tools::list_tools()`, the exact descriptor list `tools/list` returns
 **Protocol version** (reported by `initialize`): `2024-11-05`
 
 ## Public API Surface
@@ -26,7 +26,7 @@ builder type and no `ToolRegistry`: `tools/list` is served directly from
 
 ## MCP Tools
 
-`tools/list` returns exactly 17 descriptors. The table below mirrors
+`tools/list` returns exactly 18 descriptors. The table below mirrors
 `hilo-mcp/src/tools/mod.rs` (and `hilo-mcp/tests/mcp_test.rs` keeps it that
 way).
 
@@ -41,6 +41,7 @@ way).
 | `vfs_graph_impact` | `{path, max_depth?}` | `{dependents, total, max_depth_reached}` | Files that depend on this file, directly or transitively |
 | `vfs_graph_understand` | `{task, budget?, resolution?}` | `{text, files, anchors, tokens_estimate}` | Harmonic multi-resolution context for a task (MAP → SIGNATURES → DETAIL) |
 | `vfs_graph_search` | `{query, limit?}` | `{results, total}` (or a `message` when `.vfs/graph/graph.db` is missing) | Deterministic semantic search (TF-IDF + BM25 + reciprocal rank fusion) |
+| `vfs_graph_audit` | `{path?}` | `{schema, root, scanned_files, public_symbols, entrypoints, buckets {unreachable, unlinked, ok}, unknown, census, symbols, rules}` | COV-5 symbol-level connection + test audit: per public function, is it reachable from a declared entrypoint and does it carry a test link (the NAMED list, bucketed, never a score) |
 | `vfs_rule_list` | `{}` | `{rules, total}` | Rules defined in the manifest |
 | `vfs_rule_check` | `{name}` | `{rule, description, matches, total}` (or `{rule, error}` when the rule's query fails) | Execute a named rule query against the graph |
 | `vfs_list_directory` | `{path}` | `{entries, total}` | Entries in a virtual directory (backends mount table), with the real local filesystem as fallback when the virtual listing is empty; errors on nonexistent paths and file paths |

@@ -1,6 +1,6 @@
 //! Tool definitions and dispatch for the Hilo MCP server.
 //!
-//! Seventeen tools are exposed:
+//! Eighteen tools are exposed:
 //! - `vfs_get_metadata`     — read Hilo xattrs for a file
 //! - `vfs_set_metadata`     — write Hilo xattr for a file
 //! - `vfs_graph_related`    — find related files via the dependency graph
@@ -10,6 +10,7 @@
 //! - `vfs_graph_impact`     — transitive impact analysis for a file
 //! - `vfs_graph_understand` — harmonic multi-resolution context (signal engine)
 //! - `vfs_graph_search`     — semantic code search (TF-IDF + BM25, deterministic)
+//! - `vfs_graph_audit`      — symbol-level connection + test audit (COV-5)
 //! - `vfs_rule_list`        — list all rules defined in the manifest
 //! - `vfs_rule_check`       — execute a named rule query against the graph
 //! - `vfs_list_directory`   — list entries in a virtual directory
@@ -175,6 +176,16 @@ pub fn list_tools() -> Vec<Tool> {
             }),
         },
         Tool {
+            name: "vfs_graph_audit".into(),
+            description: "COV-5 symbol-level connection + test audit. Per public function, answers whether it is reachable from a declared entrypoint and whether it carries a test link, and returns the NAMED list partitioned into three buckets — unreachable (no caller path from an entrypoint), unlinked (reachable, no test link), ok (reachable AND linked) — each with a count and the rule that produced it. Languages without a public-function extractor are named under `unknown` rather than counted as ok. Pure source analysis: needs no warmed graph.".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Optional project root to audit (defaults to the server's working directory)"}
+                }
+            }),
+        },
+        Tool {
             name: "vfs_rule_list".into(),
             description: "List all rules defined in the Hilo manifest (stale-files, untested-critical, transitive-impact, etc.).".into(),
             input_schema: serde_json::json!({
@@ -283,6 +294,7 @@ pub fn call_tool(name: &str, arguments: &serde_json::Value) -> McpResult<serde_j
         "vfs_graph_impact" => graph_impact(arguments),
         "vfs_graph_understand" => graph_understand(arguments),
         "vfs_graph_search" => graph_search(arguments),
+        "vfs_graph_audit" => graph_audit(arguments),
         "vfs_rule_list" => rule_list(arguments),
         "vfs_rule_check" => rule_check(arguments),
         "vfs_list_directory" => list_directory(arguments),
@@ -767,10 +779,46 @@ fn graph_search(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
     }))
 }
 
+/// `vfs_graph_audit` — COV-5 symbol-level connection + test audit.
+///
+/// Walks the project rooted at `path` (or the server's working directory) and
+/// returns the two-question audit as the NAMED list partitioned into
+/// `unreachable` / `unlinked` / `ok`, each with a count and the rule that
+/// produced it. Pure source analysis — it needs no `.vfs/graph/graph.db`, so it
+/// is answerable before a `hilo graph warm`, and the same call covers a
+/// foreign repo (where the surface inventory legitimately has nothing to say).
+///
+/// An explicit `path` that is not a directory is an error, not an empty
+/// report: a success-shaped empty answer for a typo'd root is the defect class
+/// this row exists to remove.
+fn graph_audit(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
+    let root = match arguments["path"].as_str() {
+        Some(p) => {
+            let path = PathBuf::from(p);
+            if !path.is_dir() {
+                return Err(McpError::Protocol(format!("path is not a directory: {p}")));
+            }
+            path
+        }
+        None => std::env::current_dir().map_err(McpError::Io)?,
+    };
+
+    let corpus = hilo_graph::audit::collect_corpus(&root);
+    // COV-2 links on disk enrich the test-link evidence when present; their
+    // absence is not an error — the corpus-derived test-name evidence stands.
+    let links_path = root.join(".vfs").join("graph").join("coverage_links.jsonl");
+    let coverage_links = hilo_graph::coverage_links::read_links(&links_path).unwrap_or_default();
+    let opts = hilo_graph::audit::AuditOptions {
+        max_evidence: 10,
+        coverage_links,
+    };
+    let report = hilo_graph::audit::audit(&corpus, &root.to_string_lossy(), &opts);
+    Ok(serde_json::to_value(report)?)
+}
+
 // ---------------------------------------------------------------------------
 // Rule tools
 // ---------------------------------------------------------------------------
-
 /// Load the manifest from the primary or fallback path.
 fn load_manifest() -> McpResult<hilo_core::manifest::Manifest> {
     let primary = Path::new(MANIFEST_PATH);

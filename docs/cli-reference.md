@@ -691,6 +691,66 @@ mix — without them every surface reports **uncovered with that absence named**
 in the report, never as a silent zero. Wiring numbers (GAP-113) are omitted
 until that row lands, with the omission stated in `rules`.
 
+### `audit` (COV-5 — symbol-level connection + test audit)
+
+The graph's primitives (`impact`, `related`, `untested`) are FILE-scoped, so a
+public function that is defined but never called from any entrypoint — or
+called but never linked to a test — is invisible as an individual fact. The
+audit answers, **per public function**, two questions and returns the NAMED
+list, never a score:
+
+1. is it reachable from a declared entrypoint?
+2. does it carry a coverage link?
+
+```bash
+hilo graph audit            # scan the current directory
+hilo graph audit --json     # locked shape
+hilo graph audit path/to/project
+```
+
+The result partitions into three buckets, each with a count, the rule that
+produced it, and its named members:
+
+| bucket | meaning |
+|--------|---------|
+| `unreachable` | no caller path from a declared entrypoint |
+| `unlinked` | reachable from an entrypoint, but no test link |
+| `ok` | reachable AND linked |
+
+```bash
+hilo graph audit --json | jq '.buckets | keys'
+# ["ok", "unlinked", "unreachable"]
+```
+
+The rules, exactly:
+
+- **Public function** — Rust bare `pub fn` (`pub(crate)`/`pub(super)` are NOT
+  public), Go `func`/method whose name is exported (leading uppercase), Python
+  `def`/`async def` not starting with `_`, TypeScript/JavaScript declarations
+  inside an `export`. Test files and generated files define no audited symbol
+  (they are the link source, not the surface).
+- **Declared entrypoint** — a file whose `classify_file` role is `entrypoint`
+  (filename convention `main.rs`/`__main__.py`/`index.js`/`Program.cs`/
+  `Main.kt`/`index.php`/`main.swift`, or an AST-detected `main`/canonical entry
+  symbol). No hand list.
+- **Reachable** — the defining file is itself a declared entrypoint, or a file
+  reachable-from-an-entrypoint names the symbol, or the symbol is named inside
+  its own file beyond its definition sites while that file is reachable. File
+  reachability is the forward closure of `A names a public symbol of B` from
+  the entrypoints.
+- **Reference** — a lexical identifier occurrence (comments and string
+  literals included). It deliberately over-approximates, so `unreachable` is a
+  conservative, no-false-accusation claim: "the name is textually absent from
+  every reachable file".
+- **Linked** — a test file names the symbol, or an on-disk COV-2 link
+  (`.vfs/graph/coverage_links.jsonl`) targets its name or file.
+
+Languages without a public-function extractor are named under `unknown` — they
+are never collapsed into `ok`. `census` carries a per-language row
+(`files`, `public_symbols`, the extractor rule), so a zero is distinguishable
+from an unexercised extractor, and every bucket reports its rule whether or not
+it is empty. The command is a REPORT, not a gate: it always exits 0. (feat(graph): COV-5 symbol-level connection + test audit)
+
 ## `hilo classify`
 
 Auto-tag every source file with `user.vfs.role` and `user.vfs.status`
