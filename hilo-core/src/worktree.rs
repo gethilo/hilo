@@ -21,6 +21,44 @@ pub enum WorktreeError {
     NotFound(String),
     #[error("worktree already exists: {0}")]
     AlreadyExists(String),
+    #[error("unresolved ref '{ref_name}': tried {forms_tried}; {available_refs}")]
+    UnresolvedRef {
+        ref_name: String,
+        forms_tried: String,
+        available_refs: String,
+    },
+}
+
+/// Cap on how many branch names the unresolved-ref error lists.
+const MAX_LISTED_BRANCHES: usize = 10;
+
+/// List available branch names (local + remote-tracking), deduplicated and
+/// capped at [`MAX_LISTED_BRANCHES`], for the unresolved-ref error message.
+fn available_branches(repo: &git2::Repository) -> String {
+    let mut names: Vec<String> = Vec::new();
+    let mut truncated = false;
+    if let Ok(branches) = repo.branches(None) {
+        for (branch, _kind) in branches.flatten() {
+            if names.len() >= MAX_LISTED_BRANCHES {
+                truncated = true;
+                break;
+            }
+            if let Ok(Some(name)) = branch.name() {
+                if !names.iter().any(|n| n == name) {
+                    names.push(name.to_string());
+                }
+            }
+        }
+    }
+    if names.is_empty() {
+        return "available branches: none".to_string();
+    }
+    let list = names.join(", ");
+    if truncated {
+        format!("available branches (first {MAX_LISTED_BRANCHES}): {list}, ...")
+    } else {
+        format!("available branches: {list}")
+    }
 }
 
 /// Status of a managed worktree.
@@ -204,20 +242,37 @@ impl WorktreeManager {
     /// Tags result in a detached HEAD; branches update HEAD to track the
     /// branch ref.
     fn checkout_ref(&self, repo: &git2::Repository, ref_name: &str) -> Result<(), WorktreeError> {
-        let (object, reference) = repo
-            .revparse_ext(ref_name)
-            .or_else(|_| repo.revparse_ext(&format!("refs/heads/{ref_name}")))
-            .or_else(|_| repo.revparse_ext(&format!("refs/tags/{ref_name}")))?;
-        repo.checkout_tree(&object, None)?;
-        match reference {
-            Some(gref) if gref.is_tag() => {
-                repo.set_head_detached(object.id())?;
-            }
-            _ => {
-                repo.set_head(&format!("refs/heads/{ref_name}"))?;
+        // Fresh clones only carry refs the fetch materialized; when nothing
+        // resolves, the failure must name every form tried and what the
+        // remote actually offers instead of a bare libgit2 revspec error.
+        let candidate_forms: [String; 3] = [
+            ref_name.to_string(),
+            format!("refs/heads/{ref_name}"),
+            format!("refs/tags/{ref_name}"),
+        ];
+        for form in &candidate_forms {
+            if let Ok((object, reference)) = repo.revparse_ext(form) {
+                repo.checkout_tree(&object, None)?;
+                match reference {
+                    Some(gref) if gref.is_tag() => {
+                        repo.set_head_detached(object.id())?;
+                    }
+                    _ => {
+                        repo.set_head(&format!("refs/heads/{ref_name}"))?;
+                    }
+                }
+                return Ok(());
             }
         }
-        Ok(())
+        Err(WorktreeError::UnresolvedRef {
+            ref_name: ref_name.to_string(),
+            forms_tried: candidate_forms
+                .iter()
+                .map(|f| format!("'{f}'"))
+                .collect::<Vec<_>>()
+                .join(", "),
+            available_refs: available_branches(repo),
+        })
     }
 }
 
@@ -489,5 +544,77 @@ mod tests {
             !tmp.path().join("bad-repo").exists(),
             "worktree dir left behind after failed clone: {err}"
         );
+    }
+
+    // TEST 13: An unresolvable ref error names every tried form and the
+    // available branches (DF-WARPFS-132).
+    //
+    // `checkout_ref` tries the ref as-is, then `refs/heads/<ref>`, then
+    // `refs/tags/<ref>`; the final error must say so and list what the
+    // remote actually offers instead of a bare libgit2 revspec error.
+    #[test]
+    fn test_ensure_unresolvable_ref_error_names_forms_and_branches() {
+        let (_dir, url) = init_bare_repo_master_with_main();
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = WorktreeManager::with_base_dir(tmp.path().to_path_buf()).unwrap();
+        let err = mgr.ensure("repo-a", &url, "no-such-branch").unwrap_err();
+        let msg = err.to_string();
+        // Names the requested ref and every candidate form tried.
+        assert!(msg.contains("no-such-branch"), "names the ref: {msg}");
+        assert!(msg.contains("tried"), "lists tried forms: {msg}");
+        assert!(msg.contains("'no-such-branch'"), "tried bare form: {msg}");
+        assert!(
+            msg.contains("'refs/heads/no-such-branch'"),
+            "tried branch form: {msg}"
+        );
+        assert!(
+            msg.contains("'refs/tags/no-such-branch'"),
+            "tried tag form: {msg}"
+        );
+        // Lists the branches the remote actually offers.
+        assert!(
+            msg.contains("available branches"),
+            "lists available branches: {msg}"
+        );
+        assert!(msg.contains("master"), "available branch master: {msg}");
+        assert!(msg.contains("main"), "available branch main: {msg}");
+    }
+
+    // TEST 14: The available-branch list is capped (DF-WARPFS-132).
+    //
+    // A repo with more than MAX_LISTED_BRANCHES branches must not dump all
+    // of them into the error: the message notes the cap (first 10) and
+    // truncates.
+    #[test]
+    fn test_unresolved_ref_branch_list_is_capped() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo_path = dir.path().join("many-branches.git");
+        std::fs::create_dir_all(&repo_path).unwrap();
+        git_cmd(&["init", "--bare", "-b", "main", repo_path.to_str().unwrap()]);
+        let work = dir.path().join("work");
+        let url = format!("file://{}", repo_path.display());
+        git_cmd(&["clone", &url, work.to_str().unwrap()]);
+        std::fs::write(work.join("README.md"), "# test\n").unwrap();
+        git_cmd(&["-C", work.to_str().unwrap(), "add", "README.md"]);
+        git_cmd(&["-C", work.to_str().unwrap(), "commit", "-m", "initial"]);
+        git_cmd(&["-C", work.to_str().unwrap(), "push", "origin", "main"]);
+        for i in 1..=12 {
+            let branch = format!("b{i:02}");
+            git_cmd(&["-C", work.to_str().unwrap(), "branch", &branch]);
+        }
+        git_cmd(&["-C", work.to_str().unwrap(), "push", "origin", "--all"]);
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = WorktreeManager::with_base_dir(tmp.path().to_path_buf()).unwrap();
+        let err = mgr.ensure("capped", &url, "nope").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("first 10"), "cap noted: {msg}");
+        assert!(msg.contains("..."), "truncation marker: {msg}");
+        // Early branches always sit inside the first 10 (the clone default
+        // `main` sorts last alphabetically, so b01..b10 lead the list).
+        assert!(msg.contains("b01"), "early branch listed: {msg}");
+        assert!(msg.contains("b05"), "early branch listed: {msg}");
+        assert!(!msg.contains("b11"), "beyond-cap branch omitted: {msg}");
+        assert!(!msg.contains("b12"), "beyond-cap branch omitted: {msg}");
     }
 }
