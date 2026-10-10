@@ -1351,3 +1351,66 @@ auditable conflicts ledger." · **Angle:** run 35/36 covered install + graph sur
 - Install leg: SKIPPED-install-bunker-with-citation (DF-WARPFS-119) — runs 35+36 proved the documented fresh install twice within 24h at the same HEAD; zero Cargo drift; nothing a third leg adds.
 - Rows filed: PERF-011, DF-WARPFS-119 (skip record), DF-WARPFS-120 (triggers PASS record). created_by: dogfood-run37-2026-10-10.
 - Left behind: this entry + the 3 board rows. No code changes. NOTE: parallel sync dogfood run also used the 119/120 ids first-minted in this working tree; it renumbered to 126/127 citing the collision — no duplicates exist (grep-verified).
+# Dogfood Run 38 (warpfs-dogfood lane) — 2026-10-10 — `workspace mount` / `unmount` surface
+
+**Tick:** warpfs-dogfood-2026-10-10-05-39-14 · **Head:** a996ef92 · **Binary:** hilo 0.4.0 v0.3.0-343-ga996ef92 (release, built this tick, /var/tmp/hermes-cargo-target)
+
+**Promise tested:** "A user declares multiple repos + backends in `.vfs/manifest.yaml` and `hilo workspace mount <dir>` mounts them all into one unified FUSE tree (docs/cli-reference.md `## workspace mount`, README 'More commands')."
+
+**Angle:** runs 35-38 covered fresh install, foreign-repo graph consumer, sync, triggers. No run ever drove the multi-repo workspace mount — the README flagship's second surface. Scratch: /tmp/dogfood-warpfs-wsmount (2 bare repos + manifest, nothing in the target repo touched).
+
+## What happened (the journey)
+
+1. **The documented shape fails on a fresh machine.** Manifest with two repos `ref: main` (exactly the manifest example's own shape) → `failed to build mount plan: revspec 'refs/tags/main' not found` on BOTH repos, exit 1. Root cause: `checkout_ref` (hilo-core/src/worktree.rs:174-186) tries revparse → refs/heads → refs/tags, but a fresh git2 clone only materializes refs/heads/<default>, so any non-default branch name resolves through the tags arm only. The manifest example itself (`ref: main`) cannot mount. **P0, DF-WARPFS-128.**
+2. Retry worked only because the first failed attempt left a clone whose default branch (master) matched nothing... after re-clone into the residue the clone default happened to be main. A fresh user following the docs hits #1 and gets no hint it's about branch resolution (DF-WARPFS-132, P2).
+3. **Mount works when refs resolve.** Plan prints `repo-a -> /a/ (ro)`, `repo-b -> /b/ (rw)`, banner, then BLOCKS — foreground only; `timeout 30` killed it and left a dead FUSE endpoint ("Transport endpoint is not connected"). No `--daemon` flag exists on workspace mount, unlike `hilo mount` (DF-WARPFS-130, P1). Backgrounded, the tree mounts: 35 files, both repos, browsable.
+4. **Reads are fast and correct:** single file read 3-4ms; full-tree cat (35 files) 161ms. Unmount clean, exit 0, no surviving process, mountpoint gone.
+5. **`writable: true` is a lie:** plan says (rw), FUSE options hardcode `MountOption::RO` (workspace_mount.rs:541-543), no write path exists in the FS. **DF-WARPFS-129, P1.**
+6. **No metadata passthrough:** `getfattr` → "No such attribute"; no xattr, no graph, no .vfs in the unified tree — the agent-first promise stops at this boundary. **DF-WARPFS-131, P2.**
+
+## Verdict
+
+🟡 **PROMISING-BUT-ROUGH** — when it mounts, the unified-tree idea works and reads are comfortable. But the flagship documented shape (branch refs) fails outright on a fresh machine, rw claims are inert, and the surface has no daemon mode. Not shippable as a user journey; mountable if you know the workarounds (clone-default refs, background by hand).
+
+**Time-to-first-success:** ~25 min (3 failed mounts + source-reading to understand the refs/trap). Friction count: 5 (P0 refs, blocking foreground, dead-endpoint after kill, rw lie, no xattrs).
+
+**Perf (Step 2b):** nothing slow enough to file. File read 3-4ms, full tree 161ms, mount-to-browsable ~2s, unmount <1s. Warm/cold not separable for a once-per-run FUSE mount; no user-noticeable wait beyond the mount itself.
+
+**Install leg:** SKIPPED-install-bunker-with-citation — runs 35+36 proved the documented fresh install twice within 24h at the same HEAD; `git log --since 24h -- '**/Cargo.toml'` shows only a docs commit (b68e01a9). Nothing a third leg adds. NOT re-proved here; the P0 above is mount-plan stage and would reproduce on any box with the same manifest.
+
+**Rows filed:** DF-WARPFS-128..132 (created_by: dogfood-warpfs-run38), verified unique on the board.
+
+**Left behind:** this log entry + the 5 board rows. No code changes; scratch under /tmp only.
+
+# Dogfood Run 39 — 2026-10-10 — FUSE mount re-discovery (run-20 P0/P1 re-proof + new graph/trigger/perf findings) — 🟢 FUSE SHIPPABLE / 🟡 graph related silent-empty
+
+**Tick:** warpfs-dogfood-2026-10-10-05-39-14 · **Promise:** "a user can browse, read and
+query a codebase through an agent-first FUSE mount in under a second." · **Angle:** runs
+35-38 took install/foreign-repo/sync surfaces on 10-10; the FUSE mount itself was last
+dogfooded 2026-09-20 (run 7/20) — re-prove the completed P0/P1 set through real use.
+**Binary:** hilo 0.4.0 v0.3.0-341-g3a62d63b (local debug, target-local/), scratch corpus
+/tmp/df39repo (222 files, 3524 edges, graph pre-warmed).
+
+- Re-proof (all through real use, not tests): DF-5 empty/nested readdir instant; DF-48
+  workspace nested paths resolve; DF-6 default mount works on stock fusermount3; DF-7
+  .git excluded; DF-8 mtimes identical to disk; DF-29 nested trigger fires ~6-10s;
+  DF-30 no db lock held; DF-32 no leak after unmount; read-only EROFS is the documented
+  contract; xattr passthrough clean cross-surface (hilo meta + getfattr).
+- DF-WARPFS-133 (P1, new): `graph related <absolute path>` → "No outgoing edges" exit 0
+  while relative path returns full edges and impact/understand handle absolutes fine —
+  silent-empty on the exact path an agent browsing the mount uses.
+- DF-WARPFS-134 (P2, new): `--triggers --daemon` discards stderr, the trigger engine's
+  only log channel — daemonized trigger mounts are observably dead (foreground control
+  fires in 6-10s). Fix: daemon stderr → named file + banner.
+- DF-WARPFS-135 (P1, PERF, updates PERF-011): mount traversal cold 14-20s / warm
+  1.16-2.1s vs 9ms native (~129x) with graph pre-warmed; profile: ~52% std::path
+  parse/compare in readdir → Path::parent(), ~12.6% populate_directory linear scan
+  (perf -F 199 on the daemon pid; hot paths hilo-fuse/src/ops.rs).
+- Sibling run 38 (tick 05:14) took the workspace surface with rows DF-128..132; this
+  run independently re-proved DF-129 (writable:true inert, banner says rw, FS EROFS).
+- Install leg: SKIPPED-with-citation — runs 35+36 proved fresh installs within 24h;
+  code delta since = one test-only commit; zero Cargo dep drift.
+- Time-to-first-success (browse+read+query via mount): ~1 min. Friction: 3.
+- Left behind: docs/dogfood/2026-10-10-run39-fuse-rediscovery.md + rows DF-133/134/135
+  (created_by: dogfood-warpfs-run39) + skills/hilo-usage/SKILL.md run-39 section. No
+  code changes. Foreman woken: NO (read-only lane contract).
