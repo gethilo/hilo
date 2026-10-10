@@ -3148,7 +3148,18 @@ fn backend_sync_local_pushes_pulls_and_filters() {
         String::from_utf8_lossy(&again.stdout)
     );
 
-    // Remote newer → pull updates the local copy.
+    // Remote newer → pull updates the local copy. Bump the remote mtime a
+    // full second past the aligned local mtime: the planner compares
+    // whole-second mtimes, and an equal second is now a documented NO-OP
+    // (DF-WARPFS-69) — only a strictly newer remote pulls.
+    std::thread::sleep(Duration::from_millis(1100));
+    let remote_newer = SystemTime::now() + Duration::from_secs(2);
+    let f = fs::File::options()
+        .write(true)
+        .open(backend_root.join("a.txt"))
+        .expect("open remote a.txt");
+    f.set_modified(remote_newer).expect("set remote mtime");
+    drop(f);
     fs::write(backend_root.join("a.txt"), "from-remote\n").expect("failed to update remote");
     let pulled = hilo_cmd()
         .args(["backend", "sync", "--pull"])
