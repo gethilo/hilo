@@ -83,6 +83,16 @@ impl WorkspaceMount {
         self.next_inode.fetch_add(1, Ordering::SeqCst)
     }
 
+    /// Whether any mounted backend is writable.
+    ///
+    /// The kernel enforces one read-only/read-write mode for the whole mount,
+    /// so the mount may only be mounted read-only when NO backend is writable.
+    /// The per-entry `MountEntry::writable` flag still provides the fine-grained
+    /// userspace enforcement layer on top of this coarse kernel decision.
+    pub fn any_writable(&self) -> bool {
+        self.mounts.iter().any(|m| m.writable)
+    }
+
     /// Given a mount-relative path ("auth-service/src/main.go"),
     /// find which mount entry it belongs to and resolve to real path.
     #[allow(dead_code)]
@@ -533,16 +543,20 @@ impl Filesystem for WorkspaceMount {
 /// This call blocks until the filesystem is unmounted (or an error occurs).
 /// On success returns `Ok(())`.
 pub fn mount(fs: WorkspaceMount, config: &crate::FuseConfig) -> anyhow::Result<()> {
-    let opts = mount_options(config);
+    let opts = mount_options(&fs, config);
     fuser::mount2(fs, &config.mount_point, &opts)?;
     Ok(())
 }
 
-fn mount_options(config: &crate::FuseConfig) -> Vec<MountOption> {
-    let mut opts = vec![
-        MountOption::RO,
-        MountOption::FSName("hilo-workspace".into()),
-    ];
+fn mount_options(fs: &WorkspaceMount, config: &crate::FuseConfig) -> Vec<MountOption> {
+    let mut opts = vec![MountOption::FSName("hilo-workspace".into())];
+    // The kernel enforces RO/RW for the whole mount, so it is read-only only
+    // when NO backend is writable (default behavior is unchanged for an
+    // all-read-only or empty workspace). Per-entry `writable` enforcement
+    // happens in userspace (lookup/getattr/write) regardless of this flag.
+    if !fs.any_writable() {
+        opts.push(MountOption::RO);
+    }
     if config.allow_other {
         opts.push(MountOption::AllowOther);
     }
@@ -613,4 +627,83 @@ pub fn ws_backing_file_for_test(fs: &WorkspaceMount, rel: &str) -> Option<PathBu
 #[doc(hidden)]
 pub fn ws_root_ino_for_test() -> u64 {
     ROOT_INO
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::permissions::PermissionEngine;
+    use hilo_core::workspace::MountEntry;
+
+    fn test_config() -> FuseConfig {
+        FuseConfig {
+            mount_point: PathBuf::from("/tmp/hilo-ws-opt-test"),
+            allow_other: false,
+            direct_io: false,
+            auto_unmount: false,
+            read_only: true,
+            attr_timeout: 1.0,
+            entry_timeout: 1.0,
+            max_read: 131_072,
+            max_write: 131_072,
+            sandbox: None,
+        }
+    }
+
+    fn entry(name: &str, writable: bool) -> MountEntry {
+        MountEntry {
+            name: name.to_string(),
+            backing_path: PathBuf::from("/tmp").join(name),
+            at: format!("/tmp/vfs/{name}"),
+            writable,
+        }
+    }
+
+    fn ws(mounts: Vec<MountEntry>) -> WorkspaceMount {
+        WorkspaceMount::new(
+            mounts,
+            test_config(),
+            PermissionEngine::from_rules(Vec::new()),
+        )
+    }
+
+    #[test]
+    fn any_writable_mount_drops_ro_option() {
+        let fs = ws(vec![entry("rw", true), entry("ro", false)]);
+        assert!(
+            fs.any_writable(),
+            "one writable backend must make the mount writable"
+        );
+        let opts = mount_options(&fs, &test_config());
+        assert!(
+            !opts.contains(&MountOption::RO),
+            "a writable backend must NOT produce a read-only kernel mount"
+        );
+        assert!(
+            opts.iter().any(|o| matches!(o, MountOption::FSName(_))),
+            "FSName must still be present"
+        );
+    }
+
+    #[test]
+    fn all_read_only_keeps_ro_option() {
+        let fs = ws(vec![entry("ro1", false), entry("ro2", false)]);
+        assert!(!fs.any_writable());
+        let opts = mount_options(&fs, &test_config());
+        assert!(
+            opts.contains(&MountOption::RO),
+            "an all-read-only workspace must keep the read-only kernel mount"
+        );
+    }
+
+    #[test]
+    fn empty_workspace_keeps_ro_option() {
+        let fs = ws(Vec::new());
+        assert!(!fs.any_writable());
+        let opts = mount_options(&fs, &test_config());
+        assert!(
+            opts.contains(&MountOption::RO),
+            "an empty workspace must keep the default read-only kernel mount"
+        );
+    }
 }
