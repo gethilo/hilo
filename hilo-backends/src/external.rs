@@ -9,7 +9,7 @@
 //! Command table (spec §6.1, exact for rclone/s3sync/gdrive):
 //! | Tool | list | get | put | delete | stat |
 //! |---|---|---|---|---|---|
-//! | rclone | `rclone lsf --json {remote}:{path}/{prefix}` | `rclone copyto {remote}:{path}/{key} {dest}` | `rclone copyto {local} {remote}:{path}/{key}` | `rclone deletefile {remote}:{path}/{key}` | `rclone lsl {remote}:{path}/{key}` |
+//! | rclone | `rclone lsjson {remote}:{path}/{prefix}` | `rclone copyto {remote}:{path}/{key} {dest}` | `rclone copyto {local} {remote}:{path}/{key}` | `rclone deletefile {remote}:{path}/{key}` | `rclone lsl {remote}:{path}/{key}` |
 //! | s3sync | `s3sync list {bucket}/{prefix}` | `s3sync pull {bucket}/{key} {dest}` | `s3sync push {local} {bucket}/{key}` | `s3sync rm {bucket}/{key}` | `s3sync stat {bucket}/{key}` |
 //! | gdrive | `gdrive files list --query "'{folder}' in parents"` | `gdrive files download {id} --dest {dest}` | `gdrive files upload {local} --parent {folder}` | `gdrive files delete {id}` | `gdrive files info {id}` |
 //!
@@ -166,29 +166,8 @@ impl ExternalToolDriver {
     }
 
     fn list_rclone(&self, prefix: &str) -> Result<Vec<BackendEntry>, BackendError> {
-        let out =
-            self.run(Command::new("rclone").args(["lsf", "--json", &self.remote_arg(prefix)]))?;
-        #[derive(serde::Deserialize)]
-        struct RcloneEntry {
-            #[serde(default, rename = "Path")]
-            path: String,
-            #[serde(default, rename = "Size")]
-            size: i64,
-            #[serde(default, rename = "IsDir")]
-            is_dir: bool,
-        }
-        let entries: Vec<RcloneEntry> = serde_json::from_str(&out)
-            .map_err(|e| BackendError::ToolFailed("rclone".into(), None, e.to_string()))?;
-        Ok(entries
-            .into_iter()
-            .map(|e| BackendEntry {
-                key: join_key(prefix, &e.path),
-                size: e.size,
-                modified: None,
-                etag: None,
-                is_dir: e.is_dir,
-            })
-            .collect())
+        let out = self.run(Command::new("rclone").args(["lsjson", &self.remote_arg(prefix)]))?;
+        parse_rclone_lsjson(&out, prefix)
     }
 
     fn list_s3sync(&self, prefix: &str) -> Result<Vec<BackendEntry>, BackendError> {
@@ -310,6 +289,36 @@ fn join_key(prefix: &str, name: &str) -> String {
     }
 }
 
+/// Parse `rclone lsjson` stdout — an array of `{Path,Size,IsDir,ModTime,…}`
+/// objects — into [`BackendEntry`]s. Each relative `Path` is joined onto the
+/// listing `prefix` (spec §6 BackendEntry). `ModTime` is RFC3339; a blank or
+/// malformed value yields `modified: None` rather than failing the whole list.
+fn parse_rclone_lsjson(out: &str, prefix: &str) -> Result<Vec<BackendEntry>, BackendError> {
+    #[derive(serde::Deserialize)]
+    struct RcloneEntry {
+        #[serde(default, rename = "Path")]
+        path: String,
+        #[serde(default, rename = "Size")]
+        size: i64,
+        #[serde(default, rename = "IsDir")]
+        is_dir: bool,
+        #[serde(default, rename = "ModTime")]
+        mod_time: String,
+    }
+    let entries: Vec<RcloneEntry> = serde_json::from_str(out)
+        .map_err(|e| BackendError::ToolFailed("rclone".into(), None, e.to_string()))?;
+    Ok(entries
+        .into_iter()
+        .map(|e| BackendEntry {
+            key: join_key(prefix, &e.path),
+            size: e.size,
+            modified: parse_rclone_rfc3339(&e.mod_time),
+            etag: None,
+            is_dir: e.is_dir,
+        })
+        .collect())
+}
+
 /// Parse `2026-08-26` + `12:00:00.123` into unix seconds (civil-date algorithm).
 fn parse_rclone_datetime(date: &str, time: &str) -> Option<i64> {
     let mut dp = date.split('-');
@@ -334,6 +343,46 @@ fn civil_to_unix(y: i64, m: i64, d: i64, hh: i64, mm: i64, ss: i64) -> i64 {
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     let days = era * 146097 + doe - 719468;
     days * 86400 + hh * 3600 + mm * 60 + ss
+}
+
+/// Parse an RFC3339 timestamp into unix seconds. `rclone lsjson` emits
+/// `ModTime` like `2026-10-10T01:25:24.160756232-05:00` (nanosecond precision,
+/// local offset) or `…Z` (UTC); fractional seconds are dropped (second
+/// precision is all [`BackendEntry::modified`] carries).
+fn parse_rclone_rfc3339(s: &str) -> Option<i64> {
+    let (date, time) = s.split_once('T')?;
+    let (time, offset) = parse_rfc3339_offset(time);
+    let time = time.split('.').next().unwrap_or(time);
+    let mut dp = date.split('-');
+    let y: i64 = dp.next()?.parse().ok()?;
+    let m: i64 = dp.next()?.parse().ok()?;
+    let d: i64 = dp.next()?.parse().ok()?;
+    let mut tp = time.split(':');
+    let hh: i64 = tp.next()?.parse().ok()?;
+    let mm: i64 = tp.next()?.parse().ok()?;
+    let ss: i64 = tp.next()?.parse().ok()?;
+    // RFC3339: `local = UTC + offset`, so `UTC = local - offset`.
+    Some(civil_to_unix(y, m, d, hh, mm, ss) - offset)
+}
+
+/// Split a trailing RFC3339 zone (`Z` or `±HH:MM`) off a time-of-day string,
+/// returning `(time_without_zone, offset_seconds)`. A missing zone is treated
+/// as UTC (`0`).
+fn parse_rfc3339_offset(time: &str) -> (&str, i64) {
+    if let Some(t) = time.strip_suffix('Z').or_else(|| time.strip_suffix('z')) {
+        return (t, 0);
+    }
+    match time.rfind(|c| c == '+' || c == '-') {
+        Some(0) | None => (time, 0),
+        Some(i) => {
+            let (t, zone) = time.split_at(i);
+            let sign = if zone.starts_with('-') { -1 } else { 1 };
+            let mut zp = zone[1..].split(':');
+            let oh: i64 = zp.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+            let om: i64 = zp.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+            (t, sign * (oh * 3600 + om * 60))
+        }
+    }
 }
 
 /// PATH search without invoking the binary.
@@ -585,18 +634,19 @@ mod tests {
         // list
         std::fs::write(
             &stdout_file,
-            r#"[{"Path":"a.txt","Name":"a.txt","Size":42,"IsDir":false},{"Path":"dir","Name":"dir","Size":0,"IsDir":true}]"#,
+            r#"[{"Path":"a.txt","Name":"a.txt","Size":42,"MimeType":"text/plain","ModTime":"2026-08-26T12:34:56.000000000Z","IsDir":false},{"Path":"dir","Name":"dir","Size":0,"MimeType":"inode/directory","ModTime":"2026-08-26T12:00:00Z","IsDir":true}]"#,
         )
         .unwrap();
         let entries = run_with_path(&bin_dir, || d.list("")).unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].key, "a.txt");
         assert_eq!(entries[0].size, 42);
+        assert_eq!(entries[0].modified, Some(1_787_747_696));
         assert!(entries[1].is_dir);
         // keys are relative to the backend prefix/path (spec §6 BackendEntry)
         assert_eq!(entries[1].key, "dir");
         let argv = std::fs::read_to_string(&log).unwrap();
-        assert_eq!(argv.lines().next().unwrap(), "lsf --json myremote:docs/sub");
+        assert_eq!(argv.lines().next().unwrap(), "lsjson myremote:docs/sub");
         std::fs::remove_file(&log).unwrap();
 
         // get
@@ -712,5 +762,49 @@ mod tests {
         assert_eq!(civil_to_unix(1970, 1, 1, 0, 0, 0), 0);
         // 2026-08-26 12:34:56 UTC = 1787747696
         assert_eq!(civil_to_unix(2026, 8, 26, 12, 34, 56), 1_787_747_696);
+    }
+
+    #[test]
+    fn rclone_lsjson_output_parses_path_size_mtime() {
+        // Real `rclone lsjson` shape: ModTime is RFC3339 with nanosecond
+        // precision and either `Z` or a local `±HH:MM` offset.
+        let fixture = r#"[
+            {"Path":"a.txt","Name":"a.txt","Size":42,"MimeType":"text/plain","ModTime":"2026-08-26T12:34:56Z","IsDir":false},
+            {"Path":"sub","Name":"sub","Size":4096,"MimeType":"inode/directory","ModTime":"2026-10-10T01:25:24.160756232-05:00","IsDir":true},
+            {"Path":"nested","Name":"nested","Size":7,"MimeType":"text/plain","ModTime":"2017-05-31T16:15:57+01:00","IsDir":false}
+        ]"#;
+        let entries = parse_rclone_lsjson(fixture, "pre").unwrap();
+        assert_eq!(entries.len(), 3);
+
+        assert_eq!(entries[0].key, "pre/a.txt");
+        assert_eq!(entries[0].size, 42);
+        assert_eq!(entries[0].modified, Some(1_787_747_696));
+        assert!(!entries[0].is_dir);
+
+        assert_eq!(entries[1].key, "pre/sub");
+        assert_eq!(entries[1].size, 4096);
+        assert!(entries[1].is_dir);
+        // -05:00 → UTC = local + 5h = 1791613524
+        assert_eq!(entries[1].modified, Some(1_791_613_524));
+
+        // +01:00 → UTC = local - 1h = 1496243757
+        assert_eq!(entries[2].modified, Some(1_496_243_757));
+    }
+
+    #[test]
+    fn rclone_lsjson_blank_modtime_is_none() {
+        // `--no-modtime` (or a backend without modtimes) yields an empty
+        // ModTime; the parser must not panic and must report `modified: None`.
+        let fixture = r#"[{"Path":"a.txt","Name":"a.txt","Size":1,"IsDir":false}]"#;
+        let entries = parse_rclone_lsjson(fixture, "").unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].modified, None);
+    }
+
+    #[test]
+    fn parse_rclone_rfc3339_rejects_malformed() {
+        assert_eq!(parse_rclone_rfc3339(""), None);
+        assert_eq!(parse_rclone_rfc3339("not-a-time"), None);
+        assert_eq!(parse_rclone_rfc3339("2026-08-26 12:34:56"), None); // no 'T'
     }
 }
