@@ -145,7 +145,12 @@ repos:
     writable: false            # read-only dependency
     auto_pull: true
 
-# ── Backends ──
+# ── Backends (manifest inventory) ──
+# Parsed schema: hilo-core `Backends` (s3 / remote / local), surfaced by the
+# MCP virtual directory (`vfs_list_directory`). This is NOT the mount surface:
+# `hilo backend mount` accepts only s3|gdrive|onedrive|dropbox|external and
+# registers mounts in `.vfs/backends/mounts.yaml` (§13). `remote` (git) and
+# `local` are not mount types — see §13.1.
 backends:
   s3:
     - bucket: my-project-models
@@ -707,15 +712,23 @@ namespace hilo {
 
 Paths in the mount that resolve to external storage. The agent sees a local file. The VFS handles routing, caching, and upload tracking transparently.
 
-### 13.1 Backend Types
+A backend is mounted with `hilo backend mount`, which registers it in the workspace store `.vfs/backends/mounts.yaml` (spec §9 of `specs/backend-backed-workspace-spec.md`) — the file `hilo backend list` reads, `hilo backend sync` syncs, and the `--triggers` sync hook follows.
 
-| Type | Storage | Write Behavior | Cache |
-|---|---|---|---|
-| **Git** | Local git repo | Normal file write → staged in worktree | N/A |
-| **S3 (read-only)** | S3 bucket | Writes rejected (0444) | Local cache, TTL expiry |
-| **S3 (write-through)** | S3 bucket | Write → local cache → upload to S3 → update blob index | Local cache + remote |
-| **Remote git** | Remote git repo | If writable: write to worktree; if read-only: rejected | Local worktree |
-| **Local path** | Host filesystem path | Direct write | N/A |
+### 13.1 Mount Types
+
+`hilo backend mount --type` accepts exactly these five values (verified against `hilo backend mount --help`):
+
+| `--type` | Storage | Required flags | Write behavior | Cache |
+|---|---|---|---|---|
+| `s3` | S3 bucket, or an S3-compatible endpoint (`--endpoint`, MinIO et al.) | `--bucket` (`--prefix` optional) | Write-through: local cache → upload to S3 → update blob index (§13.2) | Local cache, TTL expiry |
+| `gdrive` | Google Drive | `--remote` | Two-way sync through the detected sync tool | Sync-tool managed |
+| `onedrive` | OneDrive | `--remote` | Two-way sync through the detected sync tool | Sync-tool managed |
+| `dropbox` | Dropbox | `--remote` | Two-way sync through the detected sync tool | Sync-tool managed |
+| `external` | Tool-backed remote (`--url` for custom endpoints) | `--remote` | Sync delegated to an external tool (rclone / s3sync / official CLI) | Sync-tool managed |
+
+Any other `--type` fails with `unknown backend type: <t> (expected s3|gdrive|onedrive|dropbox|external)` and exits 2, writing nothing. The S3 driver also has a read-only mode (`S3Client::writable = false`, writes rejected) used by the library API.
+
+**Not implemented as mount types.** `Git`, `Remote git`, and `Local path` are NOT accepted by `hilo backend mount`. A git working tree is mounted as a *repo* through the manifest `repos:` block (§4) or `hilo workspace mount`, not as a backend. The `git` and `local` drivers remain public **library** APIs of `hilo-backends` (`GitBackend`, `LocalBackend`), unreachable from the mount command. Before DF-WARPFS-19 (2026-09-22) the CLI accepted `--type git`/`local`, printed success while cloning into `~/.hilo/worktrees`, and persisted nothing `hilo backend list`/`sync` could read; those doors were removed (see `docs/hilo-backends.md`, `docs/architecture.md` §3).
 
 ### 13.2 Auto-Upload Flow (S3 write-through)
 
