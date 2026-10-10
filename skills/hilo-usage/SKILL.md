@@ -219,6 +219,39 @@ Timestamps through the mount are fabricated: every file reports the mtime of
 the stat call, so "what changed recently?" is unanswerable there
 (DF-WARPFS-8). Use the real working tree for anything mtime-based.
 
+## Run 39 (2026-10-10) — FUSE mount RE-DISCOVERY: run 7's rules 1-3 are FIXED; new traps
+
+Re-drove the mount on a 222-file/3524-edge scratch copy at HEAD 3a62d63b. The
+run-20 blockers no longer exist: default `mount --daemon` works on this box
+(DF-6 fix), empty/nested readdir instant (DF-5/48), `.git` excluded (DF-7),
+mtimes byte-identical to disk (DF-8), no process leak after unmount (DF-32),
+no graph.db lock held while mounted (DF-30). Read-only is the documented
+contract (hilo-permissions.md:19); writes get honest EROFS. Xattr passthrough
+(set via `hilo meta` on the repo path, read through the mount with `hilo meta`
+AND `getfattr`) is clean.
+
+New traps (rows DF-WARPFS-133/134/135, full evidence in
+`docs/dogfood/2026-10-10-run39-fuse-rediscovery.md`):
+
+1. **`graph related` on an ABSOLUTE path silently returns "No outgoing edges"
+   exit 0** (DF-133). Same file via repo-relative path → full edges; absolute
+   path of the underlying repo fails identically, so it is absolute-path
+   resolution, not the mount. `graph impact`/`understand` handle absolute
+   paths fine. From a mount path, use the repo-relative form — or better,
+   make the CLI canonicalize (fix direction filed).
+2. **`--triggers --daemon` gives you NO signal** (DF-134): trigger logging
+   goes to stderr, daemon mode captures stdout only. Foreground control shows
+   the same edit firing ~6-10s after the write (inotify + 500ms debounce +
+   lazy DuckDB open). If you need to SEE triggers fire, run the mount in the
+   foreground under a timeout, not `--daemon`.
+3. **Traversal cost is real on a corpus this size** (DF-135): cold first
+   `find -name '*.rs'` 14-20s, warm 1.16-2.1s vs 9ms native (~129x), even
+   with graph.db pre-warmed (the mount never touches it). Profiled: ~52% of
+   daemon samples in std::path parse/compare inside readdir's
+   `Path::parent()` + ~12.6% in populate_directory's linear `.any()` scan.
+   Prefer bounded, shallow reads through the mount on big trees; this
+   UPDATES PERF-011.
+
 ## Status snapshot (2026-09-20, run 7)
 
 - ✅ Rust/Go/Python pkg-form workflows + CLI/graph surface: SHIPPABLE
