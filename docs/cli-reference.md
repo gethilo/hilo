@@ -797,6 +797,12 @@ Mount all repos and backends from the manifest.
 hilo workspace mount /mnt/hilo
 ```
 
+Each repo's `ref` is resolved on a fresh clone by trying, in order: the
+ref as given, as a branch (`refs/heads/<ref>`), then as a tag
+(`refs/tags/<ref>`). If none resolve, the error names every form tried
+and lists the repo's available branches (capped at the first 10), instead
+of a bare `revspec ... not found` message.
+
 ### `unmount`
 
 Unmount a workspace.
