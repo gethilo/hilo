@@ -2069,3 +2069,20 @@ tasks:
   status: complete
   created_at: '2026-10-10T06:25:20.128032+00:00'
   completed_at: '2026-10-10T07:20:33.429099+00:00'
+- id: DF-WARPFS-133
+  title: graph related absolute path silent-empty
+  criteria:
+  - Absolute-path graph related/impact lookups resolve against project root with tests;
+    outside-root errors non-zero; relative behavior unchanged
+  status: complete
+  created_at: '2026-10-10T10:01:20.766349+00:00'
+  completed_at: '2026-10-10T11:04:54.258310+00:00'
+- id: DF-WARPFS-129
+  title: "workspace mount writable:true is inert \u2014 FUSE options hardcode RO"
+  criteria:
+  - 'workspace mount with writable: true mounts read-write (kernel accepts writes
+    through the mount); writable: false/default stays RO; mount-option selection has
+    a unit test; guard (scripts/rust-lint.sh) green'
+  status: complete
+  created_at: '2026-10-10T15:29:18.908151+00:00'
+  completed_at: '2026-10-10T15:57:55.297582+00:00'
