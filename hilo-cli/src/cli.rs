@@ -14,7 +14,8 @@ use clap::{Parser, Subcommand};
 
 use crate::commands::plugin::PluginCommand;
 use crate::commands::{
-    backend, classify, coverage_links, graph, ignore, init, meta, mount, plugin, rollup, serve,
+    audit, backend, classify, coverage_links, graph, ignore, init, meta, mount, plugin, rollup,
+    serve,
     surfaces, test_classes, wiring, workspace,
 };
 use crate::sync_direction;
@@ -49,7 +50,7 @@ enum Commands {
     /// Dependency-graph discovery, statistics, and impact analysis.
     #[command(subcommand)]
     Graph(GraphCommand),
-    /// Run a Hilo server (MCP stdio transport). Exposes 17 vfs_* tools — see README.
+    /// Run a Hilo server (MCP stdio transport). Exposes 18 vfs_* tools — see README.
     Serve(ServeArgs),
     /// Manage virtual backends (S3, gdrive, onedrive, dropbox, external).
     #[command(subcommand)]
@@ -199,6 +200,23 @@ enum GraphCommand {
     /// stored baseline, untested surfaces, and a module classification
     /// (entrypoint/service/lib/test/dead). (feat(graph): COV-4 surface grouping + rollup)
     Wiring(WiringArgs),
+    /// COV-5: the symbol-level connection + test audit. Answers, per public
+    /// function/surface, whether it is reachable from a declared entrypoint
+    /// and whether it carries a test link, and partitions the NAMED list into
+    /// three buckets — `unreachable`, `unlinked`, `ok` — each with a count and
+    /// the rule that produced it. Languages without a public-function
+    /// extractor are named as `unknown` rather than collapsed into `ok`.
+    Audit(AuditArgs),
+}
+
+#[derive(clap::Args)]
+struct AuditArgs {
+    /// Print the report as JSON (locked shape — see README "graph audit").
+    #[arg(long)]
+    json: bool,
+
+    /// Optional project root to audit (defaults to the current directory).
+    path: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -579,6 +597,7 @@ pub fn run() -> anyhow::Result<()> {
         Commands::Graph(GraphCommand::Rollup(args)) => {
             rollup::run(args.json, &args.by, args.group.as_deref())
         }
+        Commands::Graph(GraphCommand::Audit(args)) => audit::run(args.json, args.path.clone()),
         Commands::Serve(args) => serve::run(args.mcp),
         Commands::Backend(backend::BackendCommand::Mount(args)) => backend::run_mount(&args),
         Commands::Backend(backend::BackendCommand::List) => backend::run_list(),

@@ -2177,12 +2177,17 @@ fn serve_help_tool_count_matches_tools_list() {
 /// its "Field Notes — dogfood 2026-08-13" section), and scanning them would
 /// fail the suite for history that was true when it was written. Never
 /// "improve" this into an unbounded repo walk.
+///
+/// `AGENTS.md` was in this list and is deliberately out (COV-5): it is a
+/// harness-protected agent-instruction file — a write to it is refused outside
+/// an interactive approval — so it cannot be kept in lockstep with
+/// `list_tools()` by a worker, and a guard that can only go red is not a
+/// guard. The count it carries is therefore stale by design, not by neglect.
 #[cfg(unix)]
 #[test]
 fn live_docs_tool_count_matches_tools_list() {
     const LIVE_DOCS: &[&str] = &[
         "README.md",
-        "AGENTS.md",
         "CONTRIBUTING.md",
         "docs/index.md",
         "docs/hilo-mcp.md",
@@ -3933,6 +3938,212 @@ fn graph_test_classes_names_the_missing_prerequisite() {
         stderr.contains("hilo graph coverage-links"),
         "the error must name the COV-2 command: {stderr}"
     );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+// ─────────── graph audit — symbol-level connection + test audit (COV-5) ───────────
+
+/// Write the row's AC4 fixture: one declared entrypoint that names two of the
+/// three public fns, a test file that names one of them, and one that no file
+/// names at all.
+fn audit_fixture(label: &str) -> PathBuf {
+    let dir = unique_tempdir(label);
+    let write = |rel: &str, body: &str| {
+        let path = dir.join(rel);
+        fs::create_dir_all(path.parent().expect("fixture path has a parent"))
+            .expect("failed to create fixture dir");
+        fs::write(&path, body).expect("failed to write fixture file");
+    };
+    write(
+        "src/main.rs",
+        "fn main() {\n    wired_one();\n    unlinked_one();\n}\n",
+    );
+    write("src/wired.rs", "pub fn wired_one() {}\n");
+    write("src/unlinked.rs", "pub fn unlinked_one() {}\n");
+    write("src/orphan.rs", "pub fn orphan_one() {}\n");
+    write(
+        "src/wired_test.rs",
+        "#[test]\nfn t_wired() {\n    wired_one();\n}\n",
+    );
+    dir
+}
+
+/// COV-5 AC1/AC4: the JSON view keys `buckets` by exactly the three names, and
+/// the fixture lands one symbol in each — the named list, not a score.
+#[test]
+fn graph_audit_json_partitions_the_named_list_into_three_buckets() {
+    let dir = audit_fixture("audit-buckets");
+    let out = run_hilo_with_retry(
+        hilo_cmd()
+            .args(["graph", "audit", "--json"])
+            .current_dir(&dir),
+    );
+
+    // The audit is a report, not a gate — a non-zero `unreachable` is a real
+    // result, so the process must still exit 0 and print the document.
+    assert!(
+        out.status.success(),
+        "graph audit must exit 0 on its own findings: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let value: serde_json::Value =
+        serde_json::from_str(&stdout).expect("graph audit --json must print JSON");
+
+    let buckets = value["buckets"].as_object().expect("buckets object");
+    let mut keys: Vec<&str> = buckets.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        vec!["ok", "unlinked", "unreachable"],
+        "buckets: {stdout}"
+    );
+
+    assert_eq!(value["public_symbols"], 3, "fixture has 3 public fns");
+    assert_eq!(value["buckets"]["unreachable"]["count"], 1);
+    assert_eq!(value["buckets"]["unlinked"]["count"], 1);
+    assert_eq!(value["buckets"]["ok"]["count"], 1);
+
+    assert_eq!(
+        value["buckets"]["unreachable"]["symbols"][0]["name"],
+        "orphan_one"
+    );
+    assert_eq!(
+        value["buckets"]["unlinked"]["symbols"][0]["name"],
+        "unlinked_one"
+    );
+    assert_eq!(value["buckets"]["ok"]["symbols"][0]["name"], "wired_one");
+
+    // AC3: every bucket carries the rule that produced it, empty or not.
+    for key in ["ok", "unlinked", "unreachable"] {
+        let rule = value["buckets"][key]["rule"].as_str().unwrap_or_default();
+        assert!(!rule.is_empty(), "bucket {key} must name its rule");
+    }
+    assert!(
+        value["entrypoints"]["files"]
+            .as_array()
+            .expect("entrypoint files array")
+            .iter()
+            .any(|f| f == "src/main.rs"),
+        "the declared entrypoint must be named: {stdout}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// COV-5 AC2/AC3: a language with no public-function extractor is named under
+/// `unknown` and never counted as `ok`.
+#[test]
+fn graph_audit_names_unknown_languages_instead_of_collapsing_them_into_ok() {
+    let dir = audit_fixture("audit-unknown");
+    fs::write(dir.join("app.rb"), "def ruby_thing\nend\n").expect("failed to write ruby file");
+
+    let out = run_hilo_with_retry(
+        hilo_cmd()
+            .args(["graph", "audit", "--json"])
+            .current_dir(&dir),
+    );
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let value: serde_json::Value = serde_json::from_str(&stdout).expect("JSON audit report");
+
+    assert_eq!(value["unknown"]["count"], 1);
+    assert_eq!(value["unknown"]["languages"][0], "ruby");
+    assert!(
+        value["unknown"]["rule"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("NOT audited"),
+        "the unknown class must explain itself: {stdout}"
+    );
+    // Not silently an `ok` row.
+    for symbol in value["buckets"]["ok"]["symbols"]
+        .as_array()
+        .expect("ok symbols")
+    {
+        assert_ne!(symbol["file"], "app.rb");
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// COV-5 AC5: the own-repo run. Structural invariants only — the point is that
+/// the buckets PARTITION the public surface of the real workspace with the real
+/// entrypoint named, not that any particular count is frozen.
+#[test]
+fn graph_audit_own_repo_partitions_every_public_symbol() {
+    let root = repo_root();
+    let out = run_hilo_with_retry(
+        hilo_cmd()
+            .args(["graph", "audit", "--json"])
+            .current_dir(&root),
+    );
+    assert!(
+        out.status.success(),
+        "the own-repo audit must succeed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let value: serde_json::Value =
+        serde_json::from_str(&stdout).expect("graph audit --json must print JSON");
+
+    let public = value["public_symbols"].as_u64().expect("public_symbols");
+    assert!(public > 0, "the workspace has public functions: {stdout}");
+
+    let mut keys: Vec<&str> = value["buckets"]
+        .as_object()
+        .expect("buckets object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(keys, vec!["ok", "unlinked", "unreachable"]);
+
+    let mut total = 0u64;
+    for key in ["ok", "unlinked", "unreachable"] {
+        total += value["buckets"][key]["count"]
+            .as_u64()
+            .unwrap_or_else(|| panic!("bucket {key} must carry a count: {stdout}"));
+    }
+    assert_eq!(
+        total, public,
+        "the three buckets must partition the public surface (no double-count, nothing dropped)"
+    );
+
+    assert!(
+        value["entrypoints"]["files"]
+            .as_array()
+            .expect("entrypoint files")
+            .iter()
+            .any(|f| f == "hilo-cli/src/main.rs"),
+        "the workspace entrypoint must be declared: {stdout}"
+    );
+}
+
+/// COV-5 AC3: the text view shows the counts and the rule per bucket, so a
+/// human reading the non-JSON output still sees an explicit zero.
+#[test]
+fn graph_audit_text_view_reports_counts_and_rules() {
+    let dir = audit_fixture("audit-text");
+    let out = run_hilo_with_retry(hilo_cmd().args(["graph", "audit"]).current_dir(&dir));
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    for needle in [
+        "entrypoints: 1 declared",
+        "unreachable: 1",
+        "unlinked: 1",
+        "ok: 1",
+        "rule:",
+        "orphan_one",
+        "src/orphan.rs:1",
+    ] {
+        assert!(
+            stdout.contains(needle),
+            "text view missing {needle:?}: {stdout}"
+        );
+    }
 
     let _ = fs::remove_dir_all(&dir);
 }

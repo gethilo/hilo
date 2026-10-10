@@ -1,5 +1,6 @@
 //! Subcommand implementations for the Hilo CLI.
 
+pub mod audit;
 pub mod backend;
 pub mod classify;
 pub mod coverage_links;

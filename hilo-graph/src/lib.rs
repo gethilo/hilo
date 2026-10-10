@@ -7,6 +7,7 @@
 //! - `duckdb` — DuckDB convenience module and default-path constructors
 //! - `error` — error types for graph operations
 
+pub mod audit;
 pub mod classify;
 pub mod conformance;
 pub mod coverage_links;
@@ -28,6 +29,11 @@ pub mod test_classes;
 pub mod wiring;
 pub mod wiring_report;
 
+pub use audit::{
+    audit, collect_corpus, extract_public_functions, AuditBucket, AuditOptions, AuditReport,
+    BucketReport, Buckets, EntryPointReport, LanguageCensus, PubSymbol, SymbolAudit, UnknownReport,
+    AUDIT_LANGUAGES,
+};
 pub use classify::{
     classify_file, classify_test_file, classify_test_functions, entry_symbols_for_classification,
     extract_entry_symbols, infer_feature, Classification, TestClass, TestFunctionClass,

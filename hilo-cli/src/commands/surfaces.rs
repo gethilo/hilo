@@ -655,9 +655,9 @@ mod tests {
     fn mcp_enumerates_exactly_the_registry() {
         let (surfaces, census) = mcp_provider();
         let registry = hilo_mcp::tools::list_tools();
-        assert_eq!(surfaces.len(), 17, "17 registered MCP tools");
-        assert_eq!(census.detected, 17);
-        assert_eq!(census.expected, 17);
+        assert_eq!(surfaces.len(), 18, "18 registered MCP tools");
+        assert_eq!(census.detected, 18);
+        assert_eq!(census.expected, 18);
         let mut got: Vec<&str> = surfaces.iter().map(|s| s.name.as_str()).collect();
         let mut want: Vec<&str> = registry.iter().map(|t| t.name.as_str()).collect();
         got.sort_unstable();
