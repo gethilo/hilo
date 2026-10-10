@@ -71,6 +71,18 @@ pub enum SyncDirection {
     Both,
 }
 
+impl SyncDirection {
+    /// Whether this direction allows uploading local files (Push, Both).
+    pub fn allows_upload(self) -> bool {
+        matches!(self, SyncDirection::Push | SyncDirection::Both)
+    }
+
+    /// Whether this direction allows downloading remote files (Pull, Both).
+    pub fn allows_download(self) -> bool {
+        matches!(self, SyncDirection::Pull | SyncDirection::Both)
+    }
+}
+
 /// One planned transfer between the workspace and the backend.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransferItem {

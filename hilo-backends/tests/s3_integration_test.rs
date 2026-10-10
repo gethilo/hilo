@@ -33,7 +33,7 @@
 
 use aws_sdk_s3 as s3;
 use aws_sdk_s3::error::DisplayErrorContext;
-use hilo_backends::{S3Client, WriteResult};
+use hilo_backends::{S3Client, SyncDirection, WriteResult};
 use std::env;
 use tempfile::TempDir;
 
@@ -425,6 +425,7 @@ async fn test_sync_engine_first_push_to_empty_bucket() {
         String::new(),
         ws.path().to_path_buf(),
         IgnoreMatcher::empty(),
+        SyncDirection::Both,
     );
 
     // Plan against the empty bucket: everything local must be an upload,

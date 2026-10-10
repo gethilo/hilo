@@ -8,6 +8,10 @@
 //! Sync semantics (last-writer-wins, no deletes):
 //! - local-only non-ignored files are uploaded
 //! - remote-only non-ignored objects are downloaded
+//! - a `SyncDirection` (Push/Pull/Both, planner parity) restricts the run to
+//!   one hemisphere: items in the opposite hemisphere are skipped and
+//!   counted (`unused_local`/`unused_remote`), never transferred
+//!   (DF-WARPFS-126)
 //! - files on both sides: the side with the newer mtime/last-modified wins;
 //!   equal timestamps are left unchanged
 //! - `.vfs/` metadata is NEVER transferred in either direction
@@ -19,6 +23,7 @@ use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 use tokio::fs;
 
+use crate::planner::SyncDirection;
 use crate::s3::{S3Client, S3Result};
 
 /// Where an ignore rule came from (backend-backed-workspace-spec §4).
@@ -463,15 +468,26 @@ pub struct SyncPlan {
     pub unchanged: usize,
     pub ignored_local: usize,
     pub ignored_remote: usize,
+    /// Local files NOT transferred because the run's [`SyncDirection`]
+    /// blocks uploads (pull-only): local-only or local-newer files. They
+    /// stay on both sides — a later `--both`/`--push` run transfers them;
+    /// nothing is deleted or lost.
+    pub unused_local: usize,
+    /// Remote objects NOT transferred because the run's [`SyncDirection`]
+    /// blocks downloads (push-only): remote-only or remote-newer objects.
+    pub unused_remote: usize,
 }
 
-/// Two-way sync engine between a local directory and an S3 bucket prefix.
+/// Sync engine between a local directory and an S3 bucket prefix. The run's
+/// [`SyncDirection`] bounds which hemisphere transfers (planner parity):
+/// Push uploads only, Pull downloads only, Both is the full two-way mirror.
 pub struct SyncEngine {
     client: S3Client,
     bucket: String,
     prefix: String,
     local_dir: PathBuf,
     ignore: IgnoreMatcher,
+    direction: SyncDirection,
 }
 
 /// Whether a relative path is part of Hilo's own metadata or an ignore
@@ -487,12 +503,16 @@ pub(crate) fn is_never_synced(rel_path: &str) -> bool {
 }
 
 impl SyncEngine {
+    /// `direction` is enforced at plan time (DF-WARPFS-126): items in the
+    /// opposite hemisphere are skipped and counted on the plan instead of
+    /// being transferred — matching `planner::plan_sync` semantics.
     pub fn new(
         client: S3Client,
         bucket: String,
         prefix: String,
         local_dir: PathBuf,
         ignore: IgnoreMatcher,
+        direction: SyncDirection,
     ) -> Self {
         Self {
             client,
@@ -500,12 +520,18 @@ impl SyncEngine {
             prefix: prefix.trim_matches('/').to_string(),
             local_dir,
             ignore,
+            direction,
         }
     }
 
     /// Build the transfer plan for a local file set and a remote object set.
     /// Ignores are enforced here (defense in depth: callers may pre-filter
     /// for efficiency, but the plan is the source of truth).
+    ///
+    /// The engine's [`SyncDirection`] is enforced here too (DF-WARPFS-126,
+    /// planner parity): uploads only when the direction allows them,
+    /// downloads likewise; blocked items are counted on the plan
+    /// (`unused_local`/`unused_remote`) instead of being transferred.
     pub fn build_plan(&self, local: &[LocalFile], remote: &[RemoteObject]) -> SyncPlan {
         let mut plan = SyncPlan::default();
         let remote_map: HashMap<&str, &RemoteObject> =
@@ -518,12 +544,26 @@ impl SyncEngine {
                 continue;
             }
             match remote_map.get(lf.rel_path.as_str()) {
-                None => plan.uploads.push(lf.clone()),
+                None => {
+                    if self.direction.allows_upload() {
+                        plan.uploads.push(lf.clone());
+                    } else {
+                        plan.unused_local += 1;
+                    }
+                }
                 Some(ro) => {
                     if lf.mtime_unix > ro.last_modified_unix {
-                        plan.uploads.push(lf.clone());
+                        if self.direction.allows_upload() {
+                            plan.uploads.push(lf.clone());
+                        } else {
+                            plan.unused_local += 1;
+                        }
                     } else if ro.last_modified_unix > lf.mtime_unix {
-                        plan.downloads.push((*ro).clone());
+                        if self.direction.allows_download() {
+                            plan.downloads.push((*ro).clone());
+                        } else {
+                            plan.unused_remote += 1;
+                        }
                     } else {
                         plan.unchanged += 1;
                     }
@@ -537,7 +577,11 @@ impl SyncEngine {
                 continue;
             }
             if !local_set.contains(ro.rel_path.as_str()) {
-                plan.downloads.push(ro.clone());
+                if self.direction.allows_download() {
+                    plan.downloads.push(ro.clone());
+                } else {
+                    plan.unused_remote += 1;
+                }
             }
         }
 
@@ -827,7 +871,7 @@ mod tests {
         }
     }
 
-    async fn engine(ignore_text: &str) -> SyncEngine {
+    async fn engine_dir(ignore_text: &str, direction: SyncDirection) -> SyncEngine {
         SyncEngine::new(
             // Client is never used by build_plan.
             S3Client::new("us-east-1", Path::new("/tmp/none"), 0, true)
@@ -837,7 +881,12 @@ mod tests {
             "prefix".to_string(),
             PathBuf::from("/tmp/ws"),
             IgnoreMatcher::parse(ignore_text),
+            direction,
         )
+    }
+
+    async fn engine(ignore_text: &str) -> SyncEngine {
+        engine_dir(ignore_text, SyncDirection::Both).await
     }
 
     #[test]
@@ -1108,6 +1157,95 @@ mod tests {
         assert_eq!(plan.unchanged, 1);
         assert_eq!(plan.ignored_local, 1);
         assert_eq!(plan.ignored_remote, 1);
+    }
+
+    // ---------- direction hemispheres (DF-WARPFS-126) ----------
+
+    /// One fixture exercising every hemisphere cell: local-only a.txt,
+    /// remote-only b.txt, equal c.txt, local-newer d.txt, remote-newer
+    /// e.txt.
+    async fn direction_fixture(direction: SyncDirection) -> SyncPlan {
+        let e = engine_dir("", direction).await;
+        let local = vec![
+            lf("a.txt", 10, 100),
+            lf("c.txt", 10, 100),
+            lf("d.txt", 10, 200),
+            lf("e.txt", 10, 100),
+        ];
+        let remote = vec![
+            ro("b.txt", 10, 100),
+            ro("c.txt", 10, 100),
+            ro("d.txt", 10, 100),
+            ro("e.txt", 10, 200),
+        ];
+        e.build_plan(&local, &remote)
+    }
+
+    fn sorted_paths<'a, T: 'a>(items: &'a [T], rel: impl Fn(&'a T) -> &'a str) -> Vec<&'a str> {
+        let mut v: Vec<&str> = items.iter().map(rel).collect();
+        v.sort_unstable();
+        v
+    }
+
+    #[tokio::test]
+    async fn plan_push_transfers_uploads_only() {
+        let plan = direction_fixture(SyncDirection::Push).await;
+        assert_eq!(
+            sorted_paths(&plan.uploads, |u| u.rel_path.as_str()),
+            vec!["a.txt", "d.txt"]
+        );
+        assert!(plan.downloads.is_empty(), "--push must not download");
+        assert_eq!(
+            plan.unused_remote, 2,
+            "b.txt remote-only + e.txt remote-newer are direction-blocked"
+        );
+        assert_eq!(plan.unused_local, 0);
+        assert_eq!(plan.unchanged, 1);
+    }
+
+    #[tokio::test]
+    async fn plan_pull_transfers_downloads_only() {
+        let plan = direction_fixture(SyncDirection::Pull).await;
+        assert_eq!(
+            sorted_paths(&plan.downloads, |d| d.rel_path.as_str()),
+            vec!["b.txt", "e.txt"]
+        );
+        assert!(plan.uploads.is_empty(), "--pull must not upload");
+        assert_eq!(
+            plan.unused_local, 2,
+            "a.txt local-only + d.txt local-newer are direction-blocked"
+        );
+        assert_eq!(plan.unused_remote, 0);
+        assert_eq!(plan.unchanged, 1);
+    }
+
+    #[tokio::test]
+    async fn plan_both_transfers_both_hemispheres() {
+        let plan = direction_fixture(SyncDirection::Both).await;
+        assert_eq!(
+            sorted_paths(&plan.uploads, |u| u.rel_path.as_str()),
+            vec!["a.txt", "d.txt"]
+        );
+        assert_eq!(
+            sorted_paths(&plan.downloads, |d| d.rel_path.as_str()),
+            vec!["b.txt", "e.txt"]
+        );
+        assert_eq!(plan.unused_local, 0);
+        assert_eq!(plan.unused_remote, 0);
+        assert_eq!(plan.unchanged, 1);
+    }
+
+    #[tokio::test]
+    async fn plan_direction_blocked_and_ignored_counted_separately() {
+        // Under --push an ignored remote object stays `ignored_remote`
+        // (never synced either way) while a non-ignored remote-only object
+        // becomes `unused_remote` (blocked by direction only).
+        let e = engine_dir("*.bin\n", SyncDirection::Push).await;
+        let remote = vec![ro("old.bin", 10, 100), ro("keep.txt", 10, 100)];
+        let plan = e.build_plan(&[], &remote);
+        assert!(plan.downloads.is_empty());
+        assert_eq!(plan.ignored_remote, 1);
+        assert_eq!(plan.unused_remote, 1);
     }
 
     #[tokio::test]

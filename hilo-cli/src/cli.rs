@@ -428,10 +428,12 @@ struct WorkspaceSyncArgs {
     /// endpoint is disclosed on the run header (DF-WARPFS-12).
     #[arg(long)]
     endpoint: Option<String>,
-    /// Push local changes to the backend
+    /// Push local changes only — never download (remote-only files are
+    /// skipped and reported).
     #[arg(long, conflicts_with_all = ["pull", "both"])]
     push: bool,
-    /// Pull remote changes into the workspace
+    /// Pull remote changes only — never upload (local-only files are
+    /// skipped and reported).
     #[arg(long, conflicts_with_all = ["push", "both"])]
     pull: bool,
     /// Two-way sync (default)
