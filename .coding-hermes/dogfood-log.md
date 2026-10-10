@@ -1167,3 +1167,22 @@ cost users see once and AGENTS.md already directs heavy builds off-box; PERF-010
 
 **Left behind:** docs/dogfood/2026-10-06-run34-cov2-fresh-tip-consumer.md + this log
 entry + 2 board rows. No code changes.
+
+## Run 35 — 2026-10-10 — fresh-machine no-sudo install leg (bunker-las-02, sibling substitution)
+**Verdict: ✅ SHIPPABLE on the install leg.** First install leg in 17 runs: bunker-las-03 still
+offline (5d), sibling bunker-las-02 answered (bunkerd active), spawn 187c4563 TTL 2h.
+**Install (documented no-sudo path, verbatim):** rustup minimal ok (~2m), public https clone 121s,
+cold release build `cargo build --release -p hilo-cli --no-default-features --features
+vendored-openssl` 26m32s (README estimate 15-30min accurate), ldd libfuse3 links = 0 (claim holds),
+hilo 0.4.0 / v0.3.0-324-gbf1baca. Smoke on 2-file Python corpus: init/meta/graph warm+stats/search/
+classify all rc=0 and correct; mount + read-through-mount works WITH pre-created dir.
+**Rows filed (verified: tasks.jsonl 343→345, tail DF-WARPFS-116):**
+- DF-WARPFS-115 (P1): mount prints success banner before validating mount point; ENOENT after "Hilo mounted at".
+- DF-WARPFS-116 (P2): graph search "semantic (TF-IDF+BM25)" is lexical-only in practice; real symbol 'add' not found on small corpus.
+**Perf (Step 2b):** build 26m32s cold is a first-install cost, accurately documented by the README
+(15-30min) — not a finding. Smoke verbs all sub-second; nothing user-noticeable to file.
+**Install-leg residue:** bunkerd DestroyAgent for 187c4563 timed out repeatedly (19.5GB archive
+step; deadline_exceeded on :10001) — destroy retried in background; 2h TTL (20:12 PDT) is the
+backstop. Escalation note per bunker-agent-isolation if TTL also fails.
+**Left behind:** docs/dogfood/2026-10-10-run35-fresh-install-nosudo.md + skills/hilo-usage/SKILL.md
++ 2 board rows + this entry. No code changes.
