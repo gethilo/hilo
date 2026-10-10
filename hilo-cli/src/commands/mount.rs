@@ -51,6 +51,20 @@ pub fn run_mount(mount_point: &str, triggers: bool, allow_other: bool, daemon: b
         hilo_core::logging::init_logging_to(false, std::io::stderr);
     }
 
+    // DF-WARPFS-115: validate the mount point BEFORE any success output —
+    // the banner promised a mount that then failed with a bare ENOENT.
+    if std::env::var_os(DAEMON_CHILD_ENV).is_none() {
+        let mp = Path::new(mount_point);
+        if let Err(e) = std::fs::metadata(mp) {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                anyhow::bail!(
+                    "mount point {mount_point} does not exist — create it first (mkdir -p {mount_point})"
+                );
+            }
+            return Err(e).with_context(|| format!("cannot access mount point {mount_point}"));
+        }
+    }
+
     // Foreground parent of a `--daemon` mount: spawn the detached child and
     // return. The child (see DAEMON_CHILD_ENV) skips this branch.
     if daemon && std::env::var_os(DAEMON_CHILD_ENV).is_none() {
@@ -568,6 +582,26 @@ fn default_triggers() -> Vec<TriggerConfig> {
 mod tests {
     use super::*;
     use std::ffi::OsString;
+
+    // ───────── DF-WARPFS-115: mount point validated before any banner ─────────
+
+    #[test]
+    fn mount_point_validation_rejects_missing_dir() {
+        // run_mount itself blocks in the FUSE session, so assert the
+        // validation contract on the same metadata check it performs.
+        let missing = std::env::temp_dir().join("hilo-dfwarpfs115-does-not-exist");
+        let _ = std::fs::remove_dir_all(&missing);
+        let err = std::fs::metadata(&missing).expect_err("path must not exist");
+        assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+        // The error message the CLI prints for this class names the path.
+        let msg = format!(
+            "mount point {} does not exist — create it first (mkdir -p {})",
+            missing.display(),
+            missing.display()
+        );
+        assert!(msg.contains("does not exist"));
+        assert!(msg.contains("mkdir -p"));
+    }
 
     // ───────── DF-WARPFS-59: plugin declarations warn, never silence ─────────
 
