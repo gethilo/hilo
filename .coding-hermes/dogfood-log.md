@@ -1214,11 +1214,16 @@ tip binary, driving init → warm → stats → understand → search → impact
   WSGI->view->response"` rc=0, wsgi_app present → `graph impact src/flask/app.py`
   (crate-scoped importers, correct). **All rc=0.**
 - Destroy: `bunker destroy bd0fa5e8` hit `deadline_exceeded` on the 20.6 GB
-  archive step (same class as run 35's 187c4563) — retried in background, 2h TTL
-  as backstop. Escalate per bunker-agent-isolation if TTL also fails.
+  archive step (same class as run 35's 187c4563). Root cause observed: the
+  archive `gzip` is killed at ~5min on 19-20GB homes; the TTL reaper then
+  completes destroys 12-25 min later. During the failure window bunkerd served
+  NO RPC on :10001/:10002 despite the startup banner — both listeners appear
+  only after reconciliation + archive backlog finishes (verified: "REST
+  listening :10001" at 20:08:58 PDT). BOTH agents (187c4563, bd0fa5e8)
+  verified destroyed by 20:47 PDT; `bunker list` = 0.
 
 **Conclusion:** run 35's install-leg claim is re-proven independently (fresh
-agent, different feature set, same host). The documented no-sudo install path
+agent, different feature set, same host). The documented install path
 works verbatim on a fresh machine. **No SKIPPED-install-bunker row this run.**
 
 ## Real use — consumer journey on flask @ 2ea3e097 (tip binary 0.4.0, v0.3.0-327-g1195639a)
@@ -1265,5 +1270,5 @@ Findings (filed as board rows):
 ## Left behind
 
 - docs/dogfood/2026-10-10-run36-foreign-repo-consumer.md + this log entry +
-  board rows DF-WARPFS-117/118. No code changes (run 35's DF-115 mount fix is
-  stashed as dfwarpfs115-wip for the foreman, untouched here).
+  board rows DF-WARPFS-117/118 (committed f4e3ad2d, pushed to origin/master).
+  No code changes (run 35's DF-115 mount fix landed separately as e4655347).
