@@ -15,8 +15,7 @@ use clap::{Parser, Subcommand};
 use crate::commands::plugin::PluginCommand;
 use crate::commands::{
     audit, backend, classify, coverage_links, graph, ignore, init, meta, mount, plugin, rollup,
-    serve,
-    surfaces, test_classes, wiring, workspace,
+    serve, surfaces, test_classes, wiring, workspace,
 };
 use crate::sync_direction;
 
