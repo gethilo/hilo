@@ -776,6 +776,10 @@ hilo backend sync --pull       # download remote changes only
 hilo backend sync --push sub/  # limit to a subtree
 ```
 
+Conflict ledger: LWW resolutions are appended to
+`.vfs/sync/conflicts.jsonl` (one JSONL record per resolution, even when
+the winner matches the transfer direction — spec §7).
+
 ### `setup`
 
 Detect sync tools and credentials for a backend type. Writes nothing.
