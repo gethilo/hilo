@@ -84,8 +84,8 @@ pub use surfaces::{
 };
 
 pub use rollup::{
-    crate_of, module_of, resolve_group, ClassCount, GroupBy, GroupRollup, GroupSource,
-    RollupReport, SourceCount, SurfaceGrouping, CRATE_MANIFESTS,
+    crate_of, resolve_group, ClassCount, GroupBy, GroupRollup, GroupSource, RollupReport,
+    SourceCount, SurfaceGrouping, CRATE_MANIFESTS,
 };
 
 pub use coverage_links::{
