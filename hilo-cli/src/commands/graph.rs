@@ -1012,9 +1012,20 @@ pub fn run_related(path: &str, relation: Option<&str>, direction: Option<&str>) 
         .map(hilo_graph::Direction::parse)
         .unwrap_or(hilo_graph::Direction::Forward);
 
+    // DF-WARPFS-133: normalize the subject to repo-relative form before
+    // lookup, so an absolute path (the natural form when browsing the FUSE
+    // mount or referencing a file absolutely) resolves to the same node as
+    // its repo-relative spelling — and an absolute path outside the project
+    // root errors instead of silently answering "No outgoing edges".
+    let project_root = graph
+        .root()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| cwd.clone());
+    let path = normalize_subject(&project_root, path)?;
+
     // JIT: parse on cache miss, query on cache hit.
     let edges = graph
-        .related_or_parse(path, relation, dir)
+        .related_or_parse(&path, relation, dir)
         .context("failed to query related edges")?;
 
     if edges.is_empty() {
@@ -1120,7 +1131,9 @@ pub fn run_impact(path: &str, max_depth: u32, format: Option<&str>, external: bo
     // `<repo>/plugin` queries the same node as the same command from the
     // repo root — never a wrong-package prefix. Absolute paths under the
     // project root are accepted and made relative; symbol nodes pass through.
-    let path = normalize_subject(&project_root, path);
+    // DF-WARPFS-133: an absolute path OUTSIDE the root now errors here
+    // instead of silently answering "No dependents found".
+    let path = normalize_subject(&project_root, path)?;
 
     let results = if external {
         // GAP-039: same node-existence check for the external path —
@@ -1275,42 +1288,97 @@ fn discover_graph_root(cwd: &Path) -> Option<(PathBuf, PathBuf)> {
     None
 }
 
-/// DF-WARPFS-55: normalize an impact/related subject to repo-relative form.
+/// DF-WARPFS-55 / DF-WARPFS-133: normalize an impact/related subject to
+/// repo-relative form.
 ///
 /// Symbol nodes (`pkg:`/`sys:`/`file:`/`std:`/`external:`) pass through
 /// untouched. A path relative to the process CWD is re-expressed relative to
-/// the project root; an absolute path under the project root is stripped to
-/// its relative form. Anything else (a path outside the project, or relative
-/// in a way that escapes it) is returned unchanged and fails later with the
-/// standard "not in the graph" error naming what the caller passed.
-fn normalize_subject(project_root: &Path, path: &str) -> String {
+/// the project root when it resolves there; an absolute path under the
+/// project root is stripped to its relative form. An absolute path OUTSIDE
+/// the project root is an error — the graph answers for repo-relative paths
+/// only, and silently returning empty for an absolute path the caller copied
+/// from a FUSE mount or an absolute reference is a wrong answer presented as
+/// a valid one (DF-WARPFS-133).
+///
+/// Leading `./`, `..` components and trailing slashes are normalized away
+/// before the root comparison: canonicalization handles them when the path
+/// exists on disk, a lexical normalization handles them when it does not.
+fn normalize_subject(project_root: &Path, path: &str) -> Result<String> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    normalize_subject_at(project_root, &cwd, path)
+}
+
+/// Testable core of [`normalize_subject`], with an explicit `cwd` so unit
+/// tests do not depend on the process working directory.
+fn normalize_subject_at(project_root: &Path, cwd: &Path, path: &str) -> Result<String> {
     if path.starts_with("pkg:")
         || path.starts_with("sys:")
         || path.starts_with("std:")
         || path.starts_with("external:")
         || path.starts_with("file:")
     {
-        return path.to_string();
+        return Ok(path.to_string());
     }
-    let requested = Path::new(path);
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let absolute = if requested.is_absolute() {
-        requested.to_path_buf()
+    // Trim trailing slashes so a directory-style reference to a file
+    // (`src/lib.rs/`) does not fail canonicalization with ENOTDIR. A bare
+    // root ("/") is preserved.
+    let trimmed = path.trim_end_matches('/');
+    let trimmed = if trimmed.is_empty() { "/" } else { trimmed };
+    let requested = Path::new(trimmed);
+
+    if requested.is_absolute() {
+        // An absolute subject is resolved against the project root. When it
+        // exists, canonicalize resolves symlinks and `.`/`..`; when it does
+        // not (a not-yet-existing file the caller still names absolutely),
+        // collapse those components lexically so the root comparison — and
+        // any later "not in the graph" error — name the resolved relative
+        // path, not the raw absolute spelling.
+        let resolved =
+            std::fs::canonicalize(requested).unwrap_or_else(|_| normalize_lexically(requested));
+        match resolved.strip_prefix(project_root) {
+            Ok(rel) => Ok(rel.to_string_lossy().replace('\\', "/")),
+            Err(_) => anyhow::bail!(
+                "'{trimmed}' is outside the project root '{}'; graph related/impact answer for repo-relative paths inside this root",
+                project_root.display()
+            ),
+        }
     } else {
-        cwd.join(requested)
-    };
-    // Only rewrite when the path actually RESOLVES: a subject that does not
-    // exist relative to the CWD (e.g. a repo-relative path typed from a
-    // subdirectory) must pass through unchanged so the graph layer can try
-    // it against the project root. Rewriting an unresolvable path would
-    // double-prefix it (`plugin/plugin/...`) and hide the real subject.
-    let Ok(resolved) = std::fs::canonicalize(&absolute) else {
-        return path.to_string();
-    };
-    if let Ok(rel) = resolved.strip_prefix(project_root) {
-        return rel.to_string_lossy().replace('\\', "/");
+        // Relative subject: preserve DF-WARPFS-55 semantics — resolve against
+        // the CWD when the file exists there, else pass through unchanged so
+        // the graph layer can try it against the project root. Rewriting an
+        // unresolvable path would double-prefix it (`plugin/plugin/...`) and
+        // hide the real subject.
+        let absolute = cwd.join(requested);
+        let Ok(resolved) = std::fs::canonicalize(&absolute) else {
+            return Ok(path.to_string());
+        };
+        if let Ok(rel) = resolved.strip_prefix(project_root) {
+            return Ok(rel.to_string_lossy().replace('\\', "/"));
+        }
+        Ok(path.to_string())
     }
-    path.to_string()
+}
+
+/// Collapse `.` and `..` components (and an empty trailing component) without
+/// touching the filesystem. Used for subjects that cannot be canonicalized
+/// because they do not exist on disk; a `..` never pops above the path root.
+fn normalize_lexically(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                if matches!(
+                    out.components().next_back(),
+                    Some(std::path::Component::Normal(_))
+                ) {
+                    out.pop();
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 /// PERF-001 companion: a missing `graph.db` is no longer a hard error when a
@@ -3103,6 +3171,136 @@ mod tests {
             classify_empty_module(dir.path(), "."),
             EmptyModule::UncoveredDirectory
         );
+    }
+
+    // ── DF-WARPFS-133: absolute-path subject resolution ────────────────────
+
+    /// An absolute path under the project root resolves to its repo-relative
+    /// form — the exact shape an agent browsing the FUSE mount (or holding an
+    /// absolute reference) passes. This is AC1.
+    #[test]
+    fn normalize_subject_absolute_path_inside_root_resolves() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src").join("lib.rs"), "fn main() {}\n").unwrap();
+
+        let abs = root
+            .join("src")
+            .join("lib.rs")
+            .to_string_lossy()
+            .into_owned();
+        let rel = normalize_subject_at(&root, &root, &abs).unwrap();
+        assert_eq!(rel, "src/lib.rs");
+    }
+
+    /// A relative path still resolves exactly as before (AC2): when the CWD
+    /// is the project root, a relative subject is a no-op; a relative subject
+    /// that does not exist relative to the CWD passes through unchanged so
+    /// the graph layer can try it against the root.
+    #[test]
+    fn normalize_subject_relative_path_unchanged() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src").join("lib.rs"), "fn main() {}\n").unwrap();
+
+        // Existing file, CWD == root → resolves to the same relative form.
+        assert_eq!(
+            normalize_subject_at(&root, &root, "src/lib.rs").unwrap(),
+            "src/lib.rs"
+        );
+        // Non-existent file → passes through unchanged (DF-WARPFS-55).
+        assert_eq!(
+            normalize_subject_at(&root, &root, "src/nonexistent.rs").unwrap(),
+            "src/nonexistent.rs"
+        );
+    }
+
+    /// An absolute path OUTSIDE the project root is an error, not a silent
+    /// empty answer.
+    #[test]
+    fn normalize_subject_absolute_path_outside_root_errors() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let outside = TempDir::new().unwrap();
+        let outside_root = outside.path().canonicalize().unwrap();
+        fs::write(outside_root.join("other.rs"), "fn main() {}\n").unwrap();
+
+        let abs = outside_root.join("other.rs").to_string_lossy().into_owned();
+        let err = normalize_subject_at(&root, &root, &abs).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("outside the project root"),
+            "error should say the path is outside the root, got: {msg}"
+        );
+        assert!(
+            msg.contains("other.rs"),
+            "error should name the offending path, got: {msg}"
+        );
+    }
+
+    /// A nonexistent absolute path under the root still resolves lexically,
+    /// so a later "not in the graph" error names the resolved relative path.
+    #[test]
+    fn normalize_subject_nonexistent_absolute_inside_root_resolves_lexically() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+
+        let abs = root
+            .join("src")
+            .join("missing.rs")
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(
+            normalize_subject_at(&root, &root, &abs).unwrap(),
+            "src/missing.rs"
+        );
+    }
+
+    /// Leading `./`, `..` components and trailing slashes are normalized away.
+    #[test]
+    fn normalize_subject_normalizes_dot_components_and_trailing_slash() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src").join("lib.rs"), "fn main() {}\n").unwrap();
+
+        // Trailing slash on a file path.
+        let trailing = format!("{}/src/lib.rs/", root.display());
+        assert_eq!(
+            normalize_subject_at(&root, &root, &trailing).unwrap(),
+            "src/lib.rs"
+        );
+        // `./` component inside an absolute path.
+        let dot = format!("{}/src/./lib.rs", root.display());
+        assert_eq!(
+            normalize_subject_at(&root, &root, &dot).unwrap(),
+            "src/lib.rs"
+        );
+        // `../` component inside an absolute path.
+        let parent = format!("{}/src/../src/lib.rs", root.display());
+        assert_eq!(
+            normalize_subject_at(&root, &root, &parent).unwrap(),
+            "src/lib.rs"
+        );
+    }
+
+    /// Symbol node ids pass through untouched, unchanged by DF-WARPFS-133.
+    #[test]
+    fn normalize_subject_symbol_nodes_pass_through() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        for sym in [
+            "pkg:serde",
+            "sys:stdio.h",
+            "std:fs",
+            "external:other:src/lib.rs",
+            "file:src/lib.rs",
+        ] {
+            assert_eq!(normalize_subject_at(&root, &root, sym).unwrap(), sym);
+        }
     }
 
     #[test]
