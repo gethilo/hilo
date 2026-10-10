@@ -1,0 +1,12 @@
+{
+  "tick_id": "warpfs-foreman-2026-10-10-08-01-05",
+  "project": "warpfs",
+  "budget": 9,
+  "dispatched": [
+    {"task": "DF-WARPFS-126", "priority": "P1", "branch": "wt/DF-WARPFS-126", "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-126"},
+    {"task": "DF-WARPFS-127", "priority": "P2", "branch": "wt/DF-WARPFS-127", "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-127"},
+    {"task": "DF-WARPFS-132", "priority": "P2", "branch": "wt/DF-WARPFS-132", "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-132"}
+  ],
+  "independence_verified": "126=cli/workspace.rs+backends/sync.rs; 127=docs+backends/planner.rs; 132=hilo-core/worktree.rs — disjoint",
+  "created_at": "2026-10-10T08:01:05-05:00"
+}
