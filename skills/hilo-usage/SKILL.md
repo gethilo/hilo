@@ -1,7 +1,7 @@
 ---
 name: hilo-usage
-description: "How to USE hilo (warpfs) — the agent-first virtual filesystem — for real work: fresh-machine no-sudo install (run 35), init/warm/query workflows, verified per-language workarounds, known gaps as of 2026-10-10 (run 35)."
-version: "1.1.0"
+description: "How to USE hilo (warpfs) — the agent-first virtual filesystem — for real work: fresh-machine no-sudo install (run 35), init/warm/query workflows, verified per-language workarounds, known gaps as of 2026-10-10 (run 37: backend sync surface)."
+version: "1.2.0"
 category: software-development
 ---
 
@@ -248,8 +248,16 @@ hilo workspace sync --bucket <B> --at <DIR>             # two-way, last-writer-w
 
 It is verified byte-exact (3 MB binary sha256 matched), honours `.hiloignore`
 (ignored files never leave the machine), never transfers `.vfs/` or the ignore
-file, is idempotent on re-run, and handles nested + unicode paths. There is no
-`--pull`/`--push` flag on it — a plain run is two-way; `--pull` exits 2.
+file, is idempotent on re-run, and handles nested + unicode paths.
+
+> **Direction flags on `workspace sync` are INERT (DF-WARPFS-119, 2026-10-10):**
+> `--push/--pull/--both` exist and parse, but only recolor the header line —
+> every run is a full two-way sync (a `--push` run will DOWNLOAD remote-only
+> files, a `--pull` run will UPLOAD local-only files). Until that is fixed,
+> treat every `workspace sync` as two-way LWW regardless of flags. If you need
+> true one-way direction semantics, use `hilo backend sync --push/--pull`
+> (the planner-based engine honors directions correctly), or verify the fix
+> landed before scripting one-way backups.
 
 **Do not use `hilo backend mount` without a §9 flag.** The plain form exits 0,
 prints `mounted s3://…`, and registers nothing (D1). Any one of
@@ -818,3 +826,41 @@ executor exists — the wiring is missing.)
   README's "Standard source build" path is correct but slow — a fresh user
   on a slow machine could wait 20-30 minutes. No defect in the install
   instructions themselves, but the time cost is a usability friction.
+
+## Backend sync surface (run 37, 2026-10-10): what works, what is dead
+
+**Native S3 path — WORKS (this is the one to use).** Verified against a local
+`rclone serve s3` endpoint (a cloud-free stand-in for MinIO/real S3):
+
+```bash
+rclone serve s3 /tmp/remote-dir --addr 127.0.0.1:19018 --auth-key key,secret  # stand-in endpoint
+cd my-hilo-workspace   # after `hilo init`
+hilo backend mount --type s3 --bucket b --at s3work --endpoint http://127.0.0.1:19018
+export AWS_ACCESS_KEY_ID=key AWS_SECRET_ACCESS_KEY=secret
+hilo backend sync --push   # first run transfers everything, RC=0
+hilo backend sync --pull   # repeat runs: full no-op (0 transferred, 0 conflicts)
+```
+
+- DF-WARPFS-69 verified live: repeat push/pull/both over an aligned set are
+  no-ops; a genuinely changed file transfers exactly once and logs exactly one
+  row in `.vfs/sync/conflicts.jsonl`; local mtime aligns to the remote after
+  transfer. Warm 130ms, cold ~117ms (2-file corpus).
+- Traps: (1) rclone serve caches listings ~5m (dir-cache-time) — an external
+  edit is invisible to an immediate pull, no hint given (DF-WARPFS-124);
+  (2) there is NO per-backend selector — `backend sync <name>` args are subtree
+  PATHs, and one broken mount poisons the whole run with exit 3
+  (DF-WARPFS-122); (3) transfer errors print the key but not the cause
+  (DF-WARPFS-123).
+
+**External/rclone path — DEAD at HEAD (DF-WARPFS-121, P0).**
+`hilo backend mount --type external --remote <dir> --tool rclone` mounts fine,
+but the first `backend sync` fails with `rclone (exit 2): unknown flag: --json`
+— hilo calls `rclone lsf --json` (external.rs:170) and that flag does not
+exist; the verb is `rclone lsjson`. Same defect kills gdrive/onedrive/dropbox.
+Until fixed, do not plan any workflow on external backends; use the native S3
+path above.
+
+**`--type local` is CLI-rejected** (library-only LocalDriver,
+DF-WARPFS-125) — the zero-credential try-it path does not exist on the CLI.
+For a local-dir sync stand-in, use `rclone serve s3` as shown, or the
+`workspace sync` engine (run 8 recipe above).

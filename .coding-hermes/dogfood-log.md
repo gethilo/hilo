@@ -1272,3 +1272,82 @@ Findings (filed as board rows):
 - docs/dogfood/2026-10-10-run36-foreign-repo-consumer.md + this log entry +
   board rows DF-WARPFS-117/118 (committed f4e3ad2d, pushed to origin/master).
   No code changes (run 35's DF-115 mount fix landed separately as e4655347).
+
+## 2026-10-10 — run 37 — backend sync surface (native S3 + rclone external) — 🟡 PROMISING-BUT-ROUGH
+
+Promise: "a user can sync a workspace with an S3/external backend via `hilo backend
+mount` + `hilo backend sync --push/--pull/--both`, with LWW conflicts logged to
+.vfs/sync/conflicts.jsonl, and repeat syncs are no-ops (DF-WARPFS-69)."
+
+Method: scratch workspace + `rclone serve s3` as a local S3 endpoint (no cloud
+creds), fresh HEAD build (4766da26; the installed binary predated the DF-WARPFS-69
+fix). Drove mount/push/pull/both, repeat runs, 7 LWW edit cycles, ledger reads.
+Sibling tick same morning took triggers (rows 119/120) and the install skip row.
+
+Top findings (board rows):
+- DF-WARPFS-121 (P0): every external-backend sync dies on `rclone lsf --json`
+  (external.rs:170) — the verb is `rclone lsjson`; gdrive/onedrive/dropbox/
+  external all dead at HEAD, invisible to the green unit suite.
+- DF-WARPFS-122 (P1): no per-backend selector; one broken mount poisons every
+  sync run (positional args are PATHs; the broken mount runs first, exit 3).
+- DF-WARPFS-123 (P2): transfer errors swallow the backend cause
+  (map_err(|_|) at planner.rs:335/370/410) — key without diagnosis.
+- DF-WARPFS-124 (P2): stale-LIST planning (rclone serve 5m dir-cache): immediate
+  pull after an external edit silently no-ops; conflict rows can carry
+  post-transfer aligned mtimes (decision mtimes not captured at plan time).
+- DF-WARPFS-125 (P3): LocalDriver CLI-unreachable (mount rejects --type local).
+
+What held: DF-WARPFS-69 verified LIVE — initial push 3 files RC=0 117ms; repeat
+push/pull/both all clean no-ops; changed file = 1 transfer + 1 conflict row +
+mtime alignment; ledger honest per change. Perf: warm 130ms ±11 (hyperfine 20
+runs), cold ~117ms — nothing user-noticeable; no PERF row.
+
+Install leg: SKIPPED-install-bunker (explicit) — premise re-proven twice today
+(run 35 PASS 26m32s; run 36 re-proof 24m37s) + sibling row DF-WARPFS-119 filed
+the same skip with identical evidence.
+
+Time-to-first-success: push worked on the first try on the native path (~5 min
+setup including the rclone serve stand-in); external path = 0% (dead verb).
+
+Left behind: docs/dogfood/2026-10-10-run37-sync-surface.md + this entry + rows
+121-125. No code changes.
+# Dogfood Run 38 — 2026-10-10 — backend/workspace sync (DF-WARPFS-69 verification + true-conflict arm) — 🟢 backend-sync SHIPPABLE / 🟡 workspace-sync direction flags inert
+
+**Tick:** my-project-dogfood-2026-10-10-05-14-09 · **Promise:** "A user can two-way sync a
+local directory against an S3 backend with last-writer-wins conflict resolution and an
+auditable conflicts ledger." · **Angle:** run 35/36 covered install + graph surfaces on
+10-10; this run took the sync surface at the moment its DF-69 fix (621fd5c8) landed.
+
+- DF-WARPFS-69 fix VERIFIED: aligned-set repeat push/pull/both = 0 transfers 0 conflicts;
+  changed file = 1 transfer + exactly 1 ledger row; TRUE DIVERGENCE (first ever driven)
+  = mtime-correct RemoteWins, 1 row. Delete propagation honest.
+- DF-WARPFS-126 (P1, new; originally appended as -119, renumbered after a sibling triggers tick collided on the id): `workspace sync --push/--pull/--both` are INERT — direction
+  only recolors the header; `--push` downloads remote-only files, `--pull` uploads
+  local-only files. run_workspace_sync never passes direction into SyncEngine.
+- DF-WARPFS-127 (P2, new; renumbered as above): conflicts ledger documented as .vfs/backends/conflicts.jsonl
+  in the §9 narrative family, actually at .vfs/sync/conflicts.jsonl (only the spec is right).
+- Perf: no-op `backend sync --both` 142.7ms ±13.7 warm (hyperfine ×20); cold push 0.25s.
+  Nothing to file.
+- Install leg: SKIPPED-install-bunker-with-citation — run 35 (26m32s) + run 36 (24m37s)
+  proved the documented install on fresh boxes within 24h; zero Cargo dep drift
+  1195639a→3a62d63b (git diff --stat empty). What a third leg would add: nothing new.
+- Left behind: docs/dogfood/2026-10-10-run37-sync-df69-verification.md + board rows
+  DF-WARPFS-126/127 (created_by: dogfood-warpfs-run37) + this entry. No code changes.
+
+## 2026-10-10 — run 37 (triggers lane) — triggers surface re-verification at HEAD — 🟢 PROMISE HOLDS
+
+**Tick:** my-project-dogfood-2026-10-10-05-14-09 · **Head:** 4766da26 · **Binary:** hilo 0.4.0 debug (built 2026-10-10T04:43Z, target-local; trigger fixes 2bfae820/4836c316/d3bee47a all ancestors)
+**Angle:** the parallel sync run took the backend-sync surface; this run took the TRIGGERS surface — run 10 (09-23) found it broken (DF-WARPFS-28/29/30/32) and the four fixes had never been re-verified in real use.
+
+**Real-use pass** (scratch corpus /tmp/dogfood-warpfs-r37, 5 files Rust+Python):
+- DF-WARPFS-28 FIX CONFIRMED: stock `hilo init` (manifest `triggers: []`) + `hilo mount --triggers` loads 13 default triggers, stdout AND stderr agree ("[trigger-engine] loaded 13 triggers").
+- DF-WARPFS-29 FIX CONFIRMED: editing src/deep/nested.rs THROUGH the mount fires parse-and-diff in ~5s with the project-relative path; a real import edit appended {src/main.rs -> pkg:std, imports} to edges.jsonl live (write-through verified). Comment-only edits correctly report 0 impacted/0 new — that is the diff working, not a regression.
+- DF-30 steady state: `graph stats` 196-296ms while the trigger mount is up (Lazy per-event connections, no standing lock).
+- DF-32: fusermount3 -u → no surviving `hilo mount` process on 5/5 trigger mounts.
+- Verdict for the surface: ✅ works as documented at HEAD; run 10's 🔴 no longer stands.
+
+**Perf (Step 2b):** NEW finding PERF-011 — the FIRST graph read from a second process while any mount is settling stalls 2.7-8.0s (trigger 7.86/8.02/4.22s across 3 fresh mounts; plain mount 2.66s), then collapses to baseline (warm hyperfine 195.8ms ±23.9, n=20). Wait-shaped (user 0.16s/sys 0.02s) → graph.db open contention at mount startup (mount.rs:341 Lazy + GraphDB::open reconcile graph.rs:1425). P3: real users mount-then-query and see a silent multi-second hang.
+
+- Install leg: SKIPPED-install-bunker-with-citation (DF-WARPFS-119) — runs 35+36 proved the documented fresh install twice within 24h at the same HEAD; zero Cargo drift; nothing a third leg adds.
+- Rows filed: PERF-011, DF-WARPFS-119 (skip record), DF-WARPFS-120 (triggers PASS record). created_by: dogfood-run37-2026-10-10.
+- Left behind: this entry + the 3 board rows. No code changes. NOTE: parallel sync dogfood run also used the 119/120 ids first-minted in this working tree; it renumbered to 126/127 citing the collision — no duplicates exist (grep-verified).
