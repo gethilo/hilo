@@ -167,7 +167,11 @@ backends:
       at: /project/data/
       writable: true
 
-# ── Metadata namespaces (set as xattrs on matching files) ──
+# ── Metadata namespaces (declared here; written as `user.vfs.<name>` xattrs).
+#    Hilo populates the `auto` entries below plus role/status/feature/backend/
+#    hash/impact/last_modified/cache_status/remote/materialized; the rest are
+#    declared namespaces that an agent, the CLI (`hilo meta`), MCP
+#    (`vfs_set_metadata`) or a trigger `set_xattr` action sets explicitly. ──
 metadata:
   namespaces:
     - feature         # user.vfs.feature → "auth-module"
@@ -178,10 +182,10 @@ metadata:
     - relations       # user.vfs.relations → "imports:a.go|tested_by:a_test.go"
     - impact          # user.vfs.impact → pre-computed blast radius
     - complexity      # user.vfs.complexity → "cyclomatic=14,loc=142"
-    - risk            # user.vfs.risk → "critical-path", "low", "generated"
-    - last_tested     # user.vfs.last_tested → ISO timestamp
+    - role            # user.vfs.role → "entrypoint", "library", "test" (hilo classify)
+    - status          # user.vfs.status → "stable", "beta", "unknown" (hilo classify)
     - last_modified   # user.vfs.last_modified → ISO timestamp
-    - cache_status    # user.vfs.cache_status → "hit", "miss", "stale"
+    - cache_status    # user.vfs.cache_status → "synced"
     - review_status   # user.vfs.review_status → "needs-review", "approved"
   auto:
     hash: true
@@ -266,7 +270,7 @@ triggers:
     timeout: 60s
     debounce: 2s
     on_success:
-      set_xattr: "user.vfs.last_tested={{ .Timestamp }}"
+      set_xattr: "user.vfs.review_status=tested-{{ .Timestamp }}"
   - name: sync-s3
     when: "/project/models/*"
     on: write
@@ -444,11 +448,15 @@ A top-level VFS mount that is NOT itself a git repo. Multiple repos, S3 buckets,
 Edges that span repo boundaries are flagged as `external:`:
 
 ```bash
-$ getfattr -n user.vfs.relations auth-service/src/handler.go
-user.vfs.relations="imports:auth-service/src/types.go|external:shared-lib/pkg/utils.go"
+# Query the graph for the edges leaving this file. Cross-repo targets are
+# written as `external:<repo>:<path>` and rendered with that prefix:
+$ hilo graph related auth-service/src/handler.go
+auth-service/src/handler.go  →  auth-service/src/types.go  (imports)  [ast_exact conf=1.00]
+auth-service/src/handler.go  →  external:shared-lib:pkg/utils.go  (imports)  [ast_exact conf=1.00]
 
-$ getfattr -n user.vfs.impact shared-lib/pkg/utils.go
-user.vfs.impact="direct:shared-lib/pkg/auth.go|external:auth-service/src/handler.go,payment-service/src/checkout.rs"
+# Impact is an xattr the trigger loop stamps on each reached file:
+$ getfattr -n user.vfs.impact auth-service/src/handler.go
+user.vfs.impact="imports (depth 1)"
 ```
 
 ### 6.2 Mount Ordering
@@ -815,6 +823,14 @@ All stored in `.vfs/` at the mount root (workspace-level for multi-repo, repo-le
 
 ## 17. Agent Experience
 
+Every `user.vfs.*` attribute below is written by a shipped code path before the
+agent reads it — the trigger loop (`parse-and-diff`, `upload-to-backend`),
+`hilo classify`, and the lazy-stream placeholder logic. Namespaces Hilo does
+not compute on its own are **opt-in**: write them with `hilo meta --set`, the
+MCP `vfs_set_metadata` tool, or a trigger's `set_xattr` action. Hilo never
+invents a value for a namespace that nothing wrote, so an absent xattr means
+"not set", never a synthesized default.
+
 ```bash
 # Agent opens workspace
 $ cd /mnt/vfs/workspace
@@ -827,26 +843,46 @@ auth-service/  payment-service/  shared-lib/  models/  docs/  datasets/
 $ cat auth-service/src/handler.go
 (func Handler(...) — exact git blob content)
 
-# Asks: "what's connected?"
-$ getfattr -n user.vfs.relations auth-service/src/handler.go
-user.vfs.relations="imports:types.go,middleware.go|external:shared-lib/pkg/utils.go"
+# Asks: "what's connected?" — a graph query, not an xattr
+$ hilo graph related auth-service/src/handler.go
+auth-service/src/handler.go  →  auth-service/src/types.go  (imports)  [ast_exact conf=1.00]
+auth-service/src/handler.go  →  external:shared-lib:pkg/utils.go  (imports)  [ast_exact conf=1.00]
 
-# Asks: "what breaks if I change this?"
-$ getfattr -n user.vfs.impact shared-lib/pkg/utils.go
-user.vfs.impact="direct:pkg/auth.go|external:auth-service/src/handler.go,payment-service/src/checkout.rs"
+# Asks: "what breaks if I change this?" — the trigger loop stamps every file it
+# reached, one impact xattr per file: "<relation> (depth <n>)"
+$ getfattr -n user.vfs.impact auth-service/src/handler.go
+user.vfs.impact="imports (depth 1)"
+
+# Freshness is stamped each time a file is parsed by the trigger loop:
+$ getfattr -n user.vfs.last_modified auth-service/src/handler.go
+user.vfs.last_modified="2026-06-14T09:33:14Z"
+
+# Role/status come from `hilo classify` (AST-based, no LLM):
+$ hilo classify
+$ getfattr -n user.vfs.role auth-service/src/middleware.go
+user.vfs.role="library"
+$ getfattr -n user.vfs.status auth-service/src/middleware.go
+user.vfs.status="stable"
+
+# Files written through an S3 backend carry backend/hash/cache_status:
+$ getfattr -n user.vfs.backend models/new-model.bin
+user.vfs.backend="s3"
+$ getfattr -n user.vfs.cache_status models/new-model.bin
+user.vfs.cache_status="synced"
+
+# Unread lazy-loaded placeholders carry remote/materialized until first access:
+$ getfattr -n user.vfs.remote vendor/shared-lib/data.bin
+user.vfs.remote="assets/data.bin"
+$ getfattr -n user.vfs.materialized vendor/shared-lib/data.bin
+user.vfs.materialized="false"
 
 # Tries to edit .gitignore → kernel-enforced denial
 $ echo "*.log" > .gitignore
 bash: .gitignore: Permission denied
 
-# Checks risk before editing
-$ getfattr -n user.vfs.risk auth-service/src/middleware.go
-user.vfs.risk="critical-path"
-
-# Checks freshness
-$ getfattr -n user.vfs.last_tested auth-service/src/login.go
-user.vfs.last_tested="2026-06-14T09:33:14"
-# Model compares with last_modified → STALE. Needs re-test.
+# Anything else is opt-in — set it explicitly; nothing writes it by default:
+$ hilo meta auth-service/src/login.go --set review_status --value needs-review
+Set user.vfs.review_status = needs-review on auth-service/src/login.go
 
 # Invokes a rule through MCP
 # vfs_rule_check("untested-critical")
@@ -921,10 +957,10 @@ graph = ["tree-sitter", "duckdb", "xattr"]  # petgraph is transitive-only (via w
 
 ```
 Request:
-{"method":"tools/call","params":{"name":"vfs_get_metadata","arguments":{"path":"src/login.go","keys":["feature","risk"]}}}
+{"method":"tools/call","params":{"name":"vfs_get_metadata","arguments":{"path":"src/login.go","keys":["feature","role"]}}}
 
 Response (success):
-{"content":[{"type":"text","text":"{\"path\":\"src/login.go\",\"size\":1234,\"mtime\":\"2026-06-14T09:33:14Z\",\"backend\":\"git\",\"hash\":\"sha256:abc123...\",\"xattrs\":{\"user.vfs.feature\":\"auth-module\",\"user.vfs.risk\":\"critical-path\"}}"}]}
+{"content":[{"type":"text","text":"{\"path\":\"src/login.go\",\"size\":1234,\"mtime\":\"2026-06-14T09:33:14Z\",\"backend\":\"git\",\"hash\":\"sha256:abc123...\",\"xattrs\":{\"user.vfs.feature\":\"auth-module\",\"user.vfs.role\":\"entrypoint\"}}"}]}
 
 Response (not found):
 {"content":[{"type":"text","text":"{\"error\":\"file not found\",\"path\":\"src/nonexistent.go\"}"}],"isError":true}
