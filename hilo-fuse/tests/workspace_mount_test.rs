@@ -19,8 +19,9 @@ use std::path::PathBuf;
 use hilo_core::workspace::MountEntry;
 use hilo_fuse::permissions::PermissionEngine;
 use hilo_fuse::workspace_mount::{
-    ws_backing_file_for_test, ws_child_names_for_test, ws_inode_for_path_for_test,
-    ws_populate_dir_for_test, ws_root_ino_for_test, WorkspaceMount,
+    ws_backing_file_for_test, ws_child_names_for_test, ws_create_for_test,
+    ws_inode_for_path_for_test, ws_populate_dir_for_test, ws_root_ino_for_test,
+    ws_setattr_size_for_test, ws_write_for_test, WorkspaceMount,
 };
 use hilo_fuse::FuseConfig;
 
@@ -165,5 +166,175 @@ fn test_deep_sibling_files_are_distinct_inodes() {
         ws_inode_for_path_for_test(&fs, "demo/src/commands/run.rs"),
         ws_inode_for_path_for_test(&fs, "demo/README.md"),
         "distinct paths must map to distinct inodes"
+    );
+}
+
+// ============================================================
+// DF-WARPFS-138 — workspace-mount write path (write/create/setattr)
+// through the backing path. Same in-process harness as above: no
+// kernel mount, write-through verified by reading the REAL backing
+// directory back from disk.
+// ============================================================
+
+/// A backing repo with one file, mounted writable or read-only.
+fn writable_fixture(writable: bool) -> (tempfile::TempDir, WorkspaceMount) {
+    let backing = tempfile::tempdir().unwrap();
+    fs::write(backing.path().join("README.md"), "0123456789").unwrap();
+
+    let mounts = vec![MountEntry {
+        name: "demo".to_string(),
+        backing_path: backing.path().to_path_buf(),
+        at: "/tmp/vfs/demo".to_string(),
+        writable,
+    }];
+    let config = FuseConfig {
+        mount_point: PathBuf::from("/tmp/hilo-ws138-test"),
+        allow_other: false,
+        direct_io: false,
+        auto_unmount: false,
+        read_only: !writable,
+        attr_timeout: 1.0,
+        entry_timeout: 1.0,
+        max_read: 131_072,
+        max_write: 131_072,
+        sandbox: None,
+    };
+    let fs = WorkspaceMount::new(mounts, config, PermissionEngine::from_rules(Vec::new()));
+    (backing, fs)
+}
+
+/// Walk root -> demo -> README.md exactly as the kernel's lookup does.
+fn readme_ino(fs: &WorkspaceMount) -> u64 {
+    let root = ws_root_ino_for_test();
+    assert!(ws_populate_dir_for_test(fs, root), "root populates");
+    let demo = ws_inode_for_path_for_test(fs, "demo").expect("mount dir resolves");
+    assert!(ws_populate_dir_for_test(fs, demo), "mount dir populates");
+    ws_inode_for_path_for_test(fs, "demo/README.md").expect("README.md resolves")
+}
+
+#[test]
+fn ws138_write_to_writable_mount_lands_bytes_on_backing_disk() {
+    let (backing, fs) = writable_fixture(true);
+    let ino = readme_ino(&fs);
+
+    let n = ws_write_for_test(&fs, ino, 4, b"ABCD").expect("writable mount must accept writes");
+    assert_eq!(n, 4, "write replies the byte count written");
+
+    // Ground truth: the bytes landed in the REAL backing directory at the
+    // requested offset, leaving the rest of the file intact.
+    let on_disk = fs::read(backing.path().join("README.md")).unwrap();
+    assert_eq!(
+        on_disk, b"0123ABCD89",
+        "bytes must land at offset 4 on disk"
+    );
+
+    // The same bytes read back through the mount's own read path.
+    let real = ws_backing_file_for_test(&fs, "demo/README.md").expect("backing mapping");
+    assert_eq!(fs::read(&real).unwrap(), b"0123ABCD89");
+}
+
+#[test]
+fn ws138_write_to_read_only_mount_is_refused_with_eacces() {
+    let (backing, fs) = writable_fixture(false);
+    let ino = readme_ino(&fs);
+
+    let err = ws_write_for_test(&fs, ino, 0, b"nope")
+        .expect_err("a writable:false mount must refuse writes");
+    assert_eq!(
+        err,
+        libc::EACCES,
+        "refusal must be EACCES (denied), not ENOSYS/EIO"
+    );
+
+    assert_eq!(
+        fs::read(backing.path().join("README.md")).unwrap(),
+        b"0123456789",
+        "a refused write must not touch the backing file"
+    );
+}
+
+#[test]
+fn ws138_create_materializes_backing_file_and_lookup_sees_it() {
+    let (backing, fs) = writable_fixture(true);
+    let root = ws_root_ino_for_test();
+    assert!(ws_populate_dir_for_test(&fs, root));
+    let demo = ws_inode_for_path_for_test(&fs, "demo").unwrap();
+
+    let ino = ws_create_for_test(&fs, demo, "brand-new.txt").expect("create on writable mount");
+    assert_ne!(ino, 0);
+
+    // The file exists on the real backing disk.
+    let backing_file = backing.path().join("brand-new.txt");
+    assert!(
+        backing_file.exists(),
+        "create must materialize the backing file"
+    );
+    assert_eq!(fs::read(&backing_file).unwrap(), Vec::<u8>::new());
+
+    // The new node is visible via lookup (kernel retry path) and via readdir.
+    assert_eq!(
+        ws_inode_for_path_for_test(&fs, "demo/brand-new.txt"),
+        Some(ino),
+        "lookup must see the created node"
+    );
+    assert!(
+        ws_child_names_for_test(&fs, demo).contains(&"brand-new.txt".to_string()),
+        "the created file must appear in the parent's listing"
+    );
+
+    // And writes through the new inode land on the same backing file.
+    let n = ws_write_for_test(&fs, ino, 0, b"hi").expect("write to created file");
+    assert_eq!(n, 2);
+    assert_eq!(fs::read(&backing_file).unwrap(), b"hi");
+}
+
+#[test]
+fn ws138_create_on_read_only_mount_is_refused() {
+    let (backing, fs) = writable_fixture(false);
+    let root = ws_root_ino_for_test();
+    assert!(ws_populate_dir_for_test(&fs, root));
+    let demo = ws_inode_for_path_for_test(&fs, "demo").unwrap();
+
+    let err =
+        ws_create_for_test(&fs, demo, "blocked.txt").expect_err("read-only mount must refuse");
+    assert_eq!(err, libc::EACCES);
+    assert!(
+        !backing.path().join("blocked.txt").exists(),
+        "a refused create must not materialize anything"
+    );
+}
+
+#[test]
+fn ws138_setattr_size_shrinks_and_extends_backing_file() {
+    let (backing, fs) = writable_fixture(true);
+    let ino = readme_ino(&fs);
+
+    ws_setattr_size_for_test(&fs, ino, 3).expect("setattr size on writable mount");
+
+    assert_eq!(
+        fs::read(backing.path().join("README.md")).unwrap(),
+        b"012",
+        "setattr(size) must shrink the REAL backing file"
+    );
+
+    // Extending back must zero-fill like truncate(2).
+    ws_setattr_size_for_test(&fs, ino, 6).expect("setattr extend");
+    assert_eq!(
+        fs::read(backing.path().join("README.md")).unwrap(),
+        b"012\0\0\0"
+    );
+}
+
+#[test]
+fn ws138_setattr_size_on_read_only_mount_is_refused() {
+    let (backing, fs) = writable_fixture(false);
+    let ino = readme_ino(&fs);
+
+    let err = ws_setattr_size_for_test(&fs, ino, 2).expect_err("read-only must refuse setattr");
+    assert_eq!(err, libc::EACCES);
+    assert_eq!(
+        fs::read(backing.path().join("README.md")).unwrap(),
+        b"0123456789",
+        "refused setattr must leave the backing file untouched"
     );
 }

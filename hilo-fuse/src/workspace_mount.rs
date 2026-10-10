@@ -5,20 +5,21 @@
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use fuser::{
-    FileAttr, FileType, Filesystem, KernelConfig, MountOption, ReplyAttr, ReplyData,
-    ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, ReplyXattr, Request,
+    FileAttr, FileType, Filesystem, KernelConfig, MountOption, ReplyAttr, ReplyCreate, ReplyData,
+    ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, ReplyXattr, Request, TimeOrNow,
 };
-use libc::{EACCES, ENODATA, ENOENT};
+use libc::{EACCES, EIO, ENODATA, ENOENT};
 
 use hilo_core::workspace::MountEntry;
 
-use crate::permissions::PermissionEngine;
+use crate::permissions::{PermissionEngine, PermissionOp};
 use crate::FuseConfig;
 
 const ROOT_INO: u64 = 1;
@@ -95,7 +96,8 @@ impl WorkspaceMount {
 
     /// Given a mount-relative path ("auth-service/src/main.go"),
     /// find which mount entry it belongs to and resolve to real path.
-    #[allow(dead_code)]
+    ///
+    /// Used by the write/create/setattr paths (DF-WARPFS-138).
     fn resolve_to_real(&self, rel_path: &Path) -> Option<(usize, PathBuf)> {
         let path_str = rel_path.to_string_lossy();
         // Strip leading "/" if present
@@ -240,6 +242,221 @@ impl WorkspaceMount {
             );
         }
         true
+    }
+
+    /// Shared write-path gates for an entry: the inode exists, it is a file,
+    /// the permission engine allows the write, and the owning mount is
+    /// writable (DF-WARPFS-138). Returns the entry clone on success and the
+    /// errno the Filesystem method should reply with on failure.
+    fn writable_entry_gate(&self, ino: u64) -> Result<InodeEntry, i32> {
+        let files = self.files.read().unwrap();
+        let entry = match files.get(&ino) {
+            Some(e) if matches!(e.kind, InodeKind::File) => e.clone(),
+            _ => return Err(ENOENT),
+        };
+        drop(files);
+        // 1. Permission engine check (backend rules take priority).
+        if self
+            .permissions
+            .check(&entry.path, PermissionOp::Write)
+            .is_err()
+        {
+            return Err(EACCES);
+        }
+        // 2. Per-entry writable flag (fine-grained userspace enforcement).
+        let writable = entry
+            .mount_idx
+            .map(|idx| self.mounts[idx].writable)
+            .unwrap_or(true);
+        if !writable {
+            return Err(EACCES);
+        }
+        Ok(entry)
+    }
+
+    /// Resolve an entry's mount-relative path to its real backing path.
+    /// Mirrors the inline resolution used by `read()` (entry.mount_idx +
+    /// backing_path strip) via the shared `resolve_to_real` helper.
+    fn backing_path_for(&self, entry: &InodeEntry) -> Option<(usize, PathBuf)> {
+        self.resolve_to_real(&entry.path)
+    }
+
+    /// Write-through core for `write()`: open the backing file and write the
+    /// bytes at the requested offset. All failures after the gates pass map
+    /// to EIO with a stderr diagnostic (mirrors ops.rs §8.4).
+    fn write_through(&self, entry: &InodeEntry, offset: i64, data: &[u8]) -> Result<u32, i32> {
+        let (_, real_path) = match self.backing_path_for(entry) {
+            Some(p) => p,
+            None => {
+                eprintln!(
+                    "[hilo-fuse] workspace write: cannot resolve backing path for {}",
+                    entry.path.display()
+                );
+                return Err(EIO);
+            }
+        };
+        let file = match std::fs::OpenOptions::new().write(true).open(&real_path) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!(
+                    "[hilo-fuse] workspace write open failed for {}: {e}",
+                    real_path.display()
+                );
+                return Err(EIO);
+            }
+        };
+        use std::os::unix::fs::FileExt;
+        match file.write_at(data, offset.max(0) as u64) {
+            Ok(n) => Ok(n as u32),
+            Err(e) => {
+                eprintln!(
+                    "[hilo-fuse] workspace write_at failed for {}: {e}",
+                    real_path.display()
+                );
+                Err(EIO)
+            }
+        }
+    }
+
+    /// Truncate/extend the backing file (setattr size path). Requires the
+    /// same gate as write; other setattr fields are not supported here.
+    fn set_len_through(&self, entry: &InodeEntry, size: u64) -> Result<(), i32> {
+        let (_, real_path) = match self.backing_path_for(entry) {
+            Some(p) => p,
+            None => {
+                eprintln!(
+                    "[hilo-fuse] workspace setattr: cannot resolve backing path for {}",
+                    entry.path.display()
+                );
+                return Err(EIO);
+            }
+        };
+        match std::fs::OpenOptions::new().write(true).open(&real_path) {
+            Ok(f) => match f.set_len(size) {
+                Ok(()) => Ok(()),
+                Err(e) => {
+                    eprintln!(
+                        "[hilo-fuse] workspace set_len failed for {}: {e}",
+                        real_path.display()
+                    );
+                    Err(EIO)
+                }
+            },
+            Err(e) => {
+                eprintln!(
+                    "[hilo-fuse] workspace setattr open failed for {}: {e}",
+                    real_path.display()
+                );
+                Err(EIO)
+            }
+        }
+    }
+
+    /// Create core for `create()`: materialize the file under the parent's
+    /// backing directory, register an inode, and return its new inode number.
+    fn create_through(&self, parent: u64, name: &OsStr, mode: u32, flags: i32) -> Result<u64, i32> {
+        let files = self.files.read().unwrap();
+        let parent_entry = match files.get(&parent) {
+            Some(e) if matches!(e.kind, InodeKind::Directory) => e.clone(),
+            _ => return Err(ENOENT),
+        };
+        drop(files);
+
+        // Gate on the PARENT: its owning mount must be writable and the
+        // permission engine must allow a write under the parent path.
+        let parent_writable = parent_entry
+            .mount_idx
+            .map(|idx| self.mounts[idx].writable)
+            .unwrap_or(true);
+        if !parent_writable
+            || self
+                .permissions
+                .check(&parent_entry.path, PermissionOp::Write)
+                .is_err()
+        {
+            return Err(EACCES);
+        }
+
+        let (idx, parent_real) = match self.backing_path_for(&parent_entry) {
+            Some(p) => p,
+            None => {
+                eprintln!(
+                    "[hilo-fuse] workspace create: cannot resolve backing path for {}",
+                    parent_entry.path.display()
+                );
+                return Err(EIO);
+            }
+        };
+        let real_path = parent_real.join(name);
+        let rel_path = parent_entry.path.join(name);
+        // Truncate only when O_TRUNC is requested (flags carry the open
+        // mode); creation flags like O_CREAT/O_EXCL are implied by this op.
+        let truncate = flags & libc::O_TRUNC != 0;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(truncate)
+            .mode(mode & 0o7777)
+            .open(&real_path)
+            .map_err(|e| {
+                eprintln!(
+                    "[hilo-fuse] workspace create failed for {}: {e}",
+                    real_path.display()
+                );
+                EIO
+            })?;
+
+        let mut files = self.files.write().unwrap();
+        // Another thread may have created the same path concurrently; reuse
+        // that inode if present (paths are the mount's identity).
+        if let Some(existing) = files
+            .iter()
+            .find(|(_, e)| e.path == rel_path)
+            .map(|(i, _)| *i)
+        {
+            return Ok(existing);
+        }
+        let ino = self.alloc_inode();
+        files.insert(
+            ino,
+            InodeEntry {
+                path: rel_path,
+                kind: InodeKind::File,
+                size: 0,
+                mode: {
+                    let m = mode & 0o7777;
+                    if m == 0 {
+                        0o644
+                    } else {
+                        m
+                    }
+                },
+                mount_idx: Some(idx),
+            },
+        );
+        Ok(ino)
+    }
+
+    /// Post-gate attr reply for setattr: report the fresh size from disk
+    /// (mirrors getattr's TTL + writable-derived mode).
+    fn attr_after_setattr(&self, ino: u64, entry: &InodeEntry) -> FileAttr {
+        let writable = entry
+            .mount_idx
+            .map(|idx| self.mounts[idx].writable)
+            .unwrap_or(true);
+        let mut size = entry.size;
+        if let Some((_, p)) = self.backing_path_for(entry) {
+            if let Ok(meta) = std::fs::metadata(&p) {
+                size = meta.len();
+                let mut files = self.files.write().unwrap();
+                if let Some(e) = files.get_mut(&ino) {
+                    e.size = size;
+                }
+            }
+        }
+        let mut updated = entry.clone();
+        updated.size = size;
+        self.make_attr(ino, &updated, writable)
     }
 }
 
@@ -435,7 +652,6 @@ impl Filesystem for WorkspaceMount {
         // Enforce permission check for backend mounts
         let files = self.files.read().unwrap();
         if let Some(entry) = files.get(&ino) {
-            use crate::permissions::PermissionOp;
             let access_mode = _flags & libc::O_ACCMODE;
             if access_mode == libc::O_WRONLY {
                 if self
@@ -496,14 +712,47 @@ impl Filesystem for WorkspaceMount {
         _req: &Request,
         ino: u64,
         _fh: u64,
-        _offset: i64,
-        _data: &[u8],
+        offset: i64,
+        data: &[u8],
         _write_flags: u32,
         _flags: i32,
         _lock_owner: Option<u64>,
         reply: ReplyWrite,
     ) {
-        // Check backend permission first
+        // 1+2. Permission engine + per-entry writable gate (backend rules
+        // take priority). EACCES here means "denied", never "unimplemented".
+        let entry = match self.writable_entry_gate(ino) {
+            Ok(e) => e,
+            Err(errno) => {
+                reply.error(errno);
+                return;
+            }
+        };
+        // 3. Write through to the backing file at the requested offset.
+        match self.write_through(&entry, offset, data) {
+            Ok(n) => reply.written(n),
+            Err(e) => reply.error(e),
+        }
+    }
+
+    fn setattr(
+        &mut self,
+        _req: &Request,
+        ino: u64,
+        _mode: Option<u32>,
+        _uid: Option<u32>,
+        _gid: Option<u32>,
+        size: Option<u64>,
+        _atime: Option<TimeOrNow>,
+        _mtime: Option<TimeOrNow>,
+        _ctime: Option<SystemTime>,
+        _fh: Option<u64>,
+        _crtime: Option<SystemTime>,
+        _chgtime: Option<SystemTime>,
+        _bkuptime: Option<SystemTime>,
+        _flags: Option<u32>,
+        reply: ReplyAttr,
+    ) {
         let files = self.files.read().unwrap();
         let entry = match files.get(&ino) {
             Some(e) => e.clone(),
@@ -512,29 +761,71 @@ impl Filesystem for WorkspaceMount {
                 return;
             }
         };
+        drop(files);
 
-        // 1. Permission engine check (backend rules take priority)
-        use crate::permissions::PermissionOp;
-        if self
-            .permissions
-            .check(&entry.path, PermissionOp::Write)
-            .is_err()
-        {
-            reply.error(EACCES);
-            return;
+        match size {
+            Some(new_size) => {
+                // Truncate/extend goes through the same write gate.
+                let gated = match self.writable_entry_gate(ino) {
+                    Ok(e) => e,
+                    Err(errno) => {
+                        reply.error(errno);
+                        return;
+                    }
+                };
+                if let Err(e) = self.set_len_through(&gated, new_size) {
+                    reply.error(e);
+                    return;
+                }
+                let attr = self.attr_after_setattr(ino, &entry);
+                reply.attr(&TTL, &attr);
+            }
+            None => {
+                // No size change requested: reply the current attrs (the
+                // metadata layer is out of scope for DF-WARPFS-138).
+                let writable = entry
+                    .mount_idx
+                    .map(|idx| self.mounts[idx].writable)
+                    .unwrap_or(true);
+                let attr = self.make_attr(ino, &entry, writable);
+                reply.attr(&TTL, &attr);
+            }
         }
+    }
 
-        // 2. Writable flag check
-        let writable = entry
-            .mount_idx
-            .map(|idx| self.mounts[idx].writable)
-            .unwrap_or(true);
-        if !writable {
-            reply.error(EACCES);
-            return;
+    fn create(
+        &mut self,
+        _req: &Request,
+        parent: u64,
+        name: &OsStr,
+        mode: u32,
+        _umask: u32,
+        flags: i32,
+        reply: ReplyCreate,
+    ) {
+        match self.create_through(parent, name, mode, flags) {
+            Ok(ino) => {
+                let files = self.files.read().unwrap();
+                match files.get(&ino) {
+                    Some(entry) => {
+                        let writable = entry
+                            .mount_idx
+                            .map(|idx| self.mounts[idx].writable)
+                            .unwrap_or(true);
+                        let attr = self.make_attr(ino, entry, writable);
+                        drop(files);
+                        // fuser's create reply carries the open flags as u32;
+                        // echo the kernel-provided bits back verbatim.
+                        reply.created(&TTL, &attr, 0, 0, flags as u32);
+                    }
+                    None => {
+                        drop(files);
+                        reply.error(ENOENT);
+                    }
+                }
+            }
+            Err(e) => reply.error(e),
         }
-        // Fall through to write implementation if writable
-        reply.error(EACCES);
     }
 }
 
@@ -629,6 +920,60 @@ pub fn ws_root_ino_for_test() -> u64 {
     ROOT_INO
 }
 
+#[doc(hidden)]
+pub fn ws_write_for_test(
+    fs: &WorkspaceMount,
+    ino: u64,
+    offset: i64,
+    data: &[u8],
+) -> Result<u32, i32> {
+    let entry = fs.writable_entry_gate(ino)?;
+    fs.write_through(&entry, offset, data)
+}
+
+#[doc(hidden)]
+pub fn ws_create_for_test(fs: &WorkspaceMount, parent: u64, name: &str) -> Result<u64, i32> {
+    // Mirrors the kernel's create: mode 0o644, O_CREAT (no O_TRUNC).
+    fs.create_through(parent, OsStr::new(name), 0o644, libc::O_CREAT)
+}
+
+#[doc(hidden)]
+pub fn ws_setattr_size_for_test(fs: &WorkspaceMount, ino: u64, size: u64) -> Result<(), i32> {
+    let entry = fs.writable_entry_gate(ino)?;
+    fs.set_len_through(&entry, size)?;
+    // Keep the inode table's cached size in sync (as attr_after_setattr does).
+    if let Some((_, p)) = fs.backing_path_for(&entry) {
+        if let Ok(meta) = std::fs::metadata(&p) {
+            let mut files = fs.files.write().unwrap();
+            if let Some(e) = files.get_mut(&ino) {
+                e.size = meta.len();
+            }
+        }
+    }
+    Ok(())
+}
+
+#[doc(hidden)]
+pub struct WsEntryInfoForTest {
+    pub path: PathBuf,
+    pub is_file: bool,
+    pub size: u64,
+    pub mode: u32,
+    pub mount_idx: Option<usize>,
+}
+
+#[doc(hidden)]
+pub fn ws_entry_info_for_test(fs: &WorkspaceMount, ino: u64) -> Option<WsEntryInfoForTest> {
+    let files = fs.files.read().unwrap();
+    files.get(&ino).map(|e| WsEntryInfoForTest {
+        path: e.path.clone(),
+        is_file: matches!(e.kind, InodeKind::File),
+        size: e.size,
+        mode: e.mode,
+        mount_idx: e.mount_idx,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -704,6 +1049,192 @@ mod tests {
         assert!(
             opts.contains(&MountOption::RO),
             "an empty workspace must keep the default read-only kernel mount"
+        );
+    }
+
+    // ------------------------------------------------------------
+    // DF-WARPFS-138 — write/create/setattr through the backing path.
+    // ------------------------------------------------------------
+
+    /// A workspace whose single mount `name` points at a REAL tempdir
+    /// backing directory, so write-through lands bytes on disk.
+    fn ws_with_backing(name: &str, writable: bool) -> (tempfile::TempDir, WorkspaceMount) {
+        let backing = tempfile::tempdir().unwrap();
+        let mounts = vec![MountEntry {
+            name: name.to_string(),
+            backing_path: backing.path().to_path_buf(),
+            at: format!("/tmp/vfs/{name}"),
+            writable,
+        }];
+        let fs = WorkspaceMount::new(
+            mounts,
+            test_config(),
+            PermissionEngine::from_rules(Vec::new()),
+        );
+        (backing, fs)
+    }
+
+    /// Populate root + the mount dir and return the inode of
+    /// `<mount>/<rel>`, mirroring the kernel's lookup walk.
+    fn inode_of(fs: &WorkspaceMount, mount: &str, rel: &str) -> u64 {
+        let root = ws_root_ino_for_test();
+        assert!(ws_populate_dir_for_test(fs, root), "root populates");
+        let dir = ws_inode_for_path_for_test(fs, mount).expect("mount dir resolves");
+        assert!(ws_populate_dir_for_test(fs, dir), "mount dir populates");
+        ws_inode_for_path_for_test(fs, &format!("{mount}/{rel}")).expect("file resolves")
+    }
+
+    #[test]
+    fn write_writable_mount_lands_bytes_at_offset() {
+        let (backing, fs) = ws_with_backing("rw-write", true);
+        std::fs::write(backing.path().join("hello.txt"), b"0123456789").unwrap();
+
+        let ino = inode_of(&fs, "rw-write", "hello.txt");
+        let n = ws_write_for_test(&fs, ino, 3, b"XYZ").expect("write must succeed");
+        assert_eq!(n, 3, "write must reply the byte count");
+
+        let on_disk = std::fs::read(backing.path().join("hello.txt")).unwrap();
+        assert_eq!(on_disk, b"012XYZ6789", "bytes land at the requested offset");
+
+        // The inode table's cached size is stale here (write() does not
+        // refresh it in this revision), so assert only the DISK truth above.
+    }
+
+    #[test]
+    fn write_negative_offset_clamps_to_zero() {
+        let (backing, fs) = ws_with_backing("rw-neg", true);
+        std::fs::write(backing.path().join("f.txt"), b"abcdef").unwrap();
+
+        let ino = inode_of(&fs, "rw-neg", "f.txt");
+        let n = ws_write_for_test(&fs, ino, -5, b"XY").expect("write must succeed");
+        assert_eq!(n, 2);
+        assert_eq!(
+            std::fs::read(backing.path().join("f.txt")).unwrap(),
+            b"XYcdef",
+            "a negative offset must clamp to 0, not wrap around"
+        );
+    }
+
+    #[test]
+    fn write_read_only_mount_is_refused_with_eacces() {
+        let (backing, fs) = ws_with_backing("ro-write", false);
+        std::fs::write(backing.path().join("hello.txt"), b"untouched").unwrap();
+
+        let ino = inode_of(&fs, "ro-write", "hello.txt");
+        let err = ws_write_for_test(&fs, ino, 0, b"XYZ").expect_err("must refuse");
+        assert_eq!(err, libc::EACCES, "read-only entries must deny with EACCES");
+        assert_eq!(
+            std::fs::read(backing.path().join("hello.txt")).unwrap(),
+            b"untouched",
+            "a refused write must not touch the backing file"
+        );
+    }
+
+    #[test]
+    fn write_unknown_inode_is_enoent() {
+        let (_backing, fs) = ws_with_backing("rw-enoent", true);
+        assert_eq!(ws_write_for_test(&fs, 9999, 0, b"x"), Err(libc::ENOENT));
+    }
+
+    #[test]
+    fn create_materializes_file_and_registers_inode() {
+        let (backing, fs) = ws_with_backing("rw-create", true);
+        let root = ws_root_ino_for_test();
+        assert!(ws_populate_dir_for_test(&fs, root));
+        let dir = ws_inode_for_path_for_test(&fs, "rw-create").unwrap();
+
+        let ino =
+            ws_create_for_test(&fs, dir, "new-file.txt").expect("create must succeed on writable");
+        assert_ne!(ino, 0);
+
+        let backing_file = backing.path().join("new-file.txt");
+        assert!(backing_file.exists(), "create must materialize the file");
+        assert_eq!(
+            std::fs::read(&backing_file).unwrap(),
+            Vec::<u8>::new(),
+            "a fresh create (no O_TRUNC semantics) starts empty"
+        );
+
+        let info = ws_entry_info_for_test(&fs, ino).expect("new node registered");
+        assert!(info.is_file, "created node must be a File");
+        assert_eq!(info.path, PathBuf::from("rw-create/new-file.txt"));
+        assert_eq!(
+            info.mode, 0o644,
+            "default mode derives from the create flags"
+        );
+        assert_eq!(info.mount_idx, Some(0), "mount_idx inherits the parent's");
+
+        // The new node is visible via the same lookup path the kernel uses.
+        assert_eq!(
+            ws_inode_for_path_for_test(&fs, "rw-create/new-file.txt"),
+            Some(ino),
+            "created node must be visible via lookup"
+        );
+        assert!(
+            ws_child_names_for_test(&fs, dir).contains(&"new-file.txt".to_string()),
+            "created node appears in the parent's listing"
+        );
+    }
+
+    #[test]
+    fn create_read_only_mount_is_refused_with_eacces() {
+        let (backing, fs) = ws_with_backing("ro-create", false);
+        let root = ws_root_ino_for_test();
+        assert!(ws_populate_dir_for_test(&fs, root));
+        let dir = ws_inode_for_path_for_test(&fs, "ro-create").unwrap();
+
+        let err = ws_create_for_test(&fs, dir, "nope.txt").expect_err("must refuse");
+        assert_eq!(err, libc::EACCES);
+        assert!(
+            !backing.path().join("nope.txt").exists(),
+            "a refused create must not materialize the file"
+        );
+    }
+
+    #[test]
+    fn setattr_size_truncates_backing_file() {
+        let (backing, fs) = ws_with_backing("rw-setattr", true);
+        std::fs::write(backing.path().join("big.txt"), b"01234567890123456789").unwrap();
+
+        let ino = inode_of(&fs, "rw-setattr", "big.txt");
+        ws_setattr_size_for_test(&fs, ino, 5).expect("setattr size must succeed");
+
+        let on_disk = std::fs::read(backing.path().join("big.txt")).unwrap();
+        assert_eq!(
+            on_disk, b"01234",
+            "setattr(size) must truncate the backing file"
+        );
+
+        let info = ws_entry_info_for_test(&fs, ino).expect("entry still registered");
+        assert_eq!(info.size, 5, "cached size follows the backing file");
+    }
+
+    #[test]
+    fn setattr_size_extends_backing_file() {
+        let (backing, fs) = ws_with_backing("rw-extend", true);
+        std::fs::write(backing.path().join("g.txt"), b"abc").unwrap();
+
+        let ino = inode_of(&fs, "rw-extend", "g.txt");
+        ws_setattr_size_for_test(&fs, ino, 6).expect("extend must succeed");
+        assert_eq!(
+            std::fs::read(backing.path().join("g.txt")).unwrap(),
+            b"abc\0\0\0",
+            "setattr(size) must extend with zeros like truncate(2)"
+        );
+    }
+
+    #[test]
+    fn setattr_size_read_only_mount_is_refused_with_eacces() {
+        let (backing, fs) = ws_with_backing("ro-setattr", false);
+        std::fs::write(backing.path().join("keep.txt"), b"keepme").unwrap();
+
+        let ino = inode_of(&fs, "ro-setattr", "keep.txt");
+        let err = ws_setattr_size_for_test(&fs, ino, 1).expect_err("must refuse");
+        assert_eq!(err, libc::EACCES);
+        assert_eq!(
+            std::fs::read(backing.path().join("keep.txt")).unwrap(),
+            b"keepme",
+            "refused setattr must not touch the backing file"
         );
     }
 }
