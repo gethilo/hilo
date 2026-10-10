@@ -4,7 +4,9 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use hilo_backends::{EphemeralMatcher, IgnoreMatcher, S3Client, S3Endpoint, SyncEngine};
+use hilo_backends::{
+    EphemeralMatcher, IgnoreMatcher, S3Client, S3Endpoint, SyncDirection, SyncEngine,
+};
 use hilo_core::workspace::WorkspaceManifest;
 use hilo_fuse::permissions::PermissionEngine;
 use hilo_fuse::{daemon, workspace_mount, workspace_mount::WorkspaceMount, FuseConfig};
@@ -136,12 +138,19 @@ pub fn run_workspace_sync(
             client.endpoint.display(),
             region,
         );
+        // DF-WARPFS-126: the direction is ENFORCED, not just labeled —
+        // --push never downloads, --pull never uploads (planner parity).
         let engine = SyncEngine::new(
             client,
             bucket.to_string(),
             prefix.to_string(),
             local_dir.clone(),
             ignore,
+            match direction {
+                SyncDirectionArg::Push => SyncDirection::Push,
+                SyncDirectionArg::Pull => SyncDirection::Pull,
+                SyncDirectionArg::Both => SyncDirection::Both,
+            },
         );
 
         let plan = if dry_run {
@@ -164,12 +173,22 @@ pub fn run_workspace_sync(
             println!("  ↓ {}", ro.rel_path);
         }
         println!(
-            "sync complete: {} uploaded, {} downloaded, {} unchanged, {} ignored local, {} ignored remote",
+            "sync complete: {} uploaded, {} downloaded, {} unchanged, {} ignored local, {} ignored remote{}",
             plan.uploads.len(),
             plan.downloads.len(),
             plan.unchanged,
             plan.ignored_local,
             plan.ignored_remote,
+            if plan.unused_local + plan.unused_remote > 0 {
+                format!(
+                    ", {} skipped by direction ({} local, {} remote)",
+                    plan.unused_local + plan.unused_remote,
+                    plan.unused_local,
+                    plan.unused_remote
+                )
+            } else {
+                String::new()
+            },
         );
         Ok(())
     })

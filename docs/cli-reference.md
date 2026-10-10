@@ -807,13 +807,20 @@ hilo workspace unmount /mnt/hilo
 
 ### `sync`
 
-Two-way sync a local directory against a remote backend prefix (S3 today).
-Non-ignored files are mirrored in both directions (newer side wins); files
-matched by the ignore file stay local-only and are never transferred.
+Sync a local directory against a remote backend prefix (S3 today).
+`--both` (default) mirrors non-ignored files in both directions (newer side
+wins); `--push` uploads only; `--pull` downloads only. The direction is
+enforced on the sync plan, not just labeled: a `--push` run never
+downloads and a `--pull` run never uploads — files that would move the
+other way are skipped and reported (`N skipped by direction`) and stay
+available for a later `--both`/`--push`/`--pull` run. Files matched by
+the ignore file stay local-only and are never transferred.
 See docs/ignore-file.md for the ignore format.
 
 ```bash
 hilo workspace sync --bucket my-bucket --prefix data --at ./ws --dry-run
+hilo workspace sync --bucket my-bucket --prefix data --at ./ws --push   # upload only
+hilo workspace sync --bucket my-bucket --prefix data --at ./ws --pull   # download only
 ```
 
 ### `ephemeral`
