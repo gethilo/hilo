@@ -18,6 +18,7 @@ pub mod impact;
 pub mod parser;
 pub mod provenance;
 pub mod resolution;
+pub mod rollup;
 pub mod rules;
 pub mod semantic;
 pub mod signal;
@@ -80,6 +81,11 @@ pub use semantic::{
 pub use surfaces::{
     append_surfaces_deduped, surface_id, KindCensus, Surface, SurfaceInventory, SurfaceKind,
     SurfaceScope,
+};
+
+pub use rollup::{
+    crate_of, resolve_group, ClassCount, GroupBy, GroupRollup, GroupSource, RollupReport,
+    SourceCount, SurfaceGrouping, CRATE_MANIFESTS,
 };
 
 pub use coverage_links::{

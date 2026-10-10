@@ -85,6 +85,58 @@ pub fn remove_vfs_xattr(path: &Path, name: &str) -> Result<(), MetadataError> {
     xattr::remove(path, &attr).map_err(|e| MetadataError::Xattr(e.to_string()))
 }
 
+/// COV-4: the explicit grouping annotations carried by one file.
+///
+/// The two xattrs are the human's own words for *which feature this file
+/// belongs to* — the first, most-authoritative level of the surface-grouping
+/// precedence (`user.vfs.feature` is coarser than `user.vfs.component`, so
+/// callers should prefer `feature` when both are set).
+///
+/// Both are `Option<String>` because "not annotated" is a real state: the
+/// grouping falls back to the structural boundary (crate, then module path)
+/// rather than inventing a group.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GroupAnnotations {
+    /// `user.vfs.feature`, when set and non-blank.
+    pub feature: Option<String>,
+    /// `user.vfs.component`, when set and non-blank.
+    pub component: Option<String>,
+}
+
+impl GroupAnnotations {
+    /// True when neither annotation is present.
+    pub fn is_empty(&self) -> bool {
+        self.feature.is_none() && self.component.is_none()
+    }
+}
+
+/// Read the COV-4 grouping annotations from `path`'s `user.vfs.*` xattrs.
+///
+/// **Best-effort by design.** A file whose xattrs cannot be read (the
+/// filesystem carries no xattr support, the file vanished, permissions) is
+/// reported as *un-annotated* rather than failing: grouping has a structural
+/// fallback, so an unreadable annotation must degrade to "no explicit group",
+/// never abort a rollup that could still answer with crate/module groups.
+/// The one thing it must never do is invent a group.
+pub fn group_annotations(path: &Path) -> GroupAnnotations {
+    GroupAnnotations {
+        feature: read_annotation(path, "feature"),
+        component: read_annotation(path, "component"),
+    }
+}
+
+/// One annotation, trimmed, with a blank/whitespace-only value treated as
+/// absent (an empty xattr is not a group name).
+fn read_annotation(path: &Path, name: &str) -> Option<String> {
+    let value = get_vfs_xattr(path, name).ok().flatten()?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
 /// Return the platform-specific errno value for "no data / attribute not found".
 ///
 /// On Linux this is `ENODATA` (61). On macOS the xattr crate maps missing
@@ -228,5 +280,61 @@ mod tests {
         set_vfs_xattr(&path, "feature", "temp").unwrap();
         remove_vfs_xattr(&path, "feature").unwrap();
         assert_eq!(get_vfs_xattr(&path, "feature").unwrap(), None);
+    }
+
+    // ── COV-4 grouping annotations ────────────────────────────────────
+
+    #[test]
+    fn group_annotations_reads_feature_and_component() {
+        let (_dir, path) = temp_file();
+        set_vfs_xattr(&path, "user.vfs.feature", "workspace-mount").unwrap();
+        // The prefix is stripped exactly once, and the value is trimmed.
+        set_vfs_xattr(&path, "component", "  fuse  ").unwrap();
+        assert_eq!(
+            group_annotations(&path),
+            GroupAnnotations {
+                feature: Some("workspace-mount".into()),
+                component: Some("fuse".into()),
+            }
+        );
+        assert!(!group_annotations(&path).is_empty());
+    }
+
+    #[test]
+    fn group_annotations_absent_is_unannotated_not_invented() {
+        let (_dir, path) = temp_file();
+        let ann = group_annotations(&path);
+        assert_eq!(ann, GroupAnnotations::default());
+        assert!(ann.is_empty());
+        assert_eq!(ann.feature, None);
+        assert_eq!(ann.component, None);
+    }
+
+    #[test]
+    fn group_annotations_blank_value_is_absent() {
+        let (_dir, path) = temp_file();
+        set_vfs_xattr(&path, "feature", "   ").unwrap();
+        let ann = group_annotations(&path);
+        assert_eq!(ann.feature, None, "a blank xattr is not a group name");
+        assert!(ann.is_empty());
+    }
+
+    #[test]
+    fn group_annotations_missing_file_is_unannotated() {
+        // An unreadable path must degrade to "no explicit group" (the
+        // structural fallback covers it), never error out.
+        let ann = group_annotations(std::path::Path::new("/nonexistent/cov4/file.rs"));
+        assert_eq!(ann, GroupAnnotations::default());
+    }
+
+    #[test]
+    fn group_annotations_reads_exactly_the_two_grouping_keys() {
+        let (_dir, path) = temp_file();
+        set_vfs_xattr(&path, "role", "entrypoint").unwrap();
+        set_vfs_xattr(&path, "component", "backends").unwrap();
+        let ann = group_annotations(&path);
+        assert_eq!(ann.component, Some("backends".into()));
+        // An unrelated user.vfs.* xattr is not a grouping annotation.
+        assert_eq!(ann.feature, None);
     }
 }

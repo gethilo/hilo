@@ -636,6 +636,61 @@ classes named; a class with zero tests reports `0` and still names itself
 (never an absent key). The rule is pinned by a test over a fixture tree that
 holds one test of each class (`hilo-graph/tests/fixtures/test_classes/`).
 
+### `rollup`
+
+Group the COV-1 surfaces into **features/components** and roll coverage and the
+class mix up to that level (COV-4), so "is the workspace-mount feature
+covered?" is one query rather than a per-ask re-derivation.
+
+```bash
+hilo graph surfaces          # COV-1: enumerate the contract surfaces
+hilo graph coverage-links    # COV-2: link tests to surfaces with evidence
+hilo graph rollup            # COV-4: group + roll up (--by feature, the default)
+hilo graph rollup --by crate
+hilo graph rollup --by module --json
+hilo graph rollup --group hilo-cli   # one group's own gap list
+```
+
+A surface's group is chosen by one documented precedence — first match wins:
+
+| # | source | how it is decided |
+|---|--------|-------------------|
+| 1 | `user.vfs.feature` | explicit xattr on the surface's owner file |
+| 2 | `user.vfs.component` | explicit xattr, consulted when no feature is set |
+| 3 | crate boundary | nearest ancestor carrying a project manifest (`Cargo.toml`, `go.mod`, `package.json`, `pyproject.toml`, …) |
+| 4 | module path prefix | the file's module path with the file name and a trailing `src/` dropped (`hilo-cli/src/commands/graph.rs` → `hilo_cli::commands`) |
+
+The **chosen source is recorded on each surface row** (`source`:
+`xattr_feature` | `xattr_component` | `crate` | `module`), so an annotated
+group is always distinguishable from a structural stand-in — it is never
+re-inferred when the report is read.
+
+`--by crate` / `--by module` bias the structural fallback; explicit
+annotations still win in every mode, because precedence (1) is unconditional.
+On a repo with no annotations `--by feature` therefore degrades to the crate
+boundary — the same grouping `--by crate` produces — because in an
+un-annotated tree a crate is the coarsest structural stand-in for a feature.
+
+An un-annotated repo still groups, and the report **states which fallback it
+used** (`fallback_note`, plus the per-source `source_census`), so the report is
+never empty and never silently fabricated.
+
+Each group reports its member surface count, covered/uncovered counts, its
+class mix (per test class, how many members it reaches — all eight classes,
+zeroes included), and its own gap lists. The arithmetic is checked by a test:
+`sum(group.surface_count) == total_surfaces == surfaces.len()` — every surface
+lands in exactly one group, with no double counting and none dropped.
+
+`--group <name>` restricts the report to one group and answers with that
+group's own gap list (its uncovered surfaces and its `class_gap` surfaces); an
+unknown name is a loud error, never a success-shaped empty report.
+
+Requires the COV-1 inventory (`.vfs/graph/surfaces.jsonl`). The COV-2 links
+(`.vfs/graph/coverage_links.jsonl`) supply the coverage counts and the class
+mix — without them every surface reports **uncovered with that absence named**
+in the report, never as a silent zero. Wiring numbers (GAP-113) are omitted
+until that row lands, with the omission stated in `rules`.
+
 ## `hilo classify`
 
 Auto-tag every source file with `user.vfs.role` and `user.vfs.status`

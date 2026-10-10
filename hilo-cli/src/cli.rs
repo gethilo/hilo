@@ -14,8 +14,8 @@ use clap::{Parser, Subcommand};
 
 use crate::commands::plugin::PluginCommand;
 use crate::commands::{
-    backend, classify, coverage_links, graph, ignore, init, meta, mount, plugin, serve, surfaces,
-    test_classes, wiring, workspace,
+    backend, classify, coverage_links, graph, ignore, init, meta, mount, plugin, rollup, serve,
+    surfaces, test_classes, wiring, workspace,
 };
 use crate::sync_direction;
 
@@ -172,13 +172,32 @@ enum GraphCommand {
     /// Requires `.vfs/graph/surfaces.jsonl` (run `hilo graph surfaces`) and
     /// `.vfs/graph/coverage_links.jsonl` (run `hilo graph coverage-links`).
     TestClasses(TestClassesArgs),
+    /// Group surfaces into features/components and roll coverage + class mix
+    /// up to the group level (COV-4), so "is the workspace-mount feature
+    /// covered?" is one query rather than a per-ask re-derivation.
+    ///
+    /// A surface's group is chosen by one documented precedence — explicit
+    /// `user.vfs.feature` / `user.vfs.component` xattr, then the crate
+    /// boundary (nearest project manifest), then the module path prefix — and
+    /// the chosen source is recorded on the surface's own row, so an
+    /// annotated group is always distinguishable from a structural fallback.
+    /// An un-annotated repo still groups (the fallback is stated in the
+    /// output), so the report is never empty.
+    ///
+    /// Requires `.vfs/graph/surfaces.jsonl` (run `hilo graph surfaces`,
+    /// COV-1). `.vfs/graph/coverage_links.jsonl` (COV-2) supplies the
+    /// coverage counts and the class mix; without it every surface reports
+    /// uncovered, with that absence named in the report.
+    ///
+    /// `--group <name>` answers for one group and lists its gaps.
+    Rollup(RollupArgs),
     /// GAP-112/GAP-113: the wiring report. Detects silent-fallback wiring
     /// (interfaces consumed from non-test code whose ONLY satisfiers are
     /// test-role types — the TRBL-084 shape) as `pass` / `finding` /
     /// `unsupported`, and emits the aggregate per-module wiring report:
     /// public surfaces, inbound/outbound connection counts, deltas against a
     /// stored baseline, untested surfaces, and a module classification
-    /// (entrypoint/service/lib/test/dead).
+    /// (entrypoint/service/lib/test/dead). (feat(graph): COV-4 surface grouping + rollup)
     Wiring(WiringArgs),
 }
 
@@ -208,6 +227,29 @@ struct TestClassesArgs {
     /// Print the report as JSON (locked shape) instead of text.
     #[arg(long)]
     json: bool,
+}
+
+#[derive(clap::Args)]
+struct RollupArgs {
+    /// Grouping dimension: `feature` (explicit xattr annotation first, then
+    /// the crate boundary, then the module path prefix — the documented
+    /// precedence), `crate`, or `module`.
+    ///
+    /// Explicit `user.vfs.*` annotations take precedence in every mode; the
+    /// flag biases which structural fallback is used when a surface carries
+    /// none.
+    #[arg(long, default_value = "feature", value_name = "DIMENSION")]
+    by: String,
+
+    /// Print the report as JSON (locked shape) instead of text.
+    #[arg(long)]
+    json: bool,
+
+    /// Restrict the report to one group (by name) and answer with that
+    /// group's own gap list: its uncovered surfaces and its class-gap
+    /// surfaces. An unknown name is a loud error.
+    #[arg(long, value_name = "NAME")]
+    group: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -534,6 +576,9 @@ pub fn run() -> anyhow::Result<()> {
             args.write_baseline.clone(),
         ),
         Commands::Graph(GraphCommand::TestClasses(args)) => test_classes::run(args.json),
+        Commands::Graph(GraphCommand::Rollup(args)) => {
+            rollup::run(args.json, &args.by, args.group.as_deref())
+        }
         Commands::Serve(args) => serve::run(args.mcp),
         Commands::Backend(backend::BackendCommand::Mount(args)) => backend::run_mount(&args),
         Commands::Backend(backend::BackendCommand::List) => backend::run_list(),
