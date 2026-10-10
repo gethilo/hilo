@@ -61,22 +61,28 @@ hilo plugin load ./scanner.wasm  # Plugin loader (same binary)
 
 ### 3.1 Key Crates
 
+Versions are the requirement declared in the crate `Cargo.toml` files, resolved
+in the pinned `Cargo.lock` (`cargo tree` shows the resolved graph).
+
 | Crate | Version | Role |
 |---|---|---|
 | `fuser` | 0.15.1 | FUSE daemon — requires libfuse3 at runtime (see README Requirements) |
 | `petgraph` | 0.6.5 | **Transitive-only — NOT a direct workspace dependency**: no workspace `Cargo.toml` declares it, no crate uses it, and `wasm-compose` pulls it into `Cargo.lock`. Graph traversal is implemented internally (§9.2) |
-| `tree-sitter` | latest | AST parsing — official Rust bindings, zero-copy |
-| `xattr` | latest | Extended attributes — pure Rust |
-| `inotify` | latest | File event watching — idiomatic kernel wrapper |
-| `duckdb` | 0.10+ | Analytical query engine — official DuckDB bindings |
+| `tree-sitter` | 0.25 | AST parsing — official Rust bindings, zero-copy |
+| `xattr` | 1.x | Extended attributes — pure Rust |
+| `inotify` | 0.10 | File event watching — idiomatic kernel wrapper |
+| `duckdb` | 1.1 | Analytical query engine — official DuckDB bindings (`bundled`) |
 | `tokio` | 1.x | Async runtime for concurrent FUSE request handling |
 | `rayon` | 1.x | Parallel graph traversal |
-| `extism` | latest | Wasm plugin runtime — sandboxed, multi-language PDK |
+| `extism` | 1.x | Wasm plugin runtime — sandboxed, multi-language PDK |
 | `uniffi` | 0.28+ | FFI bindings generator — Go, Python, Kotlin, Swift |
 | `clap` | 4.x | CLI argument parsing |
 | `serde` | 1.x | Serialization (manifest, JSONL, MCP responses) |
-| `git2` | latest | Git backend operations |
-| `aws-sdk` | 1.x | S3 backend operations |
+| `git2` | 0.19 | Git backend operations |
+| `aws-sdk-s3` | 1.x | S3 backend operations (`aws-config` supplies credentials/region) |
+
+MCP is implemented in `hilo-mcp` as hand-written JSON-RPC over stdio — there is
+no `rmcp` (or any other MCP framework) dependency.
 
 ### 3.2 Extensibility Surfaces
 
