@@ -2094,3 +2094,23 @@ tasks:
   status: complete
   created_at: '2026-10-10T16:23:11.802956+00:00'
   completed_at: '2026-10-10T16:37:52.382697+00:00'
+- id: DF-WARPFS-138
+  title: 'workspace mount: implement write/create/setattr write-through for writable:true
+    mounts'
+  criteria:
+  - 'hilo-fuse/src/workspace_mount.rs implements write-through: write() resolves the
+    inode to its real backing path and calls FileExt::write_at after the permission
+    + writable checks (grep -q ''write_at'' hilo-fuse/src/workspace_mount.rs), and
+    the function no longer ends in an unconditional reply.error(EACCES)'
+  - both fn create and fn setattr are implemented in hilo-fuse/src/workspace_mount.rs
+    (grep -E 'fn (create|setattr)' matches two functions)
+  - cargo test -p hilo_fuse exits 0 and includes new tests proving a write into a
+    writable:true mount lands the expected bytes on the backing file, a write into
+    a writable:false mount is refused with EACCES, create() materializes the file
+    on the backing path, and setattr() with size truncates the backing file
+  - cargo clippy -p hilo_fuse --all-targets -- -D warnings exits 0, and the pre-existing
+    tests all_read_only_keeps_ro_option and any_writable_mount_drops_ro_option still
+    pass unchanged
+  status: complete
+  created_at: '2026-10-10T17:46:04.001251+00:00'
+  completed_at: '2026-10-10T18:48:14.298537+00:00'
