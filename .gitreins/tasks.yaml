@@ -2029,3 +2029,18 @@ tasks:
   status: complete
   created_at: '2026-10-08T06:13:58.681579+00:00'
   completed_at: '2026-10-08T07:04:05.268817+00:00'
+- id: DOCS-GAP-007
+  title: "Fix spec \xA717 Agent Experience xattr drift"
+  criteria:
+  - "spec \xA717 documents only real xattrs or implements missing writers"
+  status: complete
+  created_at: '2026-10-10T01:21:48.670724+00:00'
+  completed_at: '2026-10-10T01:24:51.985611+00:00'
+- id: DOCS-GAP-004
+  title: "Fix spec \xA713/\xA74 backend drift"
+  criteria:
+  - "spec \xA713 lists only implemented mount types (s3|gdrive|onedrive|dropbox|external);\
+    \ git/local marked not-implemented"
+  status: complete
+  created_at: '2026-10-10T01:22:40.527357+00:00'
+  completed_at: '2026-10-10T01:30:49.223712+00:00'
