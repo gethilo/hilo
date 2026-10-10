@@ -259,7 +259,7 @@ impl BackendRegistry {
 
 | Tool | list | get | put | delete | stat |
 |---|---|---|---|---|---|
-| `rclone` | `rclone lsf --json {remote}:{path}/{prefix}` | `rclone copyto {remote}:{path}/{key} {dest}` | `rclone copyto {local} {remote}:{path}/{key}` | `rclone deletefile {remote}:{path}/{key}` | `rclone lsl {remote}:{path}/{key}` |
+| `rclone` | `rclone lsjson {remote}:{path}/{prefix}` | `rclone copyto {remote}:{path}/{key} {dest}` | `rclone copyto {local} {remote}:{path}/{key}` | `rclone deletefile {remote}:{path}/{key}` | `rclone lsl {remote}:{path}/{key}` |
 | `s3sync` | `s3sync list {bucket}/{prefix}` | `s3sync pull {bucket}/{key} {dest}` | `s3sync push {local} {bucket}/{key}` | `s3sync rm {bucket}/{key}` | `s3sync stat {bucket}/{key}` |
 | `gdrive` | `gdrive files list --query "'{folder}' in parents"` | `gdrive files download {id} --dest {dest}` | `gdrive files upload {local} --parent {folder}` | `gdrive files delete {id}` | `gdrive files info {id}` |
 
@@ -478,7 +478,7 @@ Source of truth for the deliverable doc; the implementer copies this table into 
 
 **Ephemeral (hilo-core):** built-in catalog classifies `target/`, `node_modules/` as Ephemeral and `src/` as Persistent; `.hiloephemeral` adds/removes; xattr `Some(true)` overrides pattern-negative; `Some(false)` protects from wipe; `.git/` and `manifest.yaml` never Ephemeral; `scan` sizes sum correctly (fixture tree with known byte counts).
 
-**Backend trait (hilo-backends):** `MockBackend` (HashMap in-memory) + `LocalDriver` reference impl pass an identical contract test suite (list/stat/get/put/delete/walk round-trips). `ExternalToolDriver` unit tests use a fake `rclone` bash shim on PATH (captures argv, returns canned `lsf --json`) — assert exact command construction for list/get/put/delete/stat. S3 native: live integration test gated on `AWS_ACCESS_KEY_ID` presence (skip otherwise).
+**Backend trait (hilo-backends):** `MockBackend` (HashMap in-memory) + `LocalDriver` reference impl pass an identical contract test suite (list/stat/get/put/delete/walk round-trips). `ExternalToolDriver` unit tests use a fake `rclone` bash shim on PATH (captures argv, returns canned `lsjson`) — assert exact command construction for list/get/put/delete/stat. S3 native: live integration test gated on `AWS_ACCESS_KEY_ID` presence (skip otherwise).
 
 **Sync engine (hilo-core):** plan excludes ignored + ephemeral (counts in `skipped_*`); push transfers new/changed only; delete propagation when local gone + not ignored; pull never deletes local; LWW: remote-newer → remote wins, local-newer → local wins, equal → direction default; conflicts.jsonl appended per resolution; partial failure stops with `TransferFailed(key)` and idempotent re-run completes.
 
