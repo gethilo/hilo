@@ -1,0 +1,27 @@
+{
+  "tick": "warpfs-foreman-2026-10-10-06-20-27",
+  "budget": 2,
+  "dispatched": [
+    {
+      "id": "DF-WARPFS-128",
+      "title": "P0: workspace manifest ref:<branch> never mounts (worktree.rs branch-ref resolution)",
+      "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-128",
+      "branch": "wt/DF-WARPFS-128",
+      "base": "origin/master",
+      "base_sha": "7829bb21",
+      "worker_log": "/tmp/warpfs-worker-DF-WARPFS-128.log",
+      "status": "dispatched"
+    },
+    {
+      "id": "DF-WARPFS-121",
+      "title": "P0: backend sync dies on rclone 'unknown flag: --json' (lsf has no --json)",
+      "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-121",
+      "branch": "wt/DF-WARPFS-121",
+      "base": "origin/master",
+      "base_sha": "7829bb21",
+      "worker_log": "/tmp/warpfs-worker-DF-WARPFS-121.log",
+      "status": "dispatched"
+    }
+  ],
+  "serial_merge_order": ["DF-WARPFS-128", "DF-WARPFS-121"]
+}

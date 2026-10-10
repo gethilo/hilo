@@ -372,7 +372,7 @@ fn parse_rfc3339_offset(time: &str) -> (&str, i64) {
     if let Some(t) = time.strip_suffix('Z').or_else(|| time.strip_suffix('z')) {
         return (t, 0);
     }
-    match time.rfind(|c| c == '+' || c == '-') {
+    match time.rfind(['+', '-']) {
         Some(0) | None => (time, 0),
         Some(i) => {
             let (t, zone) = time.split_at(i);

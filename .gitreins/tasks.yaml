@@ -2044,3 +2044,27 @@ tasks:
   status: complete
   created_at: '2026-10-10T01:22:40.527357+00:00'
   completed_at: '2026-10-10T01:30:49.223712+00:00'
+- id: DF-WARPFS-115
+  title: 'mount: validate mount point before printing success banner'
+  criteria:
+  - hilo mount on a nonexistent mount point exits non-zero with a message naming the
+    missing path; the success banner never prints on a failed mount; a valid mount
+    still works
+  status: complete
+  created_at: '2026-10-10T02:31:04.673149+00:00'
+  completed_at: '2026-10-10T02:39:42.629661+00:00'
+- id: DF-WARPFS-128
+  title: workspace manifest ref:<branch> never mounts (worktree.rs branch-ref resolution)
+  criteria:
+  - Branch refs (not just tags/HEAD) resolve and mount on fresh clone; failed clone
+    leaves no empty worktree dir; guard green
+  status: complete
+  created_at: '2026-10-10T06:25:19.583845+00:00'
+  completed_at: '2026-10-10T07:07:09.101986+00:00'
+- id: DF-WARPFS-121
+  title: 'backend sync dies on rclone ''unknown flag: --json'''
+  criteria:
+  - rclone listing uses a supported machine-readable form; parse covered by tests;
+    no lsf --json remains; guard green
+  status: in_progress
+  created_at: '2026-10-10T06:25:20.128032+00:00'
