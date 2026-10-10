@@ -15,9 +15,11 @@
 //!
 //! - LWW: remote `modified` vs local mtime (unix seconds). Remote newer →
 //!   remote wins (pull). Local newer → local wins (push). Equal mtimes →
-//!   remote wins on `Pull`, local wins on `Push`. On `Both`, equal mtimes
-//!   transfer nothing (prevents the push/pull ping-pong when both sides are
-//!   aligned); this is the documented `Both` tie-break.
+//!   NO-OP in every direction: because every transfer aligns the local
+//!   mtime to the remote `modified`, equal mtimes mean neither side changed
+//!   since the last sync, and transferring them re-logged a LWW conflict
+//!   per file on every repeat run (DF-WARPFS-69). This is a documented
+//!   deviation from the spec §7 per-direction tie-break.
 //! - A direction-blocked resolution (e.g. remote-newer file during a
 //!   `Push`-only run) produces no transfer item; it resolves on the next
 //!   two-way run.
@@ -220,27 +222,26 @@ pub fn plan_sync(
                         plan.to_transfer.push(item);
                     }
                     // Pull-only: local newer is direction-blocked.
-                } else if remote_mtime > local_mtime {
-                    if matches!(direction, SyncDirection::Pull | SyncDirection::Both) {
-                        let pull_item = TransferItem {
-                            direction: SyncDirection::Pull,
-                            ..item
-                        };
-                        plan.to_transfer.push(pull_item);
-                    }
-                    // Push-only: remote newer is direction-blocked.
-                } else if matches!(direction, SyncDirection::Push) {
-                    // Equal: local wins on Push (spec §7 tie-break).
-                    plan.to_transfer.push(item);
-                } else if matches!(direction, SyncDirection::Pull) {
-                    // Equal: remote wins on Pull (spec §7 tie-break).
+                } else if remote_mtime > local_mtime
+                    && matches!(direction, SyncDirection::Pull | SyncDirection::Both)
+                {
                     let pull_item = TransferItem {
                         direction: SyncDirection::Pull,
                         ..item
                     };
                     plan.to_transfer.push(pull_item);
+                    // Push-only: remote newer is direction-blocked.
                 }
-                // Both + equal: no transfer (documented no-ping-pong tie-break).
+                // Equal mtimes (any direction): no transfer. This is a
+                // documented deviation from the spec §7 per-direction
+                // tie-break ("Equal: local wins on Push / remote wins on
+                // Pull"). Because every transfer aligns the local mtime to
+                // the remote `modified`, equal mtimes are the steady state
+                // after a first sync — transferring them re-resolves the
+                // full set and re-logs a LWW conflict per file on EVERY
+                // repeat run (DF-WARPFS-69). The post-transfer alignment
+                // means the equal case carries no information: neither side
+                // changed since the last sync.
             }
         }
     }
@@ -806,15 +807,15 @@ mod tests {
             "Both + equal transfers nothing (no ping-pong)"
         );
 
-        // Push-only: local-newer pushes, equal pushes (local wins), remote-newer blocked.
+        // Push-only: local-newer pushes; equal and remote-newer are no-ops/blocked.
         let push = plan_sync(&backend, root, &empty_ignore(), &eph, SyncDirection::Push).unwrap();
         let push_keys: Vec<&str> = push.to_transfer.iter().map(|i| i.key.as_str()).collect();
-        assert_eq!(push_keys, vec!["equal.txt", "local_newer.txt"]);
+        assert_eq!(push_keys, vec!["local_newer.txt"]);
 
-        // Pull-only: remote-newer pulls, equal pulls (remote wins), local-newer blocked.
+        // Pull-only: remote-newer pulls; equal and local-newer are no-ops/blocked.
         let pull = plan_sync(&backend, root, &empty_ignore(), &eph, SyncDirection::Pull).unwrap();
         let pull_keys: Vec<&str> = pull.to_transfer.iter().map(|i| i.key.as_str()).collect();
-        assert_eq!(pull_keys, vec!["equal.txt", "remote_newer.txt"]);
+        assert_eq!(pull_keys, vec!["remote_newer.txt"]);
     }
 
     #[test]
@@ -894,6 +895,81 @@ mod tests {
         )
         .unwrap();
         assert!(plan2.to_transfer.is_empty(), "aligned state is a no-op");
+    }
+
+    /// DF-WARPFS-69 regression: a repeat sync over an aligned (equal-mtime)
+    /// set must plan ZERO transfers and record ZERO new conflicts, in every
+    /// direction. Before the fix, `Pull`/`Push` runs re-transferred the whole
+    /// equal set (per-direction tie-break) and appended a LWW conflict row
+    /// per file on every run.
+    #[test]
+    fn repeat_sync_on_aligned_set_is_a_full_no_op() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write_file(root, "a.txt", b"same", 2000);
+        write_file(root, "b.txt", b"same", 2000);
+        let backend = MockBackend::new();
+        backend.seed("a.txt", b"same", 2000);
+        backend.seed("b.txt", b"same", 2000);
+        let eph = empty_ephemeral(root);
+
+        for direction in [
+            SyncDirection::Push,
+            SyncDirection::Pull,
+            SyncDirection::Both,
+        ] {
+            let plan = plan_sync(&backend, root, &empty_ignore(), &eph, direction).unwrap();
+            assert!(
+                plan.to_transfer.is_empty(),
+                "{direction:?}: aligned set must plan no transfers"
+            );
+            assert!(plan.to_delete.is_empty());
+            let conflicts_before = root.join(".vfs/sync/conflicts.jsonl");
+            let n_before = if conflicts_before.exists() {
+                read_plain(&conflicts_before).lines().count()
+            } else {
+                0
+            };
+            let stats = execute_sync(&plan, &backend, root).unwrap();
+            assert_eq!(stats.transferred, 0, "{direction:?}: zero transfers");
+            assert!(stats.conflicts.is_empty(), "{direction:?}: zero conflicts");
+            let n_after = if conflicts_before.exists() {
+                read_plain(&conflicts_before).lines().count()
+            } else {
+                0
+            };
+            assert_eq!(
+                n_before, n_after,
+                "{direction:?}: conflicts.jsonl unchanged"
+            );
+        }
+    }
+
+    // A genuinely changed file (mtime differs) still transfers and logs
+    // exactly one conflict row per changed file per sync.
+    #[test]
+    fn changed_file_still_transfers_and_logs_one_conflict() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write_file(root, "changed.txt", b"local-old", 1000);
+        let backend = MockBackend::new();
+        backend.seed("changed.txt", b"remote-new", 5000);
+        let eph = empty_ephemeral(root);
+
+        let plan = plan_sync(&backend, root, &empty_ignore(), &eph, SyncDirection::Pull).unwrap();
+        assert_eq!(plan.to_transfer.len(), 1);
+        let stats = execute_sync(&plan, &backend, root).unwrap();
+        assert_eq!(stats.transferred, 1);
+        assert_eq!(stats.conflicts.len(), 1);
+
+        // Second pull: mtime aligned to 5000 -> full no-op (AC1 shape).
+        let plan2 = plan_sync(&backend, root, &empty_ignore(), &eph, SyncDirection::Pull).unwrap();
+        assert!(plan2.to_transfer.is_empty());
+        let conflicts_path = root.join(".vfs/sync/conflicts.jsonl");
+        let lines = read_plain(&conflicts_path).lines().count();
+        let stats2 = execute_sync(&plan2, &backend, root).unwrap();
+        assert_eq!(stats2.transferred, 0);
+        assert_eq!(read_plain(&conflicts_path).lines().count(), lines);
     }
 
     #[test]
