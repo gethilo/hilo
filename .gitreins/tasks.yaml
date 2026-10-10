@@ -2066,5 +2066,6 @@ tasks:
   criteria:
   - rclone listing uses a supported machine-readable form; parse covered by tests;
     no lsf --json remains; guard green
-  status: in_progress
+  status: complete
   created_at: '2026-10-10T06:25:20.128032+00:00'
+  completed_at: '2026-10-10T07:20:33.429099+00:00'
