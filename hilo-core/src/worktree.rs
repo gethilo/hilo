@@ -5,7 +5,7 @@
 //! worktree is a full clone (not a linked worktree) living in its own
 //! directory under the manager's base directory.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use thiserror::Error;
@@ -68,10 +68,22 @@ impl WorktreeManager {
             self.checkout_ref(&repo, ref_name)?;
             Ok(worktree_path)
         } else {
-            // Fresh clone.
+            // Fresh clone. A plain clone only materializes the remote's
+            // default branch, so a manifest `ref` that names any OTHER branch
+            // (e.g. `main` against a repo whose default is `master`) has no
+            // local ref, and `checkout_ref` falls through to the tags arm and
+            // dies. Fetch every branch (mirroring the already-cloned path) so
+            // the requested ref resolves against fetched refs.
             std::fs::create_dir_all(&worktree_path)?;
-            let repo = git2::Repository::clone(url, &worktree_path)?;
-            self.checkout_ref(&repo, ref_name)?;
+            let result = self.clone_and_checkout(url, &worktree_path, ref_name);
+            if let Err(err) = result {
+                // A failed clone/checkout must not leave an empty (or
+                // half-cloned) directory behind: remove it so a subsequent
+                // mount retries from scratch instead of wedging on a dir with
+                // no `.git`. Cleanup is best-effort; the original error wins.
+                let _ = std::fs::remove_dir_all(&worktree_path);
+                return Err(err);
+            }
             Ok(worktree_path)
         }
     }
@@ -161,6 +173,24 @@ impl WorktreeManager {
 
     // ── Private helpers ────────────────────────────────────────────────
 
+    /// Clone `url` into `worktree_path` and checkout `ref_name`.
+    ///
+    /// The clone is followed by a full branch fetch (`fetch_origin`) before
+    /// checkout: a plain `git2::Repository::clone` only materializes the
+    /// remote's default branch, so resolving a non-default branch ref requires
+    /// fetching the branch set first.
+    fn clone_and_checkout(
+        &self,
+        url: &str,
+        worktree_path: &Path,
+        ref_name: &str,
+    ) -> Result<(), WorktreeError> {
+        let repo = git2::Repository::clone(url, worktree_path)?;
+        self.fetch_origin(&repo)?;
+        self.checkout_ref(&repo, ref_name)?;
+        Ok(())
+    }
+
     /// Fetch all branches from the configured `origin` remote.
     fn fetch_origin(&self, repo: &git2::Repository) -> Result<(), WorktreeError> {
         let mut remote = repo.find_remote("origin")?;
@@ -241,6 +271,42 @@ mod tests {
         std::fs::write(work.join("README.md"), "# test\n").unwrap();
         git_cmd(&["-C", work.to_str().unwrap(), "add", "README.md"]);
         git_cmd(&["-C", work.to_str().unwrap(), "commit", "-m", "initial"]);
+        git_cmd(&["-C", work.to_str().unwrap(), "push", "origin", "main"]);
+
+        (dir, url)
+    }
+
+    /// Create a bare Git repo whose default branch is `master` AND which also
+    /// carries a separate `main` branch. This reproduces the DF-WARPFS-128
+    /// fixture: a manifest `ref: main` against a repo whose clone-default is
+    /// `master` must still resolve `main`. Returns the temp dir and the
+    /// `file://` URL.
+    fn init_bare_repo_master_with_main() -> (TempDir, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let repo_path = dir.path().join("test-repo.git");
+        std::fs::create_dir_all(&repo_path).unwrap();
+
+        // Default branch is `master` (the `-b master` flag overrides the
+        // `init.defaultBranch=main` injected by `git_cmd`).
+        git_cmd(&[
+            "init",
+            "--bare",
+            "-b",
+            "master",
+            repo_path.to_str().unwrap(),
+        ]);
+
+        let work = dir.path().join("work");
+        let url = format!("file://{}", repo_path.display());
+        git_cmd(&["clone", &url, work.to_str().unwrap()]);
+
+        std::fs::write(work.join("README.md"), "# test\n").unwrap();
+        git_cmd(&["-C", work.to_str().unwrap(), "add", "README.md"]);
+        git_cmd(&["-C", work.to_str().unwrap(), "commit", "-m", "initial"]);
+        git_cmd(&["-C", work.to_str().unwrap(), "push", "origin", "master"]);
+
+        // A `main` branch that is NOT the remote default.
+        git_cmd(&["-C", work.to_str().unwrap(), "checkout", "-b", "main"]);
         git_cmd(&["-C", work.to_str().unwrap(), "push", "origin", "main"]);
 
         (dir, url)
@@ -387,5 +453,41 @@ mod tests {
         let mgr = WorktreeManager::with_base_dir(tmp.path().to_path_buf()).unwrap();
         let path = mgr.ensure("tag-repo", &url, "v1.0").unwrap();
         assert!(path.join("file.txt").exists());
+    }
+
+    // TEST 11: Fresh clone resolves a non-default branch ref (DF-WARPFS-128).
+    //
+    // The remote's default branch is `master`; the manifest requests `main`.
+    // A plain clone only materializes `master`, so the old code fell through
+    // to the tags arm and died with `revspec 'refs/tags/main' not found`.
+    #[test]
+    fn test_ensure_resolves_non_default_branch_on_fresh_clone() {
+        let (_dir, url) = init_bare_repo_master_with_main();
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = WorktreeManager::with_base_dir(tmp.path().to_path_buf()).unwrap();
+        let path = mgr.ensure("repo-a", &url, "main").unwrap();
+        assert!(path.join("README.md").exists());
+        // HEAD must track the requested branch, not the clone default.
+        let repo = git2::Repository::open(&path).unwrap();
+        assert_eq!(repo.head().unwrap().shorthand().unwrap(), "main");
+    }
+
+    // TEST 12: A failed fresh clone leaves no worktree directory behind.
+    //
+    // DF-WARPFS-128 hardening: `ensure` must not leave an empty (or
+    // half-cloned) directory when the clone fails, so a later mount retries
+    // from scratch instead of wedging on a dir with no `.git`.
+    #[test]
+    fn test_ensure_failed_clone_leaves_no_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = WorktreeManager::with_base_dir(tmp.path().to_path_buf()).unwrap();
+        // A `file://` URL to a path that is not a Git repo makes the clone
+        // fail deterministically (no network involved).
+        let url = format!("file://{}", tmp.path().join("not-a-repo").display());
+        let err = mgr.ensure("bad-repo", &url, "main").unwrap_err();
+        assert!(
+            !tmp.path().join("bad-repo").exists(),
+            "worktree dir left behind after failed clone: {err}"
+        );
     }
 }
