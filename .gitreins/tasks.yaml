@@ -2086,3 +2086,11 @@ tasks:
   status: complete
   created_at: '2026-10-10T15:29:18.908151+00:00'
   completed_at: '2026-10-10T15:57:55.297582+00:00'
+- id: GAP-118
+  title: Re-evaluate Wave 11 retrieval/flow/context/impact fixes
+  criteria:
+  - Verify GAP-098/101/116/117 fixes work end-to-end; produce HTML report with evidence
+    at /tmp/wave11-outputs/gap-118-report.html
+  status: complete
+  created_at: '2026-10-10T16:23:11.802956+00:00'
+  completed_at: '2026-10-10T16:37:52.382697+00:00'
