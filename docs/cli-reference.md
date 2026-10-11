@@ -913,8 +913,18 @@ Manage multi-repo workspace mounts.
 Mount all repos and backends from the manifest.
 
 ```bash
+# Foreground: blocks the terminal until unmounted
 hilo workspace mount /mnt/hilo
+
+# Background: detach into a daemon process and return immediately
+hilo workspace mount --daemon /mnt/hilo
 ```
+
+`hilo workspace mount` runs in the foreground and blocks the terminal until
+unmounted (DF-WARPFS-130). Run it in a separate terminal, background it with
+`&`, or pass `--daemon` to detach it into a background process: the parent
+returns immediately and the mount stays alive until
+`hilo workspace unmount /mnt/hilo` tears it down.
 
 Each repo's `ref` is resolved on a fresh clone by trying, in order: the
 ref as given, as a branch (`refs/heads/<ref>`), then as a tag

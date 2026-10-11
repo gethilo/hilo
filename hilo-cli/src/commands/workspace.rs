@@ -2,6 +2,7 @@
 //! S3 two-way sync + ephemeral classification.
 
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result};
 use hilo_backends::{
@@ -11,10 +12,32 @@ use hilo_core::workspace::WorkspaceManifest;
 use hilo_fuse::permissions::PermissionEngine;
 use hilo_fuse::{daemon, workspace_mount, workspace_mount::WorkspaceMount, FuseConfig};
 
+use super::mount::DAEMON_CHILD_ENV;
 use crate::SyncDirectionArg;
 
 /// Mount all repos and backends declared in the manifest.
-pub fn run_workspace_mount(manifest_path: &str, mount_point: &str) -> Result<()> {
+///
+/// When `--daemon` is set, the workspace mount runs in a detached background
+/// process (mirroring `hilo mount --daemon`, DF-WARPFS-130): the current
+/// process re-executes itself with `HILO_MOUNT_DAEMONIZED=1`, `setsid()`s
+/// the child, redirects its stdio to `/dev/null`, and returns immediately.
+/// The child performs the actual `workspace_mount::mount` and keeps serving
+/// until `hilo workspace unmount` tears it down.
+pub fn run_workspace_mount(manifest_path: &str, mount_point: &str, daemon: bool) -> Result<()> {
+    // Foreground parent of a `--daemon` mount: spawn the detached child and
+    // return. The child (see DAEMON_CHILD_ENV) skips this branch.
+    if daemon && std::env::var_os(DAEMON_CHILD_ENV).is_none() {
+        let mut cmd = build_workspace_daemon_command(manifest_path, mount_point)?;
+        let child = cmd
+            .spawn()
+            .context("failed to spawn background workspace mount")?;
+        println!(
+            "Hilo workspace mount daemonized (pid {}) — filesystem available at {mount_point}",
+            child.id()
+        );
+        return Ok(());
+    }
+
     let manifest =
         WorkspaceManifest::load(manifest_path).context("failed to load workspace manifest")?;
     let errors = manifest.validate();
@@ -63,6 +86,40 @@ pub fn run_workspace_mount(manifest_path: &str, mount_point: &str) -> Result<()>
     println!("Hilo workspace mounted at {}", mount_point);
     workspace_mount::mount(fs, &config).context("workspace FUSE mount failed")?;
     Ok(())
+}
+
+/// Build the detached child command for `hilo workspace mount --daemon`.
+///
+/// Re-executes the current binary as `hilo workspace mount --manifest
+/// <manifest> <mount_point> --daemon` with `HILO_MOUNT_DAEMONIZED=1`, makes
+/// the child a session leader (`setsid`) and detaches its stdio so the parent
+/// can return immediately. Mirrors `mount::build_daemon_command`
+/// (DF-WARPFS-130).
+pub fn build_workspace_daemon_command(manifest_path: &str, mount_point: &str) -> Result<Command> {
+    let exe = std::env::current_exe().context("failed to locate the hilo binary")?;
+    let mut cmd = Command::new(exe);
+    cmd.arg("workspace").arg("mount");
+    cmd.arg("--manifest").arg(manifest_path);
+    cmd.arg(mount_point);
+    cmd.arg("--daemon");
+    cmd.env(DAEMON_CHILD_ENV, "1");
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // Safety: setsid() is async-signal-safe and does not allocate.
+        unsafe {
+            cmd.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+    Ok(cmd)
 }
 
 /// Unmount a workspace at the given mount point.
@@ -264,4 +321,54 @@ pub fn run_workspace_wipe(apply: bool) -> Result<()> {
         println!("skipped {protected} wipe-protected file(s) (user.vfs.ephemeral=false)");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsString;
+
+    // ───────── DF-WARPFS-130: workspace mount --daemon command shape ─────────
+
+    #[test]
+    fn test_build_workspace_daemon_command_args() {
+        let cmd = build_workspace_daemon_command(".vfs/manifest.yaml", "/mnt/hilo").unwrap();
+        let args: Vec<OsString> = cmd.get_args().map(OsString::from).collect();
+        assert_eq!(
+            args,
+            vec![
+                OsString::from("workspace"),
+                OsString::from("mount"),
+                OsString::from("--manifest"),
+                OsString::from(".vfs/manifest.yaml"),
+                OsString::from("/mnt/hilo"),
+                OsString::from("--daemon"),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_build_workspace_daemon_command_sets_marker_env() {
+        let cmd = build_workspace_daemon_command(".vfs/manifest.yaml", "/mnt/hilo").unwrap();
+        let envs: Vec<(OsString, Option<OsString>)> = cmd
+            .get_envs()
+            .map(|(k, v)| (k.to_os_string(), v.map(OsString::from)))
+            .collect();
+        assert!(
+            envs.contains(&(
+                OsString::from("HILO_MOUNT_DAEMONIZED"),
+                Some(OsString::from("1"))
+            )),
+            "daemon child marker env must be set: {envs:?}"
+        );
+    }
+
+    #[test]
+    fn test_build_workspace_daemon_command_program_is_current_exe() {
+        let cmd = build_workspace_daemon_command(".vfs/manifest.yaml", "/mnt/hilo").unwrap();
+        assert_eq!(
+            cmd.get_program(),
+            std::env::current_exe().expect("current exe resolves")
+        );
+    }
 }

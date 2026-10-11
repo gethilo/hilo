@@ -15,7 +15,10 @@ use hilo_triggers::{GraphDbSource, SyncHook, SyncHookConfig, TriggerConfig, Trig
 
 /// Environment variable set on the re-executed child of a `--daemon` mount.
 /// Lets the child run the normal blocking mount path without re-daemonizing.
-const DAEMON_CHILD_ENV: &str = "HILO_MOUNT_DAEMONIZED";
+///
+/// Shared with `workspace mount --daemon` (DF-WARPFS-130): one canonical
+/// marker so the child branch skips re-daemonizing on both mount paths.
+pub(crate) const DAEMON_CHILD_ENV: &str = "HILO_MOUNT_DAEMONIZED";
 
 /// Mount a Hilo read-only FUSE filesystem.
 ///
