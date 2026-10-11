@@ -457,6 +457,9 @@ struct WorkspaceMountArgs {
     manifest: String,
     /// Directory to mount the workspace at.
     mount_point: String,
+    /// Run in the background: detach from the terminal and return immediately.
+    #[arg(long)]
+    daemon: bool,
 }
 
 #[derive(clap::Args)]
@@ -609,7 +612,7 @@ pub fn run() -> anyhow::Result<()> {
             args.daemon,
         ),
         Commands::Workspace(WorkspaceCommand::Mount(args)) => {
-            workspace::run_workspace_mount(&args.manifest, &args.mount_point)
+            workspace::run_workspace_mount(&args.manifest, &args.mount_point, args.daemon)
         }
         Commands::Workspace(WorkspaceCommand::Unmount(args)) => {
             workspace::run_workspace_unmount(&args.mount_point)
