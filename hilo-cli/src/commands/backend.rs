@@ -86,6 +86,9 @@ pub struct SyncArgs {
     /// Two-way sync (default)
     #[arg(long, conflicts_with_all = ["push", "pull"])]
     pub both: bool,
+    /// Sync only the named mounted backend (default: all mounted backends)
+    #[arg(long, value_name = "NAME")]
+    pub backend: Option<String>,
     /// Limit the sync to one or more subtrees
     #[arg(value_name = "PATH")]
     pub paths: Vec<PathBuf>,
@@ -257,6 +260,20 @@ pub fn run_sync(args: &SyncArgs) -> Result<()> {
         eprintln!("hint: run 'hilo backend mount' first to register a backend");
         std::process::exit(2);
     }
+    // DF-WARPFS-122: optional per-backend selector so one broken/unreachable
+    // mount does not poison a run that only meant to sync a healthy one.
+    let names: Vec<String> = if let Some(selector) = &args.backend {
+        if !names.contains(selector) {
+            eprintln!(
+                "error: backend '{selector}' is not mounted (mounted: {})",
+                names.join(", ")
+            );
+            std::process::exit(2);
+        }
+        vec![selector.clone()]
+    } else {
+        names
+    };
 
     // Per-mount configs (ignore file, poll, defaults) come from mounts.yaml;
     // the registry holds the constructed drivers.

@@ -3185,6 +3185,77 @@ fn backend_sync_local_pushes_pulls_and_filters() {
 }
 
 #[test]
+fn backend_sync_selector_targets_one_mount_and_rejects_unknown() {
+    // DF-WARPFS-122: --backend <NAME> syncs only the named mount, so one
+    // broken/unreachable mount does not poison a run meant for a healthy one;
+    // an unknown name is a loud exit 2 naming the mounted set.
+    let dir = unique_tempdir("backend-sync-selector");
+    let workspace = dir.join("workspace");
+    let backend_a = dir.join("backend-a");
+    let backend_b = dir.join("backend-b");
+    fs::create_dir_all(&workspace).expect("failed to create workspace");
+    fs::create_dir_all(&backend_a).expect("failed to create backend-a");
+    fs::create_dir_all(&backend_b).expect("failed to create backend-b");
+
+    fs::write(workspace.join("a.txt"), "alpha\n").expect("failed to write a.txt");
+    write_mounts_yaml(
+        &workspace,
+        &format!(
+            "- name: mount-a\n  type: local\n  prefix: {}\n  mode: mirror\n- name: mount-b\n  type: local\n  prefix: {}\n  mode: mirror\n",
+            backend_a.display(),
+            backend_b.display()
+        ),
+    );
+
+    // Selected sync touches ONLY the selected backend.
+    let selected = hilo_cmd()
+        .args(["backend", "sync", "--push", "--backend", "mount-b"])
+        .current_dir(&workspace)
+        .output()
+        .expect("failed to spawn selected sync");
+    assert!(
+        selected.status.success(),
+        "sync --backend mount-b failed: {}",
+        String::from_utf8_lossy(&selected.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&selected.stdout);
+    assert!(
+        stdout.contains("sync target mount-b:") && !stdout.contains("sync target mount-a:"),
+        "selected sync must name only mount-b, got: {stdout}"
+    );
+    assert!(
+        backend_b.join("a.txt").exists(),
+        "mount-b should receive the push"
+    );
+    assert!(
+        !backend_a.join("a.txt").exists(),
+        "unselected mount-a must not receive the push"
+    );
+
+    // Unknown backend name: loud error, exit 2, nothing transferred.
+    let unknown = hilo_cmd()
+        .args(["backend", "sync", "--push", "--backend", "no-such-mount"])
+        .current_dir(&workspace)
+        .output()
+        .expect("failed to spawn unknown-selector sync");
+    assert_eq!(
+        unknown.status.code(),
+        Some(2),
+        "unknown backend must exit 2, got {:?}",
+        unknown.status.code()
+    );
+    let stderr = String::from_utf8_lossy(&unknown.stderr);
+    assert!(
+        stderr.contains("no-such-mount")
+            && stderr.contains("mount-a")
+            && stderr.contains("mount-b"),
+        "error must name the selector and the mounted set, got: {stderr}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn backend_sync_no_mounts_exits_2() {
     let dir = unique_tempdir("backend-sync-nomount");
     let output = hilo_cmd()
