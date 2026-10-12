@@ -441,7 +441,9 @@ mod tests {
             settle_ms: DEFAULT_SETTLE_MS,
             poll_secs: DEFAULT_POLL_SECS,
         });
-        let error = result.expect_err("invalid S3 configuration must disable the hook");
+        let error = result
+            .err()
+            .expect("invalid S3 configuration must disable the hook");
         assert!(
             error.to_string().contains("S3Driver needs `bucket`"),
             "backend error should preserve its configuration detail: {error}"
