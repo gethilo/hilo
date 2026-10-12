@@ -2077,6 +2077,34 @@ impl GraphDB {
         Ok(count > 0)
     }
 
+    /// Resolve an exact bare source-defined symbol through the persisted graph
+    /// symbol index.
+    ///
+    /// A unique symbol returns its owning graph file. Missing symbols return
+    /// `None` so callers can preserve the existing "not in the graph" error;
+    /// multiple owners are an actionable error rather than an arbitrary pick.
+    /// The index is read from the graph root and is never rebuilt or populated
+    /// by a query.
+    pub fn resolve_symbol(&self, symbol: &str) -> GraphResult<Option<String>> {
+        let Some(root) = self.root.as_deref() else {
+            return Ok(None);
+        };
+        let mut owners = Vec::new();
+        for path in crate::resolution::symbol_owners(root, symbol)? {
+            if self.file_in_graph(&path)? {
+                owners.push(path);
+            }
+        }
+        match owners.as_slice() {
+            [] => Ok(None),
+            [owner] => Ok(Some(owner.clone())),
+            _ => Err(GraphError::Other(format!(
+                "symbol '{symbol}' is ambiguous; candidates: {}",
+                owners.join(", ")
+            ))),
+        }
+    }
+
     /// GAP-081 phase 2a: does the store hold `path` as an edge endpoint?
     ///
     /// The `edges` table is the authority on what the graph can answer for: a

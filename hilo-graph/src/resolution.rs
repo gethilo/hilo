@@ -49,8 +49,72 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Component, Path, PathBuf};
 
 use duckdb::{params, Connection};
+use serde::Deserialize;
 
 use crate::error::GraphResult;
+
+const SYMBOL_CACHE_FILE: &str = ".symbols_cache.json";
+const SYMBOL_CACHE_VERSION: u32 = 2;
+
+#[derive(Debug, Deserialize)]
+struct PersistedSymbolCache {
+    version: u32,
+    symbols: BTreeMap<String, Vec<String>>,
+}
+
+/// Match a query against the identifier portion of an indexed symbol entry.
+///
+/// Older index entries may carry a language signature (`wsgi_app(self, ...):`)
+/// rather than just the identifier. Keep that persisted representation stable,
+/// but make bare-subject lookup operate on the symbol id.
+fn symbol_entry_matches(entry: &str, symbol: &str) -> bool {
+    if entry == symbol {
+        return true;
+    }
+    let identifier = entry
+        .split('(')
+        .next()
+        .unwrap_or(entry)
+        .trim_end_matches(':')
+        .split_whitespace()
+        .last()
+        .unwrap_or("");
+    identifier == symbol
+}
+
+/// Find graph-file owners for an exact source-defined symbol.
+///
+/// The CLI search/understand index persists the source-defined symbol map next
+/// to the graph database. Subject resolution reads that index rather than
+/// reparsing arbitrary source files during an impact query. Missing or stale
+/// cache data is treated as no match; the caller retains the normal unknown
+/// subject error contract.
+pub fn symbol_owners(root: &Path, symbol: &str) -> GraphResult<Vec<String>> {
+    let path = root.join(".vfs").join("graph").join(SYMBOL_CACHE_FILE);
+    let Ok(raw) = std::fs::read(&path) else {
+        return Ok(Vec::new());
+    };
+    let Ok(cache) = serde_json::from_slice::<PersistedSymbolCache>(&raw) else {
+        return Ok(Vec::new());
+    };
+    if cache.version != SYMBOL_CACHE_VERSION {
+        return Ok(Vec::new());
+    }
+
+    let mut owners = cache
+        .symbols
+        .into_iter()
+        .filter_map(|(path, symbols)| {
+            symbols
+                .iter()
+                .any(|name| symbol_entry_matches(name, symbol))
+                .then_some(path)
+        })
+        .collect::<Vec<_>>();
+    owners.sort();
+    owners.dedup();
+    Ok(owners)
+}
 
 /// Resolves file paths to their `pkg:` nodes, caching results per query.
 ///

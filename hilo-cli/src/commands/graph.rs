@@ -885,6 +885,15 @@ pub fn run_warm_in(
         if std::env::var("HILO_WARM_TIMING").is_ok() {
             eprintln!("  [timing] full cache hit — skipping jsonl+db write");
         }
+        // Keep the graph's exact-symbol owner index available even when warm
+        // has nothing new to parse. Impact resolves bare symbols from this
+        // persisted index and must not re-scan source files on query.
+        let symbol_graph_path = cwd.join(".vfs").join("graph").join("graph.db");
+        let symbol_graph =
+            GraphDB::open_read_only(symbol_graph_path.to_str().unwrap_or(".vfs/graph/graph.db"))
+                .context("failed to open graph for symbol index")?;
+        load_or_build_symbol_cache(cwd, &symbol_graph)
+            .context("failed to refresh graph symbol index")?;
         let n = all_edges.len();
         let m = unique_sources.len();
         let langs = langs_seen.len();
@@ -964,6 +973,10 @@ pub fn run_warm_in(
     if let Err(e) = write_last_warm_marker(&warm_marker) {
         eprintln!("warning: failed to write warm marker: {e}");
     }
+
+    // Persist source-defined symbols alongside the graph. This is deliberately
+    // a warm/search concern; impact only reads the resulting index.
+    load_or_build_symbol_cache(cwd, &graph).context("failed to build graph symbol index")?;
 
     Ok(())
 }
@@ -1134,6 +1147,21 @@ pub fn run_impact(path: &str, max_depth: u32, format: Option<&str>, external: bo
     // DF-WARPFS-133: an absolute path OUTSIDE the root now errors here
     // instead of silently answering "No dependents found".
     let path = normalize_subject(&project_root, path)?;
+    // A bare subject that is neither a real file nor an existing graph node is
+    // eligible for exact symbol-owner resolution. Existing path/pkg/sys forms
+    // stay on their historical path unchanged; ambiguity is returned by the
+    // graph layer instead of silently selecting one owner.
+    let path = if path.starts_with("pkg:")
+        || path.starts_with("sys:")
+        || path.starts_with("std:")
+        || path.starts_with("external:")
+        || graph.file_in_graph(&path)?
+        || project_root.join(&path).exists()
+    {
+        path
+    } else {
+        graph.resolve_symbol(&path)?.unwrap_or(path)
+    };
 
     let results = if external {
         // GAP-039: same node-existence check for the external path —

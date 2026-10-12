@@ -1405,6 +1405,96 @@ fn graph_impact_nonexistent_file_errors() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn graph_impact_bare_symbol_matches_owner_file_and_reports_resolution_errors() {
+    let dir = unique_tempdir("impact-symbol");
+    fs::create_dir_all(dir.join("src")).expect("failed to create source dir");
+    fs::write(dir.join("src/__init__.py"), "").expect("failed to write package init");
+    fs::write(
+        dir.join("src/owner.py"),
+        "from src.dep import dep_symbol\n\ndef unique_symbol():\n    return dep_symbol()\n",
+    )
+    .expect("failed to write owner");
+    fs::write(dir.join("src/dep.py"), "def dep_symbol():\n    return 1\n")
+        .expect("failed to write dependency");
+    fs::write(
+        dir.join("src/consumer.py"),
+        "from src.owner import unique_symbol\n",
+    )
+    .expect("failed to write consumer");
+    init_project(&dir);
+    run_hilo_ok(&dir, &["graph", "warm"]);
+
+    let owner = run_hilo_ok(
+        &dir,
+        &[
+            "graph",
+            "impact",
+            "src/owner.py",
+            "--max-depth",
+            "3",
+            "--format",
+            "json",
+        ],
+    );
+    let symbol = run_hilo_ok(
+        &dir,
+        &[
+            "graph",
+            "impact",
+            "unique_symbol",
+            "--max-depth",
+            "3",
+            "--format",
+            "json",
+        ],
+    );
+    let owner_json: serde_json::Value = serde_json::from_str(&owner).expect("owner JSON");
+    let symbol_json: serde_json::Value = serde_json::from_str(&symbol).expect("symbol JSON");
+    assert_eq!(symbol_json, owner_json);
+    assert_eq!(symbol_json["subject"], "src/owner.py");
+
+    let unknown = run_hilo_with_retry(
+        hilo_cmd()
+            .args(["graph", "impact", "missing_symbol"])
+            .current_dir(&dir),
+    );
+    assert!(!unknown.status.success());
+    let unknown_stderr = String::from_utf8_lossy(&unknown.stderr);
+    assert!(
+        unknown_stderr.contains("is not in the graph"),
+        "{unknown_stderr}"
+    );
+
+    fs::write(
+        dir.join("src/other.py"),
+        "from src.dep import dep_symbol\n\ndef unique_symbol():\n    return dep_symbol()\n",
+    )
+    .expect("failed to write ambiguous owner");
+    run_hilo_ok(&dir, &["graph", "warm"]);
+    let ambiguous = run_hilo_with_retry(
+        hilo_cmd()
+            .args(["graph", "impact", "unique_symbol"])
+            .current_dir(&dir),
+    );
+    assert!(!ambiguous.status.success());
+    let ambiguous_stderr = String::from_utf8_lossy(&ambiguous.stderr);
+    assert!(
+        ambiguous_stderr.contains("is ambiguous"),
+        "{ambiguous_stderr}"
+    );
+    assert!(
+        ambiguous_stderr.contains("src/owner.py"),
+        "{ambiguous_stderr}"
+    );
+    assert!(
+        ambiguous_stderr.contains("src/other.py"),
+        "{ambiguous_stderr}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 // ─────────────────────── graph module (unknown prefix, GAP-085) ───────────────────────
 
 #[test]
