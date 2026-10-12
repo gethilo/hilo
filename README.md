@@ -240,6 +240,27 @@ make test-integration
 CI runs `cargo fmt --check`, the build, `cargo clippy --workspace -- -D warnings` and
 `cargo test --workspace` on every push (see `.github/workflows/ci.yml`).
 
+```bash
+# Fast compile-only gate (same as: cargo check --workspace)
+make check
+
+# Apply rustfmt (same as: cargo fmt --all)
+make fmt
+
+# Lint gate — zero warnings allowed (same as: cargo clippy --workspace -- -D warnings)
+make clippy
+```
+
+## Known gaps
+
+- **Plugin hooks are not enforced** — `hilo plugin load` validates and
+  registers a WASM plugin, but no declared hook ever fires (execution is
+  not implemented; see [docs/hilo-plugins.md](docs/hilo-plugins.md))
+- **Manifest permission rules are not enforced** — the manifest
+  `permissions.rules` engine is parsed but NOT consumed: FUSE enforcement
+  uses hardcoded default protections only
+  (see [docs/hilo-permissions.md](docs/hilo-permissions.md))
+
 ## The Problem
 
 Your AI agent reads files to answer questions about code. "What depends on
