@@ -4,7 +4,9 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use hilo_backends::{EphemeralMatcher, IgnoreMatcher, S3Client, S3Endpoint, SyncEngine};
+use hilo_backends::{
+    EphemeralMatcher, IgnoreMatcher, S3Client, S3Endpoint, SyncDirection, SyncEngine,
+};
 use hilo_core::workspace::WorkspaceManifest;
 use hilo_fuse::permissions::PermissionEngine;
 use hilo_fuse::{daemon, workspace_mount, workspace_mount::WorkspaceMount, FuseConfig};
@@ -142,6 +144,11 @@ pub fn run_workspace_sync(
             prefix.to_string(),
             local_dir.clone(),
             ignore,
+            match direction {
+                SyncDirectionArg::Push => SyncDirection::Push,
+                SyncDirectionArg::Pull => SyncDirection::Pull,
+                SyncDirectionArg::Both => SyncDirection::Both,
+            },
         );
 
         let plan = if dry_run {
