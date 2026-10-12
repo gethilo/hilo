@@ -1,10 +1,1 @@
-{
-  "tick_id": "warpfs-foreman-2026-10-12-02-23-56",
-  "project": "warpfs",
-  "budget": 12,
-  "dispatched": [],
-  "recovery_mode": true,
-  "independence_verified": "n/a — no fresh dispatch; recovering orphaned wave README-DOCS-WAVE/CLI-DOCS-WAVE/SKILL-DOCS-WAVE from tick 2026-10-08 era (branches wt/REV-WARPFS-1-shippable, wt/GAP-111)",
-  "created_at": "2026-10-11T21:30:00-05:00",
-  "notes": "serial recovery tick: 3 in_progress gitreins tasks from a prior wave, work landed on orphan branches; verifying and completing instead of dispatching new workers"
-}
+{"tick": 278, "summary": "Wave recovery (orphan tick warpfs-foreman-2026-10-12-02-23-56, 0 workers): audited 6 leftover worktrees/branches. wt/DF-WARPFS-129, wt/DF-WARPFS-135, wt/GAP-111, wt/REV-WARPFS-1-shippable already merged (0 ahead) -> worktrees+branches removed. wt/GAP-108-correction was board-only with a stale duplicate of an already-corrected row (main's GAP-108 row already says CLOSED FALSE POSITIVE) and its event id 814 already exists on main -> branch deleted, no merge. wt/init-worktree-hooks-301ee26 was REAL unmerged code (linked-worktree init fix, base 84bd6e66 STALE vs master): STALE-BASE rule applied — rebased onto origin/master d636f260, fixed the stale SyncEngine::new arity (DF-WARPFS-126 6-arg) and the equal-mtime pull test (DF-WARPFS-69, applied 4766da26's remote-mtime fix), gates green locally (hilo-cli lib 131 / cli 69+77 / clippy -D warnings / fmt / workspace -D-warnings compile), merged --no-ff as b333c9e8, re-gated on the merged tree (all green), pushed origin/master (0 unpushed).", "wave_manifest": ".coding-hermes/waves/warpfs-foreman-2026-10-12-02-23-56.json", "recovered_commit": "b333c9e8", "branch_disposition": {"merged_and_removed": ["wt/DF-WARPFS-129", "wt/DF-WARPFS-135", "wt/GAP-111", "wt/REV-WARPFS-1-shippable", "wt/COV-1-adopted", "wt/DF-WARPFS-105", "wt/DF-WARPFS-55", "wt/GAP-093", "wt/COV-2", "wt/GAP-108-correction (board-only stale duplicate, not merged)"], "merged_into_master": ["wt/init-worktree-hooks-301ee26 -> b333c9e8 (merge) / 66a21127 (rebased fix)"]}, "push": "origin/master == HEAD b333c9e8, 0 unpushed"}
