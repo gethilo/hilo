@@ -1081,7 +1081,7 @@ use crate::backend::{BackendEntry, BackendError};
 /// The trait is synchronous, so the driver owns a current-thread tokio runtime
 /// and block_on's each call (same pattern as the CLI's sync engine wrapper).
 pub struct S3Driver {
-    runtime: tokio::runtime::Runtime,
+    runtime: Option<tokio::runtime::Runtime>,
     client: S3Client,
     bucket: String,
     /// Key prefix; all trait keys are relative to it.
@@ -1099,6 +1099,57 @@ impl std::fmt::Debug for S3Driver {
             .field("prefix", &self.prefix)
             .field("mode", &self.mode)
             .finish_non_exhaustive()
+    }
+}
+
+impl Drop for S3Driver {
+    fn drop(&mut self) {
+        let Some(runtime) = self.runtime.take() else {
+            return;
+        };
+
+        if tokio::runtime::Handle::try_current().is_err() {
+            drop(runtime);
+            return;
+        }
+
+        // Tokio forbids the normal blocking shutdown when this destructor runs
+        // on a runtime thread. Do the blocking drop on a plain OS thread and
+        // join it so the runtime is fully destroyed before the driver is gone.
+        // Keeping the runtime behind a mutex also lets the spawn-failure path
+        // reclaim it for Tokio's non-blocking shutdown instead of leaking it.
+        let runtime = std::sync::Arc::new(std::sync::Mutex::new(Some(runtime)));
+        let thread_runtime = std::sync::Arc::clone(&runtime);
+        match std::thread::Builder::new()
+            .name("hilo-s3-driver-runtime-drop".into())
+            .spawn(move || {
+                let runtime = thread_runtime
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take();
+                drop(runtime);
+            }) {
+            Ok(handle) => {
+                let _ = handle.join();
+            }
+            Err(_) => {
+                if let Some(runtime) = runtime
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take()
+                {
+                    runtime.shutdown_background();
+                }
+            }
+        }
+    }
+}
+
+impl S3Driver {
+    fn runtime(&self) -> &tokio::runtime::Runtime {
+        self.runtime
+            .as_ref()
+            .expect("S3Driver runtime must remain available while the driver is in use")
     }
 }
 
@@ -1159,7 +1210,7 @@ impl S3Driver {
         let endpoint_display = endpoint.display().to_string();
         let (runtime, client) = build_runtime_and_client(endpoint, region, cache_dir)?;
         Ok(Self {
-            runtime,
+            runtime: Some(runtime),
             client,
             bucket,
             prefix,
@@ -1221,7 +1272,7 @@ impl crate::backend::Backend for S3Driver {
     fn list(&self, prefix: &str) -> Result<Vec<BackendEntry>, BackendError> {
         let full = self.full_key(prefix);
         let metas = self
-            .runtime
+            .runtime()
             .block_on(self.client.list_objects_with_meta(&self.bucket, &full))?;
         Ok(metas
             .into_iter()
@@ -1238,7 +1289,7 @@ impl crate::backend::Backend for S3Driver {
     fn stat(&self, key: &str) -> Result<BackendEntry, BackendError> {
         let full = self.full_key(key);
         match self
-            .runtime
+            .runtime()
             .block_on(self.client.head_object_meta(&self.bucket, &full))?
         {
             Some((size, modified)) => Ok(BackendEntry {
@@ -1254,7 +1305,7 @@ impl crate::backend::Backend for S3Driver {
 
     fn get(&self, key: &str, dest: &std::path::Path) -> Result<(), BackendError> {
         let full = self.full_key(key);
-        self.runtime
+        self.runtime()
             .block_on(self.client.download_to(&self.bucket, &full, dest))?;
         Ok(())
     }
@@ -1263,9 +1314,9 @@ impl crate::backend::Backend for S3Driver {
         use sha2::{Digest, Sha256};
         let full = self.full_key(key);
         let bytes = std::fs::read(local)?;
-        let etag = self
-            .runtime
-            .block_on(self.client.upload_bytes(&self.bucket, &full, &bytes))?;
+        let etag =
+            self.runtime()
+                .block_on(self.client.upload_bytes(&self.bucket, &full, &bytes))?;
         let mut hasher = Sha256::new();
         hasher.update(&bytes);
         let sha256 = format!(
@@ -1285,7 +1336,7 @@ impl crate::backend::Backend for S3Driver {
 
     fn delete(&self, key: &str) -> Result<(), BackendError> {
         let full = self.full_key(key);
-        self.runtime
+        self.runtime()
             .block_on(self.client.delete_object(&self.bucket, &full))?;
         Ok(())
     }
@@ -1355,6 +1406,12 @@ mod s3driver_tests {
             .unwrap()
             .expect("explicit endpoint client construction should not require network access");
         assert_eq!(driver.endpoint(), "http://127.0.0.1:1");
+
+        let drop_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(driver)));
+        assert!(
+            drop_result.is_ok(),
+            "S3Driver::drop must be safe inside a Tokio runtime"
+        );
     }
 
     /// Live round-trip, gated on AWS env (spec §15). Skips when
