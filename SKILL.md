@@ -104,6 +104,7 @@ hilo-ffi/           # UniFFI bindings (Kotlin, Swift, Python)
 | `vfs_graph_stats` | Aggregate graph statistics |
 | `vfs_graph_understand` | Harmonic multi-resolution context (MAP → SIGNATURES → DETAIL) |
 | `vfs_graph_search` | Semantic code search (TF-IDF + BM25 + RRF) |
+| `vfs_graph_audit` | Symbol-level connection + test audit — partitions project files into unreachable / unlinked / ok with counts and deciding rules |
 | `vfs_graph_untested` | List files that have import edges but no test coverage (no tested_by edges) |
 | `vfs_graph_module` | Get per-module file listing and test coverage statistics from the dependency graph |
 | `vfs_list_directory` | List virtual directory contents |
