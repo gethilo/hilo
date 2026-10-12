@@ -1102,6 +1102,45 @@ impl std::fmt::Debug for S3Driver {
     }
 }
 
+fn build_runtime_and_client(
+    endpoint: S3Endpoint,
+    region: String,
+    cache_dir: PathBuf,
+) -> Result<(tokio::runtime::Runtime, S3Client), crate::backend::BackendError> {
+    let build = move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| crate::backend::BackendError::BucketError(e.to_string()))?;
+        let client = runtime.block_on(S3Client::with_endpoint(
+            &endpoint, &region, &cache_dir, 0, true,
+        ))?;
+        Ok((runtime, client))
+    };
+
+    // `Runtime::block_on` panics when called from any Tokio runtime thread.
+    // Build on a plain OS thread in that case; the returned runtime is moved
+    // back to the synchronous driver and remains the owner of Backend calls.
+    if tokio::runtime::Handle::try_current().is_ok() {
+        std::thread::Builder::new()
+            .name("hilo-s3-driver-init".into())
+            .spawn(build)
+            .map_err(|e| {
+                crate::backend::BackendError::BucketError(format!(
+                    "failed to spawn S3 client initialization thread: {e}"
+                ))
+            })?
+            .join()
+            .map_err(|_| {
+                crate::backend::BackendError::BucketError(
+                    "S3 client initialization thread panicked".into(),
+                )
+            })?
+    } else {
+        build()
+    }
+}
+
 impl S3Driver {
     pub fn new(cfg: &crate::backend::BackendConfig) -> Result<Self, crate::backend::BackendError> {
         let bucket = cfg.bucket.clone().ok_or_else(|| {
@@ -1110,10 +1149,6 @@ impl S3Driver {
         let region = cfg.region.clone().unwrap_or_else(|| "us-east-1".into());
         let prefix = cfg.prefix.clone().unwrap_or_default();
         let cache_dir = std::env::temp_dir().join(format!("hilo-s3driver-{}", cfg.name));
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| crate::backend::BackendError::BucketError(e.to_string()))?;
         // DF-WARPFS-12: an explicit config endpoint beats AWS_ENDPOINT_URL;
         // without one, resolve from the environment and DISCLOSE what was
         // resolved (default-chain = the operator's ambient AWS config).
@@ -1122,9 +1157,7 @@ impl S3Driver {
             _ => S3Endpoint::from_env(),
         };
         let endpoint_display = endpoint.display().to_string();
-        let client = runtime.block_on(S3Client::with_endpoint(
-            &endpoint, &region, &cache_dir, 0, true,
-        ))?;
+        let (runtime, client) = build_runtime_and_client(endpoint, region, cache_dir)?;
         Ok(Self {
             runtime,
             client,
@@ -1301,6 +1334,27 @@ mod s3driver_tests {
     #[test]
     fn strip_prefix_leaves_unmatched_full_key_unchanged() {
         assert_eq!(strip_prefix_key("other/x.txt", "workspace"), "other/x.txt");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn s3driver_new_does_not_enter_nested_runtime() {
+        let cfg = crate::backend::BackendConfig {
+            kind: crate::backend::BackendKind::S3,
+            name: "runtime-context-test".into(),
+            bucket: Some("test-bucket".into()),
+            endpoint: Some("http://127.0.0.1:1".into()),
+            ..Default::default()
+        };
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| S3Driver::new(&cfg)));
+        assert!(
+            result.is_ok(),
+            "S3Driver::new must not panic inside a Tokio runtime"
+        );
+        let driver = result
+            .unwrap()
+            .expect("explicit endpoint client construction should not require network access");
+        assert_eq!(driver.endpoint(), "http://127.0.0.1:1");
     }
 
     /// Live round-trip, gated on AWS env (spec §15). Skips when
