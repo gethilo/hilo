@@ -107,6 +107,106 @@ fn test_impact_not_in_graph() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn write_symbol_index(root: &std::path::Path, entries: &[(&str, &[&str])]) {
+    let symbols: serde_json::Map<String, serde_json::Value> = entries
+        .iter()
+        .map(|(path, names)| ((*path).to_string(), serde_json::json!(names)))
+        .collect();
+    let cache = serde_json::json!({
+        "version": 2,
+        "root": root.to_string_lossy(),
+        "fingerprint": "fixture",
+        "symbols": symbols,
+        "index_doc": {},
+    });
+    let cache_path = root.join(".vfs").join("graph").join(".symbols_cache.json");
+    std::fs::write(cache_path, serde_json::to_vec(&cache).unwrap()).unwrap();
+}
+
+#[test]
+fn bare_symbol_resolves_to_unique_owner_and_matches_owner_impact(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let graph_path = root.path().join(".vfs").join("graph").join("graph.db");
+    std::fs::create_dir_all(graph_path.parent().unwrap())?;
+    let graph = GraphDB::open(graph_path.to_str().unwrap())?;
+    graph.insert_edges(&[
+        edge("src/consumer.rs", "src/owner.rs", "imports"),
+        edge("src/owner.rs", "src/dependency.rs", "imports"),
+    ])?;
+    write_symbol_index(root.path(), &[("src/owner.rs", &["unique_symbol"])]);
+
+    assert_eq!(
+        graph.resolve_symbol("unique_symbol")?,
+        Some("src/owner.rs".to_string())
+    );
+    let by_owner = compute_impact(graph.conn(), "src/owner.rs", 10)?;
+    let by_symbol = compute_impact(
+        graph.conn(),
+        &graph.resolve_symbol("unique_symbol")?.unwrap(),
+        10,
+    )?;
+    assert_eq!(
+        serde_json::to_value(&by_symbol)?,
+        serde_json::to_value(&by_owner)?
+    );
+    Ok(())
+}
+
+#[test]
+fn bare_symbol_reports_all_ambiguous_candidates() -> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let graph_path = root.path().join(".vfs").join("graph").join("graph.db");
+    std::fs::create_dir_all(graph_path.parent().unwrap())?;
+    let graph = GraphDB::open(graph_path.to_str().unwrap())?;
+    graph.insert_edges(&[
+        edge("src/a.rs", "src/shared.rs", "imports"),
+        edge("src/b.rs", "src/shared.rs", "imports"),
+    ])?;
+    write_symbol_index(
+        root.path(),
+        &[
+            ("src/a.rs", &["shared_symbol"]),
+            ("src/b.rs", &["shared_symbol"]),
+        ],
+    );
+
+    let error = graph
+        .resolve_symbol("shared_symbol")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("symbol 'shared_symbol' is ambiguous"));
+    assert!(error.contains("src/a.rs"));
+    assert!(error.contains("src/b.rs"));
+    Ok(())
+}
+
+#[test]
+fn unknown_bare_symbol_returns_no_owner() -> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let graph_path = root.path().join(".vfs").join("graph").join("graph.db");
+    std::fs::create_dir_all(graph_path.parent().unwrap())?;
+    let graph = GraphDB::open(graph_path.to_str().unwrap())?;
+    graph.insert_edges(&[edge("src/owner.rs", "src/dependency.rs", "imports")])?;
+    write_symbol_index(root.path(), &[("src/owner.rs", &["known_symbol"])]);
+
+    assert_eq!(graph.resolve_symbol("missing_symbol")?, None);
+    Ok(())
+}
+
+#[test]
+fn symbol_index_is_not_used_for_non_graph_candidates() -> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let graph_path = root.path().join(".vfs").join("graph").join("graph.db");
+    std::fs::create_dir_all(graph_path.parent().unwrap())?;
+    let graph = GraphDB::open(graph_path.to_str().unwrap())?;
+    graph.insert_edges(&[edge("src/real.rs", "src/dependency.rs", "imports")])?;
+    write_symbol_index(root.path(), &[("src/not-in-graph.rs", &["stale_symbol"])]);
+
+    assert_eq!(graph.resolve_symbol("stale_symbol")?, None);
+    Ok(())
+}
+
 #[test]
 fn test_impact_json_format() -> Result<(), Box<dyn std::error::Error>> {
     let result = ImpactResult {
