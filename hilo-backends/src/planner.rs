@@ -36,7 +36,8 @@
 //!   (push: local file mtime = remote modified after put; pull: dest mtime =
 //!   remote modified), so a repeated sync is a no-op instead of a ping-pong.
 //! - Partial failure: `execute_sync` stops at the first failing item and
-//!   returns [`SyncError::TransferFailed`] with the item key; already
+//!   returns [`SyncError::TransferFailed`] carrying both the item key and
+//!   the underlying [`BackendError`] (as its `#[source]`); already
 //!   transferred items are NOT rolled back (an idempotent re-run resumes).
 //! - Ephemeral: files classified ephemeral are skipped unless the
 //!   `user.vfs.sync=upstream` xattr is set (spec §7); symlinks are never
@@ -144,8 +145,14 @@ pub struct SyncStats {
 /// Sync engine errors (spec §12: `SyncError::TransferFailed`).
 #[derive(Debug, thiserror::Error)]
 pub enum SyncError {
-    #[error("transfer failed: {0}")]
-    TransferFailed(String),
+    #[error("transfer failed: {key}: {source}")]
+    TransferFailed {
+        /// Key of the item whose transfer/delete failed.
+        key: String,
+        /// Underlying backend failure (retained for diagnosis).
+        #[source]
+        source: BackendError,
+    },
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
     #[error("backend error: {0}")]
@@ -294,7 +301,8 @@ pub fn plan_sync(
 }
 
 /// Execute a plan: transfers, then deletes. Stops at the first failure with
-/// [`SyncError::TransferFailed`] carrying the item key; already-transferred
+/// [`SyncError::TransferFailed`] carrying the item key and the underlying
+/// [`BackendError`] as its `#[source]`; already-transferred
 /// items are not rolled back.
 ///
 /// Every executed LWW resolution (a transferred item whose counterpart
@@ -342,9 +350,10 @@ pub fn execute_sync(
     }
 
     for key in &plan.to_delete {
-        backend
-            .delete(key)
-            .map_err(|_| SyncError::TransferFailed(key.clone()))?;
+        backend.delete(key).map_err(|e| SyncError::TransferFailed {
+            key: key.clone(),
+            source: e,
+        })?;
     }
 
     for rec in &stats.conflicts {
@@ -379,7 +388,10 @@ fn execute_transfer(
             }
             backend
                 .put(&item.local_path, &item.key)
-                .map_err(|_| SyncError::TransferFailed(item.key.clone()))?;
+                .map_err(|e| SyncError::TransferFailed {
+                    key: item.key.clone(),
+                    source: e,
+                })?;
             stats.bytes += std::fs::metadata(&item.local_path)?.len();
             stats.transferred += 1;
             // Align local mtime to the remote modified (no ping-pong).
@@ -419,7 +431,10 @@ fn execute_transfer(
             let part = PathBuf::from(part_name);
             backend
                 .get(&item.key, &part)
-                .map_err(|_| SyncError::TransferFailed(item.key.clone()))?;
+                .map_err(|e| SyncError::TransferFailed {
+                    key: item.key.clone(),
+                    source: e,
+                })?;
             std::fs::rename(&part, &item.local_path)?;
             stats.bytes += std::fs::metadata(&item.local_path)?.len();
             stats.transferred += 1;
@@ -574,6 +589,12 @@ mod tests {
             self.fail_keys.lock().unwrap().insert(key.to_string());
         }
 
+        /// Concrete cause asserted by the TransferFailed tests (extracted so
+        /// get/put/delete agree with the expected message byte-for-byte).
+        fn fail_cause(key: &str) -> BackendError {
+            BackendError::Unreachable(format!("backend refused transfer of {key}"))
+        }
+
         fn get_bytes(&self, key: &str) -> Option<Vec<u8>> {
             self.objects
                 .lock()
@@ -629,7 +650,7 @@ mod tests {
 
         fn get(&self, key: &str, dest: &Path) -> Result<(), BackendError> {
             if self.fails(key) {
-                return Err(BackendError::Io(std::io::Error::other("mock failure")));
+                return Err(Self::fail_cause(key));
             }
             let objs = self.objects.lock().unwrap();
             let obj = objs
@@ -642,7 +663,7 @@ mod tests {
 
         fn put(&self, local: &Path, key: &str) -> Result<crate::WriteResult, BackendError> {
             if self.fails(key) {
-                return Err(BackendError::Io(std::io::Error::other("mock failure")));
+                return Err(Self::fail_cause(key));
             }
             let bytes = std::fs::read(local)?;
             let modified = local_mtime_unix(local).unwrap_or(0);
@@ -659,7 +680,7 @@ mod tests {
 
         fn delete(&self, key: &str) -> Result<(), BackendError> {
             if self.fails(key) {
-                return Err(BackendError::Io(std::io::Error::other("mock failure")));
+                return Err(Self::fail_cause(key));
             }
             let mut objs = self.objects.lock().unwrap();
             objs.remove(key)
@@ -1003,9 +1024,21 @@ mod tests {
         )
         .unwrap();
         let err = execute_sync(&plan, &backend, root).unwrap_err();
+        let SyncError::TransferFailed { key, source } = &err else {
+            panic!("unexpected error: {err:?}");
+        };
+        assert_eq!(key, "z_blocked.txt");
         assert!(
-            matches!(&err, SyncError::TransferFailed(k) if k == "z_blocked.txt"),
-            "unexpected error: {err:?}"
+            source
+                .to_string()
+                .contains("backend refused transfer of z_blocked.txt"),
+            "cause must carry the concrete backend failure, got {source:?}"
+        );
+        // Rendered error includes both the key and the underlying cause.
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains("z_blocked.txt") && rendered.contains("backend refused transfer"),
+            "rendered error must include key + cause, got: {rendered}"
         );
         // The earlier item was NOT rolled back.
         assert_eq!(backend.get_bytes("a_ok.txt").unwrap(), b"ok");
@@ -1035,7 +1068,21 @@ mod tests {
         )
         .unwrap();
         let err = execute_sync(&plan, &backend, root).unwrap_err();
-        assert!(matches!(&err, SyncError::TransferFailed(k) if k == "gone.txt"));
+        let SyncError::TransferFailed { key, source } = &err else {
+            panic!("unexpected error: {err:?}");
+        };
+        assert_eq!(key, "gone.txt");
+        assert!(
+            source
+                .to_string()
+                .contains("backend refused transfer of gone.txt"),
+            "cause must carry the concrete backend failure, got {source:?}"
+        );
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains("gone.txt") && rendered.contains("backend refused transfer"),
+            "rendered error must include key + cause, got: {rendered}"
+        );
     }
 
     #[test]

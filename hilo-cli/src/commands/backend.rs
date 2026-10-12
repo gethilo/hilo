@@ -658,7 +658,7 @@ fn exit_code(e: &BackendError) -> i32 {
 
 fn sync_exit_code(e: &SyncError) -> i32 {
     match e {
-        SyncError::TransferFailed(_) => 3,
+        SyncError::TransferFailed { .. } => 3,
         SyncError::Backend(b) => exit_code(b),
         _ => 1,
     }
