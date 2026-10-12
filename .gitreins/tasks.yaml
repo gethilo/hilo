@@ -2002,8 +2002,9 @@ tasks:
   - 'PASS: on a redis-scale corpus, a 0-byte graph.db heals on the next open (or via
     documented graph warm) with no manual rm, and the fix''s existing deleted-file
     test still passes'
-  status: in_progress
+  status: complete
   created_at: '2026-10-03T17:19:15.838388+00:00'
+  completed_at: '2026-10-12T02:50:56.426653+00:00'
 - id: GAP-119
   title: Terraform/HCL infrastructure-as-code graph support
   criteria:
@@ -2095,8 +2096,9 @@ tasks:
   - Run 42-core + 6-surface Wave 11 case set against pinned SHAs, generate HTML report
     with per-case ranks/recalls, scorable denominators, regressions vs baseline; attach
     raw outputs
-  status: in_progress
+  status: complete
   created_at: '2026-10-11T04:17:34.552651+00:00'
+  completed_at: '2026-10-12T02:58:34.117545+00:00'
 - id: DF-WARPFS-138
   title: 'workspace mount: implement write/create/setattr write-through for writable:true
     mounts'
