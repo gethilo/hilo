@@ -381,6 +381,73 @@ mod tests {
         .unwrap()
     }
 
+    fn write_s3_mount(ws: &Path, bucket: Option<&str>) {
+        let entry = MountEntry {
+            name: "s3-test".into(),
+            kind: "s3".into(),
+            bucket: bucket.map(str::to_owned),
+            prefix: None,
+            region: Some("us-east-1".into()),
+            endpoint: Some("http://127.0.0.1:1".into()),
+            remote: None,
+            tool: Some("native".into()),
+            mode: Some("mirror".into()),
+            ignore_file: None,
+            poll_secs: Some(60),
+            no_default_ignores: None,
+            at: None,
+        };
+        std::fs::create_dir_all(ws.join(".vfs/backends")).unwrap();
+        std::fs::write(
+            ws.join(".vfs/backends/mounts.yaml"),
+            serde_yaml::to_string(&vec![entry]).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn s3_mount_hook_constructs_inside_tokio_runtime() {
+        let ws = tempfile::TempDir::new().unwrap();
+        write_s3_mount(ws.path(), Some("test-bucket"));
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            SyncHook::new(SyncHookConfig {
+                workspace_root: ws.path().to_path_buf(),
+                mounts_yaml: ws.path().join(".vfs/backends/mounts.yaml"),
+                debounce_ms: DEFAULT_DEBOUNCE_MS,
+                settle_ms: DEFAULT_SETTLE_MS,
+                poll_secs: DEFAULT_POLL_SECS,
+            })
+        }));
+        assert!(
+            result.is_ok(),
+            "SyncHook::new must not panic while the trigger runtime is active"
+        );
+        let hook = result
+            .unwrap()
+            .expect("S3 mount should construct without network access");
+        assert_eq!(hook.mount_count(), 1);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn s3_mount_hook_reports_backend_configuration_error() {
+        let ws = tempfile::TempDir::new().unwrap();
+        write_s3_mount(ws.path(), None);
+
+        let result = SyncHook::new(SyncHookConfig {
+            workspace_root: ws.path().to_path_buf(),
+            mounts_yaml: ws.path().join(".vfs/backends/mounts.yaml"),
+            debounce_ms: DEFAULT_DEBOUNCE_MS,
+            settle_ms: DEFAULT_SETTLE_MS,
+            poll_secs: DEFAULT_POLL_SECS,
+        });
+        let error = result.expect_err("invalid S3 configuration must disable the hook");
+        assert!(
+            error.to_string().contains("S3Driver needs `bucket`"),
+            "backend error should preserve its configuration detail: {error}"
+        );
+    }
+
     #[test]
     fn record_event_marks_dirty_and_skips_ignored() {
         let (ws, _backend) = test_workspace();
