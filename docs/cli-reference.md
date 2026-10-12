@@ -926,6 +926,11 @@ unmounted (DF-WARPFS-130). Run it in a separate terminal, background it with
 returns immediately and the mount stays alive until
 `hilo workspace unmount /mnt/hilo` tears it down.
 
+The workspace mount is a plain union of backing files. It does not pass
+through the backing files' `user.vfs.*` extended attributes and does not
+provide a workspace-level `.vfs/` graph. Run metadata and graph commands
+against the backing repository paths when those features are needed.
+
 Each repo's `ref` is resolved on a fresh clone by trying, in order: the
 ref as given, as a branch (`refs/heads/<ref>`), then as a tag
 (`refs/tags/<ref>`). If none resolve, the error names every form tried

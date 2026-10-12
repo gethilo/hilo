@@ -468,6 +468,12 @@ bucket in its plan header; prefer an explicit `--endpoint` on a mount (or a
 sync run) over the `AWS_ENDPOINT_URL` environment variable, which is only
 disclosed, never silently consumed.
 
+`hilo workspace mount` is a plain union of backing files: it does not expose
+the backing files' `user.vfs.*` extended attributes or a workspace-level
+`.vfs/` graph. Use the backing repository paths with `hilo meta` or graph
+commands when you need Hilo metadata; do not expect those annotations through
+the workspace mount.
+
 - `hilo backend mount --type <TYPE> --at <AT>` — mount a virtual backend
   (types: `s3`, `gdrive`, `onedrive`, `dropbox`, `external`; the
   `git`/`local` types are not supported and fail with
