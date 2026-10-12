@@ -1,0 +1,27 @@
+{
+  "tick_id": "warpfs-foreman-2026-10-12-18-06-05",
+  "project": "warpfs",
+  "budget": 9,
+  "mode": "serial-fallback",
+  "reason": "Recovery block named 0 workers; the recorded task was a failed dispatch with no branch diff or implementation commit.",
+  "base": "origin/master",
+  "base_sha": "85d53bf740c44d68950fd36a2f1ec35bb23f4b8a",
+  "tasks": [
+    {
+      "id": "DF-WARPFS-116",
+      "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-116",
+      "branch": "wt/DF-WARPFS-116",
+      "worker_model": "glm-5.3-flash",
+      "worker_provider": "zai-glm",
+      "brief": "/tmp/warpfs-foreman-2026-10-12-18-06-05-DF-WARPFS-116-brief.txt",
+      "outcome": "failed-before-implementation; branch tip equals base; preserved as evidence"
+    }
+  ],
+  "finished_at": "2026-10-12T13:43:55-05:00",
+  "recovery": {
+    "workers": 0,
+    "result": "closed; no branch gates or merges required",
+    "branch_check": "wt/DF-WARPFS-116 equals origin/master 85d53bf740c44d68950fd36a2f1ec35bb23f4b8a; worktree preserved as evidence",
+    "normal_dispatch": "not started in recovery phase"
+  }
+}
