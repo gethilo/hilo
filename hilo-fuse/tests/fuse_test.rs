@@ -522,3 +522,302 @@ fn filetime_set(path: &std::path::Path, t: SystemTime) {
     let rc = unsafe { libc::utimensat(libc::AT_FDCWD, c.as_ptr(), times.as_ptr(), 0) };
     assert_eq!(rc, 0, "utimensat failed");
 }
+
+// ─── DF-WARPFS-135: parent→children index for readdir/populate/lookup ───────
+//
+// Reported: the FUSE readdir hot path filtered the ENTIRE inode map and
+// evaluated `Path::parent()` on every inode for each listing, and
+// populate_directory ran `files.values().any(|e| e.path == child_rel)` per
+// child — O(all inodes) work repeated on every `ls`/`find` over the mount.
+// The fix keeps a `children[parent][name] -> ino` index, populated at inode
+// creation under the same lock as the inode map.
+//
+// These tests pin the behaviours the rewrite must NOT change: indexed child
+// membership, idempotent re-population (no duplicate inodes, stable inode
+// numbers), sorted readdir output, the DF-WARPFS-5 cookie/resume semantics,
+// empty and nested directories, and ignore-stack filtering.
+
+use hilo_fuse::ops::{child_ino_for_test, readdir_listing_for_test};
+use std::ffi::OsStr;
+
+fn names_of(batch: &[(u64, i64, String, bool)]) -> Vec<String> {
+    batch.iter().map(|e| e.2.clone()).collect()
+}
+
+/// Replay the kernel against the REAL mount pipeline (populate + indexed
+/// enumeration + cookie builder) and require termination, like `walk()` does
+/// for the synthetic builder — but through the index.
+fn walk_mount(wfs: &Hilo, dir_ino: u64) -> Vec<(u64, i64, String, bool)> {
+    let mut seen = Vec::new();
+    let mut offset = 0i64;
+    for _ in 0..10_000 {
+        let batch = readdir_listing_for_test(wfs, dir_ino, offset);
+        if batch.is_empty() {
+            return seen;
+        }
+        let last = batch.last().unwrap().1;
+        assert!(
+            last > offset,
+            "indexed readdir did not advance: offset {} -> cookie {} (batch {:?})",
+            offset,
+            last,
+            names_of(&batch)
+        );
+        seen.extend(batch);
+        offset = last;
+    }
+    panic!("indexed readdir never terminated over a real mount pipeline");
+}
+
+#[test]
+fn test_df135_index_populated_and_idempotent() {
+    let tmp = tempfile::tempdir().unwrap();
+    for n in ["alpha.txt", "beta.txt", "sub"] {
+        if n == "sub" {
+            fs::create_dir(tmp.path().join(n)).unwrap();
+        } else {
+            fs::write(tmp.path().join(n), b"x").unwrap();
+        }
+    }
+    let config = test_config(tmp.path().to_path_buf());
+    let wfs = Hilo::new(tmp.path().to_path_buf(), config);
+
+    // First populate: every child indexed under root (ino 1).
+    assert_eq!(hilo_fuse::ops::populated_child_count(&wfs, 1), 3);
+    for n in ["alpha.txt", "beta.txt", "sub"] {
+        let indexed = child_ino_for_test(&wfs, 1, OsStr::new(n));
+        assert!(indexed.is_some(), "`{n}` must be in the parent index");
+        // The indexed inode is the SAME inode the map holds for the path —
+        // index and map cannot disagree.
+        assert_eq!(indexed, hilo_fuse::ops::inode_for_path(&wfs, n));
+    }
+
+    // Repeat populate: idempotent — no duplicate inodes, stable identities.
+    let before: Vec<Option<u64>> = ["alpha.txt", "beta.txt", "sub"]
+        .iter()
+        .map(|n| child_ino_for_test(&wfs, 1, OsStr::new(n)))
+        .collect();
+    assert_eq!(hilo_fuse::ops::populated_child_count(&wfs, 1), 3);
+    assert_eq!(hilo_fuse::ops::populated_child_count(&wfs, 1), 3);
+    let after: Vec<Option<u64>> = ["alpha.txt", "beta.txt", "sub"]
+        .iter()
+        .map(|n| child_ino_for_test(&wfs, 1, OsStr::new(n)))
+        .collect();
+    assert_eq!(
+        before, after,
+        "re-populating a directory must reuse inodes, not allocate duplicates"
+    );
+}
+
+#[test]
+fn test_df135_index_updated_when_new_child_appears() {
+    // Adversarial: a child created AFTER the first populate must be found
+    // through the index on the next populate — the index cannot go stale.
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(tmp.path().join("first.txt"), b"a").unwrap();
+    let config = test_config(tmp.path().to_path_buf());
+    let wfs = Hilo::new(tmp.path().to_path_buf(), config);
+
+    assert_eq!(hilo_fuse::ops::populated_child_count(&wfs, 1), 1);
+    fs::write(tmp.path().join("second.txt"), b"b").unwrap();
+    assert_eq!(hilo_fuse::ops::populated_child_count(&wfs, 1), 2);
+    assert!(child_ino_for_test(&wfs, 1, OsStr::new("second.txt")).is_some());
+    // The pre-existing child kept its inode (identity preserved).
+    let first_after = child_ino_for_test(&wfs, 1, OsStr::new("first.txt"));
+    assert_eq!(
+        first_after,
+        hilo_fuse::ops::inode_for_path(&wfs, "first.txt")
+    );
+}
+
+#[test]
+fn test_df135_nested_directory_indexed_under_its_parent() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::create_dir_all(tmp.path().join("sub/deeper")).unwrap();
+    fs::write(tmp.path().join("sub/inner.txt"), b"i").unwrap();
+    let config = test_config(tmp.path().to_path_buf());
+    let wfs = Hilo::new(tmp.path().to_path_buf(), config);
+
+    hilo_fuse::ops::populated_child_count(&wfs, 1);
+    let sub_ino = hilo_fuse::ops::inode_for_path(&wfs, "sub").expect("sub inode");
+    assert_eq!(hilo_fuse::ops::populated_child_count(&wfs, sub_ino), 2);
+
+    // Children of `sub` are indexed under sub_ino — and NOT leaked into root.
+    assert!(child_ino_for_test(&wfs, sub_ino, OsStr::new("inner.txt")).is_some());
+    assert!(child_ino_for_test(&wfs, sub_ino, OsStr::new("deeper")).is_some());
+    assert!(
+        child_ino_for_test(&wfs, 1, OsStr::new("inner.txt")).is_none(),
+        "grandchild must not be indexed under root"
+    );
+
+    let inner = child_ino_for_test(&wfs, sub_ino, OsStr::new("inner.txt")).unwrap();
+    assert_eq!(
+        wfs.resolve_path(inner).unwrap(),
+        tmp.path().join("sub/inner.txt")
+    );
+    // Path identity: the indexed inode's stored relative path matches the
+    // map lookup — what the old full-scan `entry.path == expected_path` gave.
+    assert_eq!(
+        inner,
+        hilo_fuse::ops::inode_for_path(&wfs, "sub/inner.txt").unwrap()
+    );
+}
+
+#[test]
+fn test_df135_readdir_output_and_cookies_unchanged() {
+    // Create out of sort order; listing must be sorted, dot entries first,
+    // cookies 1,2,3.., and a kernel-style resume walk must terminate.
+    let tmp = tempfile::tempdir().unwrap();
+    for n in ["zeta.txt", "mid.txt", "adir", "aaa.txt"] {
+        if n == "adir" {
+            fs::create_dir(tmp.path().join(n)).unwrap();
+        } else {
+            fs::write(tmp.path().join(n), b"x").unwrap();
+        }
+    }
+    let config = test_config(tmp.path().to_path_buf());
+    let wfs = Hilo::new(tmp.path().to_path_buf(), config);
+
+    let full = readdir_listing_for_test(&wfs, 1, 0);
+    assert_eq!(
+        names_of(&full),
+        vec![".", "..", "aaa.txt", "adir", "mid.txt", "zeta.txt"],
+        "indexed readdir must emit dot entries then children sorted by name"
+    );
+    let cookies: Vec<i64> = full.iter().map(|e| e.1).collect();
+    assert_eq!(
+        cookies,
+        vec![1, 2, 3, 4, 5, 6],
+        "cookie per entry, no re-emission"
+    );
+    let is_dir: Vec<bool> = full.iter().map(|e| e.3).collect();
+    assert_eq!(is_dir, vec![true, true, false, true, false, false]);
+
+    // Resume at the last cookie: stream terminates with an empty batch.
+    let last = full.last().unwrap().clone();
+    assert!(
+        readdir_listing_for_test(&wfs, last.0, last.1).is_empty(),
+        "readdir past the final cookie must return nothing"
+    );
+
+    // Full walk through the mount pipeline terminates and sees every entry.
+    let walked = walk_mount(&wfs, 1);
+    assert_eq!(names_of(&walked), names_of(&full));
+
+    // Re-listing is stable: same inode identities on a second pass.
+    let again = readdir_listing_for_test(&wfs, 1, 0);
+    assert_eq!(
+        full.iter()
+            .map(|e| (e.0, e.1, e.2.clone()))
+            .collect::<Vec<_>>(),
+        again
+            .iter()
+            .map(|e| (e.0, e.1, e.2.clone()))
+            .collect::<Vec<_>>(),
+        "repeat readdir must be identical (no duplicate inode churn)"
+    );
+}
+
+#[test]
+fn test_df135_readdir_empty_directory_terminates_through_index() {
+    // The DF-WARPFS-5 hang class, replayed through the INDEXED pipeline:
+    // empty dir must end at cookie 2 with an empty follow-up batch.
+    let tmp = tempfile::tempdir().unwrap();
+    fs::create_dir(tmp.path().join("emptydir")).unwrap();
+    let config = test_config(tmp.path().to_path_buf());
+    let wfs = Hilo::new(tmp.path().to_path_buf(), config);
+
+    hilo_fuse::ops::populated_child_count(&wfs, 1);
+    let empty_ino = hilo_fuse::ops::inode_for_path(&wfs, "emptydir").unwrap();
+    assert_eq!(hilo_fuse::ops::populated_child_count(&wfs, empty_ino), 0);
+
+    let first = readdir_listing_for_test(&wfs, empty_ino, 0);
+    assert_eq!(names_of(&first), vec![".", ".."]);
+    assert!(
+        readdir_listing_for_test(&wfs, empty_ino, 2).is_empty(),
+        "the exact call that used to loop forever must return nothing"
+    );
+    let walked = walk_mount(&wfs, empty_ino);
+    assert_eq!(names_of(&walked), vec![".".to_string(), "..".to_string()]);
+}
+
+#[test]
+fn test_df135_ignored_entries_never_reach_the_index() {
+    // DF-WARPFS-7 behaviour through the new index: ignored children are
+    // skipped before inode creation, so they are absent from readdir and
+    // from the parent index.
+    let tmp = tempfile::tempdir().unwrap();
+    fs::write(tmp.path().join("keep.txt"), b"k").unwrap();
+    fs::create_dir(tmp.path().join("target")).unwrap();
+    fs::create_dir(tmp.path().join(".git")).unwrap();
+
+    let matcher = IgnoreMatcher::parse("target/\nnode_modules/\n.git/\n*.log\n");
+    let config = test_config(tmp.path().to_path_buf());
+    let wfs = Hilo::new(tmp.path().to_path_buf(), config).with_ignores(matcher);
+
+    assert_eq!(hilo_fuse::ops::populated_child_count(&wfs, 1), 1);
+    assert!(child_ino_for_test(&wfs, 1, OsStr::new("keep.txt")).is_some());
+    assert!(child_ino_for_test(&wfs, 1, OsStr::new("target")).is_none());
+    assert!(child_ino_for_test(&wfs, 1, OsStr::new(".git")).is_none());
+
+    let listed = names_of(&readdir_listing_for_test(&wfs, 1, 0));
+    assert_eq!(listed, vec![".", "..", "keep.txt"]);
+
+    // Repeated populate keeps them out (no later leak through the dedup path).
+    assert_eq!(hilo_fuse::ops::populated_child_count(&wfs, 1), 1);
+    assert!(hilo_fuse::ops::inode_for_path(&wfs, "target").is_none());
+}
+
+#[test]
+fn test_df135_index_and_map_never_diverge() {
+    // Invariant probe over a mixed tree: for every indexed (parent, name),
+    // the mapped inode's stored relative path equals the parent path joined
+    // with the name — the exact equality the removed full-scan relied on.
+    let tmp = tempfile::tempdir().unwrap();
+    fs::create_dir_all(tmp.path().join("a/b/c")).unwrap();
+    fs::write(tmp.path().join("a/b/c/deep.txt"), b"d").unwrap();
+    fs::write(tmp.path().join("a/side.txt"), b"s").unwrap();
+    fs::write(tmp.path().join("root.txt"), b"r").unwrap();
+    let config = test_config(tmp.path().to_path_buf());
+    let wfs = Hilo::new(tmp.path().to_path_buf(), config);
+
+    // Populate breadth-first through the real pipeline.
+    let mut queue = vec![1u64];
+    let mut rounds = 0;
+    while let Some(dir) = queue.pop() {
+        let listing = readdir_listing_for_test(&wfs, dir, 0);
+        for e in listing.iter().skip(2) {
+            // children that are directories get populated too
+            if e.3 {
+                let kids = readdir_listing_for_test(&wfs, e.0, 0);
+                if kids.len() > 2 || rounds < 100 {
+                    queue.push(e.0);
+                }
+            }
+        }
+        rounds += 1;
+        if rounds > 50 {
+            break;
+        }
+    }
+
+    let root_ino = hilo_fuse::ops::inode_for_path(&wfs, "a").unwrap();
+    let a_b = hilo_fuse::ops::inode_for_path(&wfs, "a/b").unwrap();
+    let a_b_c = hilo_fuse::ops::inode_for_path(&wfs, "a/b/c").unwrap();
+    // Every level resolves through the index under its own parent.
+    assert!(child_ino_for_test(&wfs, 1, OsStr::new("a")).is_some());
+    assert_eq!(child_ino_for_test(&wfs, 1, OsStr::new("a")), Some(root_ino));
+    assert_eq!(
+        child_ino_for_test(&wfs, root_ino, OsStr::new("b")),
+        Some(a_b)
+    );
+    assert_eq!(child_ino_for_test(&wfs, a_b, OsStr::new("c")), Some(a_b_c));
+    assert_eq!(
+        child_ino_for_test(&wfs, a_b_c, OsStr::new("deep.txt")),
+        hilo_fuse::ops::inode_for_path(&wfs, "a/b/c/deep.txt")
+    );
+    assert_eq!(wfs.resolve_path(a_b_c).unwrap(), tmp.path().join("a/b/c"));
+    // Siblings stay under their own parent only.
+    assert!(child_ino_for_test(&wfs, a_b, OsStr::new("side.txt")).is_none());
+    assert!(child_ino_for_test(&wfs, root_ino, OsStr::new("side.txt")).is_some());
+}

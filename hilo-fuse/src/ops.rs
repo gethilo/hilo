@@ -6,7 +6,7 @@
 //! standard tools like `cat`, `ls`, and `getfattr` without special clients.
 
 use std::collections::HashMap;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
@@ -84,13 +84,54 @@ pub enum InodeKind {
     Directory,
 }
 
+/// DF-WARPFS-135: the inode map plus a parent→children index, kept behind ONE
+/// lock so they can never diverge.
+///
+/// Before this, `readdir` filtered the ENTIRE inode map and evaluated
+/// `Path::parent()` on every entry per listing, `populate_directory` scanned
+/// every entry to detect an already-known child, and `lookup` scanned by
+/// relative path — all O(all inodes) per call. On a large mount (tens of
+/// thousands of inodes) that O(n)-per-readdir is the reported FUSE readdir
+/// performance regression.
+///
+/// `children[parent_ino][name] = child_ino` is written in the same critical
+/// section as `files`, so an inode always has exactly its index slot. The
+/// key is the raw `OsString` file name as produced by `read_dir` at creation
+/// time; every inode in `files` was inserted by `populate_directory` under the
+/// directory whose own relative path is `entry.path.parent()`, which is the
+/// same directory `populate_directory(dir_ino)` would derive from — so the
+/// index cannot miss a previously-created child (duplicate detection, lookup,
+/// and readdir enumeration all see the identical set the old full-map scans
+/// computed), and nothing evicts inodes, so it cannot go stale.
+#[derive(Default)]
+struct InodeStore {
+    files: HashMap<u64, InodeEntry>,
+    /// parent inode number → child name → child inode number
+    children: HashMap<u64, HashMap<OsString, u64>>,
+}
+
+impl InodeStore {
+    /// Indexed child lookup: replaces the old full-map path scan.
+    fn child_ino(&self, parent: u64, name: &OsStr) -> Option<u64> {
+        self.children.get(&parent)?.get(name).copied()
+    }
+
+    /// Insert a freshly-created inode and index it under `parent` atomically
+    /// (same write-lock hold as the caller's duplicate check).
+    fn insert_child(&mut self, parent: u64, name: OsString, ino: u64, entry: InodeEntry) {
+        self.files.insert(ino, entry);
+        self.children.entry(parent).or_default().insert(name, ino);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Hilo filesystem
 // ---------------------------------------------------------------------------
 
 pub struct Hilo {
     root: PathBuf,
-    files: Arc<RwLock<HashMap<u64, InodeEntry>>>,
+    /// DF-WARPFS-135: inode map + parent→children index behind one lock.
+    files: Arc<RwLock<InodeStore>>,
     next_inode: AtomicU64,
     config: FuseConfig,
     permissions: PermissionEngine,
@@ -111,8 +152,8 @@ impl Hilo {
     /// The root inode (1) is pre-populated as a directory pointing at `root`.
     pub fn new(root: PathBuf, config: FuseConfig) -> Self {
         let permissions = PermissionEngine::from_rules(crate::permissions::default_protections());
-        let mut files = HashMap::new();
-        files.insert(
+        let mut store = InodeStore::default();
+        store.files.insert(
             ROOT_INO,
             InodeEntry {
                 path: PathBuf::from("/"),
@@ -123,7 +164,7 @@ impl Hilo {
         );
         Hilo {
             root,
-            files: Arc::new(RwLock::new(files)),
+            files: Arc::new(RwLock::new(store)),
             next_inode: AtomicU64::new(2),
             config,
             permissions,
@@ -176,8 +217,8 @@ impl Hilo {
     /// Root (ino 1) resolves to `self.root`. Any other inode's stored `path`
     /// is joined onto `self.root`.
     pub fn resolve_path(&self, ino: u64) -> Option<PathBuf> {
-        let files = self.files.read().unwrap();
-        let entry = files.get(&ino)?;
+        let store = self.files.read().unwrap();
+        let entry = store.files.get(&ino)?;
         match ino {
             ROOT_INO => Some(self.root.clone()),
             _ => Some(self.root.join(&entry.path)),
@@ -199,8 +240,8 @@ impl Hilo {
             Err(_) => return,
         };
 
-        let mut files = self.files.write().unwrap();
-        let dir_entry = match files.get(&dir_ino) {
+        let mut store = self.files.write().unwrap();
+        let dir_entry = match store.files.get(&dir_ino) {
             Some(e) => e.clone(),
             None => return,
         };
@@ -212,9 +253,10 @@ impl Hilo {
                 _ => dir_entry.path.join(&name),
             };
 
-            // Skip if we already have an inode for this relative path.
-            let exists = files.values().any(|e| e.path == child_rel);
-            if exists {
+            // DF-WARPFS-135: skip if we already have an inode for this child.
+            // Indexed by parent+name — replaces `files.values().any(...)`,
+            // which was O(all inodes) per child per populate call.
+            if store.child_ino(dir_ino, &name).is_some() {
                 continue;
             }
 
@@ -237,7 +279,11 @@ impl Hilo {
             };
 
             let ino = self.alloc_inode();
-            files.insert(
+            // Creation-time indexing: the inode and its index slot land in the
+            // same write-lock hold, so the two views cannot diverge.
+            store.insert_child(
+                dir_ino,
+                name,
                 ino,
                 InodeEntry {
                     path: child_rel,
@@ -247,6 +293,30 @@ impl Hilo {
                 },
             );
         }
+    }
+
+    /// DF-WARPFS-135: sorted (ino, name, is_dir) children of `dir_ino`, read
+    /// from the parent→children index. Shared by `readdir` (full listing) and
+    /// the test helpers so enumerated order matches the FUSE reply exactly.
+    ///
+    /// This replaces the per-listing `files.iter().filter(|_| e.path.parent()
+    /// == ...)` pass, which reparsed every inode in the filesystem for each
+    /// directory read.
+    fn indexed_children(&self, dir_ino: u64) -> Vec<(u64, String, bool)> {
+        let store = self.files.read().unwrap();
+        let Some(map) = store.children.get(&dir_ino) else {
+            return Vec::new();
+        };
+        let mut children: Vec<(u64, String, bool)> = map
+            .iter()
+            .filter_map(|(name, &ino)| {
+                let entry = store.files.get(&ino)?;
+                let is_dir = matches!(entry.kind, InodeKind::Directory);
+                Some((ino, name.to_string_lossy().into_owned(), is_dir))
+            })
+            .collect();
+        children.sort_by(|a, b| a.1.cmp(&b.1));
+        children
     }
 
     /// Build a `FileAttr` from an `InodeEntry`.
@@ -356,34 +426,27 @@ impl Filesystem for Hilo {
         // Ensure the parent directory's children are populated.
         self.populate_directory(parent);
 
-        // Build the expected relative path for this child.
-        let expected_path = {
-            let files = self.files.read().unwrap();
-            match files.get(&parent) {
-                Some(_) if parent == ROOT_INO => PathBuf::from(name),
-                Some(parent_entry) => parent_entry.path.join(name),
-                None => {
-                    reply.error(ENOENT);
-                    return;
-                }
-            }
-        };
-
-        // Search for the child inode by relative path.
-        let files = self.files.read().unwrap();
-        for (ino, entry) in files.iter() {
-            if entry.path == expected_path {
-                let attr = self.make_attr(*ino, entry);
-                reply.entry(&TTL, &attr, 0);
-                return;
-            }
+        // DF-WARPFS-135: resolve parent+name through the index — replaces the
+        // full-map scan by relative path. The index is populated at inode
+        // creation under the same parent `populate_directory` just walked, so
+        // it sees exactly the children the old path-equality scan did.
+        let store = self.files.read().unwrap();
+        if !store.files.contains_key(&parent) {
+            reply.error(ENOENT);
+            return;
         }
-        reply.error(ENOENT);
+        match store.child_ino(parent, name) {
+            Some(ino) => {
+                let attr = self.make_attr(ino, &store.files[&ino]);
+                reply.entry(&TTL, &attr, 0);
+            }
+            None => reply.error(ENOENT),
+        }
     }
 
     fn getattr(&mut self, _req: &Request, ino: u64, _fh: Option<u64>, reply: ReplyAttr) {
-        let files = self.files.read().unwrap();
-        if let Some(entry) = files.get(&ino) {
+        let store = self.files.read().unwrap();
+        if let Some(entry) = store.files.get(&ino) {
             let attr = self.make_attr(ino, entry);
             reply.attr(&TTL, &attr);
         } else {
@@ -403,47 +466,21 @@ impl Filesystem for Hilo {
             self.populate_directory(ino);
         }
 
-        let files = self.files.read().unwrap();
-
         // A directory we do not know about is an error; resolve that BEFORE
         // emitting anything so the reply is unambiguous.
-        let dir_entry = match files.get(&ino) {
-            Some(e) => e.clone(),
-            None => {
+        {
+            let store = self.files.read().unwrap();
+            if !store.files.contains_key(&ino) {
                 reply.error(ENOENT);
                 return;
             }
-        };
+        }
 
-        // Collect children (sorted by name for deterministic ordering).
-        let mut children: Vec<(u64, String, bool)> = files
-            .iter()
-            .filter(|(_, e)| {
-                if ino == ROOT_INO {
-                    // Direct children of root have single-component relative paths.
-                    e.path
-                        .parent()
-                        .map(|p| p.as_os_str().is_empty())
-                        .unwrap_or(false)
-                        && e.path != Path::new("/")
-                } else {
-                    e.path.parent() == Some(&dir_entry.path)
-                }
-            })
-            .map(|(i, e)| {
-                let is_dir = matches!(e.kind, InodeKind::Directory);
-                (
-                    *i,
-                    e.path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into_owned(),
-                    is_dir,
-                )
-            })
-            .collect();
-        children.sort_by(|a, b| a.1.cmp(&b.1));
+        // DF-WARPFS-135: children come from the parent→children index
+        // (sorted by name for deterministic ordering). The old path filtered
+        // the entire inode map and ran `Path::parent()` on every entry for
+        // every listing.
+        let children = self.indexed_children(ino);
 
         // DF-WARPFS-5: entry list is computed in one place, and the resume rule
         // is `offset < cookie`. Emitting `.`/`..` on `offset <= k` re-sent `..`
@@ -576,7 +613,13 @@ impl Filesystem for Hilo {
         // kernel proceeds (read or write open). Metadata-only operations
         // (getxattr/listxattr) never materialize (§13.14).
         if let Some(stream) = self.stream.clone() {
-            let rel = self.files.read().unwrap().get(&ino).map(|e| e.path.clone());
+            let rel = self
+                .files
+                .read()
+                .unwrap()
+                .files
+                .get(&ino)
+                .map(|e| e.path.clone());
             if let Some(rel) = rel {
                 if let Some(full) = self.resolve_path(ino) {
                     if let Err(e) = stream.materialize(&rel, &full) {
@@ -592,8 +635,8 @@ impl Filesystem for Hilo {
         }
         // Enforce permission check — resolve the path for this inode
         // and verify the operation is allowed by the engine.
-        let files = self.files.read().unwrap();
-        if let Some(entry) = files.get(&ino) {
+        let store = self.files.read().unwrap();
+        if let Some(entry) = store.files.get(&ino) {
             let access_mode = _flags & libc::O_ACCMODE;
             let op = if access_mode == libc::O_WRONLY {
                 PermissionOp::Write
@@ -691,9 +734,9 @@ fn _epoch_now() -> Duration {
 /// Helper used by tests: look up an inode by relative path.
 #[allow(dead_code)]
 pub fn inode_for_path(wfs: &Hilo, rel: &str) -> Option<u64> {
-    let files = wfs.files.read().unwrap();
+    let store = wfs.files.read().unwrap();
     let target = Path::new(rel);
-    for (ino, entry) in files.iter() {
+    for (ino, entry) in store.files.iter() {
         if entry.path == target {
             return Some(*ino);
         }
@@ -715,8 +758,8 @@ pub fn readdir_entries_for_test(
 /// so metadata honesty is provable without a kernel mount.
 #[doc(hidden)]
 pub fn attr_for_test(wfs: &Hilo, ino: u64) -> Option<FileAttr> {
-    let files = wfs.files.read().unwrap();
-    let entry = files.get(&ino)?;
+    let store = wfs.files.read().unwrap();
+    let entry = store.files.get(&ino)?;
     Some(wfs.make_attr(ino, entry))
 }
 
@@ -765,20 +808,35 @@ pub fn is_ignored_for_test(matcher: IgnoreMatcher, rel: &str) -> bool {
 #[allow(dead_code)]
 pub fn populated_child_count(wfs: &Hilo, dir_ino: u64) -> usize {
     wfs.populate_directory(dir_ino);
-    let files = wfs.files.read().unwrap();
-    let dir_entry = match files.get(&dir_ino) {
-        Some(e) => e.clone(),
-        None => return 0,
-    };
-    let parent_path = &dir_entry.path;
-    files
-        .values()
-        .filter(|e| {
-            if dir_ino == ROOT_INO {
-                e.path.parent().is_none() && e.path != Path::new("/")
-            } else {
-                e.path.parent() == Some(parent_path)
-            }
-        })
-        .count()
+    // DF-WARPFS-135: counted through the parent→children index. The index
+    // count is what readdir enumerates, so this helper stays consistent with
+    // the hot path it is used alongside.
+    let store = wfs.files.read().unwrap();
+    if !store.files.contains_key(&dir_ino) {
+        return 0;
+    }
+    store.children.get(&dir_ino).map(|m| m.len()).unwrap_or(0)
+}
+
+/// Test-only: the readdir entries the mount would produce for `dir_ino` at
+/// `offset` — populate + indexed child enumeration + the shared cookie
+/// builder, i.e. exactly the pipeline `Filesystem::readdir` runs, minus the
+/// kernel reply object (DF-WARPFS-135).
+#[doc(hidden)]
+pub fn readdir_listing_for_test(
+    wfs: &Hilo,
+    dir_ino: u64,
+    offset: i64,
+) -> Vec<(u64, i64, String, bool)> {
+    wfs.populate_directory(dir_ino);
+    let children = wfs.indexed_children(dir_ino);
+    readdir_entries(offset, &children)
+}
+
+/// Test-only: indexed child-membership probe — `Some(ino)` iff the
+/// parent→children index holds `name` under `parent` (DF-WARPFS-135).
+#[doc(hidden)]
+pub fn child_ino_for_test(wfs: &Hilo, parent: u64, name: &OsStr) -> Option<u64> {
+    let store = wfs.files.read().unwrap();
+    store.child_ino(parent, name)
 }
