@@ -33,6 +33,7 @@ pub const MANIFEST_PATHS: &[&str] = &["manifest.yaml", ".vfs/manifest.yaml"];
 /// parent directory is a normal, non-hidden source root).
 pub const DEFAULT_PRUNE_DIRS: &[&str] = &[
     "target",        // Rust build output
+    "target-local",  // Rust local build output (warpfs-specific)
     "node_modules",  // JavaScript/TypeScript
     "vendor",        // Go / PHP
     "__pycache__",   // Python cache
