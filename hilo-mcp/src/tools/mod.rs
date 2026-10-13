@@ -770,6 +770,7 @@ fn graph_search(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
         limit,
         index_symbols: true,
         root: None,
+        extra_documents: Vec::new(),
     };
     let results = hilo_graph::search(&db, query, &opts)?;
 

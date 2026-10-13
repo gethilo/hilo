@@ -154,6 +154,7 @@ fn ranked(db: &GraphDB, corpus_dir: &Path, query: &str) -> Vec<String> {
         limit: SEARCH_LIMIT,
         index_symbols: true,
         root: Some(corpus_dir.to_path_buf()),
+        ..Default::default()
     };
     search(db, query, &opts)
         .expect("search")

@@ -121,6 +121,30 @@ fn symbol_cache_path(root: &Path) -> PathBuf {
 /// Graph documents that can carry source-defined symbols, sorted so both the
 /// fingerprint and serialized cache are deterministic.
 fn symbol_source_paths(graph: &GraphDB) -> Result<Vec<String>> {
+    let mut paths = symbol_edge_endpoint_paths(graph)?;
+
+    // DF-WARPFS-116: the graph DB stores only edge ENDPOINTS, so a
+    // discovered source file with zero import edges (a `math.py` nothing
+    // imports) is invisible here — and was missing from the symbol cache
+    // AND the search corpus. Warm's parse cache keys EVERY discovered file,
+    // so its zero-edge keys (files on disk with a known language extension,
+    // absent from the endpoint set) join the corpus.
+    if let Ok(cwd) = std::env::current_dir() {
+        let cache = load_parse_cache(&cwd);
+        for key in cache.keys() {
+            if !paths.contains(key)
+                && Language::from_path(std::path::Path::new(key)).is_some()
+                && std::path::Path::new(key).exists()
+            {
+                paths.push(key.clone());
+            }
+        }
+        paths.sort();
+    }
+    Ok(paths)
+}
+
+fn symbol_edge_endpoint_paths(graph: &GraphDB) -> Result<Vec<String>> {
     let (froms, tos) = graph
         .distinct_files()
         .context("failed to list graph files for symbol cache")?;
@@ -2878,6 +2902,23 @@ pub fn run_search(query: &str, limit: Option<usize>, no_symbols: bool) -> Result
     // restores the cheap path-only index.
     opts.index_symbols = !no_symbols;
 
+    // DF-WARPFS-116: discovered files with zero import edges are invisible
+    // to the graph DB (edge endpoints only) — pass them from warm's parse
+    // cache so a symbol defined in a file nothing imports is still findable.
+    opts.extra_documents = load_parse_cache(&cwd)
+        .keys()
+        .filter(|key| {
+            !key.starts_with("pkg:")
+                && !key.starts_with("local:")
+                && !key.starts_with("sys:")
+                && !key.starts_with("std:")
+                && !key.starts_with("external:")
+                && Language::from_path(std::path::Path::new(key.as_str())).is_some()
+                && std::path::Path::new(key.as_str()).exists()
+        })
+        .cloned()
+        .collect();
+
     let results = if no_symbols {
         hilo_graph::semantic::search(&graph, query, &opts)
     } else {
@@ -3514,6 +3555,7 @@ mod tests {
             limit: 10,
             index_symbols: true,
             root: None,
+            extra_documents: Vec::new(),
         };
         let search = hilo_graph::semantic::search_with_symbols(
             &graph,

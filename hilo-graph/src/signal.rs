@@ -363,6 +363,7 @@ fn discover_anchors(
         limit: seed_limit,
         index_symbols: true,
         root: None,
+        extra_documents: Vec::new(),
     };
     let semantic_results =
         match crate::semantic::search_with_symbols(db, task, &search_opts, symbol_extractor) {
