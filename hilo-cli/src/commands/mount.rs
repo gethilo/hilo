@@ -44,7 +44,13 @@ pub(crate) const DAEMON_CHILD_ENV: &str = "HILO_MOUNT_DAEMONIZED";
 /// process exits — the graph.db write lock never outlives the mount.
 ///
 /// On `SIGINT` / `SIGTERM` the mount is cleaned up via `daemon::unmount`.
-pub fn run_mount(mount_point: &str, triggers: bool, allow_other: bool, daemon: bool) -> Result<()> {
+pub fn run_mount(
+    mount_point: &str,
+    triggers: bool,
+    allow_other: bool,
+    daemon: bool,
+    log_file: Option<&str>,
+) -> Result<()> {
     // DF-WARPFS-29: the trigger engine logs fires/failures via `tracing`,
     // which is invisible without a subscriber. Install one (stderr, human
     // format) so `--triggers` mounts surface what is actually happening.
@@ -71,11 +77,35 @@ pub fn run_mount(mount_point: &str, triggers: bool, allow_other: bool, daemon: b
     // Foreground parent of a `--daemon` mount: spawn the detached child and
     // return. The child (see DAEMON_CHILD_ENV) skips this branch.
     if daemon && std::env::var_os(DAEMON_CHILD_ENV).is_none() {
-        let mut cmd = build_daemon_command(mount_point, triggers, allow_other)?;
+        // DF-WARPFS-134: the child's only logging channel is stderr. Always
+        // hand it a real file: an explicit --log-file when given, otherwise
+        // a default log under the mount point, so `--triggers --daemon`
+        // output (trigger engine eprintln!s + tracing) is never discarded.
+        let resolved_log = resolve_daemon_log_path(log_file, Path::new(mount_point))?;
+        if let Some(parent) = resolved_log.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create log dir {}", parent.display()))?;
+        }
+        // Open in the PARENT and pass the descriptor to the child: the file
+        // exists even if the child fails before its first write.
+        let log = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&resolved_log)
+            .with_context(|| format!("failed to open daemon log {}", resolved_log.display()))?;
+        let mut cmd = build_daemon_command(
+            mount_point,
+            triggers,
+            allow_other,
+            &resolved_log,
+            log_file.is_some(),
+        )?;
+        cmd.stderr(Stdio::from(log));
         let child = cmd.spawn().context("failed to spawn background mount")?;
         println!(
-            "Hilo mount daemonized (pid {}) — filesystem available at {mount_point}",
-            child.id()
+            "Hilo mount daemonized (pid {}) — filesystem available at {mount_point} (log: {})",
+            child.id(),
+            resolved_log.display()
         );
         return Ok(());
     }
@@ -264,12 +294,30 @@ fn build_stream_state(root: &Path) -> Result<Option<Arc<StreamState>>> {
     Ok(stream_state)
 }
 
+/// DF-WARPFS-134: resolve the daemon stderr log path. An explicit
+/// `--log-file` wins; otherwise the default is
+/// `<mount_point>/.vfs/logs/mount-daemon.log` (created on demand by the
+/// caller). Resolved in the PARENT so the resolved path can be printed in
+/// the daemonized banner before the child even starts.
+fn resolve_daemon_log_path(explicit: Option<&str>, mount_point: &Path) -> Result<PathBuf> {
+    match explicit {
+        Some(p) => Ok(PathBuf::from(p)),
+        None => Ok(mount_point.join(".vfs/logs/mount-daemon.log")),
+    }
+}
+
 /// Build the detached child command for `hilo mount --daemon`.
 ///
 /// Re-executes the current binary with the same mount arguments plus
 /// `HILO_MOUNT_DAEMONIZED=1`, makes the child a session leader (`setsid`)
 /// and detaches its stdio so the parent can return immediately.
-fn build_daemon_command(mount_point: &str, triggers: bool, allow_other: bool) -> Result<Command> {
+fn build_daemon_command(
+    mount_point: &str,
+    triggers: bool,
+    allow_other: bool,
+    log_path: &Path,
+    explicit_log: bool,
+) -> Result<Command> {
     let exe = std::env::current_exe().context("failed to locate the hilo binary")?;
     let mut cmd = Command::new(exe);
     cmd.arg("mount").arg(mount_point);
@@ -279,11 +327,17 @@ fn build_daemon_command(mount_point: &str, triggers: bool, allow_other: bool) ->
     if allow_other {
         cmd.arg("--allow-other");
     }
+    if explicit_log {
+        // Only pass the flag through when the user set it; the child
+        // re-resolves the same default for an unflagged mount.
+        cmd.arg("--log-file").arg(log_path);
+    }
     cmd.arg("--daemon");
     cmd.env(DAEMON_CHILD_ENV, "1");
-    cmd.stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+    cmd.stdin(Stdio::null()).stdout(Stdio::null());
+    // DF-WARPFS-134: stderr is the child's only logging channel. This
+    // function cannot set it — the caller opens the log file in the parent
+    // and attaches it via `cmd.stderr(Stdio::from(file))` (see run_mount).
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -831,7 +885,8 @@ triggers:
 
     #[test]
     fn test_build_daemon_command_args() {
-        let cmd = build_daemon_command("/tmp/vfs", true, true).unwrap();
+        let log = Path::new("/tmp/hilo-test-134.log");
+        let cmd = build_daemon_command("/tmp/vfs", true, true, log, true).unwrap();
         let args: Vec<OsString> = cmd.get_args().map(OsString::from).collect();
         assert_eq!(
             args,
@@ -840,6 +895,8 @@ triggers:
                 OsString::from("/tmp/vfs"),
                 OsString::from("--triggers"),
                 OsString::from("--allow-other"),
+                OsString::from("--log-file"),
+                OsString::from(log),
                 OsString::from("--daemon"),
             ]
         );
@@ -848,7 +905,8 @@ triggers:
 
     #[test]
     fn test_build_daemon_command_minimal() {
-        let cmd = build_daemon_command("/tmp/vfs", false, false).unwrap();
+        let log = Path::new("/tmp/hilo-test-134.log");
+        let cmd = build_daemon_command("/tmp/vfs", false, false, log, false).unwrap();
         let args: Vec<OsString> = cmd.get_args().map(OsString::from).collect();
         assert_eq!(
             args,
@@ -858,11 +916,14 @@ triggers:
                 OsString::from("--daemon"),
             ]
         );
+        // The default log is NOT passed through; the child re-resolves it.
+        assert!(!args.contains(&OsString::from("--log-file")));
     }
 
     #[test]
     fn test_build_daemon_command_sets_marker_env() {
-        let cmd = build_daemon_command("/tmp/vfs", false, false).unwrap();
+        let log = Path::new("/tmp/hilo-test-134.log");
+        let cmd = build_daemon_command("/tmp/vfs", false, false, log, false).unwrap();
         let envs: Vec<(OsString, Option<OsString>)> = cmd
             .get_envs()
             .map(|(k, v)| (k.to_os_string(), v.map(OsString::from)))
@@ -874,5 +935,76 @@ triggers:
             )),
             "daemon child marker env must be set: {envs:?}"
         );
+    }
+
+    // ───────── DF-WARPFS-134: daemon child keeps stderr — persistent log ─────────
+
+    #[test]
+    fn test_resolve_daemon_log_path_default() {
+        let resolved =
+            resolve_daemon_log_path(None, Path::new("/tmp/some-mount")).expect("default resolves");
+        assert_eq!(
+            resolved,
+            PathBuf::from("/tmp/some-mount/.vfs/logs/mount-daemon.log"),
+            "default log must live under the mount point"
+        );
+    }
+
+    #[test]
+    fn test_resolve_daemon_log_path_explicit_wins() {
+        let resolved = resolve_daemon_log_path(
+            Some("/var/log/hilo/mount.log"),
+            Path::new("/tmp/some-mount"),
+        )
+        .expect("explicit resolves");
+        assert_eq!(resolved, PathBuf::from("/var/log/hilo/mount.log"));
+    }
+
+    #[test]
+    fn test_daemon_log_file_created_and_appended() {
+        let dir = std::env::temp_dir().join("hilo-dfwarpfs134-test");
+        std::fs::create_dir_all(&dir).expect("create log dir");
+        let log_path = dir.join("mount-daemon.log");
+        let _ = std::fs::remove_file(&log_path);
+
+        // The run_mount parent path: create dirs, open (create+append) in
+        // the parent, attach as the child's stderr.
+        if let Some(parent) = log_path.parent() {
+            std::fs::create_dir_all(parent).expect("parent dirs created");
+        }
+        let log = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .expect("log file opened (created)");
+        assert!(log_path.exists(), "log file must exist after open");
+
+        let mut cmd = Command::new("/bin/sh");
+        cmd.arg("-c").arg("echo hello-from-daemon >&2");
+        cmd.stderr(Stdio::from(log));
+        let status = cmd.status().expect("child ran");
+        assert!(status.success());
+
+        let contents = std::fs::read_to_string(&log_path).expect("log readable");
+        assert!(
+            contents.contains("hello-from-daemon"),
+            "child stderr must land in the log file: {contents:?}"
+        );
+
+        // Append-mode: a second child keeps growing the same file.
+        let log2 = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .expect("reopen for append");
+        let mut cmd2 = Command::new("/bin/sh");
+        cmd2.arg("-c").arg("echo second-write >&2");
+        cmd2.stderr(Stdio::from(log2));
+        assert!(cmd2.status().expect("second child ran").success());
+        let contents = std::fs::read_to_string(&log_path).expect("log readable");
+        assert!(contents.contains("hello-from-daemon"));
+        assert!(contents.contains("second-write"), "append, not truncate");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -82,6 +82,11 @@ struct MountArgs {
     /// Run in the background: detach from the terminal and return immediately.
     #[arg(long)]
     daemon: bool,
+    /// Daemon log file: the daemonized mount's stderr (trigger engine
+    /// eprintln!s + tracing) is appended here. Defaults to
+    /// `<mount_point>/.vfs/logs/mount-daemon.log` (DF-WARPFS-134).
+    #[arg(long, value_name = "PATH")]
+    log_file: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -610,6 +615,7 @@ pub fn run() -> anyhow::Result<()> {
             args.triggers,
             args.allow_other,
             args.daemon,
+            args.log_file.as_deref(),
         ),
         Commands::Workspace(WorkspaceCommand::Mount(args)) => {
             workspace::run_workspace_mount(&args.manifest, &args.mount_point, args.daemon)

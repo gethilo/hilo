@@ -30,7 +30,7 @@ The `hilo` binary — entrypoint for all Hilo operations. Built with clap.
 | `hilo backend sync [--push\|--pull\|--both] [PATH...]` | Sync mounted backends against the workspace (default two-way, ignore-aware) |
 | `hilo backend setup [--type s3\|gdrive\|onedrive\|dropbox\|external]` | Detect sync tools/credentials, print next steps (writes nothing) |
 | `hilo backend list` | List all mounted backends |
-| `hilo mount <mount-point> [--triggers] [--allow-other] [--daemon]` | Mount FUSE filesystem (--daemon detaches into a background process) |
+| `hilo mount <mount-point> [--triggers] [--allow-other] [--daemon] [--log-file <PATH>]` | Mount FUSE filesystem (--daemon detaches into a background process; daemon stderr — trigger engine + tracing logs — appends to `<mount-point>/.vfs/logs/mount-daemon.log` by default, or `--log-file`) |
 | `hilo workspace mount <MOUNT_POINT> [--manifest <PATH>]` | Mount all repos and backends from the workspace manifest (default `.vfs/manifest.yaml`) |
 | `hilo workspace unmount <MOUNT_POINT>` | Unmount a workspace |
 | `hilo workspace sync --bucket <BUCKET> --at <DIR> [--prefix <PREFIX>] [--ignore <FILE>] [--dry-run]` | Two-way sync a local directory against an S3 prefix — non-ignored files mirrored both ways, ignored files (`.hiloignore`, git-ignore style) stay local-only |

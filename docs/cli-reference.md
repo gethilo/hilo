@@ -791,12 +791,23 @@ hilo mount /mnt/vfs --allow-other
 
 # Run in the background (detached daemon — returns immediately)
 hilo mount /mnt/vfs --daemon
+
+# Run in the background with a custom log file (daemon stderr)
+hilo mount /mnt/vfs --daemon --log-file /var/log/hilo/mnt-vfs.log
 ```
 
 **Note:** `hilo mount` runs in the foreground and blocks the terminal
 until unmounted. Run it in a separate terminal, background it with `&`,
 or pass `--daemon` to detach it into a background process that keeps the
 mount alive until `fusermount -u /mnt/vfs` unmounts it.
+
+**Daemon logging (DF-WARPFS-134):** a `--daemon` mount no longer discards
+its stderr. By default the daemon appends to
+`<mount_point>/.vfs/logs/mount-daemon.log` (created on demand); pass
+`--log-file <PATH>` to choose the location. The resolved path is printed
+in the "Hilo mount daemonized" banner. This is where trigger engine
+output (`--triggers` — "loaded N triggers", fire/failure messages) and
+tracing logs land when running detached.
 
 ## `hilo serve`
 

@@ -6,6 +6,15 @@ All notable changes to Hilo are documented in this file.
 
 ### Fixed
 
+- **`hilo mount --daemon` keeps the child's stderr — persistent log file**
+  (DF-WARPFS-134): the daemonized child's only logging channel (trigger
+  engine eprintln!s + the `--triggers` tracing subscriber) was discarded
+  via `Stdio::null()`, making `--triggers --daemon` observably dead. The
+  parent now always hands the child a real log file: the new
+  `--log-file <PATH>` flag when given, else
+  `<mount_point>/.vfs/logs/mount-daemon.log` (dirs created on demand,
+  append mode). The resolved path is printed in the "Hilo mount
+  daemonized" banner; stdout stays detached.
 - **`graph impact` reaches flat (top-level) Python modules in file form**
   (GAP-104): `app.py` doing `import util` emits the edge
   `{from: app.py, to: pkg:util}`, but `hilo graph impact util.py` answered
