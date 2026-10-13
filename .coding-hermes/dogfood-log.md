@@ -1414,3 +1414,47 @@ dogfooded 2026-09-20 (run 7/20) — re-prove the completed P0/P1 set through rea
 - Left behind: docs/dogfood/2026-10-10-run39-fuse-rediscovery.md + rows DF-133/134/135
   (created_by: dogfood-warpfs-run39) + skills/hilo-usage/SKILL.md run-39 section. No
   code changes. Foreman woken: NO (read-only lane contract).
+
+## 2026-10-13 — run 40 — MCP server surface (first drive at HEAD) — 🟡 PROMISING-BUT-ROUGH
+
+- Verdict: 🟡 PROMISING-BUT-ROUGH. The MCP surface works end to end and cross-
+  surface parity is proven, but the P0 trust-boundary gap makes it unsafe to
+  point at anything but a scratch workspace today.
+- Promise: agent manages/queries codebase metadata via `hilo serve --mcp`
+  (18 vfs_* tools) exactly as through CLI/FUSE.
+- Method: hand-written stdio JSON-RPC client against HEAD binary 0.4.0
+  (v0.3.0-439-g4d866c84-dirty), scratch repo /tmp/df40repo, 13 tool calls over
+  10 tools incl. error paths; parity probes both directions (CLI↔MCP xattrs,
+  MCP vs CLI search output byte-compare).
+- Findings: DF-WARPFS-139 (P0) MCP server has no workspace confinement —
+  /etc/passwd metadata + 1129-entry /home/kara listing served to an MCP client;
+  root cause resolve_backend (hilo-mcp/src/tools/mod.rs:1029-1037) passes
+  absolute paths through untouched. DF-WARPFS-140 (P1) search blind to any
+  zero-import file — docstring queries return nothing until one import edge
+  exists (proven twice: consts.py and invoice.py round-trip). Positive
+  re-proofs (no rows): vfs_list_directory fixed (DF-WARPFS-41 closed),
+  18 tools not 17 (DF-WARPFS-43 count drift resolved at source), unknown-tool
+  and missing-file errors honest JSON-RPC.
+- Perf: warm search 25.8ms ±1.8 (hyperfine 20); MCP 7-call session 322ms ±10;
+  DuckDB-rebuild cold 224ms; zero-state cold 50ms. Nothing a user would feel —
+  no PERF row.
+- Install leg: ephemeral agent df40-install on bunker-mvp (only reachable
+  bunker host; bunker3/2/4 all down). Attempt 1 on the plain source build
+  FAILED rc=101 — openssl-sys cannot find OpenSSL on the bare agent (no
+  libssl-dev/pkg-config; matches README's documented wall table). Retry on the
+  README's own no-sudo path (`--no-default-features --features vendored-openssl`)
+  SUCCEEDED: clone 6s, rustup 24s, build 60m38s cold (8-core agent, loadavg
+  spiked to 67 from sibling build contention — README's 15-30min estimate is
+  for an uncontended box), smoke PASSED (init, meta set/get xattr, graph warm,
+  graph search hit, getfattr unavailable on the agent — not a product gap).
+  Agent destroyed, residue clear after recheck.
+- Time-to-first-success: ~2 min (init→warm→first MCP answer). Friction: 2
+  (the confinement surprise is a finding, not friction; friction = zero-import
+  invisibility, and needing to read source to confirm the absolute-path hole).
+- Sibling check: no same-day sibling dogfood commit (log has no 10-13 entry);
+  working tree carries sibling foreman edits (hilo-cli/cli.rs, mount.rs,
+  docs/cli-reference.md, docs/hilo-cli.md) — my commit is pathspec-scoped to
+  my files only.
+- Left behind: docs/dogfood/2026-10-13-run40-mcp-surface.md, rows
+  DF-WARPFS-139/140 (created_by dogfood-warpfs-run40), skills/hilo-usage
+  run-40 section. No code changes. Foreman woken: NO (read-only lane contract).

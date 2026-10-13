@@ -897,3 +897,26 @@ path above.
 DF-WARPFS-125) — the zero-credential try-it path does not exist on the CLI.
 For a local-dir sync stand-in, use `rclone serve s3` as shown, or the
 `workspace sync` engine (run 8 recipe above).
+
+## Run 40 (2026-10-13, MCP server re-drive at HEAD): what changed, what to trust
+
+- Tools/list now returns **18** tools (run 12 saw 17); count mismatch fixed.
+- `vfs_list_directory` WORKS at HEAD (returned 3/3 entries on a populated
+  dir; DF-WARPFS-41's empty-listing defect is fixed) — but see the P0 below
+  before trusting it on any path.
+- Cross-surface xattr parity PROVEN both directions: CLI `hilo meta --set` →
+  MCP `vfs_get_metadata` shows it; MCP `vfs_set_metadata` → CLI `hilo meta`
+  and getfattr(1) show it. Same file, same value.
+- Search over MCP matches CLI byte-for-byte (same scores, same provenance).
+- **P0 DF-WARPFS-139: no path confinement.** Absolute paths and `..` escapes
+  reach the host filesystem — `vfs_get_metadata {path:"/etc/passwd"}` and
+  `vfs_list_directory {path:"/home/kara"}` both served real data. Until fixed,
+  only point the server at scratch workspaces you control.
+- **P1 DF-WARPFS-140: search is blind to zero-import files** (constants,
+  configs, data files). Same docstring queries return nothing until the file
+  has at least one import edge. Quote this before telling an agent search is
+  trustworthy.
+- Perf (nothing user-noticeable, no PERF row): warm `graph search` 25.8ms
+  ±1.8 (hyperfine 20 runs, 4-file corpus); full 7-call MCP session 322ms ±10
+  (process spawn dominates); DuckDB-rebuild cold 224ms; init+warm+search
+  from zero 50ms cold / 26.6ms ±1.1 warm.
