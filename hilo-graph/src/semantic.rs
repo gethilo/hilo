@@ -362,6 +362,16 @@ pub struct SearchOpts {
     /// the process CWD (tests with a temp dir, embedded/sandboxed hosts)
     /// set this explicitly instead of chdir'ing the process.
     pub root: Option<std::path::PathBuf>,
+    /// Repo-relative paths of discovered source files with ZERO import
+    /// edges (DF-WARPFS-116). The graph DB only stores edge endpoints, so a
+    /// file like a `math.py` that defines symbols nothing imports is
+    /// invisible to `distinct_files()` — and was therefore absent from the
+    /// search corpus entirely: `graph search add` on a 2-file Python corpus
+    /// returned "No results found" for a genuinely defined symbol. Warm
+    /// knows these files (its parse cache keys every discovered file), and
+    /// callers that can enumerate them pass them here so they join the
+    /// TF-IDF/BM25 corpus as path+symbol documents like any other file.
+    pub extra_documents: Vec<String>,
 }
 
 impl Default for SearchOpts {
@@ -370,6 +380,7 @@ impl Default for SearchOpts {
             limit: 20,
             index_symbols: false,
             root: None,
+            extra_documents: Vec::new(),
         }
     }
 }
@@ -633,7 +644,7 @@ impl TfIdfIndex {
         db: &GraphDB,
         symbol_extractor: SymbolExtractor,
     ) -> GraphResult<Self> {
-        Self::build_with_docs(db, symbol_extractor, None)
+        Self::build_with_docs(db, symbol_extractor, None, &[])
     }
 
     /// Build a TF-IDF index with symbol extraction AND a documentation
@@ -644,10 +655,16 @@ impl TfIdfIndex {
     /// kept OUT of `doc_lens_capped`: BM25's length normalisation keeps
     /// measuring path + first-8-symbols, so every pinned pre-GAP-116 ranking
     /// holds by construction and only recall grows.
+    ///
+    /// `extra_documents` (DF-WARPFS-116): repo-relative paths of discovered
+    /// source files with zero import edges, which the graph DB (edge
+    /// endpoints only) cannot report. They join the corpus as ordinary
+    /// path+symbol documents.
     pub fn build_with_docs(
         db: &GraphDB,
         symbol_extractor: SymbolExtractor,
         doc_extractor: DocExtractor,
+        extra_documents: &[String],
     ) -> GraphResult<Self> {
         let (froms, tos) = db.distinct_files().unwrap_or((Vec::new(), Vec::new()));
         let mut all_files: HashSet<String> = froms.into_iter().collect();
@@ -661,6 +678,24 @@ impl TfIdfIndex {
         // its own name (bake-off wave 6: `pkg:..config` 0.0313 vs
         // `src/flask/config.py` 0.0308).
         all_files.retain(|p| !is_relative_specifier_node(p));
+
+        // DF-WARPFS-116: discovered-but-zero-edge files join the corpus.
+        // The caller (CLI search via warm's parse cache) enumerates them;
+        // here we only skip what is already an edge-endpoint document and
+        // anything that looks like a pseudo-node. They become ordinary
+        // path+symbol documents below, so a symbol defined in a file nothing
+        // imports is findable.
+        for extra in extra_documents {
+            if !extra.starts_with("pkg:")
+                && !extra.starts_with("local:")
+                && !extra.starts_with("sys:")
+                && !extra.starts_with("std:")
+                && !extra.starts_with("external:")
+                && !all_files.contains(extra)
+            {
+                all_files.insert(extra.clone());
+            }
+        }
 
         // Sort for determinism.
         let mut documents: Vec<String> = all_files.into_iter().collect();
@@ -1120,7 +1155,8 @@ pub fn search_with_symbols_and_docs(
     // `fused` escapes as owned data. No cross-statement borrows.
     let fused = match symbol_extractor {
         Some(f) => {
-            let index = TfIdfIndex::build_with_docs(db, Some(f), doc_extractor)?;
+            let index =
+                TfIdfIndex::build_with_docs(db, Some(f), doc_extractor, &opts.extra_documents)?;
             build_fused(db, query, &index, index.is_empty())?
         }
         None if opts.index_symbols => {
@@ -1130,11 +1166,17 @@ pub fn search_with_symbols_and_docs(
                 .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
             let extracted = default_symbol_extractor(&root_tmp);
             let extracted_docs = default_doc_extractor(&root_tmp);
-            let index = TfIdfIndex::build_with_docs(db, Some(&extracted), Some(&extracted_docs))?;
+            let index = TfIdfIndex::build_with_docs(
+                db,
+                Some(&extracted),
+                Some(&extracted_docs),
+                &opts.extra_documents,
+            )?;
             build_fused(db, query, &index, index.is_empty())?
         }
         None => {
-            let index = TfIdfIndex::build_with_docs(db, None, doc_extractor)?;
+            let index =
+                TfIdfIndex::build_with_docs(db, None, doc_extractor, &opts.extra_documents)?;
             build_fused(db, query, &index, index.is_empty())?
         }
     };
@@ -1422,6 +1464,7 @@ mod tests {
             limit: 10,
             index_symbols: false,
             root: None,
+            extra_documents: Vec::new(),
         };
 
         let symbols = default_symbol_extractor(dir.path());
@@ -1462,6 +1505,7 @@ mod tests {
             limit: 10,
             index_symbols: false,
             root: None,
+            extra_documents: Vec::new(),
         };
         let symbols = default_symbol_extractor(dir.path());
         let docs = default_doc_extractor(dir.path());
@@ -1511,6 +1555,55 @@ mod tests {
     }
 
     #[test]
+    fn extra_documents_reach_a_zero_edge_pythons_symbols() {
+        // DF-WARPFS-116: the graph DB stores only edge ENDPOINTS, so a
+        // discovered file with zero import edges (src/math.py, defining
+        // `add`) was never a document — `search add` found nothing on a
+        // 2-file Python corpus. With `extra_documents` the caller feeds the
+        // zero-edge file in and its Python def symbols become findable.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(
+            dir.path().join("src/math.py"),
+            "def add(a, b):\n    return a + b\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("src/main.py"),
+            "from math import add\n\nprint(add(1, 2))\n",
+        )
+        .unwrap();
+        let db_path = dir.path().join("graph.db");
+        let db = GraphDB::open(db_path.to_str().unwrap()).unwrap();
+        db.insert_edges(&[crate::Edge::new("src/main.py", "pkg:math", "imports")])
+            .unwrap();
+
+        // Without extra_documents: src/math.py is invisible (no edges).
+        let plain = SearchOpts {
+            limit: 10,
+            index_symbols: true,
+            root: Some(dir.path().to_path_buf()),
+            ..Default::default()
+        };
+        let results = search(&db, "add", &plain).unwrap();
+        assert!(
+            !results.iter().any(|r| r.file_path == "src/math.py"),
+            "precondition: a zero-edge file must be absent from the corpus, got: {results:?}"
+        );
+
+        // With the zero-edge file passed in: its `add` symbol is findable.
+        let with_extra = SearchOpts {
+            extra_documents: vec!["src/math.py".to_string()],
+            ..plain
+        };
+        let results = search(&db, "add", &with_extra).unwrap();
+        assert!(
+            results.iter().any(|r| r.file_path == "src/math.py"),
+            "zero-edge file's def symbol must be findable via extra_documents, got: {results:?}"
+        );
+    }
+
+    #[test]
     fn search_with_symbols_finds_defining_file_by_exact_symbol() {
         let (dir, db) = gap077_fixture();
         // The default extractor reads fixture files relative to the
@@ -1520,6 +1613,7 @@ mod tests {
             limit: 10,
             index_symbols: true,
             root: Some(dir.path().to_path_buf()),
+            extra_documents: Vec::new(),
         };
         let results = search(&db, "url_for", &opts).unwrap();
         assert!(
@@ -2011,6 +2105,7 @@ mod tests {
             limit: 500,
             index_symbols: true,
             root: Some(dir.path().to_path_buf()),
+            extra_documents: Vec::new(),
         };
         let results = search(&db, "res json", &opts).unwrap();
         let impl_pos = results
@@ -2082,6 +2177,7 @@ mod tests {
             limit: 10,
             index_symbols: true,
             root: Some(dir.path().to_path_buf()),
+            extra_documents: Vec::new(),
         };
         let results = search(&db, "url_for", &opts).unwrap();
 
@@ -2144,6 +2240,7 @@ mod tests {
             limit: 10,
             index_symbols: true,
             root: Some(dir.path().to_path_buf()),
+            extra_documents: Vec::new(),
         };
 
         // The parser's own symbol table is the oracle (default extractor).
@@ -2301,6 +2398,7 @@ mod tests {
             limit: 10,
             index_symbols: true,
             root: Some(dir.path().to_path_buf()),
+            extra_documents: Vec::new(),
         };
         let results = search_with_symbols(&db, "alpha_util", &opts, extractor).unwrap();
 
@@ -2378,6 +2476,7 @@ mod tests {
             limit: 10,
             index_symbols: true,
             root: Some(dir.path().to_path_buf()),
+            extra_documents: Vec::new(),
         };
 
         // Fixed battery: query → expected file within the top N.
@@ -2917,6 +3016,7 @@ mod tests {
             limit: 10,
             index_symbols: false,
             root: None,
+            extra_documents: Vec::new(),
         };
         let results = search(&db, "product catalog service", &opts).unwrap();
 
@@ -3043,6 +3143,7 @@ mod tests {
                 limit: 1,
                 index_symbols: false,
                 root: None,
+                extra_documents: Vec::new(),
             },
         )
         .unwrap();
@@ -3057,6 +3158,7 @@ mod tests {
             limit: 10,
             index_symbols: false,
             root: None,
+            extra_documents: Vec::new(),
         };
         let r1 = search(&db, "product catalog service", &opts).unwrap();
         let r2 = search(&db, "product catalog service", &opts).unwrap();
