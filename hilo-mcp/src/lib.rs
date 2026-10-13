@@ -4,6 +4,7 @@
 //! vfs_graph_stats, vfs_graph_audit, and 14 more) — see tools/mod.rs for the
 //! dispatch table.
 
+pub mod confinement;
 pub mod error;
 pub mod rate_limiter;
 pub mod server;
