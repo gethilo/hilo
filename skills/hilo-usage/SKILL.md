@@ -920,3 +920,20 @@ For a local-dir sync stand-in, use `rclone serve s3` as shown, or the
   ±1.8 (hyperfine 20 runs, 4-file corpus); full 7-call MCP session 322ms ±10
   (process spawn dominates); DuckDB-rebuild cold 224ms; init+warm+search
   from zero 50ms cold / 26.6ms ±1.1 warm.
+
+## Run 41 (2026-10-13, DF-116 re-proof + install wall): search parity facts
+
+- DF-WARPFS-116 fix CONFIRMED in real use: a symbol that lives ONLY in a file with zero
+  import edges (defines but imports nothing) is now found by CLI `hilo graph search` after
+  `graph warm` (was `No results found` on the pre-fix binary). No extra flags needed.
+- BUT the fix reaches only the CLI path: MCP `vfs_graph_search` still returns
+  `{"results":[],"total":0}` for the same zero-edge-file content on the same binary
+  (DF-WARPFS-141). If you are an agent driving hilo over MCP, zero-import files
+  (constants/config/docstrings) are currently UNSEARCHABLE — query them via the CLI
+  surface, or grep the files directly, until DF-141 lands.
+- Building from source on a ≤4GB-memory sandbox is a coin flip: the no-sudo path can die
+  with a bare `cc-rs ... SIGABRT` inside libduckdb-sys (no memory hint printed). If that
+  happens, retry once on a bigger box; do not assume your commands were wrong
+  (DF-WARPFS-142).
+- `hilo serve --mcp` is the MCP entrypoint (NOT `hilo mcp`); it requires a project
+  manifest (init first) or it exits non-zero naming `hilo init`.

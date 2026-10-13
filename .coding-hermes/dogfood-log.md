@@ -1458,3 +1458,49 @@ dogfooded 2026-09-20 (run 7/20) — re-prove the completed P0/P1 set through rea
 - Left behind: docs/dogfood/2026-10-13-run40-mcp-surface.md, rows
   DF-WARPFS-139/140 (created_by dogfood-warpfs-run40), skills/hilo-usage
   run-40 section. No code changes. Foreman woken: NO (read-only lane contract).
+
+# Dogfood Run 41 — 2026-10-13 — DF-WARPFS-116 re-proof (CLI A/B) + fresh-install memory wall — 🟢 DF-116 fix CONFIRMED / 🟡 MCP search still blind to zero-edge files
+
+**Tick:** my-project-dogfood-2026-10-13-10-40-03 (lane prompt names warpfs; scheduler DB
+prompt for BOTH my-project-dogfood and warpfs-dogfood carries the same misseeded body —
+config finding for fleet-config, not touched) · **Promise:** "a user can find any symbol
+via `hilo graph search`, including symbols in files that import nothing" · **Angle:**
+DF-WARPFS-116 fix (extra_documents, d28e91d6, 10-12) never re-proven through real use;
+runs 35-40 did not re-drive CLI graph search on a zero-edge corpus after it.
+**Binaries:** pre-fix control = local Oct 9 debug (reproduced `No results found` for
+zebra_quicksort, rc=0 — the filed defect, byte-identical symptom); post-fix = HEAD
+d86e9607 debug (returns `0.0328 src/math.py [lexical]`). DF-WARPFS-116 fix CONFIRMED.
+
+**Headline new finding — DF-WARPFS-141 (P1):** sibling run 40 (d86e9607, landed mid-run)
+filed DF-WARPFS-140 (search blind to zero-import files) against the MCP surface. Post-fix,
+on the SAME 3-file corpus and SAME binary: CLI finds TIMEOUT_GRACE in constants.py AND
+zebra_quicksort in math.py, while MCP `vfs_graph_search` returns `{"results":[],"total":0}`.
+The extra_documents fix reaches only the CLI path; MCP search handler needs the same feed
++ a CLI/MCP search parity test.
+
+**Install leg (bunker-mvp agent 7a34be40, fresh Ubuntu 24.04):** clone 2s rc=0, rustup 11s,
+460 crates, then libduckdb-sys C++ SIGABRT (cc-rs, core dumped, no memory hint) — no binary,
+no smoke. Sibling run 40's no-sudo build on bunker-mvp the SAME day passed (60m38s), so
+DF-WARPFS-142 (P1) is filed as a non-deterministic memory/contention wall: the documented
+no-sudo path can fail on identical hosts, cc-rs hides the cause, README documents no build
+memory requirement. Install premise on ≤4GB hosts: UNPROVEN, explicitly not silent.
+
+**Infra:** DF-WARPFS-143 (P2) bunker-mvp registry drift — my agent vanished from
+`bunker list` mid-run while SSH kept working; sibling's "destroyed, residue clear" claim
+contradicted by a still-listed df40-install agent after their commit.
+
+**Perf (Step 2b):** search 0.03s; nothing slow enough to file. The ~100min-to-abort build
+on the capped agent is captured inside DF-WARPFS-142 (the finding is the failure, not the
+speed); BUILD_SECONDS not reported — host loadavg 64 pollution.
+
+**Rows filed:** DF-WARPFS-141/142/143 (created_by dogfood-warpfs-run41), id-unique,
+append-only verified (371→374, diff = exactly 3 lines). Sibling handling: DF-140 premise
+re-proven NOT reproducing on CLI (constants.py searchable) — scope narrowed to MCP path,
+no duplicate row filed; DF-116 fix confirmed on CLI.
+
+**Left behind:** docs/dogfood/2026-10-13-run41-df116-reproof.md, the 3 rows,
+skills/hilo-usage/SKILL.md run-41 section, this log entry. No code changes. Foreman woken:
+NO (read-only lane contract). Scratch: /tmp/df40-{prefix,postfix}, agent left UNdestroyed —
+7a34be40 dropped from the registry mid-run (see DF-143); its home still answers SSH and
+holds the failed build logs; destroy refused until the registry/instance relationship is
+explainable, so it expires by TTL 12:46Z.
