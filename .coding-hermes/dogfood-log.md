@@ -1504,3 +1504,10 @@ NO (read-only lane contract). Scratch: /tmp/df40-{prefix,postfix}, agent left UN
 7a34be40 dropped from the registry mid-run (see DF-143); its home still answers SSH and
 holds the failed build logs; destroy refused until the registry/instance relationship is
 explainable, so it expires by TTL 12:46Z.
+
+## Run 42 — 2026-10-13 — DF-WARPFS-134 re-proof on live `mount --daemon --triggers`
+- [x] DF-WARPFS-134 re-proof CONFIRMED: target/debug/hilo at 5deb8880; `mount /tmp/df42-mnt --daemon --triggers` banner printed resolved log path; /proc/166658/fd/2 -> the log file; log contained trigger-engine + tracing output; fusermount3 -u left clean exit. Premise gone — foreman may close.
+- [P1] DF-WARPFS-144: mount <path> --daemon silently serves the CLI CWD, not <path> (scratch probe absent, checkout served byte-identical instead); undocumented — fix: resolve served root from the path arg or refuse naming the served dir.
+- [P1] DF-WARPFS-145: --triggers watches the daemon CWD (mount.rs:126), not the mounted source; from /home/kara/warpfs it watched the checkout regardless of mount path. Fix with the served root.
+- SKIPPED-install-bunker — same premise as DF-WARPFS-136 (runs 35+36 fresh-install PASS within 24h); this run targeted the daemon-logging fix, not an install path.
+
