@@ -80,8 +80,8 @@ pub use wiring_report::{
 pub use semantic::tokenize as semantic_tokenize;
 pub use semantic::{
     default_doc_extractor, default_symbol_extractor, extract_doc_tokens, reciprocal_rank_fusion,
-    search, search_with_symbols, search_with_symbols_and_docs, DocExtractor, SearchOpts,
-    SearchResult, TfIdfIndex, DOC_TOKEN_BUDGET,
+    search, search_with_symbols, search_with_symbols_and_docs, zero_edge_documents, DocExtractor,
+    SearchOpts, SearchResult, TfIdfIndex, DOC_TOKEN_BUDGET,
 };
 
 pub use surfaces::{

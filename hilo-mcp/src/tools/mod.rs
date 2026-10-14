@@ -777,11 +777,22 @@ fn graph_search(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
     let db = hilo_graph::GraphDB::open_read_only(GRAPH_DB_PATH)?;
     // GAP-077: MCP search indexes file-defined symbols so exact symbol
     // names surface their defining file for agents.
+    //
+    // DF-WARPFS-141: feed warm's parse-cache zero-edge files into the
+    // corpus, exactly as `hilo graph search` does. The cache lives under
+    // the served root (`.vfs/graph/`), so it is read through
+    // [`graph_root`] — the same confinement root every other graph tool
+    // resolves paths against — and the filter itself is the SHARED
+    // `hilo_graph::zero_edge_documents` implementation the CLI calls, so
+    // the two surfaces can't drift again. Without this feed a symbol
+    // defined in a file nothing imports (constants, config, docstring-only
+    // modules) answered the CLI with a hit and MCP with
+    // `{"results":[],"total":0}` on the identical corpus.
     let opts = hilo_graph::SearchOpts {
         limit,
         index_symbols: true,
         root: None,
-        extra_documents: Vec::new(),
+        extra_documents: hilo_graph::zero_edge_documents(&graph_root()),
     };
     let results = hilo_graph::search(&db, query, &opts)?;
 

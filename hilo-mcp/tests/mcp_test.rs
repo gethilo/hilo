@@ -847,6 +847,101 @@ fn test_graph_module_populated() {
 }
 
 // -------------------------------------------------------------------------
+// vfs_graph_search — DF-WARPFS-141: zero-edge parse-cache files are searchable
+// -------------------------------------------------------------------------
+
+/// Call `vfs_graph_search` over JSON-RPC. `extra` appends raw JSON fields
+/// (e.g. `,"limit":5`).
+fn graph_search_rpc(query: &str, extra: &str) -> serde_json::Value {
+    let req = format!(
+        r#"{{"jsonrpc":"2.0","id":77,"method":"tools/call","params":{{"name":"vfs_graph_search","arguments":{{"query":"{query}"{extra}}}}}}}"#
+    );
+    rpc(&req)
+}
+
+#[test]
+fn test_graph_search_finds_zero_edge_symbol_from_warm_parse_cache() {
+    use hilo_metadata::inventory::Edge;
+
+    // DF-WARPFS-141: the graph DB stores only edge ENDPOINTS, so a file
+    // nothing imports (math.py here) never became a search document and
+    // `vfs_graph_search zebra_quicksort` answered {"results":[],"total":0}
+    // while the CLI — which feeds warm's parse-cache zero-edge keys into
+    // `extra_documents` — found it on the same corpus and binary. The tool
+    // must consume the same cache through the same shared loader.
+    //
+    // The fixture simulates a warmed workspace the way `hilo graph warm`
+    // leaves it: graph.db with the import edges, plus
+    // `.vfs/graph/.parse_cache.json` keying EVERY discovered file
+    // (repo-relative paths), zero-edge ones included. main.py is the only
+    // edge endpoint; math.py and constants.py exist only as cache keys.
+    let _fx = CwdGraphFixture::new();
+    std::fs::write(
+        "math.py",
+        "def zebra_quicksort(items):\n    return sorted(items)\n",
+    )
+    .unwrap();
+    std::fs::write("constants.py", "TIMEOUT_GRACE_MS = 750\n").unwrap();
+    std::fs::write(
+        "main.py",
+        "from constants import TIMEOUT_GRACE_MS\n\nprint(TIMEOUT_GRACE_MS)\n",
+    )
+    .unwrap();
+    {
+        let db = CwdGraphFixture::graph_db(&_fx);
+        db.insert_edges(&[Edge {
+            from: "main.py".into(),
+            to: "pkg:constants".into(),
+            rel: "imports".into(),
+            provenance: "ast_exact".into(),
+            confidence: 1.0,
+        }])
+        .unwrap();
+    }
+    let cache = serde_json::json!({
+        "math.py": {"m": 1u64, "s": 55u64, "edges": []},
+        "constants.py": {"m": 1u64, "s": 25u64, "edges": []},
+        "main.py": {"m": 1u64, "s": 66u64, "edges": [
+            {"from": "main.py", "to": "pkg:constants", "rel": "imports",
+             "provenance": "ast_exact", "confidence": 1.0}
+        ]}
+    });
+    std::fs::write(
+        ".vfs/graph/.parse_cache.json",
+        serde_json::to_string(&cache).unwrap(),
+    )
+    .unwrap();
+
+    let resp = graph_search_rpc("zebra_quicksort", "");
+    assert!(
+        resp.get("error").is_none(),
+        "search on a warmed zero-edge corpus must not error: {resp}"
+    );
+    let payload = tool_payload(&resp);
+    let hits = payload["results"]
+        .as_array()
+        .expect("vfs_graph_search payload should carry a results array");
+    assert!(
+        hits.iter().any(|r| r["file_path"] == "math.py"),
+        "the zero-edge file's def symbol must be found via the parse cache: {payload}"
+    );
+
+    // Negative premise: the hit came FROM the parse-cache feed. Remove the
+    // cache and math.py is no longer a corpus document — the identical
+    // query must go back to the DF-WARPFS-141 defect shape (no math.py
+    // hit), proving the positive arm did not pass for some other reason
+    // (graph endpoints, path tokens, or a stale db).
+    std::fs::remove_file(".vfs/graph/.parse_cache.json").unwrap();
+    let resp = graph_search_rpc("zebra_quicksort", "");
+    let payload = tool_payload(&resp);
+    let hits = payload["results"].as_array().unwrap();
+    assert!(
+        !hits.iter().any(|r| r["file_path"] == "math.py"),
+        "without the parse cache the zero-edge file must be invisible again (pre-fix defect shape): {payload}"
+    );
+}
+
+// -------------------------------------------------------------------------
 // vfs_backend_status — returns backend info for a local file
 // -------------------------------------------------------------------------
 
