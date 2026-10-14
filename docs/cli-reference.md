@@ -832,24 +832,40 @@ Statuses detected: `stable`, `beta`, `unstable`, `deprecated`, `unknown`.
 
 ## `hilo mount`
 
-Mount the current directory as a FUSE filesystem with xattr passthrough.
+Mount a directory as a FUSE filesystem with xattr passthrough.
+
+By default the served (backing) tree is the current directory:
 
 ```bash
 mkdir /mnt/vfs
 hilo mount /mnt/vfs
+```
 
-# With triggers (auto-reparse on file changes)
-hilo mount /mnt/vfs --triggers
+Pass an explicit source as the second argument to serve a different tree —
+without it the mount always serves the CLI process's working directory
+(DF-WARPFS-144):
+
+```bash
+# Serve /path/to/project at /mnt/vfs regardless of the CWD
+hilo mount /mnt/vfs /path/to/project
+
+# With triggers (auto-reparse on file changes) — the trigger engine
+# watches the SERVED source directory, not the CWD (DF-WARPFS-145)
+hilo mount /mnt/vfs /path/to/project --triggers
 
 # Allow other users to access
 hilo mount /mnt/vfs --allow-other
 
 # Run in the background (detached daemon — returns immediately)
-hilo mount /mnt/vfs --daemon
+hilo mount /mnt/vfs /path/to/project --daemon
 
 # Run in the background with a custom log file (daemon stderr)
-hilo mount /mnt/vfs --daemon --log-file /var/log/hilo/mnt-vfs.log
+hilo mount /mnt/vfs /path/to/project --daemon --log-file /var/log/hilo/mnt-vfs.log
 ```
+
+A missing source directory, or a source that is a file, is a hard error
+before any mount or banner ("source directory <path> does not exist —
+mount refused").
 
 **Note:** `hilo mount` runs in the foreground and blocks the terminal
 until unmounted. Run it in a separate terminal, background it with `&`,

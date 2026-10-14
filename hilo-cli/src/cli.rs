@@ -72,6 +72,10 @@ enum Commands {
 struct MountArgs {
     /// Directory to mount the filesystem at.
     mount_point: String,
+    /// Backing source directory to serve (default: the current directory).
+    /// DF-WARPFS-144: without this, `<mount_point>` was only the FUSE
+    /// mountpoint while the served tree was always the process CWD.
+    source: Option<String>,
     /// Enable trigger engine (file watchers).
     #[arg(long)]
     triggers: bool,
@@ -657,6 +661,7 @@ pub fn run() -> anyhow::Result<()> {
             args.allow_other,
             args.daemon,
             args.log_file.as_deref(),
+            args.source.as_deref(),
         ),
         Commands::Workspace(WorkspaceCommand::Mount(args)) => {
             workspace::run_workspace_mount(&args.manifest, &args.mount_point, args.daemon)

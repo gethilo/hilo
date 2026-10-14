@@ -13,6 +13,27 @@ use hilo_fuse::stream::StreamState;
 use hilo_fuse::{daemon, FuseConfig, Hilo};
 use hilo_triggers::{GraphDbSource, SyncHook, SyncHookConfig, TriggerConfig, TriggerEngine};
 
+/// DF-WARPFS-144: resolve the mount's backing root. An explicit `source`
+/// argument wins (canoncalized); absence keeps the historic current-directory
+/// behavior so existing invocations are byte-compatible. A source that does
+/// not exist, or is not a directory, is a hard error BEFORE any banner.
+fn resolve_source(source: Option<&str>) -> Result<PathBuf> {
+    match source {
+        None => std::env::current_dir().context("failed to determine the current directory"),
+        Some(src) => {
+            let path = PathBuf::from(src);
+            let meta = std::fs::metadata(&path).with_context(|| {
+                format!("source directory {src} does not exist — mount refused")
+            })?;
+            if !meta.is_dir() {
+                anyhow::bail!("source {src} is not a directory — mount refused");
+            }
+            path.canonicalize()
+                .with_context(|| format!("failed to canonicalize source {src}"))
+        }
+    }
+}
+
 /// Environment variable set on the re-executed child of a `--daemon` mount.
 /// Lets the child run the normal blocking mount path without re-daemonizing.
 ///
@@ -22,7 +43,8 @@ pub(crate) const DAEMON_CHILD_ENV: &str = "HILO_MOUNT_DAEMONIZED";
 
 /// Mount a Hilo read-only FUSE filesystem.
 ///
-/// Reads the current directory as the backing root, builds a `FuseConfig`
+/// The backing root is the explicit `source` directory when given, otherwise
+/// the current directory (DF-WARPFS-144). Builds a `FuseConfig`
 /// from the CLI arguments, and blocks in `daemon::mount` until unmounted.
 ///
 /// When `--daemon` is set, the mount runs in a detached background process:
@@ -50,6 +72,7 @@ pub fn run_mount(
     allow_other: bool,
     daemon: bool,
     log_file: Option<&str>,
+    source: Option<&str>,
 ) -> Result<()> {
     // DF-WARPFS-29: the trigger engine logs fires/failures via `tracing`,
     // which is invisible without a subscriber. Install one (stderr, human
@@ -59,6 +82,12 @@ pub fn run_mount(
     if triggers {
         hilo_core::logging::init_logging_to(false, std::io::stderr);
     }
+
+    // DF-WARPFS-144: the backing root is the explicit source directory when
+    // given, otherwise the current directory (historic behavior). Resolved
+    // BEFORE any success output so a bad source fails with a real error
+    // instead of a banner that promises a mount of the wrong tree.
+    let current_dir = resolve_source(source)?;
 
     // DF-WARPFS-115: validate the mount point BEFORE any success output —
     // the banner promised a mount that then failed with a bare ENOENT.
@@ -95,6 +124,7 @@ pub fn run_mount(
             .with_context(|| format!("failed to open daemon log {}", resolved_log.display()))?;
         let mut cmd = build_daemon_command(
             mount_point,
+            source,
             triggers,
             allow_other,
             &resolved_log,
@@ -110,8 +140,8 @@ pub fn run_mount(
         return Ok(());
     }
 
-    let current_dir =
-        std::env::current_dir().context("failed to determine the current directory")?;
+    // `current_dir` was already resolved from the explicit source (or CWD)
+    // at the top of run_mount — DF-WARPFS-144.
 
     // DF-WARPFS-32: shared shutdown flag for the trigger engine. Created
     // BEFORE the engine thread spawns and handed in via
@@ -313,6 +343,7 @@ fn resolve_daemon_log_path(explicit: Option<&str>, mount_point: &Path) -> Result
 /// and detaches its stdio so the parent can return immediately.
 fn build_daemon_command(
     mount_point: &str,
+    source: Option<&str>,
     triggers: bool,
     allow_other: bool,
     log_path: &Path,
@@ -321,6 +352,11 @@ fn build_daemon_command(
     let exe = std::env::current_exe().context("failed to locate the hilo binary")?;
     let mut cmd = Command::new(exe);
     cmd.arg("mount").arg(mount_point);
+    // DF-WARPFS-144: pass the backing source through the re-exec, otherwise
+    // the child daemonizes serving its own CWD instead of the requested tree.
+    if let Some(src) = source {
+        cmd.arg(src);
+    }
     if triggers {
         cmd.arg("--triggers");
     }
@@ -640,6 +676,44 @@ mod tests {
     use super::*;
     use std::ffi::OsString;
 
+    // ───────── DF-WARPFS-144: explicit source resolves, bad source refuses ─────────
+
+    #[test]
+    fn resolve_source_none_uses_current_dir() {
+        let cwd = std::env::current_dir().unwrap();
+        let resolved = resolve_source(None).unwrap();
+        assert_eq!(resolved, cwd);
+    }
+
+    #[test]
+    fn resolve_source_missing_dir_is_hard_error() {
+        let missing = std::env::temp_dir().join("hilo-dfwarpfs144-does-not-exist");
+        let _ = std::fs::remove_dir_all(&missing);
+        let err = resolve_source(Some(missing.to_str().unwrap())).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("does not exist"), "{msg}");
+        assert!(msg.contains("mount refused"), "{msg}");
+    }
+
+    #[test]
+    fn resolve_source_file_is_refused() {
+        let mut f = std::env::temp_dir().join("hilo-dfwarpfs144-not-a-dir.txt");
+        f.set_extension(format!("{}", std::process::id()));
+        std::fs::write(&f, b"x").unwrap();
+        let err = resolve_source(Some(f.to_str().unwrap())).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("is not a directory"), "{msg}");
+        let _ = std::fs::remove_file(&f);
+    }
+
+    #[test]
+    fn resolve_source_explicit_dir_canonicalizes() {
+        let dir = std::env::temp_dir();
+        let resolved = resolve_source(Some(dir.to_str().unwrap())).unwrap();
+        assert!(resolved.is_absolute());
+        assert!(resolved.is_dir());
+    }
+
     // ───────── DF-WARPFS-115: mount point validated before any banner ─────────
 
     #[test]
@@ -886,13 +960,15 @@ triggers:
     #[test]
     fn test_build_daemon_command_args() {
         let log = Path::new("/tmp/hilo-test-134.log");
-        let cmd = build_daemon_command("/tmp/vfs", true, true, log, true).unwrap();
+        let cmd =
+            build_daemon_command("/tmp/vfs", Some("/tmp/src"), true, true, log, true).unwrap();
         let args: Vec<OsString> = cmd.get_args().map(OsString::from).collect();
         assert_eq!(
             args,
             vec![
                 OsString::from("mount"),
                 OsString::from("/tmp/vfs"),
+                OsString::from("/tmp/src"),
                 OsString::from("--triggers"),
                 OsString::from("--allow-other"),
                 OsString::from("--log-file"),
@@ -906,7 +982,7 @@ triggers:
     #[test]
     fn test_build_daemon_command_minimal() {
         let log = Path::new("/tmp/hilo-test-134.log");
-        let cmd = build_daemon_command("/tmp/vfs", false, false, log, false).unwrap();
+        let cmd = build_daemon_command("/tmp/vfs", None, false, false, log, false).unwrap();
         let args: Vec<OsString> = cmd.get_args().map(OsString::from).collect();
         assert_eq!(
             args,
@@ -923,7 +999,7 @@ triggers:
     #[test]
     fn test_build_daemon_command_sets_marker_env() {
         let log = Path::new("/tmp/hilo-test-134.log");
-        let cmd = build_daemon_command("/tmp/vfs", false, false, log, false).unwrap();
+        let cmd = build_daemon_command("/tmp/vfs", None, false, false, log, false).unwrap();
         let envs: Vec<(OsString, Option<OsString>)> = cmd
             .get_envs()
             .map(|(k, v)| (k.to_os_string(), v.map(OsString::from)))
