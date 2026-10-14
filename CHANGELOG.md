@@ -4,6 +4,19 @@ All notable changes to Hilo are documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Annotations survive `git push` via the `.vfs/annotations.jsonl`
+  sidecar** (DF-WARPFS-95): xattrs do not travel through git, so
+  `hilo meta --set` annotations died at the push. A successful set inside a
+  Hilo workspace is now also mirrored into the git-tracked
+  `.vfs/annotations.jsonl` (compact JSONL, one record per `rel_path` +
+  `attr`, updated in place on re-annotation; outside a workspace the
+  behavior stays xattr-only). List mode merges sidecar records that have no
+  local xattr, marked `(sidecar)` — the exact gap a fresh clone has — and
+  the new idempotent `hilo meta apply [--dry-run]` re-applies those records
+  as xattrs without ever clobbering an existing local xattr.
+
 ### Fixed
 
 - **`hilo mount --daemon` keeps the child's stderr — persistent log file**

@@ -37,11 +37,66 @@ Read and write extended attributes on files.
 # Read all Hilo xattrs
 hilo meta hilo-cli/src/main.rs
 
-# Set a specific attribute
+# Set a specific attribute (path positional comes FIRST)
 hilo meta --set user.vfs.role --value entrypoint hilo-cli/src/main.rs
 
 # Read (prints all xattrs — no per-key read flag)
 hilo meta hilo-cli/src/main.rs
+```
+
+### Git-tracked annotations sidecar (`.vfs/annotations.jsonl`)
+
+Xattrs do not survive `git push`/`git clone` — a set annotation would die at
+the push. Inside a Hilo workspace, every successful `--set` is therefore
+also mirrored into `.vfs/annotations.jsonl` (one compact JSON record per
+`rel_path` + `attr`; re-annotating the same key updates the record in
+place). Because `.vfs/` is committed, annotations now travel with the
+repository:
+
+```console
+$ hilo meta app.rs --set role --value entrypoint
+Set user.vfs.role = entrypoint on app.rs
+Recorded in .vfs/annotations.jsonl
+$ cat .vfs/annotations.jsonl
+{"rel_path":"app.rs","attr":"role","value":"entrypoint"}
+```
+
+Outside a workspace the command stays xattr-only (no sidecar, no
+"Recorded" line).
+
+List mode merges: it shows the live xattrs first, then any sidecar record
+for the same file whose attribute has no local xattr, marked with a
+`(sidecar)` suffix — exactly the gap a fresh clone has:
+
+```console
+$ hilo meta app.rs          # in a fresh clone (xattr lost in transit)
+role: entrypoint (sidecar)
+```
+
+### `hilo meta apply`
+
+Re-applies sidecar records as xattrs — run this after a fresh clone to
+restore annotations. Idempotent: a record is applied ONLY when its xattr is
+currently missing, so a local xattr is never clobbered. Missing or empty
+sidecar is not an error (`no sidecar annotations`, exit 0).
+
+```bash
+# Preview what would be applied
+hilo meta apply --dry-run
+
+# Apply every record whose xattr is missing
+hilo meta apply
+```
+
+```console
+$ hilo meta apply --dry-run
+would apply user.vfs.role on app.rs = entrypoint
+would apply 1 of 1 records (dry run)
+$ hilo meta apply
+applied user.vfs.role on app.rs = entrypoint
+applied 1 of 1 records
+$ hilo meta apply            # idempotent — the xattr now exists
+applied 0 of 1 records
 ```
 
 ## `hilo graph`

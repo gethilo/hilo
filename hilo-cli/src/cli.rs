@@ -44,7 +44,6 @@ pub struct Cli {
 enum Commands {
     /// Initialize a Hilo project in the current directory.
     Init(InitArgs),
-    /// Show Hilo extended attributes for a file.
     Meta(MetaArgs),
     /// Dependency-graph discovery, statistics, and impact analysis.
     #[command(subcommand)]
@@ -106,10 +105,22 @@ struct InitArgs {
     no_hooks: bool,
 }
 
+/// List or set Hilo extended attributes on a file.
+///
+/// The `<path>` positional comes FIRST (`hilo meta <path> --set x --value
+/// y`); `apply` rides as an OPTIONAL subcommand so `hilo meta <path>` keeps
+/// parsing exactly as before. `apply` restores annotations from the
+/// git-tracked sidecar (`.vfs/annotations.jsonl`) after a fresh clone.
+///
+/// `<path>` is Option so `hilo meta apply` can omit it; the dispatcher
+/// enforces its presence for the list/set modes (a bare `hilo meta` fails
+/// with a usage error, exactly as before).
 #[derive(clap::Args)]
 struct MetaArgs {
     /// The file whose Hilo metadata to inspect or set.
-    path: String,
+    ///
+    /// Optional at the clap level only so `hilo meta apply` can omit it.
+    path: Option<String>,
 
     /// Set a Hilo extended attribute (e.g. `user.vfs.feature`).
     #[arg(long)]
@@ -118,6 +129,26 @@ struct MetaArgs {
     /// Value for --set. Accepts literal `\n` for multiline values.
     #[arg(long, requires = "set")]
     value: Option<String>,
+
+    /// Restore annotations from the sidecar instead of touching `<path>`.
+    #[command(subcommand)]
+    apply: Option<MetaApplyArgs>,
+}
+
+/// Subcommand payload for `hilo meta apply` (enum — `Subcommand` derive).
+#[derive(Subcommand)]
+enum MetaApplyArgs {
+    /// Restore annotations from .vfs/annotations.jsonl as xattrs.
+    ///
+    /// Idempotent: a record is applied only when its xattr is currently
+    /// missing, so a local xattr is never clobbered. After a fresh clone
+    /// (xattrs do not travel through git) this restores every annotation
+    /// recorded by `hilo meta --set`.
+    Apply {
+        /// Print what would be applied without writing any xattr.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -561,7 +592,17 @@ pub fn run() -> anyhow::Result<()> {
 
     match cli.command {
         Commands::Init(args) => init::run(args.allow_home, args.no_hooks),
-        Commands::Meta(args) => meta::run(&args.path, args.set.as_deref(), args.value.as_deref()),
+        Commands::Meta(args) => match args.apply {
+            Some(MetaApplyArgs::Apply { dry_run }) => meta::run_apply(dry_run),
+            None => {
+                let Some(path) = args.path.as_deref() else {
+                    anyhow::bail!(
+                        "hilo meta requires a file path — usage: hilo meta <path> [--set <attr> --value <value>]"
+                    );
+                };
+                meta::run(path, args.set.as_deref(), args.value.as_deref())
+            }
+        },
         Commands::Graph(GraphCommand::Warm(args)) => {
             graph::run_warm(args.workspace, args.language, args.changed, args.allow_home)
         }

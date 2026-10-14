@@ -2,11 +2,16 @@
 // See specs/hilo-spec.md §15-16, §18.1.
 
 pub mod inventory;
+pub mod sidecar;
 pub mod xattr;
 
 pub use inventory::{
     append_edge, append_edges, append_edges_deduped, create_vfs_structure, edge_to_jsonl,
     read_mounts, write_mounts, BackendMount, Edge,
+};
+pub use sidecar::{
+    find_workspace_root, read_annotations, record_annotation, remove_annotation, sidecar_path,
+    AnnotationRecord,
 };
 pub use xattr::{
     get_vfs_xattr, group_annotations, list_vfs_xattrs, remove_vfs_xattr, set_vfs_xattr,
