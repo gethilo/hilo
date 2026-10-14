@@ -62,6 +62,16 @@ impl Language {
             "js" | "jsx" | "mjs" | "cjs" => Some(Language::JavaScript),
             "java" => Some(Language::Java),
             "c" => Some(Language::C),
+            // DF-WARPFS-75: a C header is a C compilation unit for the
+            // purposes of dependency extraction — it carries its own
+            // `#include` directives and every one of them is a real edge.
+            // `.h` used to resolve to NO language, so `collect_source_files`
+            // pruned every header before it could be parsed and not one edge
+            // in any C graph ever had a header as its `from` (redis corpus:
+            // 3235 edges, 0 header sources, `server.h` carried 53 includes
+            // and appeared only as a target). Same table the classify command
+            // already uses (`hilo-cli` SOURCE_EXTS maps `h` -> C).
+            "h" => Some(Language::C),
             "cpp" | "cc" | "cxx" | "hpp" | "hxx" => Some(Language::Cpp),
             "rb" => Some(Language::Ruby),
             "cs" => Some(Language::CSharp),
@@ -89,10 +99,10 @@ impl Language {
     /// All extensions this parser handles.
     pub fn all_extensions() -> &'static [&'static str] {
         &[
-            "go", "py", "ts", "tsx", "rs", "js", "jsx", "mjs", "cjs", "java", "c", "cpp", "cc",
-            "cxx", "rb", "cs", "kt", "kts", "php", "phtml", "swift", "ex", "exs", "hs", "lhs",
-            "erl", "hrl", "scala", "sc", "zig", "lua", "dart", "clj", "cljs", "cljc", "edn", "ml",
-            "mli", "r", "jl", "elm", "nim", "tf", "hcl",
+            "go", "py", "ts", "tsx", "rs", "js", "jsx", "mjs", "cjs", "java", "c", "h", "cpp",
+            "cc", "cxx", "rb", "cs", "kt", "kts", "php", "phtml", "swift", "ex", "exs", "hs",
+            "lhs", "erl", "hrl", "scala", "sc", "zig", "lua", "dart", "clj", "cljs", "cljc", "edn",
+            "ml", "mli", "r", "jl", "elm", "nim", "tf", "hcl",
         ]
     }
 
@@ -896,17 +906,8 @@ fn extract_java_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
 
 fn extract_c_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
     if node.kind() == "preproc_include" {
-        let text = node.utf8_text(source).unwrap_or("");
-        let cleaned = text
-            .strip_prefix("#include")
-            .unwrap_or(text)
-            .trim()
-            .trim_matches('"')
-            .trim_matches('<')
-            .trim_matches('>');
-        let prefix = if text.contains('"') { "local" } else { "sys" };
-        if !cleaned.is_empty() {
-            paths.push(format!("{prefix}:{cleaned}"));
+        if let Some(target) = c_include_target(node, source) {
+            paths.push(target);
         }
         return;
     }
@@ -917,6 +918,60 @@ fn extract_c_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
     for child in children {
         extract_c_imports(child, source, paths);
     }
+}
+
+/// The single dependency a `#include` directive names, or `None` for a
+/// directive with no usable operand.
+///
+/// The operand is read from the directive's own `path` field rather than by
+/// trimming the whole directive: the grammar exposes it as a `string_literal`
+/// (quoted → `local:`) or a `system_lib_string` (angle-bracketed → `sys:`),
+/// and both tokens end at their own closing delimiter. Reading them is immune
+/// to everything that surrounds a real directive in the wild — a trailing
+/// annotation (`#include "rax.h"     /* Radix tree */`, redis writes this on
+/// dozens of lines), arbitrary whitespace after the `#` (`#   include
+/// <stdint.h>`, every conditional include in redis) and indentation inside
+/// `#if` blocks. The historical whole-directive trim fused all of it onto the
+/// operand (`local:rax.h"     /* Radix tree */`), producing a node no other
+/// edge and no query can ever name — the real dependency silently vanished
+/// from the graph (DF-WARPFS-75: 34 such `.c` edges existed before headers
+/// were parsed at all, and `server.h`'s include of `rax.h` was one of them).
+///
+/// Macro-only directives (`#include FOO`, `#include FOO(x)`) keep the
+/// historical whole-directive trim, delimiter and prefix rule included, so
+/// nothing that used to produce an edge stops producing one.
+fn c_include_target(node: Node, source: &[u8]) -> Option<String> {
+    if let Some(path) = node.child_by_field_name("path") {
+        match path.kind() {
+            "string_literal" => {
+                let name = path.utf8_text(source).unwrap_or("").trim_matches('"');
+                return (!name.is_empty()).then(|| format!("local:{name}"));
+            }
+            "system_lib_string" => {
+                let name = path
+                    .utf8_text(source)
+                    .unwrap_or("")
+                    .trim_start_matches('<')
+                    .trim_end_matches('>');
+                return (!name.is_empty()).then(|| format!("sys:{name}"));
+            }
+            _ => {}
+        }
+    }
+
+    let text = node.utf8_text(source).unwrap_or("");
+    let cleaned = text
+        .strip_prefix("#include")
+        .unwrap_or(text)
+        .trim()
+        .trim_matches('"')
+        .trim_matches('<')
+        .trim_matches('>');
+    if cleaned.is_empty() {
+        return None;
+    }
+    let prefix = if text.contains('"') { "local" } else { "sys" };
+    Some(format!("{prefix}:{cleaned}"))
 }
 
 // ── Ruby ────────────────────────────────────────────────────────────
@@ -1987,6 +2042,82 @@ use anyhow::{bail, Context as _};
         assert!(imports.contains(&"local:local.h".into()));
     }
 
+    /// DF-WARPFS-75 follow-through: redis writes trailing annotations after
+    /// include operands (`#include "rax.h"     /* Radix tree */`) and spaces
+    /// after the `#` inside conditional blocks (`#   include <stdint.h>`).
+    /// Trimming the whole directive welded both onto the operand — a target
+    /// no query could ever name, which is what kept `server.h`'s include of
+    /// `rax.h` invisible even once headers were parsed. The operand now comes
+    /// from the directive's own `path` field.
+    #[test]
+    fn c_include_with_annotation_or_spacing_keeps_only_the_operand() {
+        let imports = parse(
+            Language::C,
+            "#include \"rax.h\"     /* Radix tree */\n\
+             #include <sds.h> /* use sds.h from hiredis */\n\
+             #include \"plain.h\"\n\
+             #include <float.h>  // for INFINITY\n\
+             #  include <stdint.h>\n\
+             #   include \"lzf.h\"\n",
+        );
+        for expected in [
+            "local:rax.h",
+            "sys:sds.h",
+            "local:plain.h",
+            "sys:float.h",
+            "sys:stdint.h",
+            "local:lzf.h",
+        ] {
+            assert!(
+                imports.contains(&expected.to_string()),
+                "`{expected}` missing: {imports:?}"
+            );
+        }
+        assert!(
+            imports
+                .iter()
+                .all(|p| !p.contains(' ') && !p.contains('"') && !p.contains('>')),
+            "no operand may carry an annotation or spacing: {imports:?}"
+        );
+        assert_eq!(imports.len(), 6, "one edge per directive: {imports:?}");
+    }
+
+    /// The macro-only fallback is unchanged: a directive with no quoted or
+    /// angle-bracketed operand keeps the historical whole-directive trim and
+    /// the `sys:` prefix, so no previously-emitted edge disappears.
+    #[test]
+    fn c_include_macro_operand_keeps_historical_form() {
+        let imports = parse(Language::C, "#include REDIS_STATIC_FOO\n");
+        assert_eq!(imports, vec!["sys:REDIS_STATIC_FOO".to_string()]);
+    }
+
+    /// DF-WARPFS-75: a header is a SOURCE, not just a target. Resolving a
+    /// `.h` path must yield a language (the fix), and that language's parser
+    /// must emit every `#include` the header declares with the header as the
+    /// edge's `from`. Pre-fix `Language::from_path` returned `None` for every
+    /// `.h`, so `collect_source_files` pruned the header before it could ever
+    /// be parsed and no C graph contained a header-sourced edge.
+    #[test]
+    fn c_header_is_a_source_of_its_own_includes() {
+        let language = Language::from_path(Path::new("src/server.h"))
+            .expect(".h must resolve to a language or discovery prunes it");
+        assert_eq!(language, Language::C);
+
+        let mut parser = Parser::for_language(language).unwrap();
+        let edges = parser
+            .parse_imports("src/server.h", "#include \"rax.h\"\n#include <stdio.h>\n")
+            .unwrap();
+
+        let froms: Vec<&str> = edges.iter().map(|e| e.from.as_str()).collect();
+        assert!(
+            !edges.is_empty() && froms.iter().all(|f| *f == "src/server.h"),
+            "every include a header declares is sourced AT the header: {edges:?}"
+        );
+        let tos: Vec<&str> = edges.iter().map(|e| e.to.as_str()).collect();
+        assert!(tos.contains(&"local:rax.h"), "{edges:?}");
+        assert!(tos.contains(&"sys:stdio.h"), "{edges:?}");
+    }
+
     #[test]
     fn ruby_requires() {
         let imports = parse(Language::Ruby, "require 'json'\nrequire_relative 'helper'");
@@ -2011,6 +2142,12 @@ use anyhow::{bail, Context as _};
         assert_eq!(Language::from_extension("cjs"), Some(Language::JavaScript));
         assert_eq!(Language::from_extension("java"), Some(Language::Java));
         assert_eq!(Language::from_extension("c"), Some(Language::C));
+        // DF-WARPFS-75: a header is a document, not just a target.
+        assert_eq!(Language::from_extension("h"), Some(Language::C));
+        assert_eq!(
+            Language::from_path(Path::new("src/rax.h")),
+            Some(Language::C)
+        );
         assert_eq!(Language::from_extension("cpp"), Some(Language::Cpp));
         assert_eq!(Language::from_extension("rb"), Some(Language::Ruby));
         assert_eq!(Language::from_extension("cs"), Some(Language::CSharp));

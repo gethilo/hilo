@@ -3925,6 +3925,49 @@ mod tests {
         );
     }
 
+    /// DF-WARPFS-75: `.h` is a source extension, so discovery must collect
+    /// headers instead of pruning them at the `Language::from_path` gate.
+    /// Before the fix the fixture below discovered ONLY `src/rax.c` — the
+    /// header never reached the parser, so no edge could be sourced at it.
+    #[test]
+    fn discovery_includes_c_headers() {
+        let dir = TempDir::new().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src/rax.h"), "int raxSize(void);\n").unwrap();
+        fs::write(
+            dir.path().join("src/rax.c"),
+            "#include \"rax.h\"\nint raxSize(void) { return 0; }\n",
+        )
+        .unwrap();
+        fs::write(dir.path().join("src/hpp_lookalike.hpp"), "// c++ header\n").unwrap();
+
+        let mut found = Vec::new();
+        let mut exclusions = ExclusionReport::default();
+        collect_source_files(
+            dir.path(),
+            Path::new(""),
+            None,
+            &[],
+            &mut found,
+            &mut exclusions,
+        )
+        .unwrap();
+        let found = rels_of(dir.path(), &found);
+
+        assert!(
+            found.contains(&"src/rax.h".to_string()),
+            "a C header must be discovered, not pruned: {found:?}"
+        );
+        assert!(
+            found.contains(&"src/rax.c".to_string()),
+            "C sources are unaffected: {found:?}"
+        );
+        assert!(
+            found.contains(&"src/hpp_lookalike.hpp".to_string()),
+            "the C++ header extension stays supported: {found:?}"
+        );
+    }
+
     #[test]
     fn discovery_include_override_reopens_one_path_only() {
         let dir = TempDir::new().unwrap();
@@ -4067,6 +4110,22 @@ mod tests {
         keys
     }
 
+    /// The persisted edge rows warm appended to `.vfs/graph/edges.jsonl` —
+    /// the graph's own record of what it learned, independent of the DuckDB
+    /// cache under test.
+    fn warmed_edges(root: &Path) -> Vec<Edge> {
+        let path = root.join(".vfs").join("graph").join("edges.jsonl");
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|_| panic!("edges.jsonl must exist at {}", path.display()));
+        raw.lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| {
+                serde_json::from_str::<Edge>(line)
+                    .unwrap_or_else(|e| panic!("unparsable edge row {line:?}: {e}"))
+            })
+            .collect()
+    }
+
     #[test]
     fn warm_refuses_home_root() {
         let home = TempDir::new().unwrap();
@@ -4108,6 +4167,148 @@ mod tests {
         )
         .unwrap();
         assert_eq!(warm_cache_keys(home.path()), vec!["keep.rs".to_string()]);
+    }
+
+    /// DF-WARPFS-75: a C header is a DOCUMENT — it carries its own
+    /// `#include` directives and every one of them is a real edge, so a
+    /// header's blast radius is no longer under-counted and transitive C
+    /// impact is answerable.
+    ///
+    /// Fixture (grep truth: `rax.h` is included by exactly 4 files):
+    ///   rax.h      ← rax.c, server.h, ebuckets.h, stream.h
+    ///   server.h   ← stream.h
+    ///   main.c     → stream.h  (reaches server.h ONLY through a header)
+    ///
+    /// Pre-fix every assertion below held a header as a TARGET only: warm
+    /// parsed `rax.c`/`main.c` and pruned the three headers at discovery, so
+    /// `local:rax.h` had one dependent (a .c control) and `main.c` was
+    /// invisible from `server.h`.
+    #[test]
+    fn warm_emits_include_edges_sourced_at_c_headers() {
+        let home = TempDir::new().unwrap();
+        let project = TempDir::new().unwrap();
+        let src = project.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("rax.h"), "int raxSize(void);\n").unwrap();
+        fs::write(
+            src.join("rax.c"),
+            "#include \"rax.h\"\nint raxSize(void) { return 0; }\n",
+        )
+        .unwrap();
+        fs::write(
+            src.join("server.h"),
+            "#include \"rax.h\"\nvoid serverRun(void);\n",
+        )
+        .unwrap();
+        fs::write(src.join("ebuckets.h"), "#include \"rax.h\"\n").unwrap();
+        fs::write(
+            src.join("stream.h"),
+            "#include \"server.h\"\n#include \"rax.h\"\n",
+        )
+        .unwrap();
+        fs::write(
+            src.join("main.c"),
+            "#include \"stream.h\"\nint main(void) { return 0; }\n",
+        )
+        .unwrap();
+
+        warm_project_fixture(project.path(), home.path(), &no_manifest).unwrap();
+
+        // (a) discovery handed every header to the parser.
+        let keys = warm_cache_keys(project.path());
+        for expected in [
+            "src/rax.h",
+            "src/server.h",
+            "src/stream.h",
+            "src/ebuckets.h",
+            "src/rax.c",
+            "src/main.c",
+        ] {
+            assert!(
+                keys.contains(&expected.to_string()),
+                "`{expected}` was never parsed: {keys:?}"
+            );
+        }
+
+        // (b) edges.jsonl carries header SOURCES, not just header targets.
+        let edges = warmed_edges(project.path());
+        let header_sources: BTreeSet<&str> = edges
+            .iter()
+            .filter(|e| e.from.ends_with(".h"))
+            .map(|e| e.from.as_str())
+            .collect();
+        assert!(
+            !header_sources.is_empty(),
+            "no edge is sourced at a header (the defect): {edges:?}"
+        );
+        for (from, to) in [
+            ("src/server.h", "local:rax.h"),
+            ("src/stream.h", "local:server.h"),
+            ("src/ebuckets.h", "local:rax.h"),
+        ] {
+            assert!(
+                edges.iter().any(|e| e.from == from && e.to == to),
+                "missing header-sourced edge {from} -> {to}: {edges:?}"
+            );
+        }
+        // The `.c` control is untouched — it was already exact.
+        assert!(
+            edges
+                .iter()
+                .any(|e| e.from == "src/rax.c" && e.to == "local:rax.h"),
+            "the .c->header control edge must survive: {edges:?}"
+        );
+
+        let db = GraphDB::open(
+            project
+                .path()
+                .join(".vfs/graph/graph.db")
+                .to_str()
+                .expect("utf8 graph path"),
+        )
+        .unwrap();
+
+        // (c) acceptance 1: `impact local:rax.h` lists every grep-truth
+        // includer, headers included — 4 dependents, not 1.
+        let direct = hilo_graph::impact::compute_impact(db.conn(), "local:rax.h", 1).unwrap();
+        let direct_paths: BTreeSet<String> = direct
+            .iter()
+            .filter(|row| row.depth == 1)
+            .map(|row| row.path.clone())
+            .collect();
+        let truth: BTreeSet<String> = [
+            "src/rax.c",
+            "src/server.h",
+            "src/stream.h",
+            "src/ebuckets.h",
+        ]
+        .iter()
+        .map(|p| p.to_string())
+        .collect();
+        assert_eq!(
+            direct_paths, truth,
+            "the depth-1 dependent set must equal the grep-truth includers: {direct:?}"
+        );
+
+        // (d) acceptance 2: a transitive `server.h` query reaches the `.c`
+        // file that touches `server.h` only through another header.
+        let transitive =
+            hilo_graph::impact::compute_impact(db.conn(), "local:server.h", 4).unwrap();
+        let depth1: BTreeSet<&str> = transitive
+            .iter()
+            .filter(|row| row.depth == 1)
+            .map(|row| row.path.as_str())
+            .collect();
+        assert_eq!(
+            depth1,
+            BTreeSet::from(["src/stream.h"]),
+            "stream.h is server.h's only direct includer: {transitive:?}"
+        );
+        let reached: BTreeSet<&str> = transitive.iter().map(|row| row.path.as_str()).collect();
+        assert!(
+            reached.contains("src/main.c"),
+            "main.c reaches server.h only via stream.h and must be reported: {transitive:?}"
+        );
     }
 
     /// DF-WARPFS-61/64: warm must NOT take the "all cached, graph unchanged"
