@@ -2135,14 +2135,3 @@ tasks:
     pass
   status: in_progress
   created_at: '2026-10-13T10:46:44.903140+00:00'
-- id: DF-WARPFS-139
-  title: MCP filesystem tools confined to workspace root
-  criteria:
-  - Every filesystem-touching MCP tool (vfs_get_metadata, vfs_set_metadata, vfs_list_directory,
-    vfs_resolve_path, vfs_backend_status, vfs_sync_backend) rejects out-of-tree absolute
-    paths, ../ escapes and symlink escapes with an error naming path+root; in-tree
-    paths incl. missing-on-disk still answer per existing contracts; hilo_mcp tests
-    green with new rejection+positive arms
-  status: complete
-  created_at: '2026-10-14T02:39:23.804225+00:00'
-  completed_at: '2026-10-14T02:39:33.590048+00:00'

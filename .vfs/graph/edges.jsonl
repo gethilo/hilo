@@ -3649,3 +3649,9 @@
 {"from":"hilo-mcp/tests/mcp_test.rs","to":"type:RestoreCwd","rel":"conformance_of","provenance":"ast_heuristic","confidence":0.8}
 {"from":"type:CwdGraphFixture","to":"iface:Drop","rel":"implements","provenance":"ast_heuristic","confidence":0.8}
 {"from":"hilo-mcp/tests/mcp_test.rs","to":"type:CwdGraphFixture","rel":"conformance_of","provenance":"ast_heuristic","confidence":0.8}
+{"from":"hilo-graph/src/resolution.rs","to":"pkg:serde","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-mcp/src/confinement.rs","to":"pkg:std::path::Component","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-mcp/src/confinement.rs","to":"pkg:std::path::Path","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-mcp/src/confinement.rs","to":"pkg:std::path::PathBuf","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-mcp/src/confinement.rs","to":"hilo-mcp/src/error.rs","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-mcp/src/confinement.rs","to":"hilo-mcp/src/error.rs","rel":"imports","provenance":"ast_exact","confidence":1.0}

@@ -1,0 +1,215 @@
+GitReins guard run log — full output (the console summary is bounded)
+run_utc: 2026-10-13T16:03:33Z
+workdir: /home/kara/warpfs
+test_mode: full
+test_targets: all (full mode)
+overall: PASS
+guards: 2 (1 failed, 0 skipped)
+diagnostics:
+  first_failing_test: none detected
+  secrets_scanners: clean (gitleaks + builtin cross-check)
+  scanner_nice: scanners: nice=nice -n 10
+warnings:
+  - Guard timed out after 600s (hook_timeout). Remaining checks skipped — commit allowed to proceed (fail-open).
+
+==============================================================================
+[FAIL] tests (full)  passed=false  exit_code=3
+==============================================================================
+--- output (untruncated) ---
+scanners: nice=nice -n 10
+rust-lint: rust-analyzer ran: /home/kara/.cargo/bin/rust-analyzer — rust-analyzer 1.98.0 (88d9e12 2026-08-18)
+   Compiling serde_core v1.0.229
+   Compiling num-traits v0.2.19
+    Checking serde v1.0.229
+    Checking smallvec v1.15.2
+    Checking indexmap v2.14.0
+    Checking parking_lot_core v0.9.12
+    Checking parking_lot v0.12.5
+    Checking num-integer v0.1.46
+   Compiling serde_json v1.0.151
+    Checking serde_yaml v0.9.34+deprecated
+    Checking icu_normalizer v2.2.0
+    Checking idna_adapter v1.2.2
+   Compiling semver v1.0.28
+    Checking idna v1.1.0
+    Checking url v2.5.8
+    Checking half v2.7.1
+    Checking tokio v1.53.1
+    Checking tracing-serde v0.2.0
+    Checking tracing-subscriber v0.3.23
+    Checking git2 v0.19.0
+    Checking num-bigint v0.4.8
+    Checking tokio-util v0.7.18
+    Checking hilo_metadata v0.4.0 (/home/kara/warpfs/hilo-metadata)
+    Checking arrow-buffer v58.3.0
+    Checking arrow-data v58.3.0
+    Checking chrono v0.4.45
+    Checking num-complex v0.4.6
+    Checking aws-smithy-types v1.6.1
+    Checking arrow-array v58.3.0
+   Compiling hyper v1.11.0
+    Checking hilo_core v0.4.0 (/home/kara/warpfs/hilo-core)
+   Compiling hyper-util v0.1.20
+   Compiling tree-sitter v0.25.10
+   Compiling serde_urlencoded v0.7.1
+   Compiling hyper-rustls v0.27.9
+   Compiling tower-http v0.6.11
+    Checking arrow-select v58.3.0
+    Checking aws-smithy-async v1.3.0
+    Checking aws-smithy-runtime-api v1.13.0
+   Compiling reqwest v0.12.28
+   Compiling zip v6.0.0
+    Checking crossterm v0.28.1
+    Checking comfy-table v7.1.4
+    Checking arrow-ord v58.3.0
+    Checking atoi v2.0.0
+   Compiling libduckdb-sys v1.10504.0
+    Checking arrow-cast v58.3.0
+    Checking arrow-string v58.3.0
+    Checking arrow-row v58.3.0
+    Checking arrow-arith v58.3.0
+    Checking rust_decimal v1.42.1
+   Compiling tree-sitter-nim v0.6.2 (https://github.com/alaviss/tree-sitter-nim#ac72ba30)
+   Compiling tree-sitter-clojure v0.1.0
+    Checking arrow v58.3.0
+    Checking clap_builder v4.6.2
+    Checking clap v4.6.3
+    Checking h2 v0.4.15
+    Checking aws-smithy-schema v0.2.0
+    Checking aws-smithy-eventstream v0.61.1
+    Checking aws-smithy-http v0.64.0
+    Checking tokio-rustls v0.26.4
+   Compiling rustc_version v0.4.1
+   Compiling aws-types v1.4.0
+    Checking aws-credential-types v1.3.0
+    Checking aws-smithy-http-client v1.2.0
+    Checking aws-smithy-observability v0.3.0
+    Checking aws-smithy-runtime v1.12.0
+    Checking aws-sigv4 v1.5.1
+    Checking aws-smithy-xml v0.61.1
+   Compiling wasmtime-internal-core v43.0.2
+    Checking aws-runtime v1.8.1
+    Checking aws-smithy-json v0.63.0
+    Checking aws-smithy-query v0.61.1
+   Compiling cranelift-bitset v0.130.2
+    Checking aws-smithy-checksums v0.65.0
+    Checking aws-sdk-sts v1.108.0
+    Checking aws-sdk-s3 v1.138.1
+    Checking aws-config v1.9.0
+    Checking hilo_backends v0.4.0 (/home/kara/warpfs/hilo-backends)
+    Checking plotters-backend v0.3.7
+    Checking ciborium-io v0.2.2
+    Checking ciborium-ll v0.2.2
+    Checking plotters-svg v0.3.7
+    Checking cranelift-entity v0.130.2
+    Checking gimli v0.33.0
+    Checking itertools v0.10.5
+    Checking criterion-plot v0.5.0
+    Checking cranelift-bforest v0.130.2
+    Checking plotters v0.3.7
+    Checking ciborium v0.2.2
+   Compiling pulley-interpreter v43.0.2
+    Checking wasmparser v0.245.1
+    Checking tinytemplate v1.2.1
+    Checking is-terminal v0.4.17
+    Checking anes v0.1.6
+    Checking oorandom v11.1.5
+    Checking criterion v0.5.1
+   Compiling cranelift-codegen-meta v0.130.2
+   Compiling camino v1.2.4
+   Compiling cranelift-codegen v0.130.2
+    Checking object v0.38.1
+    Checking wasm-encoder v0.245.1
+    Checking wasmprinter v0.245.1
+    Checking postcard v1.1.3
+    Checking regalloc2 v0.15.2
+   Compiling fs-err v2.11.0
+    Checking wasmtime-environ v43.0.2
+   Compiling minimal-lexical v0.2.1
+   Compiling nom v7.1.3
+   Compiling unicase v2.9.0
+   Compiling mime_guess v2.0.5
+   Compiling wit-parser v0.245.1
+    Checking serde_spanned v1.1.1
+    Checking toml_datetime v0.7.5+spec-1.1.0
+   Compiling uniffi_checksum_derive v0.28.3
+    Checking toml v0.9.12+spec-1.1.0
+    Checking petgraph v0.6.5
+   Compiling wasmtime-internal-wit-bindgen v43.0.2
+    Checking wasmtime-internal-unwinder v43.0.2
+    Checking cranelift-native v0.130.2
+    Checking cranelift-frontend v0.130.2
+   Compiling proc-macro-utils v0.10.0
+   Compiling scroll_derive v0.12.1
+   Compiling mime v0.3.17
+   Compiling paste v1.0.15
+   Compiling wasmtime-internal-component-macro v43.0.2
+   Compiling toml_edit v0.25.13+spec-1.1.0
+    Checking wasmtime-internal-cranelift v43.0.2
+   Compiling manyhow-macros v0.11.4
+    Checking fxprof-processed-profile v0.8.1
+   Compiling wiggle-generate v43.0.2
+    Checking wasm-compose v0.245.1
+    Checking wasmtime-internal-cache v43.0.2
+    Checking wasmtime-internal-jit-debug v43.0.2
+    Checking wasmtime-internal-fiber v43.0.2
+   Compiling askama_parser v0.2.1
+    Checking addr2line v0.26.1
+    Checking hilo_permissions v0.4.0 (/home/kara/warpfs/hilo-permissions)
+    Checking wasmtime-internal-jit-icache-coherence v43.0.2
+   Compiling basic-toml v0.1.10
+    Checking wasmtime v43.0.2
+   Compiling askama_derive v0.12.5
+   Compiling wiggle-macro v43.0.2
+   Compiling manyhow v0.11.4
+   Compiling cbindgen v0.29.4
+   Compiling proc-macro-crate v3.5.0
+    Checking rmp v0.8.15
+   Compiling siphasher v0.3.11
+   Compiling uniffi_meta v0.28.3
+    Checking fuser v0.15.1
+    Checking rmp-serde v1.3.1
+    Checking wiggle v43.0.2
+   Compiling extism-convert-macros v1.30.0
+   Compiling extism v1.30.0
+   Compiling cargo-platform v0.1.9
+    Checking extism-convert v1.30.0
+   Compiling cargo_metadata v0.15.4
+    Checking wasi-common v43.0.2
+    Checking extism-manifest v1.30.0
+   Compiling toml v0.5.11
+   Compiling smawk v0.3.3
+   Compiling textwrap v0.16.2
+    Checking inotify v0.10.2
+   Compiling uniffi_testing v0.28.3
+    Checking hilo_fuse v0.4.0 (/home/kara/warpfs/hilo-fuse)
+   Compiling scroll v0.12.0
+   Compiling weedle2 v5.0.0
+   Compiling askama_escape v0.10.3
+   Compiling plain v0.2.3
+   Compiling goblin v0.8.2
+   Compiling askama v0.12.1
+   Compiling uniffi_udl v0.28.3
+   Compiling bincode v1.3.3
+   Compiling uniffi_bindgen v0.28.3
+   Compiling uniffi_macros v0.28.3
+    Checking hilo_plugins v0.4.0 (/home/kara/warpfs/hilo-plugins)
+   Compiling hilo-cli v0.4.0 (/home/kara/warpfs/hilo-cli)
+   Compiling static_assertions v1.1.0
+   Compiling uniffi_core v0.28.3
+   Compiling uniffi_build v0.28.3
+   Compiling uniffi v0.28.3
+   Compiling hilo_ffi v0.4.0 (/home/kara/warpfs/hilo-ffi)
+    Checking filetime v0.2.29
+rust-lint: clippy --workspace killed by the 240s budget (cold tree?); run heavy lint on the build host
+    Checking duckdb v1.10504.0
+    Checking hilo_graph v0.4.0 (/home/kara/warpfs/hilo-graph)
+    Checking hilo_mcp v0.4.0 (/home/kara/warpfs/hilo-mcp)
+    Checking hilo_triggers v0.4.0 (/home/kara/warpfs/hilo-triggers)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 12m 02s
+
+==============================================================================
+[PASS] secrets  passed=true  exit_code=n/a
+==============================================================================
+--- output (untruncated) ---
+gitleaks: clean
