@@ -937,3 +937,26 @@ For a local-dir sync stand-in, use `rclone serve s3` as shown, or the
   (DF-WARPFS-142).
 - `hilo serve --mcp` is the MCP entrypoint (NOT `hilo mcp`); it requires a project
   manifest (init first) or it exits non-zero naming `hilo init`.
+
+## Run 43 (2026-10-13, FFI HiloHandle first drive): Python-binding facts
+
+- The documented 3-step pipeline WORKS verbatim at HEAD: `cargo build -p hilo_ffi` →
+  `cd hilo-ffi && cargo run -p hilo_ffi --bin uniffi-bindgen -- generate src/hilo.udl
+  --language python --no-format --out-dir <dir>` → copy `target/debug/libhilo_ffi.so` to
+  `<dir>/libuniffi_hilo.so` (the rename is REQUIRED; the generated module dlopens that name).
+- Run bindgen from `hilo-ffi/`, never the workspace root — from the root the relative
+  `src/hilo.udl` cannot resolve and bindgen walks up to the workspace Cargo.toml, failing
+  with a raw TOML error (`missing field 'package' at line 30`) that names no file.
+- `HiloHandle(root)` is genuinely CWD-independent (ctor ~0ms; all 6 handle methods fine from
+  a foreign cwd) — the one surface that holds the CWD contract, unlike mount --daemon
+  (DF-144) and --triggers (DF-145).
+- Caveat: `vfs_graph_impact`/`related` raise NotFound for real files whose edges only touch
+  `pkg:` pseudo-nodes (DF-WARPFS-146) — use `pkg:` forms or catch NotFound; the CLI prints
+  a graceful note for the same state.
+- Caveat: the namespace fns `vfs_get_metadata`/`vfs_set_metadata` resolve RELATIVE paths
+  against the process CWD (DF-WARPFS-147) — always pass absolute paths.
+- `vfs_rule_check` needs a `rules:` block in `.vfs/manifest.yaml` (`{name, description,
+  query}`; DuckDB SQL over graph.db, only the `edges` table; quote reserved `"from"`)
+  — undocumented schema, DF-WARPFS-148.
+- Cross-surface xattr parity is real: FFI-set ↔ getfattr ↔ `hilo meta` all agree, both
+  directions. Numbers: import 9ms; 13-call session 316ms ±12 warm; cold first query 53ms.

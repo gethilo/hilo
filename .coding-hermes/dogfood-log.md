@@ -1511,3 +1511,54 @@ explainable, so it expires by TTL 12:46Z.
 - [P1] DF-WARPFS-145: --triggers watches the daemon CWD (mount.rs:126), not the mounted source; from /home/kara/warpfs it watched the checkout regardless of mount path. Fix with the served root.
 - SKIPPED-install-bunker — same premise as DF-WARPFS-136 (runs 35+36 fresh-install PASS within 24h); this run targeted the daemon-logging fix, not an install path.
 
+
+# Dogfood Run 43 — 2026-10-13 — FFI HiloHandle Python consumer at HEAD (first drive of the new interface) — 🟢 SHIPPABLE (with FFI graph-call caveats)
+
+**Tick:** coding-hermes-tools-dogfood-2026-10-13-23-57-31 · **Head:** 7efc5d34 · **Binary:** hilo 0.4.0
+v0.3.0-444-gd86e9607-dirty (local debug, CARGO_TARGET_DIR=/var/tmp/hermes-cargo-target; libhilo_ffi.so
+built this run, 2m32s scoped `cargo build -p hilo_ffi` on warm cache) · **Angle:** runs 35-42 covered
+install/sync/triggers/workspace/FUSE/MCP/search/daemon; NO run ever drove the FFI `HiloHandle`
+interface (docs describe the explicit-root constructor; run 8 proved only the OLD namespace ABI at
+v0.3.0-14 and its Python import failed on the .so name mismatch). This is the first real consumer of
+the interface whose CWD-independence claim directly discriminates the DF-144/145 CWD class.
+
+**Real use (scratch /tmp/df43-consumer: 3-file Python repo, graphs warmed; consumer drives all 8
+documented calls + 2 namespace fns + error paths, from cwd=/tmp):**
+- Docs pipeline works verbatim at HEAD: `cd hilo-ffi` + repo uniffi-bindgen → hilo.py; the documented
+  copy/rename step (libhilo_ffi.so → libuniffi_hilo.so) is REQUIRED and correct. Import 9ms.
+- HiloHandle CWD-independence CONFIRMED for all 6 handle methods (ctor 0ms from a foreign cwd;
+  stats/related/impact/resolve_backend/list_directory all correct with relative paths).
+- Cross-surface xattr parity PROVEN both directions: FFI set → getfattr on disk → CLI `hilo meta`
+  read-back; CLI set → FFI get. vfs_list_directory/resolve_backend return real sizes/backends.
+- vfs_rule_check happy path works after hand-authoring a manifest rule (DuckDB edges query).
+
+**Findings (board rows, created_by dogfood-warpfs-run43):**
+- DF-WARPFS-146 (P1): vfs_graph_impact/related NotFound for a REAL file whose edges only touch
+  pkg: pseudo-nodes (hilo-ffi/src/lib.rs pre-check → graph.rs:2062 raw endpoint match); CLI prints
+  a graceful note for the identical state. Error text claims the file is missing — it isn't.
+- DF-WARPFS-147 (P2): namespace vfs_get/set_metadata resolve relative paths against the process
+  CWD — the handle-root contract does not cover the namespace fns.
+- DF-WARPFS-148 (P2): vfs_rule_check undocumented rule schema + NotFound names a synthetic path
+  '.vfs/manifest.yaml#rule:<name>'; bad SQL surfaces as opaque InternalError.
+- DF-WARPFS-149 (P3): `graph warm` appended a byte-identical duplicate edge despite
+  manifest deduplicate: true (JSONL layer; DuckDB stats dedupe).
+- Positive re-proofs, no rows: docs bindgen pipeline green (bindgen_cli.rs test passes; from the
+  workspace root the documented relative path `src/hilo.udl` cannot resolve — run bindgen from
+  hilo-ffi/ as the docs say, else bindgen walks up to the workspace Cargo.toml and fails with a
+  raw TOML error 'missing field `package` at line 30' that names no file); bad-root/file errors
+  honest NotFound; empty repo errors honestly on missing graph.db.
+
+**Perf (Step 2b):** full 13-call consumer session 316ms ±12 warm (hyperfine n=20); import 9ms;
+ctor ~0ms; cold first graph query 53ms. Nothing a user would feel — no PERF row filed.
+
+**Install leg:** SKIPPED-install-bunker-with-citation — the install premise was driven TWICE today
+by sibling runs (run 40 full PASS on bunker-mvp no-sudo path 60m38s; run 41 fresh-box SIGABRT filed
+DF-WARPFS-142); `git diff 4d866c84..HEAD -- '**/Cargo.toml' '**/Cargo.lock' hilo-ffi/` is empty, so
+a third leg adds nothing this run would not already know.
+
+**Time-to-first-success:** ~6 min (build 2m32s + bindgen + import + first stats). Friction: 3
+(impact NotFound trap, undocumented rule schema, namespace CWD resolution).
+
+**Left behind:** docs/dogfood/2026-10-13-run43-ffi-consumer.md, rows DF-WARPFS-146..149,
+skills/hilo-usage/SKILL.md run-43 section, this entry. No code changes. Foreman woken: NO
+(read-only lane contract). Scratch: /tmp/df43-* (consumer + corpus + bindings).
