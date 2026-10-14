@@ -2133,13 +2133,15 @@ tasks:
   - With --daemon, child stderr goes to a persistent log file (flag or sensible default),
     parent banner prints the path; unit test covers the redirect; cargo check + clippy
     pass
-  status: in_progress
+  status: complete
   created_at: '2026-10-13T10:46:44.903140+00:00'
+  completed_at: '2026-10-14T06:17:01.385644+00:00'
 - id: DF-WARPFS-75
   title: "C/C++: header files are never edge SOURCES \u2014 zero header\u2192header\
     \ include edges"
   criteria:
   - on the redis corpus, impact local:rax.h returns 4 (grep truth) and a transitive
     server.h query includes a .c file that reaches server.h only via another header
-  status: in_progress
+  status: complete
   created_at: '2026-10-14T04:50:09.921854+00:00'
+  completed_at: '2026-10-14T05:41:16.880931+00:00'
