@@ -333,7 +333,11 @@ fn documented_arguments_are_accepted_by_the_server() {
 
 #[test]
 fn test_get_metadata_nonexistent() {
-    let req = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"vfs_get_metadata","arguments":{"path":"/nonexistent/hilo-test-file"}}}"#;
+    // DF-WARPFS-139: relative in-workspace missing path keeps the original
+    // "does not exist" error contract (an absolute /nonexistent/... path is
+    // now a confinement rejection — see the escape tests below).
+    let _fx = CwdFileFixture::new();
+    let req = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"vfs_get_metadata","arguments":{"path":"nonexistent/hilo-test-file"}}}"#;
     let resp = rpc(req);
 
     // Must contain an error (not a result) — the file does not exist.
@@ -352,12 +356,12 @@ fn test_get_metadata_nonexistent() {
 #[test]
 fn test_get_metadata_roundtrip() {
     use std::fs;
-    use tempfile::TempDir;
 
-    let dir = TempDir::new().unwrap();
-    let file = dir.path().join("test.txt");
-    fs::write(&file, "hello world").unwrap();
-    let file_str = file.to_str().unwrap();
+    // DF-WARPFS-139: tool paths are confined to the workspace root, so the
+    // fixture chdirs into a throwaway workspace and uses a relative path.
+    let _fx = CwdFileFixture::new();
+    fs::write("test.txt", "hello world").unwrap();
+    let file_str = "test.txt";
 
     // Set a couple of xattrs via MCP.
     for (k, v) in [("feature", "auth-module"), ("risk", "critical-path")] {
@@ -401,12 +405,11 @@ fn test_get_metadata_roundtrip() {
 #[test]
 fn test_get_metadata_keys_filter() {
     use std::fs;
-    use tempfile::TempDir;
 
-    let dir = TempDir::new().unwrap();
-    let file = dir.path().join("test.txt");
-    fs::write(&file, "hello").unwrap();
-    let file_str = file.to_str().unwrap();
+    // DF-WARPFS-139: confined tools — fixture workspace + relative path.
+    let _fx = CwdFileFixture::new();
+    fs::write("test.txt", "hello").unwrap();
+    let file_str = "test.txt";
 
     // Set two xattrs.
     for (k, v) in [("feature", "auth"), ("risk", "low")] {
@@ -448,12 +451,11 @@ fn test_get_metadata_keys_filter() {
 #[test]
 fn test_get_metadata_with_backend_and_hash() {
     use std::fs;
-    use tempfile::TempDir;
 
-    let dir = TempDir::new().unwrap();
-    let file = dir.path().join("test.txt");
-    fs::write(&file, "data").unwrap();
-    let file_str = file.to_str().unwrap();
+    // DF-WARPFS-139: confined tools — fixture workspace + relative path.
+    let _fx = CwdFileFixture::new();
+    fs::write("test.txt", "data").unwrap();
+    let file_str = "test.txt";
 
     // Set backend and hash xattrs.
     for (k, v) in [("backend", "s3"), ("hash", "sha256:abc123")] {
@@ -625,12 +627,11 @@ fn test_notification_no_response() {
 #[test]
 fn test_set_metadata_roundtrip() {
     use std::fs;
-    use tempfile::TempDir;
 
-    let dir = TempDir::new().unwrap();
-    let file = dir.path().join("test.txt");
-    fs::write(&file, "hello").unwrap();
-    let file_str = file.to_str().unwrap();
+    // DF-WARPFS-139: confined tools — fixture workspace + relative path.
+    let _fx = CwdFileFixture::new();
+    fs::write("test.txt", "hello").unwrap();
+    let file_str = "test.txt";
 
     // Set a new attribute (no previous value).
     let set_req = format!(
@@ -663,12 +664,11 @@ fn test_set_metadata_roundtrip() {
 #[test]
 fn test_set_metadata_empty_key_rejected() {
     use std::fs;
-    use tempfile::TempDir;
 
-    let dir = TempDir::new().unwrap();
-    let file = dir.path().join("test.txt");
-    fs::write(&file, "hello").unwrap();
-    let file_str = file.to_str().unwrap();
+    // DF-WARPFS-139: confined tools — fixture workspace + relative path.
+    let _fx = CwdFileFixture::new();
+    fs::write("test.txt", "hello").unwrap();
+    let file_str = "test.txt";
 
     let req = format!(
         r#"{{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{{"name":"vfs_set_metadata","arguments":{{"path":"{file_str}","key":"","value":"x"}}}}}}"#
@@ -853,12 +853,11 @@ fn test_graph_module_populated() {
 #[test]
 fn test_backend_status_local() {
     use std::fs;
-    use tempfile::TempDir;
 
-    let dir = TempDir::new().unwrap();
-    let file = dir.path().join("test.txt");
-    fs::write(&file, "hello").unwrap();
-    let file_str = file.to_str().unwrap();
+    // DF-WARPFS-139: confined tools — fixture workspace + relative path.
+    let _fx = CwdFileFixture::new();
+    fs::write("test.txt", "hello").unwrap();
+    let file_str = "test.txt";
 
     let req = format!(
         r#"{{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{{"name":"vfs_backend_status","arguments":{{"path":"{file_str}"}}}}}}"#
@@ -891,7 +890,11 @@ fn test_backend_status_local() {
 
 #[test]
 fn test_backend_status_nonexistent() {
-    let req = r#"{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"vfs_backend_status","arguments":{"path":"/nonexistent/hilo-file-xyz"}}}"#;
+    // DF-WARPFS-139: relative in-workspace missing path keeps the
+    // "not found on disk" contract; absolute paths outside the tree are
+    // confinement rejections now.
+    let _fx = CwdFileFixture::new();
+    let req = r#"{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"vfs_backend_status","arguments":{"path":"nonexistent/hilo-file-xyz"}}}"#;
     let resp = rpc(req);
 
     assert_eq!(resp["jsonrpc"], "2.0");
@@ -966,12 +969,11 @@ fn test_backend_surfaces_follow_mounts_yaml_and_never_fake_sync() {
 #[test]
 fn test_sync_backend_local() {
     use std::fs;
-    use tempfile::TempDir;
 
-    let dir = TempDir::new().unwrap();
-    let file = dir.path().join("test.txt");
-    fs::write(&file, "hello").unwrap();
-    let file_str = file.to_str().unwrap();
+    // DF-WARPFS-139: confined tools — fixture workspace + relative path.
+    let _fx = CwdFileFixture::new();
+    fs::write("test.txt", "hello").unwrap();
+    let file_str = "test.txt";
 
     let req = format!(
         r#"{{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{{"name":"vfs_sync_backend","arguments":{{"path":"{file_str}"}}}}}}"#
@@ -994,7 +996,11 @@ fn test_sync_backend_local() {
 
 #[test]
 fn test_sync_backend_nonexistent() {
-    let req = r#"{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"vfs_sync_backend","arguments":{"path":"/nonexistent/hilo-file-xyz"}}}"#;
+    // DF-WARPFS-139: relative in-workspace missing path keeps the
+    // "backend sync is not supported" contract; absolute paths outside the
+    // tree are confinement rejections now.
+    let _fx = CwdFileFixture::new();
+    let req = r#"{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"vfs_sync_backend","arguments":{"path":"nonexistent/hilo-file-xyz"}}}"#;
     let resp = rpc(req);
 
     assert!(resp.get("error").is_some());
@@ -1260,6 +1266,38 @@ fn graph_related_rpc(path: &str, extra: &str) -> serde_json::Value {
     rpc(&req)
 }
 
+/// CWD fixture for the filesystem tools (DF-WARPFS-139).
+///
+/// MCP tool paths are confined to the workspace root (the process CWD), so
+/// tests that exercise those tools must chdir into a throwaway directory and
+/// address their files with RELATIVE paths — an absolute TempDir path outside
+/// the CWD is now (correctly) rejected as an escape.
+struct CwdFileFixture {
+    _guard: std::sync::MutexGuard<'static, ()>,
+    prev_cwd: std::path::PathBuf,
+    _dir: tempfile::TempDir,
+}
+
+impl CwdFileFixture {
+    fn new() -> Self {
+        let guard = cwd_test_lock().lock().unwrap();
+        let prev_cwd = std::env::current_dir().unwrap();
+        let dir = tempfile::TempDir::new().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+        Self {
+            _guard: guard,
+            prev_cwd,
+            _dir: dir,
+        }
+    }
+}
+
+impl Drop for CwdFileFixture {
+    fn drop(&mut self) {
+        std::env::set_current_dir(&self.prev_cwd).ok();
+    }
+}
+
 /// Extract the edge array from a successful `vfs_graph_related` result.
 fn related_edges(resp: &serde_json::Value) -> Vec<serde_json::Value> {
     assert!(
@@ -1433,8 +1471,11 @@ fn test_list_directory_lists_populated_local_dir() {
     fs::write(sub.join("alpha.bin"), b"a").unwrap();
     fs::create_dir_all(sub.join("beta_dir")).unwrap();
 
-    // Absolute populated path must return entries (was silent-empty pre-fix).
-    let resp = list_dir_rpc(sub.to_str().unwrap());
+    // DF-WARPFS-139: tool paths are confined to the workspace root, so the
+    // populated dir is addressed relatively (an absolute TempDir path is a
+    // confinement rejection now). Must still return entries (was
+    // silent-empty pre-DF-WARPFS-41).
+    let resp = list_dir_rpc("populated");
     assert!(
         resp.get("error").is_none(),
         "populated dir must not error: {resp}"
@@ -1474,7 +1515,9 @@ fn test_list_directory_error_on_nonexistent_and_file() {
     .unwrap();
 
     // Nonexistent path: explicit error, never silent-empty.
-    let resp = list_dir_rpc(dir.path().join("no_such_dir_41").to_str().unwrap());
+    // DF-WARPFS-139: addressed relatively — the path is confined to the
+    // workspace root now.
+    let resp = list_dir_rpc("no_such_dir_41");
     let err = resp
         .get("error")
         .unwrap_or_else(|| panic!("nonexistent path must return a JSON-RPC error, got: {resp}"));
@@ -1484,9 +1527,10 @@ fn test_list_directory_error_on_nonexistent_and_file() {
     );
 
     // File (not a directory): explicit error, never silent-empty.
+    // DF-WARPFS-139: addressed relatively.
     let file = dir.path().join("plain_file.txt");
     fs::write(&file, b"x").unwrap();
-    let resp = list_dir_rpc(file.to_str().unwrap());
+    let resp = list_dir_rpc("plain_file.txt");
     let err = resp
         .get("error")
         .unwrap_or_else(|| panic!("file path must return a JSON-RPC error, got: {resp}"));
@@ -1533,4 +1577,201 @@ fn test_list_directory_dot_and_root_still_populate() {
         !entries.is_empty(),
         "`/` must still fall back to the CWD listing: {text}"
     );
+}
+
+// =========================================================================
+// DF-WARPFS-139 — workspace confinement of the MCP filesystem surface
+// =========================================================================
+//
+// The MCP server is agent-facing: every path argument that reaches the
+// filesystem must resolve INSIDE the workspace root. Dogfood run 40 proved
+// the open surface (vfs_get_metadata{"/etc/passwd"} returned real host
+// metadata; vfs_list_directory{"/home/kara"} listed 1129 home entries).
+// Each read/list/write path tool gets both rejection arms: an out-of-tree
+// ABSOLUTE path and a RELATIVE '..' escape. In-tree requests stay green.
+
+/// Extract the tool-level JSON payload from a tools/call response.
+fn tool_payload(resp: &serde_json::Value) -> serde_json::Value {
+    let text = resp["result"]["content"][0]["text"]
+        .as_str()
+        .expect("content[0].text should be a string");
+    serde_json::from_str(text).expect("tool output should be valid JSON")
+}
+
+/// `path` must be rejected with an error that names the workspace root.
+fn assert_confinement_error(resp: &serde_json::Value, path: &str) {
+    let err = resp
+        .get("error")
+        .unwrap_or_else(|| panic!("path '{path}' must be rejected, got: {resp}"));
+    let message = err["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("path escapes the workspace"),
+        "rejection of '{path}' must name the escape, got: {message}"
+    );
+    assert!(
+        message.contains("workspace root"),
+        "rejection of '{path}' must name the workspace root, got: {message}"
+    );
+}
+
+fn escape_paths() -> Vec<String> {
+    vec![
+        "/etc/passwd".to_string(),
+        "../outside_df139.txt".to_string(),
+        "sub/../../../etc/passwd".to_string(),
+    ]
+}
+
+#[test]
+fn test_confinement_get_metadata_rejects_out_of_tree_paths() {
+    let _fx = CwdFileFixture::new();
+    for path in escape_paths() {
+        let req = format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"vfs_get_metadata","arguments":{{"path":"{path}"}}}}}}"#
+        );
+        assert_confinement_error(&rpc(&req), &path);
+    }
+
+    // In-tree paths still work.
+    std::fs::write("in_tree_df139.txt", b"x").unwrap();
+    let resp = rpc(
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"vfs_get_metadata","arguments":{"path":"in_tree_df139.txt"}}}"#,
+    );
+    assert!(
+        resp.get("error").is_none(),
+        "in-tree read must work: {resp}"
+    );
+    assert_eq!(tool_payload(&resp)["size"], 1);
+}
+
+#[test]
+fn test_confinement_set_metadata_rejects_out_of_tree_paths() {
+    let _fx = CwdFileFixture::new();
+    for path in escape_paths() {
+        let req = format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"vfs_set_metadata","arguments":{{"path":"{path}","key":"feature","value":"x"}}}}}}"#
+        );
+        assert_confinement_error(&rpc(&req), &path);
+    }
+
+    // No xattr was written outside the tree (the /etc/passwd arm must not
+    // have landed user.vfs.feature on the host file).
+    assert!(
+        std::fs::metadata("/etc/passwd").is_ok(),
+        "precondition: host /etc/passwd exists"
+    );
+}
+
+#[test]
+fn test_confinement_list_directory_rejects_out_of_tree_paths() {
+    let _fx = CwdFileFixture::new();
+    std::fs::write("manifest.yaml", "project:\n  name: \"t\"\n").unwrap();
+    for path in escape_paths() {
+        let req = format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"vfs_list_directory","arguments":{{"path":"{path}"}}}}}}"#
+        );
+        assert_confinement_error(&rpc(&req), &path);
+    }
+
+    // In-tree listing still works.
+    std::fs::create_dir_all("in_tree_df139").unwrap();
+    let resp = list_dir_rpc("in_tree_df139");
+    assert!(
+        resp.get("error").is_none(),
+        "in-tree list must work: {resp}"
+    );
+    assert_eq!(tool_payload(&resp)["total"], 0);
+}
+
+#[test]
+fn test_confinement_resolve_path_rejects_out_of_tree_paths() {
+    let _fx = CwdFileFixture::new();
+    for path in escape_paths() {
+        let req = format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"vfs_resolve_path","arguments":{{"path":"{path}"}}}}}}"#
+        );
+        assert_confinement_error(&rpc(&req), &path);
+    }
+}
+
+#[test]
+fn test_confinement_backend_status_rejects_out_of_tree_paths() {
+    let _fx = CwdFileFixture::new();
+    for path in escape_paths() {
+        let req = format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"vfs_backend_status","arguments":{{"path":"{path}"}}}}}}"#
+        );
+        assert_confinement_error(&rpc(&req), &path);
+    }
+
+    // In-tree existing path keeps the unmanaged-local contract.
+    std::fs::write("in_tree_df139.txt", b"x").unwrap();
+    let resp = rpc(
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"vfs_backend_status","arguments":{"path":"in_tree_df139.txt"}}}"#,
+    );
+    assert!(
+        resp.get("error").is_none(),
+        "in-tree status must work: {resp}"
+    );
+    let payload = tool_payload(&resp);
+    assert_eq!(payload["backend"], "local-only");
+    assert_eq!(payload["cache_hit"], true);
+}
+
+#[test]
+fn test_confinement_sync_backend_rejects_out_of_tree_paths() {
+    let _fx = CwdFileFixture::new();
+    for path in escape_paths() {
+        let req = format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"vfs_sync_backend","arguments":{{"path":"{path}"}}}}}}"#
+        );
+        assert_confinement_error(&rpc(&req), &path);
+    }
+
+    // In-tree path keeps the honest no-fake-sync error contract.
+    std::fs::write("in_tree_df139.txt", b"x").unwrap();
+    let resp = rpc(
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"vfs_sync_backend","arguments":{"path":"in_tree_df139.txt"}}}"#,
+    );
+    assert!(
+        resp.get("error").is_some(),
+        "unmanaged local paths must not report a fake sync: {resp}"
+    );
+    assert!(resp["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("backend sync is not supported"));
+}
+
+#[test]
+fn test_confinement_symlink_escape_rejected_end_to_end() {
+    let _fx = CwdFileFixture::new();
+    let outside = tempfile::TempDir::new().unwrap();
+    std::fs::write(outside.path().join("secret_df139.txt"), b"x").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(outside.path().join("secret_df139.txt"), "innocent_df139").unwrap();
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_file(outside.path().join("secret_df139.txt"), "innocent_df139")
+        .unwrap();
+
+    let req = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"vfs_get_metadata","arguments":{"path":"innocent_df139"}}}"#;
+    assert_confinement_error(&rpc(req), "innocent_df139");
+}
+
+#[test]
+fn test_confinement_backend_status_lenient_missing_in_tree_path() {
+    // DF-WARPFS-139 contract preservation: an unmanaged IN-TREE path that is
+    // not on disk still answers "not found on disk" — confinement must not
+    // turn it into a rejection.
+    let _fx = CwdFileFixture::new();
+    let req = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"vfs_backend_status","arguments":{"path":"not_on_disk_df139.bin"}}}"#;
+    let resp = rpc(req);
+    assert!(
+        resp.get("error").is_none(),
+        "missing in-tree path must answer, not error: {resp}"
+    );
+    let payload = tool_payload(&resp);
+    assert_eq!(payload["backend"], "local-only");
+    assert_eq!(payload["cache_hit"], false);
+    assert_eq!(payload["last_synced"], "not found on disk (unmanaged path)");
 }

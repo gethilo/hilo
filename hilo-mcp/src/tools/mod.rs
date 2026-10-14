@@ -19,6 +19,11 @@
 //! - `vfs_sync_backend`     — sync the backend for a file
 //! - `vfs_workspace_ephemeral` — list ephemeral (rebuildable) files
 //! - `vfs_workspace_wipe`   — plan or apply a wipe of ephemeral files
+//!
+//! Every tool argument that reaches the filesystem is confined to the
+//! workspace root (DF-WARPFS-139): absolute host paths, `..` escapes and
+//! symlinks pointing outside the tree are rejected by
+//! [`crate::confinement`] before any read, list or xattr write happens.
 
 use std::path::{Path, PathBuf};
 
@@ -358,10 +363,13 @@ fn get_metadata(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
     let path_str = arguments["path"]
         .as_str()
         .ok_or_else(|| McpError::Protocol("missing 'path' argument".into()))?;
-    let path = Path::new(path_str);
+
+    // DF-WARPFS-139: the read surface is agent-facing — canonicalize and
+    // confine before touching the filesystem (symlink-resolved prefix check).
+    let path = crate::confinement::ensure_inside_workspace(path_str)?;
 
     // ── file stats from the OS ──────────────────────────────────────────
-    let meta = std::fs::metadata(path)
+    let meta = std::fs::metadata(&path)
         .map_err(|e| McpError::Protocol(format!("cannot stat '{path_str}': {e}")))?;
     let size = meta.len();
     let mtime: Option<String> = meta.modified().ok().and_then(|st| {
@@ -378,7 +386,7 @@ fn get_metadata(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
         });
 
     // ── collect xattrs ──────────────────────────────────────────────────
-    let full_names = hilo_metadata::list_vfs_xattrs(path)?;
+    let full_names = hilo_metadata::list_vfs_xattrs(&path)?;
 
     let mut xattrs = serde_json::Map::new();
     let mut backend: String = "local".into();
@@ -394,7 +402,7 @@ fn get_metadata(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
             }
         }
 
-        match hilo_metadata::get_vfs_xattr(path, short_name)? {
+        match hilo_metadata::get_vfs_xattr(&path, short_name)? {
             Some(val) => {
                 // Capture backend / hash for the top-level fields.
                 if short_name == "backend" {
@@ -472,7 +480,10 @@ fn set_metadata(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
         .as_str()
         .ok_or_else(|| McpError::Protocol("missing 'value' argument".into()))?;
 
-    let path = Path::new(path_str);
+    // DF-WARPFS-139: xattr writes are agent-facing too — confine before the
+    // read-back and the set.
+    let path = crate::confinement::ensure_inside_workspace(path_str)?;
+    let path = path.as_path();
 
     // Reject empty keys.
     if key.is_empty() {
@@ -936,10 +947,16 @@ fn list_directory(arguments: &serde_json::Value) -> McpResult<serde_json::Value>
     // fell back when `path == "/"`, so every other populated path silently
     // returned {entries: [], total: 0}.
     if entries.is_empty() {
+        // DF-WARPFS-139: the filesystem fallback is confined to the workspace
+        // (symlink-resolved prefix check). "/" keeps its pre-existing meaning
+        // (DF-WARPFS-41): the workspace root itself. Lenient so in-tree
+        // not-yet-on-disk paths keep the original "path does not exist"
+        // error below instead of a raw canonicalize failure; out-of-tree
+        // paths are rejected with the workspace root named.
         let base = if path == "/" {
-            std::env::current_dir()?
+            crate::confinement::workspace_root()?
         } else {
-            PathBuf::from(path)
+            crate::confinement::ensure_inside_workspace_lenient(path)?
         };
         if base.is_file() {
             return Err(McpError::Protocol(format!(
@@ -1027,19 +1044,28 @@ fn resolve_backend(path: &str) -> McpResult<BackendResolution> {
     let mount = if mounts_path.is_file() {
         let entries = hilo_backends::read_mount_entries(&mounts_path)
             .map_err(|error| McpError::Protocol(error.to_string()))?;
+        // Mount ownership is matched on the RAW request: `at` entries are
+        // workspace-relative virtual roots (e.g. `/s3data`), so a canonical
+        // absolute path would never match them.
         hilo_backends::mount_for_path(&entries, path).cloned()
     } else {
         None
     };
 
-    let requested = Path::new(path);
-    let real_path = if mount.is_some() {
+    // DF-WARPFS-139: resolve_backend feeds vfs_resolve_path, vfs_backend_status
+    // and vfs_sync_backend — all agent-facing. Confine the location that will
+    // actually be touched: mount-owned requests are rewritten under the
+    // workspace root first (the pre-existing rewrite), everything else is
+    // confined as requested. Lenient, because an unmanaged in-workspace path
+    // that is not on disk must keep answering ("not found on disk"), never
+    // error. The confinement is re-applied to the rewrite so a `..` or a
+    // symlink inside a mount-owned request cannot escape either.
+    let effective = if mount.is_some() {
         cwd.join(path.trim_start_matches('/'))
-    } else if requested.is_absolute() {
-        requested.to_path_buf()
     } else {
-        cwd.join(requested)
+        crate::confinement::ensure_inside_workspace_lenient(path)?
     };
+    let real_path = crate::confinement::ensure_inside_workspace_lenient(&effective)?;
     let cached = real_path.exists();
 
     if let Some(mount) = mount {
@@ -1122,12 +1148,17 @@ fn sync_backend(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
 /// applied (path outside the workspace, no matcher loadable).
 fn skipped_ignore_count(path: &str) -> McpResult<Option<u32>> {
     let cwd = std::env::current_dir().map_err(McpError::Io)?;
-    let p = Path::new(path);
-    let abs = if p.is_absolute() {
-        p.to_path_buf()
-    } else {
-        cwd.join(p)
-    };
+    // DF-WARPFS-139: fold `.`/`..` lexically FIRST. `Path::strip_prefix` is
+    // purely lexical component matching, so `cwd.join("../x")` would still
+    // strip and send the xattr reads below outside the tree; a fold with
+    // leading `..` is an escape attempt — it has no ignore context (None)
+    // here and is rejected by resolve_backend afterwards.
+    let (folded, leading_dotdot) = crate::confinement::fold_lexical(Path::new(path));
+    if leading_dotdot > 0 {
+        return Ok(None);
+    }
+    let p: PathBuf = folded;
+    let abs = if p.is_absolute() { p } else { cwd.join(p) };
     // Only paths inside the workspace have an ignore context.
     let rel = match abs.strip_prefix(&cwd) {
         Ok(r) => r.to_path_buf(),
@@ -1141,16 +1172,29 @@ fn skipped_ignore_count(path: &str) -> McpResult<Option<u32>> {
         }
     }
     if let Ok(matcher) = EphemeralMatcher::load(&cwd, None) {
-        let xattr_ephemeral = hilo_metadata::xattr::get_vfs_xattr(&abs, "ephemeral")
-            .map_err(|e| McpError::Protocol(format!("failed to read user.vfs.ephemeral: {e}")))?
-            .map(|v| v == "true" || v == "1");
+        // DF-WARPFS-139: a missing in-tree path has no xattrs — probing it
+        // hard-errored the whole sync call with ENOENT (surfaced when the
+        // nonexistent-path contract test moved to a relative spelling).
+        // Probe only paths that exist; missing paths carry no explicit
+        // xattrs and fall through to classification.
+        let xattr_ephemeral = if abs.exists() {
+            hilo_metadata::xattr::get_vfs_xattr(&abs, "ephemeral")
+                .map_err(|e| McpError::Protocol(format!("failed to read user.vfs.ephemeral: {e}")))?
+                .map(|v| v == "true" || v == "1")
+        } else {
+            None
+        };
         if matcher.classify(&rel, abs.is_dir(), xattr_ephemeral) == EphemeralClass::Ephemeral {
             // Explicit `user.vfs.sync = upstream` re-includes an ephemeral
             // file (spec §13.16); everything else is skipped.
-            let sync_upstream = hilo_metadata::xattr::get_vfs_xattr(&abs, "sync")
-                .map_err(|e| McpError::Protocol(format!("failed to read user.vfs.sync: {e}")))?
-                .map(|v| v == "upstream")
-                .unwrap_or(false);
+            let sync_upstream = if abs.exists() {
+                hilo_metadata::xattr::get_vfs_xattr(&abs, "sync")
+                    .map_err(|e| McpError::Protocol(format!("failed to read user.vfs.sync: {e}")))?
+                    .map(|v| v == "upstream")
+                    .unwrap_or(false)
+            } else {
+                false
+            };
             if !sync_upstream {
                 return Ok(Some(1));
             }
