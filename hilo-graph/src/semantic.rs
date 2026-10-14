@@ -385,6 +385,63 @@ impl Default for SearchOpts {
     }
 }
 
+/// Parse-cache keys that are real, in-language source files on disk.
+///
+/// `hilo graph warm` keys EVERY discovered file in
+/// `.vfs/graph/.parse_cache.json` (repo-relative path → `{m, s, edges}`,
+/// PERF-002). The graph DB stores only edge ENDPOINTS (DF-WARPFS-116), so
+/// the zero-edge keys are the one place warm records a file nothing
+/// imports. Both search surfaces — the CLI's `hilo graph search` and the
+/// MCP server's `vfs_graph_search` — feed the surviving keys to
+/// [`SearchOpts::extra_documents`] so a symbol defined in such a file stays
+/// findable, and this shared loader is what keeps the two surfaces in
+/// parity (DF-WARPFS-141: the filter used to live only in the CLI, so the
+/// same corpus + binary answered the CLI with a hit and MCP with
+/// `{"results":[],"total":0}`).
+///
+/// A key joins the result set only when it is not a pseudo-node (the
+/// `pkg:` / `local:` / `sys:` / `std:` / `external:` import-specifier
+/// prefixes), its extension maps to a known [`Language`], and the file
+/// still exists under `graph_root` — warm's cache can outlive a deletion
+/// (edges.jsonl and this cache are append-only), and a vanished file must
+/// not join the corpus. The result is sorted so callers get a deterministic
+/// document order. A missing or unparseable cache yields an empty set:
+/// searching without a warm is already answered by the "no graph data"
+/// paths upstream.
+pub fn zero_edge_documents(graph_root: &std::path::Path) -> Vec<String> {
+    let cache_path = graph_root
+        .join(".vfs")
+        .join("graph")
+        .join(".parse_cache.json");
+    let Ok(raw) = std::fs::read_to_string(&cache_path) else {
+        return Vec::new();
+    };
+    let Ok(cache) = serde_json::from_str::<HashMap<String, serde_json::Value>>(&raw) else {
+        return Vec::new();
+    };
+    let mut docs: Vec<String> = cache
+        .into_keys()
+        .filter(|key| {
+            !key.starts_with("pkg:")
+                && !key.starts_with("local:")
+                && !key.starts_with("sys:")
+                && !key.starts_with("std:")
+                && !key.starts_with("external:")
+                && crate::parser::Language::from_path(std::path::Path::new(key.as_str()))
+                    .is_some()
+                // Warm writes repo-RELATIVE keys, so existence is judged
+                // against `graph_root` — the same directory the CLI's CWD
+                // and the MCP `graph_root()` confinement root name. (A
+                // root-joined check is byte-identical for both current
+                // callers and stays correct for a host whose served root
+                // is not the process CWD.)
+                && graph_root.join(key.as_str()).exists()
+        })
+        .collect();
+    docs.sort();
+    docs
+}
+
 // ──────────────────────────── Tokenization ────────────────────────────
 
 /// Tokenize a string into semantic tokens.
@@ -1600,6 +1657,65 @@ mod tests {
         assert!(
             results.iter().any(|r| r.file_path == "src/math.py"),
             "zero-edge file's def symbol must be findable via extra_documents, got: {results:?}"
+        );
+    }
+
+    #[test]
+    fn zero_edge_documents_filters_pseudo_nodes_unknown_ext_and_missing_files() {
+        // DF-WARPFS-141: the shared loader must apply exactly the filter the
+        // CLI applied inline before the refactor — pseudo-node keys are
+        // import STRINGS (GAP-091), keys with an unknown extension are not
+        // searchable sources, and a cache key whose file was deleted must
+        // not join the corpus (the parse cache outlives deletions;
+        // edges.jsonl and `.parse_cache.json` are append-only).
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".vfs/graph")).unwrap();
+        std::fs::write(dir.path().join("constants.py"), "MAX = 1\n").unwrap();
+        std::fs::write(dir.path().join("notes.txt"), "plain text\n").unwrap();
+        let cache = serde_json::json!({
+            "constants.py": {"m": 1u64, "s": 8u64, "edges": []},
+            "pkg:constants": {"m": 1u64, "s": 3u64, "edges": []},
+            "notes.txt": {"m": 1u64, "s": 11u64, "edges": []},
+            "deleted.rs": {"m": 1u64, "s": 9u64, "edges": []}
+        });
+        std::fs::write(
+            dir.path().join(".vfs/graph/.parse_cache.json"),
+            serde_json::to_string(&cache).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            super::zero_edge_documents(dir.path()),
+            vec!["constants.py".to_string()],
+            "only the real, in-language, on-disk zero-edge key may join the corpus"
+        );
+    }
+
+    #[test]
+    fn zero_edge_documents_is_empty_without_a_cache_and_sorted_with_one() {
+        // A missing cache file yields an empty set — searching before a
+        // `graph warm` is answered by the upstream "no graph data" paths,
+        // never an error from the loader itself.
+        let dir = tempfile::tempdir().unwrap();
+        assert!(super::zero_edge_documents(dir.path()).is_empty());
+
+        // Multiple zero-edge keys come back SORTED, so both search surfaces
+        // feed `extra_documents` in one deterministic order.
+        std::fs::create_dir_all(dir.path().join(".vfs/graph")).unwrap();
+        std::fs::write(dir.path().join("b.py"), "B = 2\n").unwrap();
+        std::fs::write(dir.path().join("a.py"), "A = 1\n").unwrap();
+        let cache = serde_json::json!({
+            "b.py": {"m": 1u64, "s": 7u64, "edges": []},
+            "a.py": {"m": 1u64, "s": 7u64, "edges": []}
+        });
+        std::fs::write(
+            dir.path().join(".vfs/graph/.parse_cache.json"),
+            serde_json::to_string(&cache).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            super::zero_edge_documents(dir.path()),
+            vec!["a.py".to_string(), "b.py".to_string()]
         );
     }
 

@@ -2905,19 +2905,12 @@ pub fn run_search(query: &str, limit: Option<usize>, no_symbols: bool) -> Result
     // DF-WARPFS-116: discovered files with zero import edges are invisible
     // to the graph DB (edge endpoints only) — pass them from warm's parse
     // cache so a symbol defined in a file nothing imports is still findable.
-    opts.extra_documents = load_parse_cache(&cwd)
-        .keys()
-        .filter(|key| {
-            !key.starts_with("pkg:")
-                && !key.starts_with("local:")
-                && !key.starts_with("sys:")
-                && !key.starts_with("std:")
-                && !key.starts_with("external:")
-                && Language::from_path(std::path::Path::new(key.as_str())).is_some()
-                && std::path::Path::new(key.as_str()).exists()
-        })
-        .cloned()
-        .collect();
+    // DF-WARPFS-141: the filter lives in
+    // `hilo_graph::zero_edge_documents` so the MCP surface consumes the
+    // SAME implementation — the CLI-private copy here was byte-equivalent
+    // but the MCP tool kept an empty `extra_documents`, so the identical
+    // corpus answered the CLI with a hit and MCP with zero results.
+    opts.extra_documents = hilo_graph::zero_edge_documents(&cwd);
 
     let results = if no_symbols {
         hilo_graph::semantic::search(&graph, query, &opts)

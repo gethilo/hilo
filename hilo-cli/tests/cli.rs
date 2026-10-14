@@ -4308,3 +4308,163 @@ fn graph_audit_text_view_reports_counts_and_rules() {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// DF-WARPFS-141: MCP `vfs_graph_search` and `hilo graph search` must return
+/// the SAME hit set on a corpus whose defining file has zero import edges.
+///
+/// The DF-WARPFS-116 fix fed warm's parse-cache zero-edge files into the
+/// CLI's `extra_documents` only; the MCP tool kept an empty feed, so the
+/// identical corpus + binary answered the CLI with a hit and MCP with
+/// `{"results":[],"total":0}` (dogfood run 41). This drives BOTH surfaces —
+/// the CLI directly and the real stdio MCP server through its actual
+/// JSON-RPC protocol — over the same warmed corpus and asserts parity.
+#[test]
+fn mcp_graph_search_matches_cli_on_zero_edge_corpus() {
+    use std::io::{BufRead as _, Write as _};
+    use std::process::Stdio;
+
+    let dir = unique_tempdir("df141-mcp-cli-parity");
+    // Zero-edge files: math.py defines the probe symbol and nothing imports
+    // it; constants.py is a constant module main.py imports (so math.py has
+    // NO edge endpoint presence at all — the exact DF-WARPFS-116 shape).
+    fs::write(
+        dir.join("math.py"),
+        "def zebra_quicksort(items):\n    return sorted(items)\n",
+    )
+    .expect("failed to write math.py");
+    fs::write(dir.join("constants.py"), "TIMEOUT_GRACE_MS = 750\n")
+        .expect("failed to write constants.py");
+    fs::write(
+        dir.join("main.py"),
+        "from constants import TIMEOUT_GRACE_MS\n\nprint(TIMEOUT_GRACE_MS)\n",
+    )
+    .expect("failed to write main.py");
+
+    init_project(&dir);
+    let warm = run_hilo_with_retry(hilo_cmd().args(["graph", "warm"]).current_dir(&dir));
+    assert!(
+        warm.status.success(),
+        "graph warm failed: {}",
+        String::from_utf8_lossy(&warm.stderr)
+    );
+
+    // CLI arm: must find the zero-edge symbol (the DF-WARPFS-116 contract).
+    let cli = run_hilo_with_retry(
+        hilo_cmd()
+            .args(["graph", "search", "zebra_quicksort"])
+            .current_dir(&dir),
+    );
+    assert!(
+        cli.status.success(),
+        "graph search failed: {}",
+        String::from_utf8_lossy(&cli.stderr)
+    );
+    let cli_stdout = String::from_utf8_lossy(&cli.stdout);
+    let cli_files: Vec<String> = cli_stdout
+        .lines()
+        .filter(|l| {
+            l.split_whitespace()
+                .next()
+                .is_some_and(|tok| tok.parse::<f64>().is_ok())
+        })
+        .map(|l| {
+            l.split_whitespace()
+                .nth(1)
+                .expect("a scored search line carries a file path")
+                .to_string()
+        })
+        .collect();
+    assert!(
+        cli_files.iter().any(|f| f == "math.py"),
+        "CLI arm precondition (DF-WARPFS-116): the zero-edge symbol must be findable, stdout:\n{cli_stdout}"
+    );
+
+    // MCP arm: the REAL stdio server (the same process shape an MCP client
+    // launches), driven through its actual stdin/stdout protocol. NOTE:
+    // concat! joins literals verbatim — single braces, no format! escaping.
+    let mut child = spawn_hilo_with_retry(
+        hilo_cmd()
+            .args(["serve", "--mcp"])
+            .current_dir(&dir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    );
+    {
+        let stdin = child
+            .stdin
+            .as_mut()
+            .expect("serve --mcp must have piped stdin");
+        stdin
+            .write_all(
+                concat!(
+                    r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"vfs_graph_search","arguments":{"query":"zebra_quicksort"}}}"#,
+                    "\n"
+                )
+                .as_bytes(),
+            )
+            .expect("failed to write the MCP request");
+        stdin.flush().expect("failed to flush the MCP request");
+    }
+    let mut response_line = String::new();
+    {
+        let stdout = child
+            .stdout
+            .as_mut()
+            .expect("serve --mcp must have piped stdout");
+        let mut reader = std::io::BufReader::new(stdout);
+        for _ in 0..20 {
+            response_line.clear();
+            let n = reader
+                .read_line(&mut response_line)
+                .expect("failed to read the MCP response");
+            if n == 0 {
+                break; // server exited — diagnosed below
+            }
+            if serde_json::from_str::<serde_json::Value>(response_line.trim()).is_ok() {
+                break;
+            }
+        }
+    }
+    let _ = child.kill();
+    let mut mcp_stderr = String::new();
+    if let Some(stderr) = child.stderr.as_mut() {
+        let _ = std::io::Read::read_to_string(stderr, &mut mcp_stderr);
+    }
+    let _ = child.wait();
+
+    let resp: serde_json::Value = serde_json::from_str(response_line.trim()).unwrap_or_else(|e| {
+        panic!(
+            "MCP arm produced no JSON-RPC response ({e}); last line: {response_line:?}; stderr: {mcp_stderr}"
+        )
+    });
+    assert!(
+        resp.get("error").is_none(),
+        "vfs_graph_search must not error on the warmed parity corpus: {resp}"
+    );
+    let text = resp["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_else(|| panic!("tool result must carry content[0].text: {resp}"));
+    let payload: serde_json::Value =
+        serde_json::from_str(text).expect("vfs_graph_search payload should be valid JSON");
+    let hits = payload["results"]
+        .as_array()
+        .expect("vfs_graph_search payload should carry a results array");
+    let mcp_files: Vec<String> = hits
+        .iter()
+        .filter_map(|r| r["file_path"].as_str().map(|s| s.to_string()))
+        .collect();
+    assert!(
+        mcp_files.iter().any(|f| f == "math.py"),
+        "AC1: the zero-edge file must be returned by MCP (was the DF-WARPFS-141 defect shape \
+         {{\"results\":[],\"total\":0}}): {payload}"
+    );
+    // AC2 parity: the two surfaces rank the identical corpus with the
+    // identical index construction, so their hit FILE SETS must be equal.
+    assert_eq!(
+        cli_files, mcp_files,
+        "CLI and MCP hit sets diverged on the identical corpus\nCLI stdout:\n{cli_stdout}\nMCP payload: {payload}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
