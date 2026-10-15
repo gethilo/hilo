@@ -2178,11 +2178,14 @@ tasks:
   status: complete
   created_at: '2026-10-15T00:22:49.447151+00:00'
   completed_at: '2026-10-15T00:22:53.653084+00:00'
-- id: QA-WARPFS-23
-  title: 'clean-machine build gap: openssl-sys blocks fresh-install'
+- id: DF-WARPFS-146
+  title: FFI vfs_graph_impact/vfs_graph_related NotFound for real file with pkg-only
+    edges
   criteria:
-  - openssl-sys compiles from source on fresh install; document native deps OR ship
-    prebuilt; verify fresh clone builds without manual intervention
+  - 'vfs_graph_impact and vfs_graph_related on an existing on-disk file whose only
+    graph edges are pkg: pseudo-node endpoints return an honest empty result instead
+    of NotFound; subjects that are neither in the graph nor on disk still NotFound;
+    unit test locks the parity with CLI graceful behavior'
   status: complete
-  created_at: '2026-10-15T01:35:09.368308+00:00'
-  completed_at: '2026-10-15T02:36:40.114306+00:00'
+  created_at: '2026-10-15T03:11:17.524272+00:00'
+  completed_at: '2026-10-15T13:04:19.174007+00:00'
