@@ -89,6 +89,15 @@ interface HiloHandle {
     [Throws=HiloError]
     constructor(string root);
 
+    // DF-WARPFS-147: metadata resolves `path` against the handle root —
+    // relative paths join the root, absolute paths must stay inside it —
+    // never the process working directory.
+    [Throws=HiloError]
+    string? vfs_get_metadata([ByRef] string path, [ByRef] string key);
+
+    [Throws=HiloError]
+    SetMetadataResult vfs_set_metadata([ByRef] string path, [ByRef] string key, [ByRef] string value);
+
     [Throws=HiloError]
     GraphRelatedResult vfs_graph_related([ByRef] string path);
 
@@ -109,9 +118,4 @@ interface HiloHandle {
 };
 
 namespace hilo {
-    [Throws=HiloError]
-    string? vfs_get_metadata([ByRef] string path, [ByRef] string key);
-
-    [Throws=HiloError]
-    SetMetadataResult vfs_set_metadata([ByRef] string path, [ByRef] string key, [ByRef] string value);
 };

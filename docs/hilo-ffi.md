@@ -7,18 +7,23 @@ primitives through a native SDK.
 
 ## Interface
 
-The `.udl` file (`src/hilo.udl`) is the **source of truth**. Metadata calls remain namespace functions. Repository-sensitive graph, backend, rule, and directory operations are methods on `HiloHandle`, whose constructor requires an explicit repository root. Embedded hosts therefore never depend on their process working directory.
+The `.udl` file (`src/hilo.udl`) is the **source of truth**. Every vfs call,
+metadata included, is a method on `HiloHandle`, whose constructor requires an
+explicit repository root. Embedded hosts therefore never depend on their
+process working directory: `path` arguments resolve against the handle root —
+relative paths join the root, absolute paths must stay inside it (an escape
+is an `InvalidInput` error).
 
-| Function | Description |
+| Method | Description |
 |---|---|
-| `vfs_get_metadata(path, key)` | Get a `user.vfs.*` xattr value |
-| `vfs_set_metadata(path, key, value)` | Set a `user.vfs.*` xattr value |
-| `vfs_graph_related(path)` | Get graph edges related to a file |
-| `vfs_graph_impact(path, max_depth)` | Transitive dependents via BFS |
-| `vfs_graph_stats()` | Graph summary statistics |
-| `vfs_resolve_backend(path)` | Backend info for a virtual path |
-| `vfs_rule_check(rule_name)` | Run a DuckDB rule query |
-| `vfs_list_directory(path)` | List virtual directory entries |
+| `handle.vfs_get_metadata(path, key)` | Get a `user.vfs.*` xattr value |
+| `handle.vfs_set_metadata(path, key, value)` | Set a `user.vfs.*` xattr value, returning the previous value |
+| `handle.vfs_graph_related(path)` | Get graph edges related to a file |
+| `handle.vfs_graph_impact(path, max_depth)` | Transitive dependents via BFS |
+| `handle.vfs_graph_stats()` | Graph summary statistics |
+| `handle.vfs_resolve_backend(path)` | Backend info for a virtual path |
+| `handle.vfs_rule_check(rule_name)` | Run a DuckDB rule query |
+| `handle.vfs_list_directory(path)` | List virtual directory entries |
 
 Supporting dictionaries (`MetadataResult`, `SetMetadataResult`,
 `GraphEdge`, `GraphRelatedResult`, `GraphImpactEntry`,

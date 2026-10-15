@@ -134,37 +134,6 @@ pub struct DirectoryListing {
     pub total: u32,
 }
 
-// --- Real implementations ---
-
-fn vfs_get_metadata(path: &str, key: &str) -> Result<Option<String>, HiloError> {
-    let p = std::path::Path::new(path);
-    hilo_metadata::get_vfs_xattr(p, key).map_err(|e| HiloError::InternalError {
-        message: format!("failed to read metadata for {}: {e}", p.display()),
-    })
-}
-
-fn vfs_set_metadata(path: &str, key: &str, value: &str) -> Result<SetMetadataResult, HiloError> {
-    if key.is_empty() {
-        return Err(HiloError::InvalidInput {
-            message: "metadata key must not be empty".into(),
-        });
-    }
-    let p = std::path::Path::new(path);
-    let previous = hilo_metadata::get_vfs_xattr(p, key).map_err(|e| HiloError::InternalError {
-        message: format!("failed to read metadata for {}: {e}", p.display()),
-    })?;
-    hilo_metadata::set_vfs_xattr(p, key, value).map_err(|e| HiloError::InternalError {
-        message: format!("failed to set metadata for {}: {e}", p.display()),
-    })?;
-    Ok(SetMetadataResult {
-        path: Some(path.to_string()),
-        key: Some(key.to_string()),
-        value: Some(value.to_string()),
-        previous_value: previous,
-        success: Some(true),
-    })
-}
-
 pub struct HiloHandle {
     root: std::path::PathBuf,
 }
@@ -237,6 +206,48 @@ impl HiloHandle {
             });
         }
         Ok(relative.to_string_lossy().replace('\\', "/"))
+    }
+
+    // DF-WARPFS-147: metadata lives on the handle so a relative `path` joins
+    // `self.root` (never the process CWD); absolute paths must stay inside
+    // the root (same escape rule as graph_subject). `path` is the repo path
+    // as returned in results; `key` accepts a bare or `user.vfs.`-prefixed
+    // name (hilo_metadata normalizes).
+    fn vfs_get_metadata(&self, path: &str, key: &str) -> Result<Option<String>, HiloError> {
+        let subject = self.graph_subject(path)?;
+        let p = self.root.join(&subject);
+        hilo_metadata::get_vfs_xattr(&p, key).map_err(|e| HiloError::InternalError {
+            message: format!("failed to read metadata for {}: {e}", p.display()),
+        })
+    }
+
+    fn vfs_set_metadata(
+        &self,
+        path: &str,
+        key: &str,
+        value: &str,
+    ) -> Result<SetMetadataResult, HiloError> {
+        if key.is_empty() {
+            return Err(HiloError::InvalidInput {
+                message: "metadata key must not be empty".into(),
+            });
+        }
+        let subject = self.graph_subject(path)?;
+        let p = self.root.join(&subject);
+        let previous =
+            hilo_metadata::get_vfs_xattr(&p, key).map_err(|e| HiloError::InternalError {
+                message: format!("failed to read metadata for {}: {e}", p.display()),
+            })?;
+        hilo_metadata::set_vfs_xattr(&p, key, value).map_err(|e| HiloError::InternalError {
+            message: format!("failed to set metadata for {}: {e}", p.display()),
+        })?;
+        Ok(SetMetadataResult {
+            path: Some(subject),
+            key: Some(key.to_string()),
+            value: Some(value.to_string()),
+            previous_value: previous,
+            success: Some(true),
+        })
     }
 
     fn manifest_path(&self) -> Result<std::path::PathBuf, HiloError> {
@@ -564,6 +575,113 @@ mod tests {
             .vfs_graph_impact("src/lib.rs", 4)
             .expect("impact should use the same named repo root");
         assert_eq!(impact.total, 1);
+    }
+
+    #[test]
+    fn metadata_resolves_against_the_repo_root_from_a_foreign_cwd() {
+        // DF-WARPFS-147: the metadata calls live on the handle and resolve
+        // `path` against `self.root` — a relative path like `src/app.py`
+        // must work with the process CWD parked anywhere else, and the
+        // xattr round-trip must land on the real file.
+        let _lock = cwd_test_lock().lock().unwrap();
+        let repo = tempfile::tempdir().unwrap();
+        let src = repo.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("app.py"), "total = 0\n").unwrap();
+
+        let previous = std::env::current_dir().unwrap();
+        let _restore = RestoreCwd(previous);
+        let foreign = tempfile::tempdir().unwrap();
+        std::env::set_current_dir(foreign.path()).unwrap();
+
+        let handle = HiloHandle::new(repo.path().to_string_lossy().into_owned()).unwrap();
+        let set = handle
+            .vfs_set_metadata("src/app.py", "user.vfs.feature", "auth-module")
+            .expect("relative path must resolve against the handle root");
+        assert_eq!(set.path.as_deref(), Some("src/app.py"));
+        assert_eq!(set.key.as_deref(), Some("user.vfs.feature"));
+        assert_eq!(set.previous_value, None);
+        assert_eq!(set.success, Some(true));
+
+        let get = handle
+            .vfs_get_metadata("src/app.py", "feature")
+            .expect("xattr round-trip through the handle root");
+        assert_eq!(get.as_deref(), Some("auth-module"));
+
+        // The xattr really lives on the repo file, not on something the
+        // foreign CWD happens to name.
+        let on_disk = hilo_metadata::get_vfs_xattr(&src.join("app.py"), "user.vfs.feature")
+            .expect("repo file xattr readable");
+        assert_eq!(on_disk.as_deref(), Some("auth-module"));
+
+        // Overwrite returns the previous value.
+        let update = handle
+            .vfs_set_metadata("src/app.py", "user.vfs.feature", "billing")
+            .expect("second set succeeds");
+        assert_eq!(update.previous_value.as_deref(), Some("auth-module"));
+        assert_eq!(
+            handle
+                .vfs_get_metadata("src/app.py", "user.vfs.feature")
+                .unwrap(),
+            Some("billing".into())
+        );
+
+        // A missing key is None, not an error.
+        assert_eq!(
+            handle
+                .vfs_get_metadata("src/app.py", "user.vfs.absent")
+                .unwrap(),
+            None
+        );
+
+        // Empty key stays rejected.
+        let empty = handle
+            .vfs_set_metadata("src/app.py", "", "v")
+            .expect_err("empty metadata key must stay rejected");
+        assert!(empty.to_string().contains("must not be empty"), "{empty}");
+    }
+
+    #[test]
+    fn metadata_paths_outside_the_root_are_rejected() {
+        // DF-WARPFS-147 escape rule: an absolute path outside the handle
+        // root (or a `..` escape) is an InvalidInput error, matching
+        // graph_subject — the xattr must NOT land on the outside file.
+        let _lock = cwd_test_lock().lock().unwrap();
+        let repo = tempfile::tempdir().unwrap();
+        let src = repo.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("app.py"), "total = 0\n").unwrap();
+
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("target.py"), "escape = 1\n").unwrap();
+        let outside_path = outside.path().join("target.py");
+
+        let handle = HiloHandle::new(repo.path().to_string_lossy().into_owned()).unwrap();
+
+        let absolute = handle
+            .vfs_set_metadata(
+                outside_path.to_string_lossy().as_ref(),
+                "user.vfs.feature",
+                "outside",
+            )
+            .expect_err("absolute path outside root must be rejected");
+        assert!(
+            absolute.to_string().contains("outside repository root"),
+            "{absolute}"
+        );
+        assert_eq!(
+            hilo_metadata::get_vfs_xattr(&outside_path, "user.vfs.feature").unwrap(),
+            None,
+            "no xattr may land on a path outside the root"
+        );
+
+        let parent = handle
+            .vfs_set_metadata("../target.py", "user.vfs.feature", "outside")
+            .expect_err("`..` path must be rejected");
+        assert!(
+            parent.to_string().contains("escapes repository root"),
+            "{parent}"
+        );
     }
 
     #[test]
