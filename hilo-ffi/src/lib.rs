@@ -260,14 +260,34 @@ impl HiloHandle {
         })
     }
 
+    fn graph_subject_known(
+        &self,
+        db: &hilo_graph::GraphDB,
+        subject: &str,
+    ) -> Result<bool, HiloError> {
+        db.file_in_graph(subject)
+            .map_err(|e| HiloError::InternalError {
+                message: format!("failed to resolve graph subject {subject}: {e}"),
+            })
+            .map(|known| {
+                // DF-WARPFS-146: a real file whose only graph edges terminate
+                // on `pkg:` pseudo-nodes has no raw file-level endpoint, but
+                // the downstream queries (compute_impact / related) resolve
+                // pkg nodes and answer honestly-empty — the CLI's graceful
+                // behavior for the identical state. Only a subject that is
+                // neither a graph endpoint NOR a real file on disk is a
+                // genuine NotFound.
+                known
+                    || (!subject.starts_with("pkg:")
+                        && !subject.starts_with("sys:")
+                        && self.root.join(subject).is_file())
+            })
+    }
+
     fn vfs_graph_related(&self, path: &str) -> Result<GraphRelatedResult, HiloError> {
         let db = self.graph_db()?;
         let subject = self.graph_subject(path)?;
-        let known = db
-            .file_in_graph(&subject)
-            .map_err(|e| HiloError::InternalError {
-                message: format!("failed to resolve graph subject {subject}: {e}"),
-            })?;
+        let known = self.graph_subject_known(&db, &subject)?;
         if !known {
             return Err(HiloError::NotFound {
                 path: self.root.join(&subject).to_string_lossy().into_owned(),
@@ -298,11 +318,7 @@ impl HiloHandle {
     fn vfs_graph_impact(&self, path: &str, max_depth: u32) -> Result<GraphImpactResult, HiloError> {
         let db = self.graph_db()?;
         let subject = self.graph_subject(path)?;
-        let known = db
-            .file_in_graph(&subject)
-            .map_err(|e| HiloError::InternalError {
-                message: format!("failed to resolve graph subject {subject}: {e}"),
-            })?;
+        let known = self.graph_subject_known(&db, &subject)?;
         if !known {
             return Err(HiloError::NotFound {
                 path: self.root.join(&subject).to_string_lossy().into_owned(),
@@ -597,5 +613,62 @@ mod tests {
             "error must name {}: {error}",
             expected.display()
         );
+    }
+
+    #[test]
+    fn pkg_only_file_answers_honestly_empty_not_notfound() {
+        // DF-WARPFS-146: a real file whose only graph edges terminate on
+        // `pkg:` pseudo-nodes must answer with an honest EMPTY result (CLI
+        // parity) instead of NotFound. The file exists on disk; the graph has
+        // no raw file-level endpoint for it.
+        let _lock = cwd_test_lock().lock().unwrap();
+        let repo = tempfile::tempdir().unwrap();
+        let src = repo.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("invoice.py"), "total = 0\n").unwrap();
+        let graph_dir = repo.path().join(".vfs/graph");
+        std::fs::create_dir_all(&graph_dir).unwrap();
+        let db = hilo_graph::GraphDB::open(graph_dir.join("graph.db").to_str().unwrap()).unwrap();
+        // Edge endpoints are pkg: pseudo-nodes only — invoice.py is neither
+        // endpoint, so the raw file_in_graph pre-check misses it.
+        db.insert_edges(&[hilo_graph::Edge {
+            from: "src/app.py".into(),
+            to: "pkg:src".into(),
+            rel: "imports".into(),
+            provenance: "test".into(),
+            confidence: 1.0,
+        }])
+        .unwrap();
+        drop(db);
+
+        let previous = std::env::current_dir().unwrap();
+        let _restore = RestoreCwd(previous);
+        let foreign = tempfile::tempdir().unwrap();
+        std::env::set_current_dir(foreign.path()).unwrap();
+
+        let handle = HiloHandle::new(repo.path().to_string_lossy().into_owned()).unwrap();
+
+        let related = handle
+            .vfs_graph_related("src/invoice.py")
+            .expect("real file with pkg-only edges must not NotFound");
+        assert_eq!(
+            related.total, 0,
+            "related is honestly empty for a file with no file-level edges"
+        );
+
+        let impact = handle
+            .vfs_graph_impact("src/invoice.py", 4)
+            .expect("real file with pkg-only edges must not NotFound");
+        assert_eq!(
+            impact.total, 0,
+            "impact is honestly empty for a file with no file-level edges"
+        );
+
+        // A subject that is neither a graph endpoint NOR a real file still
+        // NotFound (the pre-check's genuine purpose).
+        let error = handle
+            .vfs_graph_impact("src/ghost.py", 4)
+            .expect_err("phantom subject must stay NotFound");
+        assert!(error.to_string().contains("ghost.py"), "{error}");
     }
 }
