@@ -38,7 +38,7 @@ way).
 | `vfs_graph_stats` | `{}` | `{total_edges, total_files, edge_types, orphans, most_connected}` | Aggregate statistics about the dependency graph |
 | `vfs_graph_untested` | `{}` | `{files, total}` | Files with import edges but no `tested_by` edges |
 | `vfs_graph_module` | `{module_name}` | `{module, files, edges_count, test_coverage_pct}` | Per-module file listing and test coverage |
-| `vfs_graph_impact` | `{path, max_depth?}` | `{dependents, total, max_depth_reached}` | Files that depend on this file, directly or transitively |
+| `vfs_graph_impact` | `{path, max_depth?}` | `{dependents, review_set, total, max_depth_reached}` — `review_set` is the full CLI answer (`hilo graph impact`, GAP-117): the queried file first (scope `self`), then its dependents (scopes `file`/`crate`), then the forward/reverse neighbourhood (scopes `dependency`/`link`); every row carries a `scope` field, and `total` counts all returned rows across both arrays | Files that depend on this file, directly or transitively, plus the CLI's full review set |
 | `vfs_graph_understand` | `{task, budget?, resolution?}` | `{text, files, anchors, tokens_estimate}` | Harmonic multi-resolution context for a task (MAP → SIGNATURES → DETAIL) |
 | `vfs_graph_search` | `{query, limit?}` | `{results, total}` (or a `message` when `.vfs/graph/graph.db` is missing) | Deterministic semantic search (TF-IDF + BM25 + reciprocal rank fusion) |
 | `vfs_graph_audit` | `{path?}` | `{schema, root, scanned_files, public_symbols, entrypoints, buckets {unreachable, unlinked, ok}, unknown, census, symbols, rules}` | COV-5 symbol-level connection + test audit: per public function, is it reachable from a declared entrypoint and does it carry a test link (the NAMED list, bucketed, never a score) |

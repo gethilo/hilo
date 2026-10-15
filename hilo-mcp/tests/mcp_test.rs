@@ -1006,6 +1006,218 @@ fn test_backend_status_nonexistent() {
     assert_eq!(result["last_synced"], "not found on disk (unmanaged path)");
 }
 
+// -------------------------------------------------------------------------
+// vfs_graph_impact — REV-WARPFS-7: MCP answers with the CLI's review set
+// -------------------------------------------------------------------------
+
+/// REV-WARPFS-7: `vfs_graph_impact` must return the SAME review set the CLI
+/// `hilo graph impact` prints for the same file and `--max-depth`, not just
+/// the reverse-only dependent half.
+///
+/// The defect shape: the CLI runs `review_or_parse` (GAP-117 review set —
+/// subject, dependents, and the bounded forward/reverse neighbourhood), while
+/// MCP ran `impact_or_parse` (reverse BFS only). On a Rust-style corpus,
+/// where every import lands on `pkg:<crate>` nodes, MCP answered
+/// `{"dependents":[],"total":0}` while the same binary's CLI printed rows —
+/// an agent via MCP got the misleading half of the answer.
+///
+/// The corpus mirrors the warm-built graph exactly: edges are derived by the
+/// REAL parser (`hilo_graph::Parser`) from the same files on disk, so both
+/// surfaces see byte-identical edge sets without duplicating parser logic
+/// in the test. The fixture files are laid out so the review set carries a
+/// row of every scope the CLI labels:
+/// - `self`:       `src/core.rs` (the queried file, depth 0);
+/// - `file`:       `src/api.rs`  (real file edge `api.rs → core.rs`, depth 1);
+/// - `dependency`: `src/helper.rs` (forward edge `core.rs → helper.rs`);
+/// - `link`:       `src/handler.rs` (two reverse hops off the forward walk:
+///   `core.rs ← api.rs ← handler.rs`);
+/// - `crate`:      `tests/core_test.rs → pkg:mylib` (pkg-only, max-depth 2).
+#[test]
+fn mcp_graph_impact_matches_cli_review_set_on_mixed_corpus() {
+    use hilo_graph::{
+        Language, Parser, SCOPE_CRATE, SCOPE_DEPENDENCY, SCOPE_FILE, SCOPE_LINK, SCOPE_SELF,
+    };
+    use hilo_metadata::inventory::Edge;
+
+    let _fx = CwdGraphFixture::new();
+
+    // The corpus on disk. Real files, so the JIT/parse paths see them too.
+    std::fs::create_dir_all("src").unwrap();
+    std::fs::create_dir_all("tests").unwrap();
+    // GAP-043 rust module resolution needs a Cargo package root: without a
+    // Cargo.toml the parser falls back to pkg: edges for `use crate::…`.
+    std::fs::write(
+        "Cargo.toml",
+        "[package]\nname = \"mylib\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        "src/lib.rs",
+        "pub mod api;\npub mod core;\npub mod handler;\npub mod helper;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        "src/core.rs",
+        "use crate::helper;\npub fn magic() -> u32 {\n    helper::join()\n}\n",
+    )
+    .unwrap();
+    std::fs::write("src/helper.rs", "pub fn join() -> u32 {\n    42\n}\n").unwrap();
+    std::fs::write(
+        "src/api.rs",
+        "use crate::core;\npub fn call() -> u32 {\n    core::magic()\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        "src/handler.rs",
+        "use crate::api;\npub fn handle() -> u32 {\n    api::call()\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        "tests/core_test.rs",
+        "use mylib::core;\n#[test]\nfn t() {\n    assert_eq!(core::magic(), 42);\n}\n",
+    )
+    .unwrap();
+
+    // Derive the edges the way `graph warm` does: parse every file with the
+    // shared parser and insert what it emits. No hand-written edge fixture —
+    // a stale hand copy is exactly how CLI and MCP drift apart.
+    let files = [
+        "src/lib.rs",
+        "src/core.rs",
+        "src/helper.rs",
+        "src/api.rs",
+        "src/handler.rs",
+        "tests/core_test.rs",
+    ];
+    let mut edges: Vec<Edge> = Vec::new();
+    for f in files {
+        let source = std::fs::read_to_string(f).unwrap();
+        let mut parser = Parser::for_language(Language::Rust).unwrap();
+        edges.extend(parser.parse_imports(f, &source).unwrap());
+    }
+    // Premise: the corpus really carries a file→file edge (api → core) AND
+    // a pkg-only edge (test → pkg:mylib) — the mixed shape the parity fix
+    // is about. If the parser stops emitting either, this test's subject
+    // has drifted and the assertions below would be vacuous.
+    assert!(
+        edges
+            .iter()
+            .any(|e| e.from == "src/api.rs" && e.to == "src/core.rs"),
+        "premise: parser must emit a real file edge src/api.rs → src/core.rs, got: {edges:?}"
+    );
+    assert!(
+        edges
+            .iter()
+            .any(|e| e.from == "tests/core_test.rs" && e.to == "pkg:mylib"),
+        "premise: parser must emit a pkg-only edge tests/core_test.rs → pkg:mylib, got: {edges:?}"
+    );
+    {
+        let db = CwdGraphFixture::graph_db(&_fx);
+        db.insert_edges(&edges).unwrap();
+    }
+
+    // MCP arm: the tool under fix.
+    let req = r#"{"jsonrpc":"2.0","id":90,"method":"tools/call","params":{"name":"vfs_graph_impact","arguments":{"path":"src/core.rs","max_depth":1}}}"#;
+    let resp = rpc(req);
+    assert!(
+        resp.get("error").is_none(),
+        "vfs_graph_impact must not error on the parity corpus: {resp}"
+    );
+    let payload = tool_payload(&resp);
+
+    let review = payload["review_set"]
+        .as_array()
+        .expect("response must carry a review_set array (REV-WARPFS-7 shape)");
+    let find = |p: &str| {
+        review
+            .iter()
+            .find(|r| r["path"] == p)
+            .unwrap_or_else(|| panic!("{p} missing from review_set: {payload}"))
+    };
+
+    // The subject leads, with the CLI's self row.
+    let self_row = find("src/core.rs");
+    assert_eq!(self_row["scope"], SCOPE_SELF, "{payload}");
+    assert_eq!(self_row["depth"], 0, "{payload}");
+
+    // Real file edge → the CLI's file scope, depth 1.
+    assert_eq!(find("src/api.rs")["scope"], SCOPE_FILE, "{payload}");
+
+    // Forward edge → the CLI's dependency scope.
+    assert_eq!(
+        find("src/helper.rs")["scope"],
+        SCOPE_DEPENDENCY,
+        "{payload}"
+    );
+
+    // Two reverse hops off the forward walk → the CLI's link scope.
+    assert_eq!(find("src/handler.rs")["scope"], SCOPE_LINK, "{payload}");
+
+    // The dependents-only half: src/api.rs is a real dependent, the test's
+    // pkg-only edge is NOT visible at max_depth 1.
+    let dependents = payload["dependents"]
+        .as_array()
+        .expect("response must carry a dependents array (historical shape)");
+    assert!(
+        dependents.iter().any(|r| r["path"] == "src/api.rs"),
+        "dependents must keep the reverse-only dependent src/api.rs: {payload}"
+    );
+    assert!(
+        !review.iter().any(|r| r["path"] == "tests/core_test.rs"),
+        "max_depth 1 must not surface the pkg-only test edge: {payload}"
+    );
+
+    // total = dependents + review_set (both arrays are returned, so the
+    // declared total counts every row across them).
+    assert_eq!(
+        payload["total"].as_u64().unwrap(),
+        (dependents.len() + review.len()) as u64,
+        "total must equal dependents.len() + review_set.len(): {payload}"
+    );
+
+    // max_depth 2: the pkg-only crate row appears, exactly as the CLI
+    // prints it (scope=crate via pkg:mylib at depth 2).
+    let req2 = r#"{"jsonrpc":"2.0","id":91,"method":"tools/call","params":{"name":"vfs_graph_impact","arguments":{"path":"src/core.rs","max_depth":2}}}"#;
+    let resp2 = rpc(req2);
+    let payload2 = tool_payload(&resp2);
+    let review2 = payload2["review_set"].as_array().unwrap();
+    let crate_row = review2
+        .iter()
+        .find(|r| r["path"] == "tests/core_test.rs")
+        .unwrap_or_else(|| panic!("max-depth 2 must surface the pkg-only test row: {payload2}"));
+    assert_eq!(crate_row["scope"], SCOPE_CRATE, "{payload2}");
+    assert_eq!(crate_row["depth"], 2, "{payload2}");
+
+    // CLI arm — the same review rows the CLI's JSON view prints for the
+    // same file and depth. `GraphDB::open` against the fixture's db is the
+    // exact library call `hilo graph impact --format json` serializes
+    // (main.rs: GraphDB::open_read_only → review_or_parse → ImpactResult
+    // {total: files.len(), files}), so parity here IS CLI parity.
+    let db = hilo_graph::GraphDB::open(".vfs/graph/graph.db").unwrap();
+    let cli_rows = db.review_or_parse("src/core.rs", 1).unwrap();
+    let cli_json = serde_json::to_value(&hilo_graph::ImpactResult {
+        subject: "src/core.rs".into(),
+        total: cli_rows.len(),
+        files: cli_rows,
+    })
+    .unwrap();
+    let cli_files = cli_json["files"].as_array().unwrap();
+    assert_eq!(
+        review.len(),
+        cli_files.len(),
+        "MCP review_set must have exactly the CLI's row count: mcp={review:?} cli={cli_files:?}"
+    );
+    for (mcp_row, cli_row) in review.iter().zip(cli_files.iter()) {
+        assert_eq!(
+            mcp_row["path"], cli_row["path"],
+            "row-for-row parity with the CLI review set: mcp={review:?} cli={cli_files:?}"
+        );
+        assert_eq!(mcp_row["scope"], cli_row["scope"], "{cli_row}");
+        assert_eq!(mcp_row["relation"], cli_row["relation"], "{cli_row}");
+        assert_eq!(mcp_row["depth"], cli_row["depth"], "{cli_row}");
+    }
+}
+
 #[test]
 fn test_backend_surfaces_follow_mounts_yaml_and_never_fake_sync() {
     let _guard = cwd_test_lock().lock().unwrap();

@@ -668,11 +668,29 @@ fn graph_module(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
 
 /// `vfs_graph_impact` — transitive impact analysis for a file.
 ///
-/// Uses BFS over the dependency graph to find all files that depend on
-/// the given path, up to `max_depth` hops (default 5).
+/// REV-WARPFS-7: answers with the SAME review set the CLI computes
+/// (`review_or_parse`, GAP-117) — the queried file itself first (scope
+/// `self`), then its transitive dependents (the reverse blast radius,
+/// scopes `file`/`crate`), then the bounded forward/reverse neighbourhood
+/// (scopes `dependency`/`link`) that carries the change's helpers, tests,
+/// fixtures and build targets. The previous reverse-only `impact_or_parse`
+/// answer was the CLI's dependents half only: a file whose importers reach
+/// it through `pkg:` nodes (the Rust/Java shape) returned
+/// `{"dependents":[],"total":0}` from MCP while the same binary's CLI
+/// printed the full review set.
 ///
 /// JIT: on first access the start file is parsed on-the-fly and cached —
 /// no `hilo graph warm` pre-requisite needed.
+///
+/// Response shape (additive — pre-existing `dependents` consumers are
+/// unaffected):
+/// - `dependents`: the reverse-only dependent rows, unchanged from the
+///   historical contract;
+/// - `review_set`: the full CLI answer as `ImpactFile` rows, each carrying
+///   a `scope` field (`self`/`file`/`crate`/`dependency`/`link`);
+/// - `total`: `dependents.len() + review_set.len()` — the count of ALL
+///   returned rows across both arrays (the same file can legitimately
+///   appear in both).
 fn graph_impact(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
     let path_str = arguments["path"]
         .as_str()
@@ -690,12 +708,19 @@ fn graph_impact(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
 
     let db = hilo_graph::GraphDB::open_read_only(GRAPH_DB_PATH)?;
 
-    // JIT: parse start file on cache miss, then BFS over cache.
-    let results = db.impact_or_parse(path_str, max_depth)?;
+    // REV-WARPFS-7: `review_or_parse` is the exact non-external code path
+    // `hilo graph impact` runs (impact BFS + GAP-117 expansion), so MCP and
+    // CLI agree row-for-row on the same graph. `dependents` re-runs the
+    // BFS to keep the historical array byte-compatible for existing
+    // consumers; the JIT parse from the first call is cached, so the
+    // second traversal is cache-only.
+    let review_set = db.review_or_parse(path_str, max_depth)?;
+    let dependents = db.impact_or_parse(path_str, max_depth)?;
 
     Ok(serde_json::json!({
-        "dependents": results,
-        "total": results.len(),
+        "dependents": dependents,
+        "review_set": review_set,
+        "total": dependents.len() + review_set.len(),
         "max_depth_reached": false
     }))
 }
