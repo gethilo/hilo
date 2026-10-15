@@ -2145,3 +2145,36 @@ tasks:
   status: complete
   created_at: '2026-10-14T04:50:09.921854+00:00'
   completed_at: '2026-10-14T05:41:16.880931+00:00'
+- id: DF-WARPFS-95-rejudge
+  title: Re-judge landed DF-WARPFS-95 sidecar commit
+  criteria:
+  - 'AC: commit 73dc811e contains hilo-metadata/src/sidecar.rs, hilo-cli meta sidecar
+    wiring, hilo-cli/tests/dfwarpfs95_meta_sidecar.rs with 15 tests, docs update;
+    cargo test -p hilo_metadata --lib = 30 passed; integration = 5 passed; RUSTFLAGS=-D
+    warnings cargo test --workspace --no-run exit 0; commit is origin/master HEAD'
+  status: complete
+  created_at: '2026-10-14T10:12:59.660406+00:00'
+  completed_at: '2026-10-14T10:13:00.581349+00:00'
+- id: DF-WARPFS-144
+  title: 'hilo mount <mount_point> [source]: explicit backing source, not CWD'
+  criteria:
+  - "AC1: hilo mount /mnt /src --daemon serves /src (probe file visible through mount);\
+    \ AC2: hilo mount /mnt /missing errors 'does not exist \u2014 mount refused' before\
+    \ any banner; AC3: no-source invocation keeps CWD behavior; AC4: trigger engine\
+    \ watch_dir = served source (DF-WARPFS-145); AC5: resolve_source unit tests pass;\
+    \ AC6: cargo clippy -p hilo-cli --all-targets -D warnings + fmt + RUSTFLAGS=-D\
+    \ warnings test compile pass"
+  status: complete
+  created_at: '2026-10-14T14:01:28.223530+00:00'
+  completed_at: '2026-10-14T15:30:51.550197+00:00'
+- id: DF-WARPFS-101-R2
+  title: graph search release-build measurement - re-judge with evidence recorded
+  criteria:
+  - 'Verify in the working tree: board row DF-WARPFS-101 in .coding-hermes/board/tasks.jsonl
+    carries foreman_note with wall times 0.08s/0.04s/0.04s (3x warm) for ''hilo graph
+    search fn main --limit 5'' on the repo graph (286 files/3013 distinct edges),
+    measured on target/release/hilo built this tick; foreman_note records the verdict
+    (debug-only cost, no regression); target/release/hilo exists (1.43GB release binary)'
+  status: complete
+  created_at: '2026-10-15T00:22:49.447151+00:00'
+  completed_at: '2026-10-15T00:22:53.653084+00:00'
