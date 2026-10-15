@@ -2178,3 +2178,10 @@ tasks:
   status: complete
   created_at: '2026-10-15T00:22:49.447151+00:00'
   completed_at: '2026-10-15T00:22:53.653084+00:00'
+- id: QA-WARPFS-23
+  title: 'clean-machine build gap: openssl-sys blocks fresh-install'
+  criteria:
+  - openssl-sys compiles from source on fresh install; document native deps OR ship
+    prebuilt; verify fresh clone builds without manual intervention
+  status: in_progress
+  created_at: '2026-10-15T01:35:09.368308+00:00'

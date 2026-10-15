@@ -11,7 +11,13 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
 thiserror = "1"
-git2 = "0.19"
+# QA-WARPFS-23: OpenSSL is VENDORED by default. git2 pulls in openssl-sys,
+# whose build script needs libssl-dev/pkg-config — on a clean machine that is
+# a hard wall ("Could not find directory of OpenSSL installation"). Enabling
+# git2/vendored-openssl by default compiles OpenSSL from source (needs only
+# perl + a C compiler) so `cargo build --workspace` works out of the box.
+# System OpenSSL: `cargo build --workspace --no-default-features`.
+git2 = { version = "0.19", default-features = false }
 hilo_metadata = { path = "../hilo-metadata" }
 aws-sdk-s3 = { version = "1", default-features = false, features = ["behavior-version-latest", "rt-tokio", "default-https-client"] }
 aws-config = { version = "1", default-features = false, features = ["behavior-version-latest", "rt-tokio", "default-https-client"] }
@@ -22,9 +28,17 @@ regex = "1"
 walkdir = "2"
 
 [features]
+# QA-WARPFS-23: vendored OpenSSL is ON by default so a clean machine can
+# `cargo build --workspace` with no libssl-dev and no pkg-config OpenSSL probe
+# (git2's openssl-sys build script compiles OpenSSL from source instead —
+# needs only perl + a C compiler). Build with system OpenSSL via
+# `cargo build --workspace --no-default-features` (then libssl-dev IS
+# required).
+default = ["vendored-openssl"]
 # DF-WARPFS-25: opt-in OpenSSL vendoring for non-root / restricted hosts.
 # Compiles OpenSSL from source (needs only perl + a C compiler) instead of
 # linking the system libssl — no sudo, no pkg-config, no libssl-dev required.
+# Since QA-WARPFS-23 this is also the default (see above).
 vendored-openssl = ["git2/vendored-openssl"]
 
 [dev-dependencies]

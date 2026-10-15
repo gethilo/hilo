@@ -33,6 +33,9 @@ jobs:
           components: rustfmt, clippy
 
       - name: Install system dependencies
+        # QA-WARPFS-23: libssl-dev is no longer required — OpenSSL is vendored
+        # by default (hilo_backends). Kept installed so the optional
+        # system-OpenSSL build path stays exercisable; the build does not need it.
         run: |
           sudo apt-get update
           sudo apt-get install -y libfuse3-dev attr pkg-config libssl-dev

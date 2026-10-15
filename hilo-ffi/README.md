@@ -68,8 +68,10 @@ truth.
 cargo build -p hilo_ffi
 ```
 
-> The `vendored-openssl` feature belongs to `hilo-cli`/`hilo_backends`
-> (restricted-host builds); it does NOT exist on `hilo_ffi` —
+> The OpenSSL vendoring lives on `hilo_backends` and is **on by default since
+> QA-WARPFS-23** (a clean machine needs no `libssl-dev`); `hilo-cli` keeps a
+> passthrough `vendored-openssl` feature for `--no-default-features` builds.
+> The feature does NOT exist directly on `hilo_ffi` —
 > `cargo build -p hilo_ffi --features vendored-openssl` fails
 > (dogfood run 16).
 

@@ -27,7 +27,7 @@ guards:
   static_analysis_tools: {}
 evaluator:
   max_iterations: 200
-  max_time: 45m
+  max_time: 90m
   max_input_tokens: 5M
   max_output_tokens: 300000
   file_scope: changed
@@ -53,7 +53,7 @@ pipeline:
       "on": [pre-eval]
       condition: "true"
       max_iterations: 200
-      max_time: 45m
+      max_time: 90m
       max_input_tokens: 5000000
       max_output_tokens: 300000
       tools: [read_file, run_command, search_pattern, read_diff]

@@ -1,5 +1,5 @@
 GitReins guard run log — full output (the console summary is bounded)
-run_utc: 2026-10-11T05:52:16Z
+run_utc: 2026-10-14T12:04:59Z
 workdir: /home/kara/warpfs
 test_mode: full
 test_targets: all (full mode)

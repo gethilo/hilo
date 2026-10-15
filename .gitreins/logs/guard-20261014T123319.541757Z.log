@@ -1,0 +1,33 @@
+GitReins guard run log — full output (the console summary is bounded)
+run_utc: 2026-10-14T12:33:19Z
+workdir: /home/kara/warpfs
+test_mode: full
+test_targets: all (full mode)
+overall: FAIL
+guards: 2 (1 failed, 0 skipped)
+diagnostics:
+  first_failing_test: none detected
+  secrets_scanners: clean (gitleaks + builtin cross-check)
+  scanner_nice: scanners: nice=nice -n 10
+
+==============================================================================
+[FAIL] tests (full)  passed=false  exit_code=3
+==============================================================================
+--- output (untruncated) ---
+scanners: nice=nice -n 10
+rust-lint: rust-analyzer ran: /home/kara/.cargo/bin/rust-analyzer — rust-analyzer 1.98.0 (88d9e12 2026-08-18)
+   Compiling libduckdb-sys v1.10504.0
+   Compiling hilo-cli v0.4.0 (/home/kara/warpfs/hilo-cli)
+rust-lint: clippy --workspace killed by the 240s budget (cold tree?); run heavy lint on the build host
+    Checking duckdb v1.10504.0
+    Checking hilo_graph v0.4.0 (/home/kara/warpfs/hilo-graph)
+    Checking hilo_mcp v0.4.0 (/home/kara/warpfs/hilo-mcp)
+    Checking hilo_triggers v0.4.0 (/home/kara/warpfs/hilo-triggers)
+    Checking hilo_ffi v0.4.0 (/home/kara/warpfs/hilo-ffi)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 9m 09s
+
+==============================================================================
+[PASS] secrets  passed=true  exit_code=n/a
+==============================================================================
+--- output (untruncated) ---
+gitleaks: clean

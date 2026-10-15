@@ -75,6 +75,14 @@ Requirements:
 sudo apt install build-essential pkg-config libssl-dev libfuse3-dev attr
 ```
 
+> `libssl-dev` is **no longer required to build**: since QA-WARPFS-23 the
+> workspace builds with vendored OpenSSL by default (compiled from source —
+> needs only `perl` and a C compiler, so `cargo build --workspace` works on a
+> clean machine with no OpenSSL dev package). The line above keeps it for the
+> system-OpenSSL build variant (`cargo build --workspace
+> --no-default-features`) and for anyone who wants the build to link the
+> distro's libssl.
+
 ### No-sudo install (bare images, no pkg-config)
 
 On a bare image — a container, an agent sandbox, a stripped-down VM — where you
@@ -82,11 +90,14 @@ have **no `sudo`, no `pkg-config` and no FUSE development files**, this is the
 path that works. It needs only `cargo`, a C/C++ compiler and `perl`, all of
 which a userspace toolchain bootstrap can supply.
 
-A source build hits two walls on such an image, and this path removes both:
+A source build hits one remaining wall on such an image — FUSE. OpenSSL was
+the other one, and since QA-WARPFS-23 it is **vendored by default** (compiled
+from source during the build), so `cargo build --workspace` works on a clean
+machine with no `libssl-dev` and no `pkg-config` OpenSSL probe at all:
 
 | Wall | How it fails | What removes it |
 |------|--------------|-----------------|
-| OpenSSL (`openssl-sys`, pulled in by `git2`) | *"Could not find directory of OpenSSL installation"* / *"pkg-config could not be found"* | `--features vendored-openssl` — compiles OpenSSL from source (needs only `perl` and a C compiler) |
+| OpenSSL (`openssl-sys`, pulled in by `git2`) | *"Could not find directory of OpenSSL installation"* / *"pkg-config could not be found"* | **nothing needed since QA-WARPFS-23 — OpenSSL is vendored by default** (compiles from source; needs only `perl` and a C compiler). The old `--features vendored-openssl` flag still works and is now redundant |
 | FUSE (`fuser`, pulled in by `hilo-fuse`) | `fuser`'s build script probes `pkg-config` for `fuse3.pc` and **panics** (`build.rs:47`, *"called `Result::unwrap()` on an `Err` value"*) when it cannot find it | `--no-default-features` — selects `fuser`'s **pure-Rust** mount implementation: no `pkg-config`, no `libfuse3-dev`, no `libfuse3.so` |
 
 ```bash
@@ -98,8 +109,8 @@ source "$HOME/.cargo/env"
 #    gcc/g++ — agent images commonly bootstrap `zig cc` wrappers instead
 export CC="zig cc" CXX="zig c++"
 
-# 3. Build with the pure-Rust FUSE path + vendored OpenSSL:
-#    no pkg-config, no libfuse3-dev, no sudo
+# 3. Build with the pure-Rust FUSE path (OpenSSL is vendored by default):
+#    no pkg-config, no libfuse3-dev, no sudo, no libssl-dev
 git clone https://github.com/gethilo/hilo.git && cd hilo
 cargo build --release -p hilo-cli --no-default-features --features vendored-openssl
 cp target/release/hilo ~/.cargo/bin/hilo
@@ -146,10 +157,12 @@ locked-down VMs — the build hits two walls, and only one of them is OpenSSL:
 
 1. **OpenSSL** (`openssl-sys`, pulled in by `git2`). With no development
    headers the build dies with *"Could not find directory of OpenSSL
-   installation"*. This is fixed by the **`vendored-openssl` feature**, which
-   compiles OpenSSL from source and needs only `perl` and a C compiler — no
-   sudo, no `libssl-dev`. It does **not** remove the `pkg-config` requirement
-   in the next point.
+   installation"*. **Since QA-WARPFS-23 this wall is gone by default**: the
+   workspace **vendors OpenSSL by default** (compiled from source — needs only
+   `perl` and a C compiler — no sudo, no `libssl-dev`, no `pkg-config` for
+   OpenSSL). The old opt-in `--features vendored-openssl` spelling still works
+   and is now redundant. To use **system** OpenSSL instead, build with
+   `--no-default-features` — that requires `libssl-dev` and `pkg-config`.
 2. **FUSE** (`fuser`, pulled in by `hilo-fuse`). The feature does **not** cover
    this one: `fuser` 0.15 probes `pkg-config` for `fuse3.pc` while building and
    panics (`build.rs:47`) when it cannot find it. Supply the FUSE dev files
@@ -205,18 +218,25 @@ Notes on step 2–4:
 - The first build takes longer — OpenSSL *and* DuckDB are compiled from source;
   later builds are cached.
 
-> ⚠️ **Build time:** the first `cargo build --release` also compiles DuckDB
+> **Build time:** the first `cargo build --release` also compiles DuckDB
 > (`duckdb-sys`)/Arrow from source — expect 15-20 min. A full source build
-> needs a C/C++ toolchain (`g++`, e.g. from `build-essential`), `pkg-config`,
-> and the OpenSSL and FUSE 3 **development** packages (`libssl-dev`,
-> `libfuse3-dev`) for the crates that link them (`openssl-sys` via `git2`,
-> `hilo-fuse`); `clang` and `CMake` are **not** required for the standard build.
+> needs a C/C++ toolchain (`g++`, e.g. from `build-essential`) and `pkg-config`;
+> the FUSE 3 development package (`libfuse3-dev`) is needed for the C libfuse3
+> mount path (`hilo-fuse`). `clang` and `CMake` are **not** required for the
+> standard build.
+> **OpenSSL needs no system package**: since QA-WARPFS-23 the workspace
+> **builds with vendored OpenSSL by default** (compiled from source alongside
+> the build — needs only `perl` and a C compiler), so a clean machine with no
+> `libssl-dev` can `cargo build --workspace` out of the box. To link **system**
+> OpenSSL instead (e.g. for a smaller build or a distro-audited libssl), use
+> `cargo build --workspace --no-default-features` — that requires
+> `libssl-dev`/`openssl-devel` and `pkg-config`.
 > On hosts without sudo, see **[No-sudo install (bare images, no
 > pkg-config)](#no-sudo-install-bare-images-no-pkg-config)** above — it removes
-> both walls with no root at all: the `--features vendored-openssl` OpenSSL one
-> and the `fuser`/`pkg-config` one. The [Source build without
-> sudo](#source-build-without-sudo) variant just above covers the same two
-> walls by unpacking the FUSE `.deb`s into `$HOME` (it still needs a
+> the remaining walls with no root at all: the `--no-default-features`
+> `fuser`/`pkg-config` one (OpenSSL is already vendored by default). The
+> [Source build without sudo](#source-build-without-sudo) variant covers the
+> same wall by unpacking the FUSE `.deb`s into `$HOME` (it still needs a
 > `pkg-config` binary, which it unpacks too).
 > Subsequent builds are incremental and fast (~seconds).
 >

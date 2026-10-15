@@ -34,6 +34,13 @@ sudo apt install build-essential pkg-config libssl-dev libfuse3-dev attr
 # No additional deps needed for CLI-only use
 ```
 
+> Since QA-WARPFS-23 the workspace **builds with vendored OpenSSL by default**
+> (OpenSSL compiled from source during the build), so `libssl-dev` is no
+> longer a build requirement on a clean machine — `cargo build` works without
+> it. The apt line above keeps it for the **system**-OpenSSL variant
+> (`cargo build --workspace --no-default-features`), which links the distro
+> libssl and does need the dev package.
+
 ### No sudo? Install without root
 
 A bare image or sandbox with no `sudo` **and no `pkg-config`** can still build
