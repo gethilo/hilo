@@ -1645,3 +1645,14 @@ Board impact: filing no new row this tick (the pending release-blockade rows REL
 and DF-WARPFS-100/103/104 already own the no-published-artifact premise; this is fresh TIMING
 evidence for the same family). Repo left at 11cf2b82; DuckBrain last-run marker updated to name
 the TTL finding; no foreman woken (read-only lane).
+- **Install leg (run 44): PARTIAL — real bunker leg RAN and rebuilt the fresh-install premise, agent lost before smoke.** bunker-mvp (only reachable host; las-01/02/03/04 offline) spawned ephemeral agent a04646a4 (2 cores, 15.6GB, TTL 45m). Fresh-clone leg: rustup needed `-y` (the documented pipe-into-sh hangs non-interactively — docs gap, minor); rustc 1.99.1 installed clean; git clone gethilo/hilo rc=0 at 91a9a2a; `cargo build --release -p hilo-cli` with the now-default vendored OpenSSL ran 467 crates clean, no sudo, no pkg-config, no libfuse3-dev — consistent with runs 35/36. Build reached hilo-cli/hilo_fuse at ~35 min; the agent was reaped by the daemon (bunker info: not_found) at ~50 min before the artifact finished, so NO binary smoke and NO headline-feature smoke on the fresh box. Evidence: /home/kara/.config/bunker/keys/a04646a4 (dead), install-leg.log snippets in the run-44 report. Verdict: the documented INSTALL path re-proven through the compile phase; the run-35-era finding "install PASS does not imply headline feature works on the fresh box" (run 35's hilo-mount EXIT=1) remains UNREPROVED on 0.4.0 — smoke the fresh binary before trusting install alone. LESSON: a 2-core/45m-TTL agent is too small/slow for a duckdb-heavy release build — next leg needs ttl>=2h or a pre-warmed target dir.
+
+## 2026-10-16 — run 44 addendum — install-leg outcome + push record
+
+- Install leg: PARTIAL (explicit). bunker-mvp agent a04646a4 ran the documented
+  install path; rustup rc=1 without -y (docs gap), clone rc=0, 467 crates clean,
+  build killed by agent TTL at ~50min pre-artifact → no smoke. See the run-44
+  entry above and the report section for the full ladder.
+- Commit c788438c → rebased over 9fc22781 → pushed as 91a9a2ab; origin/master
+  verified = 91a9a2ab (ls-remote). Rows DF-WARPFS-150..154 on the pushed tree
+  (grep -c 5/5). REV-WARPFS-9 event 900 pushed.
