@@ -1619,3 +1619,29 @@ fresh-machine install UNPROVEN this run (SKIPPED-install-cited per run 35/36 evi
 marker refresh), the fresh-scratch scratch dir (uncommitted), and this log entry.
 Repo status unchanged from run 44: row ids 150..154 pending at HEAD/origin, no new rows
 filed this continuation (premises already filed, evidence records only).
+
+## Run 44c — 2026-10-16 — install leg final verdict (agent TTL expired mid-build)
+
+Timeline (bunker-mvp, agent a04646a4): spawn 21:03 UTC (TTL 45m, expires 21:48) -> rustup
+no-sudo install rc=0 (rustc 1.99.1, no sudo — matches run 35's claim on a different host image)
+-> documented HTTPS clone of gethilo/hilo rc=0 at 91a9a2ab, NO credentials -> cold
+`cargo build --release -p hilo-cli` started ~21:06. Polls: dependencies still compiling at
+21:11 (wasmspread/wasmtime chain), 21:13, 21:33; hilo-fuse/hilo-plugins in progress 21:44;
+cargo process count 0 + no binary 21:48:41, and `bunker info a04646a4` returned not_found at
+21:50 — the TTL expiry destroyed the agent before the release link finished. Smoke never ran.
+
+**Verdict: SKIPPED-install-incomplete-with-evidence — proven legs:** (1) fresh rclone-free
+network fetch of the real repo + (2) no-sudo toolchain install. **Unproven legs:** cold
+release build completes on a ≤8-core fresh box inside 45m (it did not — consistent with
+run 35's 26m32s Debian-13 number plus this heavier dependency tree pushing past TTL; exact
+ceiling unmeasured) and the post-install smoke (mount/sandbox on the fresh binary). This run
+added a NEW premise over runs 35/36 (TTL adequacy for the crate build), and it came back
+inconclusive-to-failing: a fresh user following the docs on a 45m throwaway host does NOT
+reach a binary. Fix direction for the foreman: either publish prebuilt release artifacts
+(releases are already gating on this) or document that a from-source fresh install needs a
+longer TTL window than the standard ephemeral agent.
+
+Board impact: filing no new row this tick (the pending release-blockade rows RELEASE-002..012
+and DF-WARPFS-100/103/104 already own the no-published-artifact premise; this is fresh TIMING
+evidence for the same family). Repo left at 11cf2b82; DuckBrain last-run marker updated to name
+the TTL finding; no foreman woken (read-only lane).
