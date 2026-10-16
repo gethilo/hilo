@@ -918,6 +918,20 @@ hilo sandbox check /path/to/project
 block and runs a trivial command through `BubblewrapExecutor::run` (bwrap);
 exit 0 means the sandboxed command succeeded.
 
+Run a command INSIDE the sandbox (the spec §14.1 agent-shell model):
+
+```bash
+hilo sandbox exec -- sh -c 'echo hi'
+hilo sandbox exec --source /path/to/project -- curl -s https://example.com
+```
+
+`hilo sandbox exec` builds the executor from the manifest `sandbox:` block and
+launches the command via `BubblewrapExecutor::run_inherit` — stdio streams
+through and the child's exit status becomes the CLI's exit status. With
+`isolate_network: true` the sandboxed process cannot reach the network (bwrap
+`--unshare-net`); with `read_only_root: true` the host root is mounted
+read-only and only the workspace plus `writable_paths` stay writable.
+
 ## `hilo serve`
 
 Start the MCP server for agent integration.

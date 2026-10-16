@@ -27,6 +27,17 @@ pub enum SandboxCommand {
     /// what failed. A missing or disabled block is a no-op ("nothing to
     /// check") — the mount itself proceeds unsandboxed in that case.
     Check(SandboxCheckArgs),
+    /// Execute a command inside the manifest's bubblewrap sandbox (§14.1).
+    ///
+    /// Builds a `BubblewrapExecutor` from the parsed `sandbox:` block and runs
+    /// the given command through `BubblewrapExecutor::run_inherit` — stdio is
+    /// inherited, so the sandboxed process's output streams through and its
+    /// exit status becomes this command's exit status. The command runs with
+    /// the sandbox's manifest settings: read-only root, network isolation
+    /// (`isolate_network: true` blocks all sockets), PID isolation, and
+    /// writable paths. This is the production launch surface for sandboxed
+    /// agent shells on a mounted workspace.
+    Exec(SandboxExecArgs),
 }
 
 #[derive(Args)]
@@ -34,6 +45,62 @@ pub struct SandboxCheckArgs {
     /// Backing source directory whose manifest is checked (default: the
     /// current directory).
     pub(crate) source: Option<String>,
+}
+
+#[derive(Args)]
+pub struct SandboxExecArgs {
+    /// Command (and arguments) to run inside the sandbox.
+    #[arg(required = true, trailing_var_arg = false)]
+    pub(crate) command: Vec<String>,
+
+    /// Backing source directory whose manifest defines the sandbox
+    /// (default: the current directory). The workspace bind inside the
+    /// sandbox is this directory.
+    #[arg(long)]
+    pub(crate) source: Option<String>,
+}
+
+/// Run `hilo sandbox exec -- <COMMAND>...`.
+pub fn run_sandbox_exec(args: &SandboxExecArgs) -> Result<()> {
+    if args.command.is_empty() {
+        anyhow::bail!("sandbox exec: no command given");
+    }
+
+    let dir = match &args.source {
+        None => std::env::current_dir().context("failed to determine the current directory")?,
+        Some(src) => Path::new(src)
+            .canonicalize()
+            .with_context(|| format!("source directory {src} does not exist"))?,
+    };
+
+    let cfg = match load_sandbox(&dir) {
+        Some(cfg) if cfg.enabled => cfg,
+        _ => {
+            anyhow::bail!(
+                "no enabled sandbox block in the manifest for {} — nothing to exec inside",
+                dir.display()
+            );
+        }
+    };
+
+    if !BubblewrapExecutor::is_available() {
+        eprintln!(
+            "warning: manifest sandbox block present but bwrap not found — cannot exec inside the sandbox (install: apt install bubblewrap)"
+        );
+        anyhow::bail!("bwrap not found");
+    }
+
+    let workspace = dir.to_string_lossy().to_string();
+    let executor = BubblewrapExecutor::new(cfg, &workspace);
+    let status = executor
+        .run_inherit(&args.command)
+        .map_err(|e| anyhow::anyhow!("sandbox exec failed: {e}"))?;
+
+    if !status.success() {
+        std::process::exit(status.code().unwrap_or(1));
+    }
+
+    Ok(())
 }
 
 /// Run `hilo sandbox check [SOURCE]`.

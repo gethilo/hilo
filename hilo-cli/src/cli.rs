@@ -690,6 +690,7 @@ pub fn run() -> anyhow::Result<()> {
         Commands::Sandbox(sandbox::SandboxCommand::Check(args)) => {
             sandbox::run_sandbox_check(args.source.as_deref())
         }
+        Commands::Sandbox(sandbox::SandboxCommand::Exec(args)) => sandbox::run_sandbox_exec(&args),
         Commands::Workspace(WorkspaceCommand::Mount(args)) => {
             workspace::run_workspace_mount(&args.manifest, &args.mount_point, args.daemon)
         }

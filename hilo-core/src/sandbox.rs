@@ -186,6 +186,32 @@ impl BubblewrapExecutor {
 
         Ok(output)
     }
+
+    /// Execute `command` inside the sandbox with INHERITED stdio, returning
+    /// the child's ExitStatus.
+    ///
+    /// DF-WARPFS-77 rework: production surface for `hilo sandbox exec` — the
+    /// spec §14.1 model where the agent's shell runs bwrap-wrapped and its
+    /// output streams through to the caller instead of being captured.
+    pub fn run_inherit(
+        &self,
+        command: &[String],
+    ) -> Result<std::process::ExitStatus, SandboxError> {
+        if !self.config.enabled {
+            return Err(SandboxError::NotEnabled);
+        }
+
+        if !Self::is_available() {
+            return Err(SandboxError::BubblewrapNotFound);
+        }
+
+        let args = self.build_args(command);
+        let status = std::process::Command::new(&args[0])
+            .args(&args[1..])
+            .status()?;
+
+        Ok(status)
+    }
 }
 
 // ── Tests ──────────────────────────────────────────────────────────
