@@ -610,6 +610,26 @@ for a corrupted or stale graph database.
 hilo graph clean
 ```
 
+### `gc`
+
+Remove exact-duplicate rows from `.vfs/graph/edges.jsonl`. Rows are
+identified by the `(from, to, rel, provenance)` 4-tuple — the same identity
+dedup-on-append enforces (see docs/graph-engine.md, "Edge Deduplication and
+`graph gc`") — and the FIRST occurrence of each identity is kept, preserving
+row order. Safe to run while `hilo mount --triggers` or another
+`hilo graph warm` is live: the rewrite is an atomic temp-file + rename under
+the shared advisory edges lock. Idempotent.
+
+```bash
+hilo graph gc
+```
+
+Removes N duplicate rows and prints a `hilo graph warm` hint (the DuckDB
+query cache has no unique constraint, so duplicates already inserted there
+persist until the cache is rebuilt from the compacted file; queries dedupe
+by pair in the meantime). On a directory with no `.vfs/graph/edges.jsonl`,
+gc reports the missing inventory instead of failing.
+
 ### `surfaces`
 
 Enumerate the repository's externally-visible contract surfaces (COV-1) —

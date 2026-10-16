@@ -4468,3 +4468,126 @@ fn mcp_graph_search_matches_cli_on_zero_edge_corpus() {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+// ─────────────────────── REV-WARPFS-8: graph gc ───────────────────────
+
+/// `hilo graph gc` removes exact duplicates from an existing
+/// edges.jsonl and is idempotent: the second pass removes nothing and
+/// the file content is byte-identical afterwards.
+#[test]
+fn graph_gc_removes_duplicates_and_is_idempotent() {
+    let dir = unique_tempdir("graph-gc-dedup");
+    // The gc surface is pure inventory I/O — no parsing, no DuckDB.
+    fs::create_dir_all(dir.join(".vfs/graph")).expect("failed to create .vfs/graph");
+    let edges = dir.join(".vfs/graph/edges.jsonl");
+    let row =
+        r#"{"from":"a.py","to":"b.py","rel":"imports","provenance":"ast_exact","confidence":1.0}"#;
+    let other =
+        r#"{"from":"c.py","to":"d.py","rel":"imports","provenance":"ast_exact","confidence":1.0}"#;
+    fs::write(&edges, format!("{row}\n{row}\n{other}\n{row}\n")).expect("failed to seed edges");
+
+    let gc1 = hilo_cmd()
+        .args(["graph", "gc"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn graph gc");
+    assert!(
+        gc1.status.success(),
+        "first gc failed: {}",
+        String::from_utf8_lossy(&gc1.stderr)
+    );
+    let out1 = String::from_utf8_lossy(&gc1.stdout);
+    assert!(
+        out1.contains("removed 2 duplicate row(s) (4 -> 2 rows)"),
+        "first gc should report the removal: {out1}"
+    );
+
+    let contents = fs::read_to_string(&edges).expect("failed to read edges after gc");
+    let mut lines: Vec<&str> = contents.lines().collect();
+    lines.sort_unstable();
+    assert_eq!(
+        lines,
+        vec![row, other],
+        "gc must keep first occurrences: {contents}"
+    );
+
+    // Idempotence: second pass removes nothing, file byte-identical.
+    let snapshot = contents.clone();
+    let gc2 = hilo_cmd()
+        .args(["graph", "gc"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn second graph gc");
+    assert!(
+        gc2.status.success(),
+        "second gc failed: {}",
+        String::from_utf8_lossy(&gc2.stderr)
+    );
+    let out2 = String::from_utf8_lossy(&gc2.stdout);
+    assert!(
+        out2.contains("0 duplicates removed"),
+        "second gc should report a no-op: {out2}"
+    );
+    assert_eq!(
+        fs::read_to_string(&edges).unwrap(),
+        snapshot,
+        "idempotent gc must not rewrite the file"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Three warm runs over the same corpus leave edges.jsonl with zero
+/// duplicate rows — the REV-WARPFS-8 acceptance check.
+#[test]
+fn graph_warm_thrice_leaves_no_duplicate_edges() {
+    let dir = unique_tempdir("warm-dedup-ac");
+    fs::create_dir_all(dir.join("src")).expect("failed to create src");
+    fs::write(dir.join("src/main.py"), "import helper\n").expect("failed to write main.py");
+    fs::write(dir.join("src/helper.py"), "MAX = 1\n").expect("failed to write helper.py");
+
+    let init = hilo_cmd()
+        .arg("init")
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo init");
+    assert!(
+        init.status.success(),
+        "init failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+
+    let edges = dir.join(".vfs/graph/edges.jsonl");
+    for pass in 1..=3 {
+        let warm = hilo_cmd()
+            .args(["graph", "warm"])
+            .current_dir(&dir)
+            .output()
+            .expect("failed to spawn graph warm");
+        assert!(
+            warm.status.success(),
+            "warm pass {pass} failed: {}",
+            String::from_utf8_lossy(&warm.stderr)
+        );
+        assert!(
+            edges.exists(),
+            "warm pass {pass} must materialize edges.jsonl"
+        );
+    }
+
+    // The acceptance probe: sort | uniq -d must find nothing.
+    let contents = fs::read_to_string(&edges).expect("failed to read edges.jsonl");
+    let mut lines: Vec<&str> = contents.lines().filter(|l| !l.trim().is_empty()).collect();
+    lines.sort_unstable();
+    let dup_groups = lines.windows(2).filter(|w| w[0] == w[1]).count();
+    assert_eq!(
+        dup_groups, 0,
+        "three warm runs must leave zero duplicate rows; file:\n{contents}"
+    );
+    assert!(
+        !contents.is_empty(),
+        "the corpus has imports, so the file must carry rows"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}

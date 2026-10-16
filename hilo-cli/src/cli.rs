@@ -194,6 +194,18 @@ enum GraphCommand {
     /// Delete the cached dependency graph (edges.jsonl + DuckDB cache) so
     /// the next `graph warm` re-parses every source file from scratch.
     Clean,
+    /// Remove exact-duplicate rows from `.vfs/graph/edges.jsonl`
+    /// (REV-WARPFS-8). Rows are identified by `(from, to, rel, provenance)`
+    /// — the same identity dedup-on-append uses — and the FIRST occurrence
+    /// of each identity is kept, preserving row order. The rewrite is
+    /// atomic (temp file + rename) and runs under the shared edges lock,
+    /// so it is safe against a running `hilo mount --triggers` append or
+    /// another `graph warm`. Idempotent: a second pass on a clean file
+    /// removes nothing. After removing rows, run `hilo graph warm` to
+    /// rebuild the DuckDB query cache from the compacted file (DuckDB has
+    /// no unique constraint, so previously-inserted duplicates persist in
+    /// the cache until then; queries dedupe by pair in the meantime).
+    Gc,
     /// Enumerate the codebase's externally-visible contract surfaces — CLI
     /// verbs/flags, MCP tools, FFI exports, FUSE ops, config keys, and public
     /// API items — and write them to `.vfs/graph/surfaces.jsonl` (COV-1).
@@ -633,6 +645,7 @@ pub fn run() -> anyhow::Result<()> {
         Commands::Graph(GraphCommand::RuleList) => graph::run_rule_list(),
         Commands::Graph(GraphCommand::RuleCheck(args)) => graph::run_rule_check(&args.name),
         Commands::Graph(GraphCommand::Clean) => graph::run_clean(),
+        Commands::Graph(GraphCommand::Gc) => graph::run_gc(),
         Commands::Graph(GraphCommand::Surfaces(args)) => {
             surfaces::run(args.json, args.kind.as_deref())
         }
