@@ -1,0 +1,15 @@
+{
+  "tick_id": "warpfs-foreman-2026-10-16-02-00-48",
+  "base_sha": "7d29be56",
+  "workers": [
+    {"task_id": "REV-WARPFS-3", "worktree": "/home/kara/worktrees/warpfs-REV-WARPFS-3", "branch": "wt/REV-WARPFS-3", "merge": "fast-forward", "commit": "c91c83ed"},
+    {"task_id": "REV-WARPFS-5", "worktree": "/home/kara/worktrees/warpfs-REV-WARPFS-5", "branch": "wt/REV-WARPFS-5", "merge": "rebased-onto-master", "rebased_branch": "wt/REV-WARPFS-5-rebased", "commit": "98b859b7+eac4f7c9"},
+    {"task_id": "REV-WARPFS-6", "worktree": "/home/kara/worktrees/warpfs-REV-WARPFS-6", "branch": "wt/REV-WARPFS-6", "merge": "fast-forward", "commit": "a4ed3c75"},
+    {"task_id": "REV-WARPFS-8", "worktree": "/home/kara/worktrees/warpfs-REV-WARPFS-8", "branch": "wt/REV-WARPFS-8", "merge": "fast-forward", "commit": "36812c42"}
+  ],
+  "status": "recovered",
+  "recovery_tick_id": "warpfs-foreman-2026-10-16-06-43-52",
+  "recovery_notes": "REV-3/6/8 merged on fresh base (7d29be56) with gates re-run on the merged tree; REV-5's branch conflicted with the merged REV-3 (both rewrote serve.rs) so it was rebased onto post-REV-3 master in its own worktree, re-gated, and merged fast-forward; the REV-5 port also required re-applying the shared-limiter changes to the post-HTTP server.rs and two parts of its own claim that the merged tree did not deliver (GET /metrics route; rate_limit_rps validation + no silent-unlimited fallback) were completed in eac4f7c9 after live probes found /metrics answering 404.",
+  "created_at": "2026-10-16T02:00:48-05:00",
+  "finished_at": "2026-10-16T04:10:00-05:00"
+}
