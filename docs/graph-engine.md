@@ -85,7 +85,9 @@ counts as tested even though no edge names the file directly.
 1. **Walk** — collect all source files, skip `target/`, `node_modules/`, etc.
 2. **Parse** — parallel parse with rayon, one tree-sitter parser per file
 3. **Extract** — walk AST for import statements, resolve to canonical paths
-4. **Deduplicate** — `INSERT OR IGNORE` with unique constraint on `(from, to, rel)`
+4. **Deduplicate** — identity is `(from, to, rel, provenance)`, enforced at the
+   JSONL append boundary (`append_edges_deduped`, REV-WARPFS-8) and mirrored
+   into DuckDB with `INSERT OR IGNORE`
 5. **Persist** — append to `edges.jsonl` (source of truth), insert into DuckDB (query cache)
 
 ## DuckDB Schema
@@ -94,14 +96,51 @@ counts as tested even though no edge names the file directly.
 CREATE TABLE IF NOT EXISTS edges (
     "from" TEXT NOT NULL,
     "to" TEXT NOT NULL,
-    rel TEXT NOT NULL DEFAULT 'imports',
+    rel TEXT NOT NULL,
     provenance TEXT NOT NULL DEFAULT 'ast_exact',
     confidence REAL NOT NULL DEFAULT 1.0
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_edges_unique
-    ON edges("from", "to", rel, provenance);
+CREATE INDEX IF NOT EXISTS idx_edges_from_rel ON edges("from", rel);
 ```
+
+There is deliberately NO unique index on `(from, to, rel, provenance)` in
+DuckDB: the insert statement is `INSERT OR IGNORE`, which is a no-op for
+duplicates without a unique constraint, so DuckDB-level dedup would not fire
+anyway. Duplicate suppression is enforced where the source of truth is
+written — the `edges.jsonl` append boundary (below) — and DuckDB is
+rebuildable from that file at any time (`hilo graph warm` after `hilo graph
+gc` compacts it).
+
+## Edge Deduplication and `graph gc` (REV-WARPFS-8)
+
+An edge's identity is the 4-tuple `(from, to, rel, provenance)` — **never**
+`(from, to)` alone: the same pair legitimately carries multiple relations
+(`imports` + `tests`, `service_call` + `service_contract`) and multiple
+provenances (`ast_exact` vs `lexical`).
+
+Suppression points, all sharing that identity:
+
+- **Warm append** — `hilo graph warm` writes `edges.jsonl` through
+  `append_edges_deduped`, which reads the existing file into a
+  `HashSet<(from, to, rel, provenance)>`, appends only genuinely new edges,
+  and grows the set with each accepted edge so duplicates *within* one batch
+  collapse to their first occurrence too.
+- **Trigger append** — the file watcher (`hilo mount --triggers`) appends
+  through the same deduped writer; heuristic edges regenerate on every
+  event, so a raw append here was the historical duplicate source.
+- **`hilo graph gc`** — one-shot compaction for files written before this
+  discipline (or by older versions). Removes exact-duplicate rows, keeping
+  the FIRST occurrence of each identity in original row order; `confidence`
+  travels with the kept row. The rewrite is atomic (temp file + rename) and
+  runs under the advisory `edges.jsonl.lock` flock shared with the append
+  paths, so it is safe to run while `hilo mount --triggers` or another
+  `graph warm` is live. Idempotent: a second pass removes nothing and does
+  not rewrite the file. Malformed (unparseable) lines are preserved
+  verbatim — gc removes exact duplicates only, it is not a repair tool.
+
+The acceptance probe mirrors what CI asserts: after repeated warm runs on
+the same corpus, `sort .vfs/graph/edges.jsonl | uniq -d` finds nothing.
 
 ## Impact Analysis
 
@@ -151,7 +190,7 @@ Results stored as xattrs: `user.vfs.role`, `user.vfs.status`.
 ## Performance
 
 - **Parallel parsing** — rayon thread pool, one parser per file
-- **Deduplication** — unique index prevents re-discover from doubling edges
+- **Deduplication** — identity `(from, to, rel, provenance)` enforced at the JSONL append boundary; `hilo graph gc` compacts legacy files (REV-WARPFS-8)
 - **Incremental** — `append_edges_deduped()` only adds new edges to JSONL
 - **Progress** — output every 100 files during discovery
 - **Vendor skip** — `target/`, `node_modules/`, `vendor/` excluded by default

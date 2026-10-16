@@ -832,7 +832,17 @@ fn parse_and_diff_sync(
     if !new_edges.is_empty() {
         if let Some(root) = project_root {
             let edges_path = root.join(".vfs/graph/edges.jsonl");
-            if let Err(e) = hilo_metadata::inventory::append_edges(&edges_path, &new_edges) {
+            // REV-WARPFS-8: this append was the duplicate factory — raw
+            // `append_edges` trusted the AST-cache diff to be exact, but
+            // heuristic provenances ("tests"/"heuristic") regenerate
+            // unconditionally on every event and the AST cache does not
+            // know about rows appended by other writers. The deduped
+            // writer now does the exact-duplicate filtering for real,
+            // under the shared advisory lock (a concurrent
+            // `hilo graph gc` cannot interleave a rename under this
+            // append).
+            if let Err(e) = hilo_metadata::inventory::append_edges_deduped(&edges_path, &new_edges)
+            {
                 info!("[trigger] parse-and-diff: failed to append edges: {e}");
             }
         }

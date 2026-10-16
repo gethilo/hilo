@@ -3157,6 +3157,35 @@ pub fn run_clean() -> Result<()> {
     Ok(())
 }
 
+/// REV-WARPFS-8: `hilo graph gc` — remove exact-duplicate rows from
+/// `.vfs/graph/edges.jsonl` in the current project.
+///
+/// The dedup mechanics live in [`hilo_metadata::inventory::gc_edges`] (same
+/// `(from, to, rel, provenance)` identity as dedup-on-append, atomic
+/// temp-file + rename swap under the advisory edges lock). This wrapper
+/// owns the reporting: removed counts, the stale-cache rebuild hint, and
+/// the not-a-project guard.
+pub fn run_gc() -> Result<()> {
+    let cwd = std::env::current_dir().context("failed to determine the current directory")?;
+    let edges_jsonl = cwd.join(".vfs").join("graph").join("edges.jsonl");
+    let (before, after, removed) = hilo_metadata::inventory::gc_edges(&edges_jsonl)
+        .with_context(|| format!("failed to gc {}", edges_jsonl.display()))?;
+    if !edges_jsonl.exists() {
+        println!(
+            "No edges inventory at {} — nothing to gc. Run `hilo graph warm` first.",
+            edges_jsonl.display()
+        );
+        return Ok(());
+    }
+    if removed == 0 {
+        println!("edges.jsonl already clean: {after} rows, 0 duplicates removed.");
+        return Ok(());
+    }
+    println!("gc: removed {removed} duplicate row(s) ({before} -> {after} rows).");
+    println!("Run `hilo graph warm` to rebuild the DuckDB cache from the compacted file.");
+    Ok(())
+}
+
 /// Remove the graph cache files under `cwd/.vfs/graph/`; returns the number
 /// of files removed. Missing files are not an error.
 fn clean_graph_dir(cwd: &Path) -> Result<usize> {

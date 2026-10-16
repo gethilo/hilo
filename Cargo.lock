@@ -2418,6 +2418,7 @@ dependencies = [
 name = "hilo_metadata"
 version = "0.4.0"
 dependencies = [
+ "fd-lock",
  "serde",
  "serde_json",
  "serde_yaml",

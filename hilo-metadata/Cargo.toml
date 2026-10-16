@@ -12,6 +12,10 @@ serde_json = "1"
 serde_yaml = "0.9"
 thiserror = "2"
 xattr = "1"
+# REV-WARPFS-8: advisory cross-process flock for edges.jsonl writers (warm,
+# trigger append, graph gc serialize on <edges.jsonl>.lock). Already resolved
+# in the workspace lock via the cap-std family, so this adds no new crate.
+fd-lock = "4"
 
 [dev-dependencies]
 tempfile = "3"

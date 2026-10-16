@@ -6,7 +6,21 @@ All notable changes to Hilo are documented in this file.
 
 ### Added
 
-- **Annotations survive `git push` via the `.vfs/annotations.jsonl`
+- **Edge deduplication for `edges.jsonl` + `hilo graph gc`**
+  (REV-WARPFS-8): every writer now enforces the `(from, to, rel,
+  provenance)` identity — the trigger/watcher append path went through
+  raw `append_edges` and was the measured duplicate source (175
+  duplicate groups / 537 redundant rows of 3120 on the review corpus),
+  warm's deduped append now also collapses duplicates within one batch,
+  and all writers serialize on an advisory `edges.jsonl.lock` flock. The
+  new `hilo graph gc` compacts existing files (first occurrence kept,
+  atomic temp+rename swap, idempotent; malformed lines preserved).
+  `docs/graph-engine.md`'s "unique index on the DuckDB table" claim was
+  drift — no such index exists in `ensure_schema`; dedup lives at the
+  JSONL append boundary. Run `hilo graph gc` once per repo, then
+  `hilo graph warm` to rebuild the DuckDB cache from the compacted file.
+
+- **Annotations survive `git push` via the `.vfs/annotations.jsonl`**
   sidecar** (DF-WARPFS-95): xattrs do not travel through git, so
   `hilo meta --set` annotations died at the push. A successful set inside a
   Hilo workspace is now also mirrored into the git-tracked
