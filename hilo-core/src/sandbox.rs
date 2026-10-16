@@ -97,34 +97,55 @@ impl BubblewrapExecutor {
         args.push("bwrap".into());
 
         // ── namespace isolation ────────────────────────────────
-        args.push("--unshare-all".into());
-        // NOTE: --unshare-all already includes net + pid; the
-        // per-flag options are redundant but kept for clarity in
-        // the arg vector (bwrap silently deduplicates).
-
-        if self.config.isolate_network {
-            args.push("--unshare-net".into());
-        }
+        // bwrap always unshares the mount namespace; the PID and
+        // network namespaces are opt-in per the manifest (§14.3), so
+        // they are added only when the corresponding flag is set.
         if self.config.isolate_pid {
             args.push("--unshare-pid".into());
         }
-
-        // ── root filesystem ────────────────────────────────────
-        if self.config.read_only_root {
-            args.push("--ro-bind".into());
-            args.push("/".into());
-            args.push("/".into());
+        if self.config.isolate_network {
+            args.push("--unshare-net".into());
         }
 
-        // ── workspace bind-mount ───────────────────────────────
+        // ── root filesystem ────────────────────────────────────
+        // Bind the FULL host root (read-only or read-write) so the
+        // sandbox can resolve the command and its dynamic libraries.
+        // A bare namespace has an empty root — no /bin, /usr or /lib —
+        // so `execvp` fails with "No such file or directory" without
+        // this. §14.1: root is READ-ONLY by default.
+        if self.config.read_only_root {
+            args.push("--ro-bind".into());
+        } else {
+            args.push("--bind".into());
+        }
+        args.push("/".into());
+        args.push("/".into());
+
+        // ── device + proc mounts ───────────────────────────────
+        // Fresh /dev and /proc so the sandbox gets a clean procfs
+        // (and device nodes) instead of the host's (§14.1 "isolated
+        // process space"). These mount over the directories the root
+        // bind already provides, so the mount points exist.
+        args.push("--dev".into());
+        args.push("/dev".into());
+        args.push("--proc".into());
+        args.push("/proc".into());
+
+        // ── workspace bind-mount (read-write) ─────────────────
+        // Bind the workspace at its OWN absolute path, not a fixed
+        // `/workspace`: under a read-only root there is no
+        // `/workspace` mount point, and bwrap cannot create one
+        // inside the read-only bind ("Can't mkdir /workspace").
+        // Self-binding works because the path already exists in the
+        // root bind and bwrap mounts over it read-write.
         let workspace_abs = self
             .workspace
             .canonicalize()
             .unwrap_or_else(|_| self.workspace.clone());
-
+        let workspace_path = workspace_abs.to_string_lossy().to_string();
         args.push("--bind".into());
-        args.push(workspace_abs.to_string_lossy().to_string());
-        args.push("/workspace".into());
+        args.push(workspace_path.clone());
+        args.push(workspace_path);
 
         // ── writable paths ─────────────────────────────────────
         for wp in &self.config.writable_paths {
@@ -233,10 +254,13 @@ mod tests {
         let args = exec.build_args(&["echo".into(), "hello".into()]);
 
         assert_eq!(args[0], "bwrap");
-        assert!(args.contains(&"--unshare-all".into()));
+        // Namespace isolation flags are honored individually (§14.3).
         assert!(args.contains(&"--unshare-net".into()));
         assert!(args.contains(&"--unshare-pid".into()));
+        // Root is bound read-only, plus fresh /dev + /proc + /tmp.
         assert!(args.contains(&"--ro-bind".into()));
+        assert!(args.contains(&"--dev".into()));
+        assert!(args.contains(&"--proc".into()));
         assert!(args.contains(&"--tmpfs".into()));
         assert!(args.contains(&"--".into()));
 
@@ -258,8 +282,12 @@ mod tests {
         let exec = BubblewrapExecutor::new(cfg, "/tmp/ws");
         let args = exec.build_args(&["ls".into()]);
 
-        // Still has --unshare-all, workspace bind, tmpfs
-        assert!(args.contains(&"--unshare-all".into()));
+        // Root is bound read-WRITE (plain --bind, not --ro-bind) when
+        // read_only_root is false; /dev + /proc + tmpfs are still there.
+        assert!(args.contains(&"--bind".into()));
+        assert!(args.contains(&"--dev".into()));
+        assert!(args.contains(&"--proc".into()));
+        assert!(args.contains(&"--tmpfs".into()));
         // These should NOT be present
         assert!(!args.contains(&"--unshare-net".into()));
         assert!(!args.contains(&"--unshare-pid".into()));
@@ -278,6 +306,96 @@ mod tests {
         // Each writable path generates a --bind pair
         let bind_count = args.iter().filter(|a| *a == "--bind").count();
         assert_eq!(bind_count, 4); // workspace + 3 writable paths
+    }
+
+    // ── live execution (bwrap installed) ────────────────────────
+    //
+    // DF-WARPFS-77 regression: the old build_args produced a bwrap
+    // invocation that could never run (empty root → `execvp sh: No such
+    // file or directory`, or read-only root → `Can't mkdir /workspace`).
+    // Prove `run()` actually executes a command end-to-end when bwrap is
+    // present; skip when it is not installed or cannot spawn.
+
+    #[test]
+    fn test_run_executes_sandboxed_command_when_bwrap_available() {
+        if !BubblewrapExecutor::is_available() {
+            eprintln!("skipping: bwrap not installed on this host");
+            return;
+        }
+        let ws = std::env::temp_dir().join(format!("hilo-bwrap-test-{}", std::process::id()));
+        std::fs::create_dir_all(&ws).unwrap();
+
+        let mut sandbox = sandbox_enabled();
+        sandbox.writable_paths = vec![];
+        let cfg = BubblewrapConfig::from_manifest(&sandbox);
+        let exec = BubblewrapExecutor::new(cfg, ws.to_str().unwrap());
+
+        let output = match exec.run(&["sh".into(), "-c".into(), "echo ok".into()]) {
+            Ok(o) => o,
+            Err(e) => {
+                eprintln!("skipping: bwrap could not run ({e})");
+                let _ = std::fs::remove_dir_all(&ws);
+                return;
+            }
+        };
+
+        assert!(output.status.success(), "bwrap exit: {}", output.status);
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "ok");
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    // ── live network isolation (bwrap installed) ────────────────
+    //
+    // DF-WARPFS-77 AC1: a process run through the executor with
+    // `isolate_network: true` must NOT reach the network (--unshare-net).
+    // curl inside the namespace fails DNS/connect; rc=0 would mean the
+    // network was reachable (regression). Skips when bwrap or curl is
+    // absent (same guard as the live-execution test).
+
+    #[test]
+    fn test_run_blocks_network_when_isolate_network_enabled() {
+        if !BubblewrapExecutor::is_available() {
+            eprintln!("skipping: bwrap not installed on this host");
+            return;
+        }
+        let curl_present = std::process::Command::new("sh")
+            .args(["-c", "command -v curl"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if !curl_present {
+            eprintln!("skipping: curl not available on host");
+            return;
+        }
+        let ws = std::env::temp_dir().join(format!("hilo-bwrap-net-{}", std::process::id()));
+        std::fs::create_dir_all(&ws).unwrap();
+
+        let mut sandbox = sandbox_enabled(); // isolate_network: true
+        sandbox.writable_paths = vec![];
+        let cfg = BubblewrapConfig::from_manifest(&sandbox);
+        let exec = BubblewrapExecutor::new(cfg, ws.to_str().unwrap());
+
+        let output = match exec.run(&[
+            "sh".into(),
+            "-c".into(),
+            "curl -s --max-time 3 -o /dev/null https://example.com; echo rc=$?".into(),
+        ]) {
+            Ok(o) => o,
+            Err(e) => {
+                eprintln!("skipping: bwrap could not run ({e})");
+                let _ = std::fs::remove_dir_all(&ws);
+                return;
+            }
+        };
+
+        assert!(output.status.success(), "bwrap exit: {}", output.status);
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        assert_ne!(
+            stdout, "rc=0",
+            "network was reachable inside the sandbox — isolate_network is broken"
+        );
+        eprintln!("network blocked inside sandbox (curl {stdout})");
+        let _ = std::fs::remove_dir_all(&ws);
     }
 
     // ── stub-mode error (bwrap not installed) ──────────────────

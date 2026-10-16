@@ -13,6 +13,7 @@ pub mod meta;
 pub mod mount;
 pub mod plugin;
 pub mod rollup;
+pub mod sandbox;
 pub mod serve;
 pub mod surfaces;
 pub mod test_classes;

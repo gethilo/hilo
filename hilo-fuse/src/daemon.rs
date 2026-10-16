@@ -14,11 +14,16 @@ use crate::FuseConfig;
 /// When `config.sandbox` is `Some(...)`, the mount itself runs sandboxed
 /// via bubblewrap for agent isolation (§14.3). On success returns `Ok(())`.
 pub fn mount(fs: Hilo, config: &FuseConfig) -> anyhow::Result<()> {
-    // If a sandbox config is present, validate that bwrap is available.
+    // DF-WARPFS-77: fail-open with a loud warning instead of refusing the
+    // mount — sandboxing is optional (spec §14.3), so a missing bwrap must
+    // never block a mount that would otherwise succeed. The mount path warns
+    // and drops the config before reaching here when the block is present but
+    // bwrap is unavailable; this is a defensive guard for any other caller
+    // that sets `Some` directly.
     if let Some(ref sandbox_cfg) = config.sandbox {
         if sandbox_cfg.enabled && !hilo_core::sandbox::BubblewrapExecutor::is_available() {
-            anyhow::bail!(
-                "bubblewrap sandbox enabled but bwrap not found (install: apt install bubblewrap)"
+            eprintln!(
+                "warning: manifest sandbox block present but bwrap not found — mounting WITHOUT sandboxing (install: apt install bubblewrap)"
             );
         }
     }

@@ -15,7 +15,7 @@ use clap::{Parser, Subcommand};
 use crate::commands::plugin::PluginCommand;
 use crate::commands::{
     audit, backend, classify, coverage_links, graph, ignore, init, meta, mount, plugin, rollup,
-    serve, surfaces, test_classes, wiring, workspace,
+    sandbox, serve, surfaces, test_classes, wiring, workspace,
 };
 use crate::sync_direction;
 
@@ -57,6 +57,9 @@ enum Commands {
     Backend(backend::BackendCommand),
     /// Mount a Hilo virtual filesystem via FUSE.
     Mount(MountArgs),
+    /// Inspect and verify the manifest bubblewrap sandbox (spec §14.3).
+    #[command(subcommand)]
+    Sandbox(sandbox::SandboxCommand),
     /// Manage multi-repo workspace mounts.
     #[command(subcommand)]
     Workspace(WorkspaceCommand),
@@ -684,6 +687,9 @@ pub fn run() -> anyhow::Result<()> {
             args.log_file.as_deref(),
             args.source.as_deref(),
         ),
+        Commands::Sandbox(sandbox::SandboxCommand::Check(args)) => {
+            sandbox::run_sandbox_check(args.source.as_deref())
+        }
         Commands::Workspace(WorkspaceCommand::Mount(args)) => {
             workspace::run_workspace_mount(&args.manifest, &args.mount_point, args.daemon)
         }

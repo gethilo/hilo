@@ -9,6 +9,8 @@ use anyhow::{Context, Result};
 use hilo_backends::planner::SyncDirection;
 use hilo_backends::stream::StreamPlacer;
 use hilo_backends::{BackendRegistry, EphemeralMatcher, IgnoreMatcher};
+use hilo_core::manifest::Sandbox;
+use hilo_core::sandbox::{BubblewrapConfig, BubblewrapExecutor};
 use hilo_fuse::stream::StreamState;
 use hilo_fuse::{daemon, FuseConfig, Hilo};
 use hilo_triggers::{GraphDbSource, SyncHook, SyncHookConfig, TriggerConfig, TriggerEngine};
@@ -163,6 +165,25 @@ pub fn run_mount(
         None
     };
 
+    // DF-WARPFS-77: wire the manifest `sandbox:` block into the mount. An
+    // absent or disabled block leaves the mount unsandboxed (historic
+    // behavior, no warning). An enabled block mounts sandboxed when bwrap is
+    // available; otherwise a loud warning fires and the mount proceeds
+    // unsandboxed (fail-open — sandboxing is optional, spec §14.3).
+    let sandbox_cfg = match load_sandbox(&current_dir) {
+        Some(cfg) if cfg.enabled => {
+            if BubblewrapExecutor::is_available() {
+                Some(cfg)
+            } else {
+                eprintln!(
+                    "warning: manifest sandbox block present but bwrap not found — mounting WITHOUT sandboxing (install: apt install bubblewrap)"
+                );
+                None
+            }
+        }
+        _ => None,
+    };
+
     let mut config = FuseConfig {
         mount_point: PathBuf::from(mount_point),
         allow_other,
@@ -173,7 +194,7 @@ pub fn run_mount(
         entry_timeout: 1.0,
         max_read: 131_072,
         max_write: 131_072,
-        sandbox: None,
+        sandbox: sandbox_cfg,
     };
 
     let fs = Hilo::new(current_dir.clone(), config.clone());
@@ -518,6 +539,41 @@ fn load_triggers(project_dir: &Path) -> Vec<TriggerConfig> {
     }
 
     default_triggers()
+}
+
+/// Load the manifest `sandbox:` block for a project directory.
+///
+/// DF-WARPFS-77: reads the same manifest candidates as `load_triggers`
+/// (`.vfs/manifest.yaml` → `manifest.yaml` → `.vfs/manifest.yml` →
+/// `manifest.yml`) and returns the sandbox config when a block is present,
+/// `None` when the manifest is missing or has no `sandbox:` key. The caller
+/// decides enabled-vs-absent and owns the loud missing-bwrap warning.
+pub(crate) fn load_sandbox(project_dir: &Path) -> Option<BubblewrapConfig> {
+    for candidate in &[
+        ".vfs/manifest.yaml",
+        "manifest.yaml",
+        ".vfs/manifest.yml",
+        "manifest.yml",
+    ] {
+        let path = project_dir.join(candidate);
+        if let Ok(contents) = std::fs::read_to_string(&path) {
+            if let Some(sandbox) = parse_manifest_sandbox(&contents) {
+                return Some(BubblewrapConfig::from_manifest(&sandbox));
+            }
+        }
+    }
+    None
+}
+
+/// Parse a `sandbox:` block out of a manifest YAML document.
+///
+/// Tolerant: a missing key, an unparseable document, or a malformed block
+/// (wrong types / unknown fields) all yield `None` — the mount then proceeds
+/// unsandboxed exactly as before the block existed.
+fn parse_manifest_sandbox(yaml: &str) -> Option<Sandbox> {
+    let doc: serde_yaml::Value = serde_yaml::from_str(yaml).ok()?;
+    let sandbox_val = doc.get("sandbox")?;
+    serde_yaml::from_value(sandbox_val.clone()).ok()
 }
 
 /// DF-WARPFS-59: loud NOT-IMPLEMENTED warnings for a manifest's `plugins:`
@@ -1082,5 +1138,87 @@ triggers:
         assert!(contents.contains("second-write"), "append, not truncate");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ───────── DF-WARPFS-77: manifest sandbox block parsing + wiring ─────────
+
+    #[test]
+    fn test_parse_manifest_sandbox_present() {
+        let yaml = "sandbox:\n  enabled: true\n  engine: bubblewrap\n  isolate_network: true\n  isolate_pid: true\n  read_only_root: true\n  writable_paths: [/tmp, /workspace]\n";
+        let sb = parse_manifest_sandbox(yaml).expect("block present");
+        assert!(sb.enabled);
+        assert!(sb.isolate_network);
+        assert!(sb.isolate_pid);
+        assert!(sb.read_only_root);
+        assert_eq!(
+            sb.writable_paths,
+            vec!["/tmp".to_string(), "/workspace".to_string()]
+        );
+        assert_eq!(sb.engine.as_deref(), Some("bubblewrap"));
+    }
+
+    #[test]
+    fn test_parse_manifest_sandbox_absent() {
+        assert!(parse_manifest_sandbox("project:\n  name: t\n").is_none());
+        assert!(parse_manifest_sandbox("version: 2\n").is_none());
+    }
+
+    #[test]
+    fn test_parse_manifest_sandbox_malformed() {
+        // Wrong type for a field → tolerant None.
+        assert!(parse_manifest_sandbox("sandbox:\n  enabled: \"yes\"\n").is_none());
+        // Block is not a mapping → None.
+        assert!(parse_manifest_sandbox("sandbox: just-a-string\n").is_none());
+        // Unknown field (deny_unknown_fields) → None.
+        assert!(parse_manifest_sandbox("sandbox:\n  enabled: true\n  bogus_field: 1\n").is_none());
+        // Unparseable document → None.
+        assert!(parse_manifest_sandbox("sandbox: [unterminated").is_none());
+    }
+
+    #[test]
+    fn test_load_sandbox_enabled_block_yields_some_config() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".vfs")).unwrap();
+        std::fs::write(
+            dir.path().join(".vfs/manifest.yaml"),
+            "version: 2\nproject:\n  name: t\nsandbox:\n  enabled: true\n  isolate_network: true\n  read_only_root: true\n  writable_paths: [/tmp]\n",
+        )
+        .unwrap();
+        let cfg = load_sandbox(dir.path()).expect("enabled block → Some");
+        assert!(cfg.enabled);
+        assert!(cfg.isolate_network);
+        assert!(cfg.read_only_root);
+        assert_eq!(cfg.writable_paths, vec!["/tmp".to_string()]);
+    }
+
+    #[test]
+    fn test_load_sandbox_absent_manifest_yields_none() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(load_sandbox(dir.path()).is_none());
+    }
+
+    #[test]
+    fn test_load_sandbox_disabled_block_yields_disabled_config() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".vfs")).unwrap();
+        std::fs::write(
+            dir.path().join(".vfs/manifest.yaml"),
+            "version: 2\nproject:\n  name: t\nsandbox:\n  enabled: false\n",
+        )
+        .unwrap();
+        let cfg = load_sandbox(dir.path()).expect("block present → Some");
+        assert!(!cfg.enabled);
+    }
+
+    #[test]
+    fn test_load_sandbox_manifest_without_sandbox_key_yields_none() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".vfs")).unwrap();
+        std::fs::write(
+            dir.path().join(".vfs/manifest.yaml"),
+            "version: 2\nproject:\n  name: t\ntriggers: []\n",
+        )
+        .unwrap();
+        assert!(load_sandbox(dir.path()).is_none());
     }
 }
