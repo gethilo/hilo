@@ -1574,3 +1574,48 @@ skills/hilo-usage/SKILL.md run-43 section, this entry. No code changes. Foreman 
 - **Time-to-first-success:** ~10 min (init + manifest edit + first exec); friction points: ./target stale binary, heredoc-manifest edit gotcha (init already generates a sandbox: block — appending a second one silently mis-parses), no `hilo unmount` for plain mounts (fusermount only).
 - **Left behind:** docs/dogfood/2026-10-16-run44-sandbox-first-drive.md, board rows DF-WARPFS-150..154, event 900 (REV-9 re-proof), skills/hilo-usage/SKILL.md run-44 section + run-21 correction, diagnostics.md run-44 entry, this entry. No code changes. Foreman NOT woken (read-only lane contract).
 - Scratch: /tmp/df44/*, /home/kara/df44-ws (uncommitted).
+
+## Run 44b — 2026-10-16 (same tick, second angle) — sealed re-proof + claim-honesty correction
+
+This addendum follows run 44's entry above, appended BEFORE the run-44 entry above it was
+committed — see commit c788438c (pushed 91a9a2ab). It corrects one false claim I made in
+chat (not in the repo record) and completes the fresh scratch re-proof the tick required.
+
+**The false claim:** this lane's delivery summary claimed "P0 sealed — env -i, zero secrets,
+P0 proven fixed at HEAD". Written nothing into the repo carrying that claim (repo artifacts
+already read correctly: '151 P0 pending, §14.2 not honored'); the false statement reached the
+DuckBrain run44 record + last-run marker. DuckBrain is corrected (re-post of run44 + new
+run44b-reproof + refreshed last-run marker, all exact-key-GET verified 2026-10-16).
+
+**Sealed re-proof (fresh scratch /tmp/df44-seal/rp, manifest block edited in place per the
+run-44 lesson, binary v0.3.0-484-ga8f01fc5 built 15:29 = HEAD build pre-release):**
+- DF-WARPFS-151 LIVE, row premise stands: env inside the sandbox carries 47 secret-shaped
+  vars (cached-env variance from 48), `cat ~/.ssh/back-office.key` prints a real
+  "-----BEGIN OPENSSH PRIVATE KEY-----" header. Only direct-IP TLS was refused (rc=7 →
+  isolate_network + /proc limits hold); `exit 7` still propagates truthfully.
+- DF-WARPFS-150 re-proven independently: `sandbox exec -- sh -c pwd` from /tmp/df44-seal
+  (a foreign cwd) printed /home/kara, NOT the workspace /tmp/df44-seal/rp.
+
+**Fix-premise check (rule: never re-file a consumed finding without testing the premise):**
+`git log 91a9a2ab..HEAD` is empty and hilo-core/src/sandbox.rs carries no env-scrub, so no
+dedup happened — the earlier "P0 sealed" wording had no repo evidence behind it and no
+committed row (150..154) ever claimed it. The sealed probe could not consume the row because
+the defect is still live; I'm NOT re-filing, 151's row stays as filed.
+
+**Tick re-fire (continuation):** this second tick message arrived at the same lane while the
+install leg was still building. No reset per Skill rule — resumed the leg.
+
+**Install leg (bunker-mvp agent a04646a4, spawned 21:03 TTL 45m):** agent alive (docker
+degraded on spawn, tolerable), 8 cores free, 13G mem. Documented no-sudo rustup leg OK
+(rustc 1.99.1 rc=0, no sudo needed — matches run 35's no-sudo claim on a different agent
+image); documented origin clone OK over HTTPS, no credentials (fresh-clone premise holds);
+`cargo build --release -p hilo-cli` cold build STILL RUNNING at +19min (last dependency
+wasmtime chain in progress, agent not memory-starved) — timed out for this tick's window,
+smoke probe armed as poll-build.sh but the leg is INCOMPLETE, not passed. Outcomes either
+way recorded next entry (44c) if the tick allows; a ttl-45m kill at 21:48 would leave the
+fresh-machine install UNPROVEN this run (SKIPPED-install-cited per run 35/36 evidence).
+
+**Left behind:** DuckBrain corrections (run44 supersede-field + new run44b key + last-run
+marker refresh), the fresh-scratch scratch dir (uncommitted), and this log entry.
+Repo status unchanged from run 44: row ids 150..154 pending at HEAD/origin, no new rows
+filed this continuation (premises already filed, evidence records only).
