@@ -2868,6 +2868,17 @@ pub fn run_understand(task: &str, budget: Option<usize>) -> Result<()> {
     if let Some(b) = budget {
         opts.token_budget = b;
     }
+    // REV-WARPFS-6: the manifest's `graph.map_exclude_paths` drives the MAP
+    // fixture demotion (defaults: tests/fixtures, examples, vendor). The
+    // manifest only overrides the default — absent or unreadable, the same
+    // default list still applies.
+    opts.map_exclude_paths = match load_manifest() {
+        Ok(manifest) => manifest.graph.map_exclude_paths,
+        Err(_) => hilo_graph::signal::MAP_EXCLUDE_PATHS_DEFAULT
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect(),
+    };
 
     let symbols = load_or_build_symbol_cache(&cwd, &graph)?.symbols;
     let cached_symbols = |path: &str| symbols.get(path).cloned().unwrap_or_default();

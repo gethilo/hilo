@@ -115,6 +115,17 @@ pub struct SignalOpts {
     pub max_nodes: usize,
     /// Harmonic (3-tier) or Flat (single-tier).
     pub resolution: Resolution,
+    /// Path prefixes (repo-root-relative, `/`-separated components) whose
+    /// files are demoted out of the MAP tier (REV-WARPFS-6). See
+    /// [`MAP_EXCLUDE_PATHS_DEFAULT`] and [`map_rank_adjustment`].
+    ///
+    /// Empty by default: the engine itself ships no opinion about which paths
+    /// are fixtures, and every pinned regression (`examples/` decoy, wave11
+    /// recall corpora) keeps its exact historical ranking. Hosts that want the
+    /// fixture-demotion behaviour set the list — the CLI and MCP surfaces fill
+    /// it from `graph.map_exclude_paths` in the manifest, whose serde default
+    /// is [`MAP_EXCLUDE_PATHS_DEFAULT`].
+    pub map_exclude_paths: Vec<String>,
 }
 
 impl Default for SignalOpts {
@@ -125,8 +136,83 @@ impl Default for SignalOpts {
             depth: 2,
             max_nodes: 60,
             resolution: Resolution::Harmonic,
+            map_exclude_paths: Vec::new(),
         }
     }
+}
+
+/// The default MAP exclusion list (REV-WARPFS-6), re-exported from
+/// `hilo_core::manifest` — the manifest field's serde default and the list
+/// the CLI/MCP surfaces fill [`SignalOpts::map_exclude_paths`] with.
+/// `tests/fixtures` — tree-sitter sample corpora (the bake-off defect: hilo's
+/// own `hilo-graph/tests/fixtures/` wave11 ruff copy filled the MAP with 54
+/// fixture rows ahead of the file the task named); `examples` — demo trees;
+/// `vendor` — third-party trees.
+pub use hilo_core::manifest::MAP_EXCLUDE_PATHS_DEFAULT;
+
+/// Path-component depth (root-relative) at which the shallow-file preference
+/// of [`map_depth_adjustment`] starts. Files shallower than this are
+/// untouched; each component beyond it costs one more of the adjustment
+/// budget — never enough to reorder two files of different relevance classes
+/// (anchor 1.0 vs 1-hop 0.8 vs 2-hop 0.5).
+pub const MAP_DEPTH_GRACE: usize = 4;
+
+/// Per-component cost of depth beyond [`MAP_DEPTH_GRACE`] in
+/// [`map_depth_adjustment`]. The whole adjustment budget
+/// (`MAP_DEPTH_MAX_DEMOTE = 0.1`) stays far below the gap between one
+/// traversal hop (0.8 → 0.5), so the weighting can only re-sort ties *within*
+/// a relevance band — of two same-band files the shallower one leads.
+pub const MAP_DEPTH_STEP: f64 = 0.02;
+
+/// Maximum amount [`map_depth_adjustment`] subtracts for deep paths
+/// (`MAP_DEPTH_STEP` per component past [`MAP_DEPTH_GRACE`], capped). A
+/// capped 0.1 can never demote a file across a traversal band (the smallest
+/// band gap is 0.3).
+pub const MAP_DEPTH_MAX_DEMOTE: f64 = 0.1;
+
+/// Path-component depth of a repo-root-relative path (`src/a.rs` → 1,
+/// `src/auth/middleware.go` → 2, a bare `main.rs` → 0).
+fn path_depth(path: &str) -> usize {
+    path.split('/').filter(|c| !c.is_empty()).count() - 1
+}
+
+/// Whether `path` contains any of the excluded prefixes as a contiguous
+/// path-component sequence (REV-WARPFS-6). The match is NOT anchored at the
+/// repo root: this repo is a Cargo workspace, its fixture trees live at
+/// `hilo-graph/tests/fixtures/…` (crate-prefixed), and a root-anchored
+/// `tests/fixtures` would filter nothing on exactly the corpus the defect was
+/// measured on. Matching at component boundaries anywhere means
+/// `tests/fixtures` covers `tests/fixtures/…` and `hilo-graph/tests/fixtures/…`
+/// but never `tests/fixtures_go_here` or `…/tests/fixtures.rs`.
+fn is_map_excluded(path: &str, exclude: &[String]) -> bool {
+    let components: Vec<&str> = path.split('/').filter(|c| !c.is_empty()).collect();
+    exclude.iter().any(|prefix| {
+        let prefix_components: Vec<&str> = prefix.split('/').filter(|c| !c.is_empty()).collect();
+        if prefix_components.is_empty() || prefix_components.len() > components.len() {
+            return false;
+        }
+        components
+            .windows(prefix_components.len())
+            .any(|window| window == prefix_components.as_slice())
+    })
+}
+
+/// MAP ordering adjustment for one path (REV-WARPFS-6): the amount subtracted
+/// from the file's position score when ordering the MAP tier.
+///
+/// Depth lever only: past [`MAP_DEPTH_GRACE`] components every extra
+/// component costs [`MAP_DEPTH_STEP`], capped at [`MAP_DEPTH_MAX_DEMOTE`] —
+/// of two same-band files the shallower implementation leads. Excluded
+/// prefixes (`tests/fixtures`, `examples`, `vendor`, …) do not adjust the
+/// order — they remove the file from the MAP tier entirely (see
+/// `format_output`); DETAIL keeps every file.
+///
+/// Returned as a non-negative `f64`; the caller subtracts it from a local
+/// sort key only — `signal_score` and every tier assignment keep the
+/// traversal score untouched (DETAIL is unaffected by construction).
+fn map_depth_adjustment(path: &str) -> f64 {
+    let deep = path_depth(path).saturating_sub(MAP_DEPTH_GRACE) as f64;
+    (MAP_DEPTH_STEP * deep).min(MAP_DEPTH_MAX_DEMOTE)
 }
 
 /// Result of a signal engine `understand()` call.
@@ -2470,7 +2556,42 @@ fn format_output(files: &[SignalFile], anchors: &[String], opts: &SignalOpts) ->
     // anchor grade then path ascending as tie-breaks) so anchors lead the
     // tier — alphabetical rendering buried the on-task file at MAP position
     // 54 of 61 behind demo apps (GAP-078).
-    for sf in files {
+    //
+    // REV-WARPFS-6: two path-aware levers apply to this tier only:
+    //
+    // * FILTER — files under an excluded prefix (`opts.map_exclude_paths`;
+    //   tests/fixtures, examples, vendor by default) do not render here at
+    //   all. The MAP is the agent's orientation budget; sample corpora have
+    //   high symbol density and zero relevance, and on hilo's own repo 54
+    //   fixture rows drowned the file the task named. The filter touches
+    //   this tier only: the file stays in the result set, keeps its
+    //   traversal-order tier assignment, and still gets its DETAIL block.
+    // * WEIGHT — the remaining files re-order by signal score minus a
+    //   bounded depth demotion (`map_depth_adjustment`), so of two
+    //   same-band files the shallower (closer to the repo root) leads. The
+    //   cap keeps the weighting inside one relevance band — it re-sorts
+    //   ties, it never promotes a 2-hop file above an anchor.
+    let mut map_order: Vec<&SignalFile> = files
+        .iter()
+        .filter(|sf| !is_map_excluded(&sf.path, &opts.map_exclude_paths))
+        .collect();
+    map_order.sort_by(|a, b| {
+        let (ka, kb) = (
+            a.signal_score - map_depth_adjustment(&a.path),
+            b.signal_score - map_depth_adjustment(&b.path),
+        );
+        kb.partial_cmp(&ka)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.path.cmp(&b.path))
+    });
+    if map_order.is_empty() {
+        // Every candidate was filtered (or the graph matched nothing that
+        // survives the filter) — say so instead of shipping a bare header.
+        output.push_str(&format!(
+            "{EMPTY_TIER} — every matched file sits under a MAP-excluded path\n"
+        ));
+    }
+    for sf in &map_order {
         let path = &sf.path;
         if sf.symbols.is_empty() {
             output.push_str(&format!("{path} → (no symbols extracted)\n"));
@@ -2819,6 +2940,143 @@ mod tests {
     }
 
     #[test]
+    fn map_path_depth_counts_root_relative_components() {
+        assert_eq!(path_depth("main.rs"), 0);
+        assert_eq!(path_depth("src/lib.rs"), 1);
+        assert_eq!(path_depth("src/auth/middleware.go"), 2);
+        assert_eq!(path_depth("a/b/c/d/e.rs"), 4);
+    }
+
+    #[test]
+    fn map_exclusion_matches_on_component_boundaries() {
+        let exclude = vec![
+            "tests/fixtures".to_string(),
+            "examples".to_string(),
+            "vendor".to_string(),
+        ];
+        assert!(is_map_excluded(
+            "tests/fixtures/wave11/ruff/mod.rs",
+            &exclude
+        ));
+        assert!(is_map_excluded("tests/fixtures", &exclude));
+        assert!(is_map_excluded("examples/aaa/util.rs", &exclude));
+        assert!(is_map_excluded("vendor/critical/x.go", &exclude));
+        // Crate-prefixed workspace reality: this repo's fixture trees live at
+        // `hilo-graph/tests/fixtures/…`, so the match must hit the prefix's
+        // component sequence anywhere in the path, not only at the root.
+        assert!(is_map_excluded(
+            "hilo-graph/tests/fixtures/wave11/ruff/mod.rs",
+            &exclude
+        ));
+        assert!(is_map_excluded("cli/examples/basic/main.rs", &exclude));
+        assert!(is_map_excluded("third_party/vendor/openssl/x.c", &exclude));
+        // Component boundary: a longer name sharing the prefix is NOT excluded.
+        assert!(!is_map_excluded("tests/fixtures_go_here/mod.rs", &exclude));
+        assert!(!is_map_excluded("tests/fixtures.rs", &exclude));
+        assert!(!is_map_excluded("src/vendor_helpers.rs", &exclude));
+        // Depth is separate from exclusion: tests/test_x.py is a test file
+        // but not under tests/fixtures — the wave11 truth paths rely on this.
+        assert!(!is_map_excluded("tests/test_type_adapter.py", &exclude));
+        assert!(!is_map_excluded("test/cpp/common/alarm_test.cc", &exclude));
+        assert!(!is_map_excluded("src/auth/middleware.go", &exclude));
+        // Trailing slashes and empty entries never match everything.
+        let slashy = vec!["tests/fixtures/".to_string(), String::new()];
+        assert!(is_map_excluded("tests/fixtures/a.rs", &slashy));
+        assert!(!is_map_excluded("src/a.rs", &slashy));
+    }
+
+    #[test]
+    #[allow(clippy::assertions_on_constants)]
+    fn map_depth_adjustment_is_bounded_and_layered() {
+        // Intact shallow implementation file: untouched.
+        assert_eq!(map_depth_adjustment("hilo-mcp/src/rate_limiter.rs"), 0.0);
+        // Grace band: up to 4 directory components are free.
+        assert_eq!(map_depth_adjustment("a/b/c/d/file.rs"), 0.0);
+        assert_eq!(
+            map_depth_adjustment("tests/fixtures/wave11/ruff/mod.rs"),
+            0.0
+        );
+        // Every component past the grace costs MAP_DEPTH_STEP.
+        let expected = (5usize.saturating_sub(MAP_DEPTH_GRACE)) as f64 * MAP_DEPTH_STEP;
+        assert!(
+            (map_depth_adjustment("tests/fixtures/wave11/ruff/deep/mod.rs") - expected).abs()
+                < 1e-9
+        );
+        // Capped: a very deep path never loses more than MAP_DEPTH_MAX_DEMOTE.
+        let deep = "a/b/c/d/e/f/g/h/i/j/k/l/m/n/o/p.rs";
+        assert!((map_depth_adjustment(deep) - MAP_DEPTH_MAX_DEMOTE).abs() < 1e-9);
+        // Band invariant: the maximum adjustment stays far below the smallest
+        // gap between traversal bands (0.3 between 0.8 and 0.5), so the
+        // weighting re-sorts ties within a band and can never promote a
+        // 2-hop file above a 1-hop one. (Constant-vs-constant on purpose:
+        // this is the design invariant, compile-time-checked by a test.)
+        assert!(
+            MAP_DEPTH_MAX_DEMOTE < 0.3,
+            "depth demotion budget must stay below one traversal band"
+        );
+    }
+
+    #[test]
+    fn understand_map_depth_weighting_orders_shallower_file_first() {
+        // REV-WARPFS-6 requirement 2 through the public surface: two files
+        // tie in the same relevance band (both anchor at grade 4 for the task
+        // tokens) and the deeper one wins the alphabetical tie-break. With
+        // the depth weighting the shallower file leads. The exclusion list
+        // here is vendor-only, so nothing is filtered — this isolates the
+        // depth lever from the filter (every file stays IN the MAP).
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[
+            edge(
+                "hilo-mcp/src/rate_limiter.rs",
+                "hilo-mcp/src/server.rs",
+                "imports",
+            ),
+            edge(
+                "aaa/limiter/deep/nest/one/sample.rs",
+                "aaa/mod.rs",
+                "imports",
+            ),
+        ])
+        .unwrap();
+
+        let result = understand(
+            &db,
+            "rate limiter",
+            &SignalOpts {
+                map_exclude_paths: vec!["vendor".to_string()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let entries: Vec<&str> = result
+            .text
+            .split("## MAP")
+            .nth(1)
+            .and_then(|m| m.split("## SIGNATURES").next())
+            .expect("MAP tier must exist")
+            .lines()
+            .filter(|l| l.contains("→"))
+            .collect();
+        let position_of = |prefix: &str| {
+            entries
+                .iter()
+                .position(|l| l.starts_with(prefix))
+                .unwrap_or_else(|| panic!("{prefix} must be in MAP, got {entries:?}"))
+        };
+        assert!(
+            position_of("hilo-mcp/src/rate_limiter.rs")
+                < position_of("aaa/limiter/deep/nest/one/sample.rs"),
+            "the shallower implementation must lead the deeper same-band file once depth weighting applies, got {entries:?}"
+        );
+        // The weighting must not have filtered anything: all four files render.
+        assert_eq!(
+            entries.len(),
+            4,
+            "no file may be filtered by the depth lever, got {entries:?}"
+        );
+    }
+
+    #[test]
     fn discover_anchors_ranks_component_match_first() {
         // GAP-078 regression: "session" is a whole path component in
         // src/app/session/store.rs but only an incidental substring inside
@@ -2851,6 +3109,12 @@ mod tests {
         // by path, so an `examples/...` decoy listed before the on-task
         // anchor even though the anchor scores higher. MAP must follow the
         // relevance order it is handed.
+        //
+        // REV-WARPFS-6: the engine's own default opts carry NO exclusion
+        // list — the engine has no opinion about which paths are fixtures.
+        // Both orderings are pinned: the historical order under the default
+        // (empty) opts, and the fixture demotion under the manifest's
+        // default list.
         let db = GraphDB::open(":memory:").unwrap();
         db.insert_edges(&[edge(
             "src/app/session/store.rs",
@@ -2884,6 +3148,357 @@ mod tests {
         assert!(
             first_entry.starts_with(anchor_line),
             "anchor must be the first MAP entry, got {first_entry:?}"
+        );
+
+        // Same graph, default exclusion list: the example decoy must now be
+        // absent from the MAP text entirely — but still present in the
+        // machine-readable result set (the filter is tier-local).
+        let filtered = understand(
+            &db,
+            "session handling",
+            &SignalOpts {
+                map_exclude_paths: MAP_EXCLUDE_PATHS_DEFAULT
+                    .iter()
+                    .map(|s| (*s).to_string())
+                    .collect(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let map = filtered
+            .text
+            .split("## MAP")
+            .nth(1)
+            .and_then(|rest| rest.split("## SIGNATURES").next())
+            .expect("MAP tier must exist");
+        assert!(
+            !map.contains(decoy_line),
+            "under the default exclusion list the examples/ decoy must be absent from MAP, got:\n{map}"
+        );
+        assert!(
+            map.contains(anchor_line),
+            "the intact anchor must stay in MAP"
+        );
+        assert!(
+            filtered
+                .files
+                .iter()
+                .any(|f| f.path == "examples/aaa/util.rs"),
+            "the exclusion list filters the MAP tier only — the decoy file must survive the result set"
+        );
+    }
+
+    #[test]
+    fn understand_fixture_filtering_keeps_implementation_in_top_map() {
+        // REV-WARPFS-6 acceptance, in-memory, at the real defect's shape: a
+        // fixture corpus whose directory tree carries the task's vocabulary
+        // anchors ABOVE the implementation — `tests/fixtures/limiter/rate/*`
+        // sums grade 8 (whole-component "limiter" + "rate") against the
+        // implementation's grade 4 ("rate_limiter" is only a component
+        // PREFIX for both tokens). Three such rows push the implementation
+        // to MAP position 3 (past the top 3), with a further crowd of
+        // grade-4 sample rows behind it — the same mechanics that filled the
+        // real repo's MAP with fixture rows. Under the manifest's default
+        // exclusion list every fixture row vanishes from the MAP tier and
+        // the implementation leads. The machine-readable result and the
+        // traversal-band tiers keep every file.
+        let db = GraphDB::open(":memory:").unwrap();
+        let mut edges = vec![edge(
+            "hilo-mcp/src/rate_limiter.rs",
+            "hilo-mcp/src/server.rs",
+            "imports",
+        )];
+        for i in 0..3 {
+            edges.push(edge(
+                "tests/fixtures/limiter/rate/mod.rs",
+                &format!("tests/fixtures/limiter/rate/sample_{i}.rs"),
+                "imports",
+            ));
+        }
+        for i in 0..4 {
+            edges.push(edge(
+                "tests/fixtures/limiter/mod.rs",
+                &format!("tests/fixtures/limiter/sample_{i}.rs"),
+                "imports",
+            ));
+        }
+        db.insert_edges(&edges).unwrap();
+
+        let excluded: Vec<String> = MAP_EXCLUDE_PATHS_DEFAULT
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+
+        let map_entries = |r: &SignalResult| -> Vec<String> {
+            r.text
+                .split("## MAP")
+                .nth(1)
+                .and_then(|m| m.split("## SIGNATURES").next())
+                .expect("MAP tier must exist")
+                .lines()
+                .filter(|l| l.contains("→"))
+                .map(str::to_string)
+                .collect()
+        };
+
+        // RED premise — the historical (unfiltered) MAP, pinned against the
+        // live engine: the fixture crowd (8 anchors + 1 boost-seeded row)
+        // fills the tier and the implementation anchor lands at position 8 —
+        // far outside the top 3. (Measured: the seed_limit=8 anchor cut and
+        // the GAP-101 boost interleave so the implementation row — grade 3,
+        // not an anchor — sorts behind every fixture anchor and the boosted
+        // sample.)
+        let historical = understand(&db, "rate limiter", &SignalOpts::default()).unwrap();
+        let historical_entries = map_entries(&historical);
+        let impl_pos = historical_entries
+            .iter()
+            .position(|l| l.starts_with("hilo-mcp/src/rate_limiter.rs"))
+            .expect("implementation must be in MAP without the exclusion list");
+        let fixture_count = historical_entries
+            .iter()
+            .filter(|l| l.starts_with("tests/fixtures/"))
+            .count();
+        assert_eq!(
+            fixture_count, 9,
+            "RED premise: the unfiltered MAP carries the whole fixture crowd, got {historical_entries:?}"
+        );
+        assert!(
+            impl_pos >= 3,
+            "RED premise: without the exclusion list the fixture crowd pushes the implementation out of the top 3, got position {impl_pos} of {historical_entries:?}"
+        );
+        // Historical tier of the implementation row (positional, on the FULL
+        // sorted set) — the GREEN arm must not change it.
+        let historical_impl_tier = historical
+            .files
+            .iter()
+            .find(|f| f.path == "hilo-mcp/src/rate_limiter.rs")
+            .expect("implementation in files")
+            .tier;
+
+        // GREEN — under the default exclusion list the crowd rows vanish
+        // from MAP and the implementation leads the tier.
+        let filtered = understand(
+            &db,
+            "rate limiter",
+            &SignalOpts {
+                map_exclude_paths: excluded,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let filtered_entries = map_entries(&filtered);
+        let impl_index = filtered_entries
+            .iter()
+            .position(|l| l.starts_with("hilo-mcp/src/rate_limiter.rs"))
+            .expect("implementation must stay in MAP");
+        assert!(
+            impl_index < 3,
+            "acceptance: implementation must be in the top 3 MAP entries, got index {impl_index} of {filtered_entries:?}"
+        );
+        assert!(
+            !filtered_entries
+                .iter()
+                .any(|l| l.starts_with("tests/fixtures/")),
+            "acceptance: no tests/fixtures file may appear in the MAP tier, got {filtered_entries:?}"
+        );
+
+        // The filter is tier-local: the machine-readable result keeps every
+        // file (including the crowd) and the implementation's TRAVERSAL
+        // tier is unchanged (tier bands depend on the sorted position, which
+        // the filter does not touch). Anchor-band files still land in
+        // DETAIL, the 1-hop neighbour in SIGNATURES, exactly as without the
+        // filter.
+        assert_eq!(filtered.files.len(), 10, "no file may be dropped");
+        let impl_file = filtered
+            .files
+            .iter()
+            .find(|f| f.path == "hilo-mcp/src/rate_limiter.rs")
+            .expect("implementation must survive in files");
+        assert_eq!(
+            impl_file.tier, historical_impl_tier,
+            "the filter must not change the implementation's tier"
+        );
+        for path in [
+            "tests/fixtures/limiter/rate/mod.rs",
+            "tests/fixtures/limiter/sample_0.rs",
+        ] {
+            let f = filtered
+                .files
+                .iter()
+                .find(|f| f.path == path)
+                .unwrap_or_else(|| panic!("{path} must survive in files"));
+            assert_eq!(f.tier, Tier::Detail, "{path} keeps its anchor-band tier");
+        }
+    }
+
+    #[test]
+    fn understand_map_rank_is_stable_without_the_exclusion_list() {
+        // The filtering is opt-in per SignalOpts: the engine's default (empty
+        // list) must reproduce the pre-change MAP text exactly — pinned on
+        // the same crowd graph as the fixture-filtering test, where the
+        // unfiltered order is the grade-8 fixture anchors, then the
+        // implementation, then the grade-4 samples, then the 1-hop neighbour.
+        let db = GraphDB::open(":memory:").unwrap();
+        let mut edges = vec![edge(
+            "hilo-mcp/src/rate_limiter.rs",
+            "hilo-mcp/src/server.rs",
+            "imports",
+        )];
+        for i in 0..3 {
+            edges.push(edge(
+                "tests/fixtures/limiter/rate/mod.rs",
+                &format!("tests/fixtures/limiter/rate/sample_{i}.rs"),
+                "imports",
+            ));
+        }
+        for i in 0..4 {
+            edges.push(edge(
+                "tests/fixtures/limiter/mod.rs",
+                &format!("tests/fixtures/limiter/sample_{i}.rs"),
+                "imports",
+            ));
+        }
+        db.insert_edges(&edges).unwrap();
+
+        let result = understand(&db, "rate limiter", &SignalOpts::default()).unwrap();
+        let entries: Vec<&str> = result
+            .text
+            .split("## MAP")
+            .nth(1)
+            .and_then(|m| m.split("## SIGNATURES").next())
+            .expect("MAP tier must exist")
+            .lines()
+            .filter(|l| l.contains("→"))
+            .collect();
+        let position_of = |prefix: &str| {
+            entries
+                .iter()
+                .position(|l| l.starts_with(prefix))
+                .unwrap_or_else(|| panic!("{prefix} must be in MAP, got {entries:?}"))
+        };
+        // Historical order, pinned against the live engine: the fixture
+        // crowd fills the head of the tier, the implementation row sorts
+        // behind it (alphabetical "hilo-mcp/…" after "tests/…" only WITHIN
+        // its band — measured position 8 of 10), and the boosted row lands
+        // last. Nothing is filtered.
+        let entries_len = entries.len();
+        let impl_pos = position_of("hilo-mcp/src/rate_limiter.rs");
+        for i in 0..3 {
+            assert!(
+                position_of(&format!("tests/fixtures/limiter/rate/sample_{i}.rs")) < impl_pos,
+                "default opts must keep the historical order (grade-8 fixtures first), got {entries:?}"
+            );
+        }
+        for i in 0..4 {
+            let pos = position_of(&format!("tests/fixtures/limiter/sample_{i}.rs"));
+            assert!(
+                pos < entries_len,
+                "every fixture sample must render in the unfiltered MAP, got {entries:?}"
+            );
+        }
+        assert_eq!(
+            entries_len, 10,
+            "the unfiltered MAP carries every matched file, got {entries:?}"
+        );
+    }
+
+    #[test]
+    fn understand_detail_tier_still_includes_excluded_fixtures() {
+        // REV-WARPFS-6 AC: DETAIL is backward compatible — a fixture that
+        // anchors keeps its DETAIL source block even under the default
+        // exclusion list. Exercised through the public understand() surface.
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[edge(
+            "tests/fixtures/wave11/authenticator.rs",
+            "src/lib.rs",
+            "imports",
+        )])
+        .unwrap();
+        let reader = |path: &str| -> Option<String> {
+            (path == "tests/fixtures/wave11/authenticator.rs")
+                .then(|| "pub struct Authenticator;\n".to_string())
+        };
+
+        let opts = SignalOpts {
+            map_exclude_paths: MAP_EXCLUDE_PATHS_DEFAULT
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
+            ..Default::default()
+        };
+        let result = understand_with_source(&db, "authenticator", &opts, Some(reader)).unwrap();
+
+        let detail = result
+            .text
+            .split("## DETAIL")
+            .nth(1)
+            .expect("DETAIL tier must exist");
+        assert!(
+            detail.contains("tests/fixtures/wave11/authenticator.rs"),
+            "DETAIL must still include the excluded fixture, got:\n{detail}"
+        );
+        let f = result
+            .files
+            .iter()
+            .find(|f| f.path == "tests/fixtures/wave11/authenticator.rs")
+            .expect("fixture must survive in files");
+        assert_eq!(f.tier, Tier::Detail, "fixture keeps its DETAIL band");
+        assert!(f.detail.is_some(), "fixture keeps its DETAIL source block");
+    }
+
+    #[test]
+    fn understand_map_filter_states_its_empty_tier_when_everything_is_excluded() {
+        // GAP-084 contract for the new filter: when every matched file sits
+        // under an excluded path, the MAP header is followed by an explicit
+        // empty-tier marker — never a bare header — and the DETAIL tier still
+        // carries the files (they were never removed from the result set).
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[edge(
+            "examples/demo/authenticator.rs",
+            "vendor/lib/auth.rs",
+            "imports",
+        )])
+        .unwrap();
+        let reader = |path: &str| -> Option<String> {
+            path.contains("auth")
+                .then(|| "pub struct Authenticator;\n".to_string())
+        };
+
+        let opts = SignalOpts {
+            map_exclude_paths: MAP_EXCLUDE_PATHS_DEFAULT
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
+            ..Default::default()
+        };
+        let result = understand_with_source(&db, "auth", &opts, Some(reader)).unwrap();
+
+        let map = result
+            .text
+            .split("## MAP")
+            .nth(1)
+            .and_then(|rest| rest.split("## SIGNATURES").next())
+            .expect("MAP tier must exist");
+        assert!(
+            map.contains(EMPTY_TIER),
+            "all-filtered MAP must state its emptiness, got:\n{map}"
+        );
+        assert!(
+            !map.contains("→"),
+            "no file row may render in an all-filtered MAP, got:\n{map}"
+        );
+        assert!(
+            !result.files.is_empty(),
+            "the filter is tier-local — files must survive in the result set"
+        );
+        let detail = result
+            .text
+            .split("## DETAIL")
+            .nth(1)
+            .expect("DETAIL tier must exist");
+        assert!(
+            detail.contains("examples/demo/authenticator.rs"),
+            "DETAIL must still include the filtered fixture, got:\n{detail}"
         );
     }
 
