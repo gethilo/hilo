@@ -6,6 +6,7 @@
 
 pub mod confinement;
 pub mod error;
+pub mod http;
 pub mod rate_limiter;
 pub mod server;
 pub mod tools;

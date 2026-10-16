@@ -48,7 +48,9 @@ enum Commands {
     /// Dependency-graph discovery, statistics, and impact analysis.
     #[command(subcommand)]
     Graph(GraphCommand),
-    /// Run a Hilo server (MCP stdio transport). Exposes 18 vfs_* tools — see README.
+    /// Run a Hilo server: MCP stdio transport (--mcp) and/or an HTTP
+    /// transport with a /health endpoint (--http). Exposes 18 vfs_* tools —
+    /// see README.
     Serve(ServeArgs),
     /// Manage virtual backends (S3, gdrive, onedrive, dropbox, external).
     #[command(subcommand)]
@@ -463,13 +465,19 @@ struct SurfacesArgs {
 
 #[derive(clap::Args)]
 struct ServeArgs {
-    /// Run as an MCP server (required — the only implemented server mode).
+    /// Run as an MCP server (stdio JSON-RPC transport).
     ///
     /// Requires a Hilo project: run `hilo init` in the directory first.
     /// Without a manifest the server exits non-zero, naming that command,
     /// rather than serving tools that can only answer from an empty graph.
-    #[arg(long, required = true)]
+    #[arg(long)]
     mcp: bool,
+
+    /// Run the HTTP transport: serves GET /health on 0.0.0.0 using the port
+    /// from the manifest (interfaces.mcp.port, default 8766). Combinable
+    /// with --mcp; at least one mode is required.
+    #[arg(long)]
+    http: bool,
 }
 
 #[derive(Subcommand)]
@@ -650,7 +658,7 @@ pub fn run() -> anyhow::Result<()> {
             rollup::run(args.json, &args.by, args.group.as_deref())
         }
         Commands::Graph(GraphCommand::Audit(args)) => audit::run(args.json, args.path.clone()),
-        Commands::Serve(args) => serve::run(args.mcp),
+        Commands::Serve(args) => serve::run(args.http, args.mcp),
         Commands::Backend(backend::BackendCommand::Mount(args)) => backend::run_mount(&args),
         Commands::Backend(backend::BackendCommand::List) => backend::run_list(),
         Commands::Backend(backend::BackendCommand::Sync(args)) => backend::run_sync(&args),

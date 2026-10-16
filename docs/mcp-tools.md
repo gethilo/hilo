@@ -1,6 +1,6 @@
 # MCP Tools
 
-Hilo exposes 18 tools via JSON-RPC over stdio. Agents query the
+Hilo exposes 18 tools via JSON-RPC. Agents query the
 dependency graph and metadata without reading files.
 
 ## Tool List
@@ -257,6 +257,48 @@ Deterministic semantic code search using TF-IDF + Okapi BM25 + Reciprocal Rank F
 - `limit` (optional): max results (default 20)
 
 Returns: `{ "results": [{ "file_path": "src/auth.rs", "symbols": ["AuthMiddleware"], "score": 0.89, "provenance": "lexical" }], "total": 5 }`
+
+## Transports
+
+### stdio (default)
+
+`hilo serve --mcp` speaks newline-delimited JSON-RPC 2.0 on stdin/stdout.
+This is the transport every MCP client config below uses, and stdout carries
+nothing but protocol bytes (logs go to stderr as JSON).
+
+### HTTP
+
+`hilo serve --http` starts an HTTP server on `0.0.0.0` at the port from the
+project manifest (`interfaces.mcp.port`, default `8766`). It can run alone or
+in the same process as `--mcp`:
+
+```bash
+hilo serve --http          # HTTP only
+hilo serve --mcp --http    # both transports, one process
+```
+
+Operational endpoint:
+
+```
+GET /health
+```
+
+```json
+{"status": "ok", "version": "0.4.0"}
+```
+
+`version` is the running `hilo` version (workspace `Cargo.toml`). Unknown
+paths return `404`. JSON-RPC over HTTP POST shares this router and will be
+documented here as it lands. Port configuration in `.vfs/manifest.yaml`:
+
+```yaml
+version: 2
+project:
+  name: my-project
+interfaces:
+  mcp:
+    port: 8766
+```
 
 ## Integration
 
