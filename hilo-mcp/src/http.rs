@@ -30,7 +30,9 @@ struct HealthStatus {
 
 /// Build the HTTP router.
 pub fn router() -> Router {
-    Router::new().route("/health", get(health))
+    Router::new()
+        .route("/health", get(health))
+        .route("/metrics", get(metrics))
 }
 
 async fn health() -> Json<HealthStatus> {
@@ -38,6 +40,15 @@ async fn health() -> Json<HealthStatus> {
         status: "ok",
         version: VERSION,
     })
+}
+
+/// `GET /metrics` — the live rate-limiter snapshot
+/// (`{"rate", "queue_depth", "rejected"}`), served from the same
+/// process-wide limiter the stdio loop admits through
+/// ([`crate::server::server_metrics_json`]). A stdio-only process never binds
+/// this router, so the endpoint exists exactly where it is observable.
+async fn metrics() -> Json<serde_json::Value> {
+    Json(crate::server::server_metrics_json())
 }
 
 /// Bind the HTTP listener on `0.0.0.0:{port}`.
@@ -179,6 +190,40 @@ mod tests {
         // Byte-exact documented shape (serde emits struct field order, compact).
         let expected = format!("{{\"status\":\"ok\",\"version\":\"{VERSION}\"}}");
         assert_eq!(body.trim(), expected);
+    }
+
+    #[test]
+    fn metrics_endpoint_serves_the_live_limiter_snapshot() {
+        let addr = start_server();
+
+        // Unlimited by default (no server loop has run yet in this process),
+        // so the shape is pinned but the counters are zeros.
+        let mut raw = None;
+        for _ in 0..100 {
+            if let Ok(response) = raw_get(addr, "/metrics") {
+                raw = Some(response);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        let raw = raw.expect("GET /metrics never succeeded");
+
+        assert!(
+            raw.starts_with("HTTP/1.1 200"),
+            "expected 200 for /metrics, got: {raw}"
+        );
+        let body = raw
+            .split("\r\n\r\n")
+            .nth(1)
+            .expect("HTTP response with a body");
+        let parsed: serde_json::Value =
+            serde_json::from_str(body).unwrap_or_else(|e| panic!("body is not JSON: {e}: {body}"));
+        assert!(parsed.get("rate").is_some(), "rate missing: {body}");
+        assert!(
+            parsed.get("queue_depth").is_some(),
+            "queue_depth missing: {body}"
+        );
+        assert!(parsed.get("rejected").is_some(), "rejected missing: {body}");
     }
 
     #[test]

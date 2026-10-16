@@ -490,6 +490,24 @@ fn default_map_exclude_paths() -> Vec<String> {
         .collect()
 }
 
+/// REV-WARPFS-5: `performance.rate_limit_rps` must be >= 0.
+///
+/// A bare `u32` field rejects `-1` during deserialization with a generic
+/// serde type error that never names the field ("invalid type: integer
+/// `-1`, expected u32 at line L column C") — technically a load failure,
+/// practically a riddle. This deserializer accepts any integer and turns
+/// negatives (and values beyond the u32 range) into an error that names
+/// the field and echoes the offending value.
+fn deserialize_rate_limit_rps<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let v = i64::deserialize(deserializer)?;
+    u32::try_from(v).map_err(|_| {
+        serde::de::Error::custom(format!("performance.rate_limit_rps must be >= 0 (got {v})"))
+    })
+}
+
 impl Default for Graph {
     fn default() -> Self {
         Self {
@@ -831,7 +849,12 @@ pub struct Performance {
     #[serde(default)]
     pub triggers: TriggerPerf,
     /// Max requests per second for the MCP server (0 = unlimited).
-    #[serde(default)]
+    ///
+    /// REV-WARPFS-5: validated at manifest load — a negative value fails
+    /// the load with an error that names the field (see
+    /// [`deserialize_rate_limit_rps`]), instead of a generic serde type
+    /// error that never mentions `rate_limit_rps`.
+    #[serde(default, deserialize_with = "deserialize_rate_limit_rps")]
     pub rate_limit_rps: u32,
 }
 
@@ -1307,6 +1330,66 @@ mod tests {
             let m2 = Manifest::parse(&yaml).unwrap();
             assert_eq!(m2.plugins.len(), 1);
             assert_eq!(m2.plugins[0].hooks[0].on, "file_write");
+        }
+    }
+
+    mod rate_limit_validation {
+        use super::*;
+
+        // ───────────── REV-WARPFS-5: rate_limit_rps must be >= 0 ─────────────
+
+        fn manifest_with_rate_limit(value: &str) -> String {
+            format!("project:\n  name: test\nperformance:\n  rate_limit_rps: {value}\n")
+        }
+
+        /// AC: a negative value fails the load with an error that names the
+        /// field and echoes the value — not a generic serde type riddle.
+        #[test]
+        fn negative_rate_limit_fails_load_naming_the_field() {
+            let err = Manifest::parse(&manifest_with_rate_limit("-1")).unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains("rate_limit_rps"),
+                "error must name performance.rate_limit_rps: {msg}"
+            );
+            assert!(
+                msg.contains("-1"),
+                "error must echo the offending value: {msg}"
+            );
+            assert!(
+                msg.contains(">= 0"),
+                "error must state the constraint: {msg}"
+            );
+        }
+
+        #[test]
+        fn very_negative_rate_limit_fails_the_same_way() {
+            let err = Manifest::parse(&manifest_with_rate_limit("-99999")).unwrap_err();
+            let msg = err.to_string();
+            assert!(
+                msg.contains("rate_limit_rps") && msg.contains("-99999"),
+                "{msg}"
+            );
+        }
+
+        #[test]
+        fn zero_still_parses_as_unlimited() {
+            let m = Manifest::parse(&manifest_with_rate_limit("0")).unwrap();
+            assert_eq!(m.performance.rate_limit_rps, 0);
+        }
+
+        #[test]
+        fn positive_rate_limit_parses() {
+            let m = Manifest::parse(&manifest_with_rate_limit("17")).unwrap();
+            assert_eq!(m.performance.rate_limit_rps, 17);
+        }
+
+        #[test]
+        fn absent_rate_limit_defaults_to_unlimited() {
+            // Backward compatibility: manifests written before the field
+            // existed must still load.
+            let m = Manifest::parse("project:\n  name: test\n").unwrap();
+            assert_eq!(m.performance.rate_limit_rps, 0);
         }
     }
 }

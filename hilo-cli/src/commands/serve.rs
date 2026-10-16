@@ -73,7 +73,7 @@ pub fn run_in(root: &Path, http: bool, mcp: bool) -> Result<()> {
     }
 
     if mcp {
-        let rate_limit_rps = load_rate_limit_rps(root);
+        let rate_limit_rps = load_rate_limit_rps(root)?;
         hilo_mcp::server::run(rate_limit_rps)?;
     } else {
         // `--http` only: this process is now a server and there is no CLI
@@ -95,12 +95,32 @@ pub fn resolve_http_port(root: &Path) -> u16 {
 
 /// Load `rate_limit_rps` from the manifest, defaulting to 0 (unlimited).
 ///
-/// Returns 0 when the manifest is absent or unparsable; [`run_in`] has
-/// already refused a root without any manifest.
-pub fn load_rate_limit_rps(root: &Path) -> u32 {
-    load_manifest(root)
-        .map(|m| m.performance.rate_limit_rps)
-        .unwrap_or(0)
+/// Precedence is `.vfs/manifest.yaml` then a root-level `manifest.yaml` —
+/// the project manifest `hilo init` writes wins when both exist, which is
+/// deliberately stricter than [`guard::manifest_path`]'s presence check.
+///
+/// REV-WARPFS-5: an UNPARSABLE manifest is now a hard error, not a silent
+/// fallback to unlimited. The old `Err(_) => 0` fallback defeated manifest
+/// validation entirely — a typo'd or invalid `rate_limit_rps` (e.g. a
+/// negative value, which hilo-core rejects at load) would have started an
+/// UNLIMITED server instead of telling the operator their configuration was
+/// never applied. A manifest that is absent entirely stays unlimited.
+pub fn load_rate_limit_rps(root: &Path) -> Result<u32> {
+    let primary = root.join(".vfs").join("manifest.yaml");
+    let fallback = root.join("manifest.yaml");
+
+    let path = if primary.exists() {
+        primary
+    } else if fallback.exists() {
+        fallback
+    } else {
+        return Ok(0); // No manifest → no rate limiting
+    };
+
+    let path_str = path.to_str().unwrap_or(".vfs/manifest.yaml");
+    let manifest = hilo_core::manifest::Manifest::from_file(path_str)
+        .with_context(|| format!("failed to load manifest {path_str}"))?;
+    Ok(manifest.performance.rate_limit_rps)
 }
 
 /// Read the project manifest, if one is present and parsable.
@@ -180,13 +200,13 @@ mod tests {
             "version: 2\nproject:\n  name: rl\nperformance:\n  rate_limit_rps: 17\n",
         )
         .unwrap();
-        assert_eq!(load_rate_limit_rps(dir.path()), 17);
+        assert_eq!(load_rate_limit_rps(dir.path()).unwrap(), 17);
     }
 
     #[test]
     fn rate_limit_defaults_to_unlimited_without_a_manifest() {
         let dir = TempDir::new().unwrap();
-        assert_eq!(load_rate_limit_rps(dir.path()), 0);
+        assert_eq!(load_rate_limit_rps(dir.path()).unwrap(), 0);
     }
 
     #[test]
