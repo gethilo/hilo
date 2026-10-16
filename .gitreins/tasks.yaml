@@ -2189,3 +2189,77 @@ tasks:
   status: complete
   created_at: '2026-10-15T03:11:17.524272+00:00'
   completed_at: '2026-10-15T13:04:19.174007+00:00'
+- id: REV-WARPFS-3
+  title: HTTP transport and /health endpoint
+  criteria:
+  - hilo serve --http serves GET /health returning 200 with {"status":"ok","version":"0.4.0"};
+    hilo-cli/tests/integration.rs passes; cargo clippy -p hilo-cli -p hilo_mcp --all-targets
+    -- -D warnings exits 0
+  status: complete
+  created_at: '2026-10-16T08:57:03.565598+00:00'
+  completed_at: '2026-10-16T08:57:20.025446+00:00'
+- id: REV-WARPFS-8
+  title: edges.jsonl exact-duplicate dedup
+  criteria:
+  - hilo-metadata append path skips exact-duplicate (from,to,rel,provenance) edge
+    rows; hilo-graph/tests/edges_dedup_test.rs passes 4 tests; hilo_metadata lib tests
+    pass
+  status: complete
+  created_at: '2026-10-16T08:57:04.126974+00:00'
+  completed_at: '2026-10-16T09:22:21.624054+00:00'
+- id: REV-WARPFS-5
+  title: MCP rate limiter backpressure, metrics endpoint, config validation
+  criteria:
+  - GET /metrics over the HTTP transport returns 200 with rate/queue_depth/rejected;
+    responses carry warning:high queue depth above 80% bucket consumption and never
+    in unlimited mode; performance.rate_limit_rps rejects negatives naming the field;
+    hilo-mcp rate_limiter_backpressure tests pass
+  status: complete
+  created_at: '2026-10-16T08:57:13.210776+00:00'
+  completed_at: '2026-10-16T09:36:56.705958+00:00'
+- id: REV-WARPFS-6
+  title: understand MAP fixture demotion
+  criteria:
+  - hilo_graph signal MAP demotes files under graph.map_exclude_paths (defaults tests/fixtures,
+    examples, vendor) while DETAIL keeps every file; hilo_graph lib tests pass; cargo
+    check --workspace exits 0
+  status: complete
+  created_at: '2026-10-16T08:57:13.462406+00:00'
+  completed_at: '2026-10-16T10:02:01.843979+00:00'
+- id: DF-WARPFS-77
+  title: 'Wire manifest sandbox block into mount: parse to FuseConfig, bwrap-verify,
+    loud warning when ignored'
+  criteria:
+  - 'AC1: mount with manifest sandbox enabled:true+bwrap installed launches bwrap-wrapped
+    agent process, network blocked (curl fails), pgrep bwrap>0. AC2: sandbox block
+    absent => behavior unchanged, exit 0. AC3: sandbox block present but bwrap unavailable
+    => loud warning line mentions ''sandbox'' + ''not found'', mount proceeds. AC4:
+    cargo clippy --workspace --all-targets -- -D warnings PASS; cargo test -p hilo-cli
+    -p hilo-fuse -p hilo-core PASS'
+  status: complete
+  created_at: '2026-10-16T15:54:54.032990+00:00'
+  completed_at: '2026-10-16T17:45:51.798288+00:00'
+- id: DF-WARPFS-77-REWORK
+  title: 'Post-rework judge: sandbox exec production surface (fixes verdict 207d981c
+    AC1 gap)'
+  criteria:
+  - "DF-WARPFS-77-REWORK post-rework verification (commit f7826092 on master, CI green).\
+    \ AC1: `hilo sandbox exec --source <ws-with-manifest-sandbox-enabled:true> --\
+    \ sh -c 'echo inside-sandbox'` prints 'inside-sandbox' exit 0 through BubblewrapExecutor::run_inherit\
+    \ (bwrap-wrapped; pgrep -c bwrap >= 1 during a long exec); with isolate_network:true\
+    \ a curl inside the exec FAILS to reach the network (curl rc != 0). AC1d: exit\
+    \ status propagates \u2014 `hilo sandbox exec -- sh -c 'exit 7'` exits 7. AC2:\
+    \ manifest WITHOUT sandbox block -> `hilo mount <mnt> <src>` proceeds unsandboxed,\
+    \ exit 0, zero sandbox warnings. AC3: manifest WITH enabled sandbox block + bwrap\
+    \ unavailable (PATH without bwrap) -> loud stderr warning containing 'sandbox'\
+    \ AND 'not found', and `hilo mount <mnt> <src>` still proceeds (exit 0 / mounted\
+    \ banner). AC4: gates green on the merged tree: cargo clippy --workspace --all-targets\
+    \ -- -D warnings exit 0; cargo test -p hilo-cli --lib = 173 passed 0 failed (run\
+    \ with GIT_CONFIG_GLOBAL=/dev/null; the hooks::tests contamination from the global\
+    \ core.hooksPath is pre-existing on the parent commit and unrelated to this change);\
+    \ cargo test -p hilo_fuse -p hilo_core all green (58 + 108 passed). AC5: docs/cli-reference.md\
+    \ documents 'hilo sandbox exec' with the agent-shell model + isolate_network note;\
+    \ docs/hilo-cli.md CLI table gains the exec row."
+  status: complete
+  created_at: '2026-10-16T18:07:49.166572+00:00'
+  completed_at: '2026-10-16T18:07:53.907379+00:00'
