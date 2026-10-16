@@ -6,6 +6,20 @@ All notable changes to Hilo are documented in this file.
 
 ### Added
 
+- **MCP rate limiter backpressure signal + `/metrics` (REV-WARPFS-5)**:
+  JSON-RPC responses now carry `"warning": "high queue depth"` while the
+  token bucket is more than 80% consumed (success and error frames; the
+  advisory slows clients before `-32000` rejections start). The limiter is
+  process-wide (`hilo_mcp::server::limiter_handle()`), so an embedded HTTP
+  transport's `/metrics` endpoint reads the same counters:
+  `{"rate": <rps>, "queue_depth": <n>, "rejected": <n>}`. Manifest
+  validation is strict — a negative `performance.rate_limit_rps` fails the
+  load naming the field, and `hilo serve --mcp` refuses to start on an
+  unparsable manifest instead of silently serving unlimited. `rate_limit_rps:
+  0` (unlimited) stays warning-free and rejection-free. `hilo serve --http`
+  is accepted but exits non-zero until the HTTP transport (REV-WARPFS-3)
+  lands.
+
 - **Annotations survive `git push` via the `.vfs/annotations.jsonl`
   sidecar** (DF-WARPFS-95): xattrs do not travel through git, so
   `hilo meta --set` annotations died at the push. A successful set inside a

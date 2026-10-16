@@ -258,6 +258,64 @@ Deterministic semantic code search using TF-IDF + Okapi BM25 + Reciprocal Rank F
 
 Returns: `{ "results": [{ "file_path": "src/auth.rs", "symbols": ["AuthMiddleware"], "score": 0.89, "provenance": "lexical" }], "total": 5 }`
 
+## Rate Limiting & Backpressure
+
+All JSON-RPC traffic passes through a token-bucket rate limiter configured
+once per server from the project manifest:
+
+```yaml
+# .vfs/manifest.yaml
+performance:
+  rate_limit_rps: 10   # sustained requests per second; 0 = unlimited (default)
+```
+
+The bucket's capacity and refill rate are both the configured rate: a server
+started with `rate_limit_rps: 10` admits a burst of 10 immediately and then
+sustains 10 per second. Validation is strict — a negative value (e.g.
+`rate_limit_rps: -1`) **fails to load** with an error naming the field, and
+an unparsable manifest fails `hilo serve --mcp` startup instead of silently
+starting unlimited.
+
+### The backpressure signal (`warning`)
+
+While more than 80% of the bucket's burst capacity is consumed
+("queue depth"), every admitted JSON-RPC response carries a top-level
+`"warning"` field so well-behaved clients can slow down **before** they hit
+hard rejections:
+
+```json
+{"jsonrpc": "2.0", "id": 7, "result": {"total_edges": 2252}, "warning": "high queue depth"}
+```
+
+The contract:
+
+| state | what the client sees |
+|-------|----------------------|
+| queue depth ≤ 80% of capacity | normal response, no `warning` field |
+| queue depth > 80% of capacity | response carries `"warning": "high queue depth"` (success **and** error frames) |
+| bucket empty | JSON-RPC error `-32000` with `data.retry_after_seconds`; `"id": null` (the limiter runs before parsing) |
+| `rate_limit_rps: 0` (unlimited) | never warns, never rejects — backward compatible |
+
+The warning is advisory: responses carrying it are complete and usable.
+
+### `/metrics` endpoint (HTTP transport)
+
+The rate limiter exposes its live counters as JSON. The endpoint is served
+by the **HTTP transport** (`hilo serve --http`, REV-WARPFS-3) — a stdio
+server has no socket and can never serve it:
+
+```
+GET /metrics
+{"rate": 10.5, "queue_depth": 42, "rejected": 3}
+```
+
+- `rate`: the configured sustained rate (0 = unlimited)
+- `queue_depth`: burst tokens currently consumed from the bucket
+- `rejected`: requests answered with `-32000` since server start
+
+`hilo serve --http` is accepted as a flag but exits non-zero until the HTTP
+transport lands; pass `--mcp` for the stdio server.
+
 ## Integration
 
 Add to your MCP client config:

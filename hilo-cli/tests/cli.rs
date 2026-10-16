@@ -2206,6 +2206,40 @@ fn serve_without_flag_errors() {
     );
 }
 
+/// REV-WARPFS-5: `--http` is a reserved flag for the HTTP transport
+/// (REV-WARPFS-3). The binary accepts it (so operators see it in --help)
+/// but must exit non-zero naming the tracker — never silently start stdio.
+#[test]
+fn serve_http_flag_is_reserved_and_refuses_loudly() {
+    let dir = unique_tempdir("serve-http-reserved");
+    init_project(&dir);
+    let output = hilo_cmd()
+        .args(["serve", "--mcp", "--http"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo serve --mcp --http");
+
+    assert!(
+        !output.status.success(),
+        "serve --http must exit non-zero until REV-WARPFS-3 lands"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--http"),
+        "the refusal must name the flag: {stderr}"
+    );
+    assert!(
+        stderr.contains("REV-WARPFS-3"),
+        "the refusal must name the tracking row: {stderr}"
+    );
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains("jsonrpc"),
+        "a refused --http must not emit JSON-RPC bytes on stdout"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Extract the tool count from `hilo serve --help`.
 ///
 /// The help states it as `Exposes <N> vfs_* tools`; reading the number out of

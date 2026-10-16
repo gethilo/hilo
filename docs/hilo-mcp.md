@@ -17,11 +17,16 @@ builder type and no `ToolRegistry`: `tools/list` is served directly from
 
 | Item | Description |
 |------|-------------|
-| `server::run(rate_limit_rps: u32) -> McpResult<()>` | Run the stdio server loop. Blocks until stdin reaches EOF. `0` disables rate limiting. |
-| `server::handle_request(line: &str) -> McpResult<Option<serde_json::Value>>` | Route one JSON-RPC request line and return the response value; `None` for a notification (a request without `id`). |
+| `server::run(rate_limit_rps: u32) -> McpResult<()>` | Run the stdio server loop on stdin/stdout. Blocks until stdin reaches EOF. `0` disables rate limiting. |
+| `server::run_with(rate_limit_rps, reader, writer) -> McpResult<()>` | Injectable core of `run` — same loop over any `BufRead`/`Write` transport (in-process integration tests, embedded hosts). |
+| `server::handle_request(line: &str) -> McpResult<Option<serde_json::Value>>` | Route one JSON-RPC request line and return the response value; `None` for a notification (a request without `id`). Attaches `"warning": "high queue depth"` while the shared limiter is under backpressure (REV-WARPFS-5). |
+| `server::limiter_handle() -> Arc<Mutex<RateLimiter>>` | The process-wide limiter the loop admits through — the seam an HTTP transport shares. |
+| `server::server_metrics_json() -> serde_json::Value` | `{"rate", "queue_depth", "rejected"}` snapshot of the live limiter (the `/metrics` body). |
+| `server::metrics_response() -> (u16, serde_json::Value)` | The `/metrics` route handler: HTTP 200 + the snapshot. Reachable only over the HTTP transport (REV-WARPFS-3); stdio has no socket. |
 | `tools::list_tools() -> Vec<Tool>` | All tool descriptors (`name`, `description`, `inputSchema`) returned by `tools/list`. |
 | `tools::call_tool(name: &str, arguments: &serde_json::Value) -> McpResult<serde_json::Value>` | Execute one tool by name; an unknown name is a protocol error. |
-| `rate_limiter::RateLimiter` | Token bucket. `RateLimiter::new(rate_rps: u32)` (an integer, not a float), `check() -> bool`, `retry_after_secs() -> f64`. |
+| `rate_limiter::RateLimiter` | Token bucket. `RateLimiter::new(rate_rps: u32)` (an integer, not a float), `check() -> bool`, `retry_after_secs() -> f64`, `queue_depth() -> u64`, `under_backpressure() -> bool`, `metrics_json() -> serde_json::Value`. |
+| `rate_limiter::BACKPRESSURE_THRESHOLD`, `BACKPRESSURE_WARNING` | Backpressure trigger (0.8 of capacity) and the exact warning string (`"high queue depth"`). |
 | `error::McpError`, `error::McpResult<T>` | Error type; handler errors surface as JSON-RPC `-32603` with the error's `Display` text as `message`. |
 
 ## MCP Tools
@@ -78,6 +83,23 @@ answers with a JSON-RPC error frame — code `-32000`, message
 `Rate limit exceeded. Retry after N seconds.`, and
 `data.retry_after_seconds` — carrying `"id": null`, because the limiter runs
 before the request is parsed.
+
+The value is validated at manifest load (REV-WARPFS-5): a negative
+`rate_limit_rps` fails the load with an error naming the field, and
+`hilo serve --mcp` treats an unparsable manifest as a startup error rather
+than silently serving unlimited.
+
+### Backpressure signal
+
+REV-WARPFS-5: while more than 80% of the burst capacity is consumed, every
+admitted response (success **and** error frames) carries a top-level
+`"warning": "high queue depth"` field — an advisory signal for clients to
+slow down before hard `-32000` rejections start. Unlimited mode
+(`rate_limit_rps: 0`) never warns. The limiter is process-wide: the loop,
+`handle_request`, and an embedded HTTP transport's `/metrics` endpoint all
+observe the same bucket through `server::limiter_handle()`. See
+`docs/mcp-tools.md` → "Rate Limiting & Backpressure" for the client-facing
+contract table.
 
 ## Usage
 

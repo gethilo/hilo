@@ -463,13 +463,19 @@ struct SurfacesArgs {
 
 #[derive(clap::Args)]
 struct ServeArgs {
-    /// Run as an MCP server (required — the only implemented server mode).
+    /// Run as an MCP server (required until the HTTP transport lands —
+    /// the only implemented server mode; `--http` is reserved for it).
     ///
     /// Requires a Hilo project: run `hilo init` in the directory first.
     /// Without a manifest the server exits non-zero, naming that command,
     /// rather than serving tools that can only answer from an empty graph.
     #[arg(long, required = true)]
     mcp: bool,
+    /// REV-WARPFS-5: reserved for the HTTP transport + `/metrics` endpoint
+    /// (REV-WARPFS-3). Accepted so the flag exists, but not implemented:
+    /// any `serve --http` exits non-zero naming the tracker.
+    #[arg(long)]
+    http: bool,
 }
 
 #[derive(Subcommand)]
@@ -650,7 +656,7 @@ pub fn run() -> anyhow::Result<()> {
             rollup::run(args.json, &args.by, args.group.as_deref())
         }
         Commands::Graph(GraphCommand::Audit(args)) => audit::run(args.json, args.path.clone()),
-        Commands::Serve(args) => serve::run(args.mcp),
+        Commands::Serve(args) => serve::run(args.mcp, args.http),
         Commands::Backend(backend::BackendCommand::Mount(args)) => backend::run_mount(&args),
         Commands::Backend(backend::BackendCommand::List) => backend::run_list(),
         Commands::Backend(backend::BackendCommand::Sync(args)) => backend::run_sync(&args),
