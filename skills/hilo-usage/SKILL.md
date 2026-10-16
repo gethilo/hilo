@@ -1,7 +1,7 @@
 ---
 name: hilo-usage
-description: "How to USE hilo (warpfs) — the agent-first virtual filesystem — for real work: fresh-machine no-sudo install (run 35), init/warm/query workflows, verified per-language workarounds, known gaps as of 2026-10-10 (run 37: backend sync surface)."
-version: "1.2.0"
+description: "How to USE hilo (warpfs) — the agent-first virtual filesystem — for real work: fresh-machine no-sudo install (run 35), init/warm/query workflows, verified per-language workarounds, sandbox reality + MCP HTTP facts as of 2026-10-16 (run 44)."
+version: "1.3.0"
 category: software-development
 ---
 
@@ -749,13 +749,41 @@ cost is index build. `--no-symbols` = 33ms on the same graph with the
 path+symbol-recall tradeoff. If you need symbol hits and can pay 4s,
 fine; otherwise run `--no-symbols` and grep the top hits.
 
-### sandbox: block in the manifest is IGNORED (DF-77)
+### sandbox: FIXED at HEAD 2026-10-16 (DF-77) — real isolation via `hilo sandbox exec`, with limits (run 44)
 
-The CHANGELOG/spec §14 advertise bwrap isolation; in reality
-`hilo mount` never reads the block (hardcoded `sandbox: None`),
-runs unsandboxed, exits 0, and warns nothing. Do not believe agent
-isolation from hilo mounts yet. (bwrap itself IS installed and the
-executor exists — the wiring is missing.)
+The run-21 finding (block ignored, unwired) is CLOSED: commits 7070d1b8 +
+f7826092 wired the manifest `sandbox:` block and shipped `hilo sandbox
+check|exec` (verified live run 44 at a8f01fc5). What you get, measured:
+
+- `hilo sandbox check` — end-to-end bwrap probe; exit 0 = works. No block or
+  disabled block = explicit "nothing to check" no-op. bwrap missing from
+  PATH = loud warning + exit 1 (honest, not fail-silent).
+- `hilo sandbox exec -- CMD` — child's exit status propagates (`sh -c
+  'exit 7'` → CLI exit 7). isolate_network verifiably blocks (curl rc=6);
+  isolate_pid gives a 4-pid /proc; read_only_root makes / read-only while
+  the workspace stays rw. **/tmp inside the sandbox is a fresh per-exec
+  tmpfs — host /tmp is NOT visible even when writable_paths includes /tmp.**
+
+Limits (run-44 rows, file before trusting the sandbox for hostile code):
+
+- DF-WARPFS-151 (P0): the child inherits the FULL host env — live API keys,
+  SSH private keys and ~/.aws/credentials are readable inside. Filesystem
+  namespace isolation ≠ environment isolation; do not run untrusted code
+  here yet.
+- DF-WARPFS-150 (P1): the child starts in your HOST cwd; under
+  read_only_root:true that cwd is read-only. cd into the workspace first or
+  use --source and cd there inside the shell.
+- The FUSE mount never bwrap-wraps anything — sandbox enforcement exists
+  only through `sandbox exec` (DF-WARPFS-153).
+
+### Sandbox build traps (run 44)
+
+- `hilo init` already generates a `sandbox:` block (enabled:false) in
+  .vfs/manifest.yaml — appending a SECOND block makes the parser misread the
+  file; edit the generated block in place.
+- On hosts with CARGO_TARGET_DIR set (fleet build policy), ./target/debug/hilo
+  can be days stale while builds "pass" — check the `built:` stamp in
+  `hilo --version` before smoking a new surface.
 
 ### graph.db damage recovery (updated run-18 guidance)
 

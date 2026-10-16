@@ -1411,3 +1411,45 @@ as missing from the SKILL.md table. They are also CLI subcommands under `hilo wo
 - After 10+ minutes, build still running (no target/release/hilo yet).
 - Destroyed agent explicitly (`bunker destroy 63217649 --server bunker-las-03`) — TTL was 2h,
   but explicit destroy is the contract.
+
+## Run 44 — 2026-10-16 (warpfs-dogfood) — first drive of `hilo sandbox` (DF-77 fix) + MCP HTTP transport
+
+**Why this surface:** runs 1-43 never touched it — the sandbox surface did not exist
+until 7070d1b8 + f7826092 landed 10-16, and the HTTP transport (REV-3/5) landed 10-15/16.
+First drive of a landed fix = the re-proof AND the first real use of the new door.
+
+**How it's built (the explanation a future agent needs):**
+- The manifest `sandbox:` block parses into BubblewrapConfig (hilo-core/src/sandbox.rs)
+  and is wired into FuseConfig at mount (mount.rs:173-198). The FUSE mount itself is
+  NEVER bwrap-wrapped — the config is stored/validated only; enforcement exists solely
+  through `hilo sandbox exec` → BubblewrapExecutor::run_inherit → bwrap with
+  --unshare-pid/--unshare-net/--ro-bind-or-bind / / --dev --proc --bind workspace
+  --tmpfs /tmp. is_available() shells out to `bwrap --version`.
+- The HTTP transport (serve --http) is an axum router with exactly two routes:
+  GET /health, GET /metrics. MCP itself remains stdio-only. Port comes from the
+  manifest interfaces.mcp.port (default 8766 — collision with off-by-one on fleet
+  hosts, REV-WARPFS-9 still pending). A bind-readiness channel turns port conflicts
+  into main-thread startup errors.
+- The rate limiter is process-wide, built from performance.rate_limit_rps at
+  serve start; GET /metrics reads it live.
+
+**Errors hit, and the right way:**
+- `./target/debug/hilo sandbox` → "unrecognized subcommand": ./target lags HEAD when
+  CARGO_TARGET_DIR is set (fleet policy redirects to /var/tmp/hermes-cargo-target).
+  Right way: build with the ambient env, smoke /var/tmp/.../debug/hilo, check the
+  `built:` stamp in `hilo --version`.
+- Appending a second `sandbox:` block to a fresh manifest silently mis-parses (init
+  already generates one). Right way: edit the generated block in place.
+- `fusermount3 -u` on an in-use mount: "Device or resource busy" — cd out first; plain
+  `hilo mount` has no unmount verb (only workspace does); killing the daemon pid then
+  fusermount works.
+
+**What the first real use proved (numbers in the dogfood-log entry):**
+- Isolation that HOLDS: network (curl rc=6), PID namespace (4 procs), RO root,
+  rw workspace bind, per-exec tmpfs /tmp, exit-code propagation (7→7), honest
+  fail-closed on missing block/bwrap.
+- Isolation that DOESN'T: full host env inherited (48 key/secret/token vars, SSH
+  private keys, aws credentials readable) → DF-WARPFS-151 P0; child starts in host
+  cwd → DF-WARPFS-150 P1. The sandbox today is a filesystem namespace, not an
+  environment boundary — the §14.2 table overclaims.
+- HTTP/rate-limiter work as REV-3/5 promised; 404 discoverability gap → DF-WARPFS-154.
