@@ -63,7 +63,7 @@ pub use resolution::{AnchoredRoot, PkgResolver};
 pub use rules::{Rule, RuleCheckResult, RuleEngine, RuleError};
 pub use signal::{
     extract_symbol_names_for_index, understand, understand_with_source, Resolution, SignalFile,
-    SignalOpts, SignalResult, SymbolSignature, Tier,
+    SignalOpts, SignalResult, SymbolSignature, Tier, MAP_EXCLUDE_PATHS_DEFAULT,
 };
 pub use wiring::{
     detect_wiring, language_state, Satisfier, SatisfierRole, WiringResult, WiringState,

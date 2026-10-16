@@ -466,6 +466,28 @@ pub struct Graph {
     /// stays pruned. Empty by default.
     #[serde(default)]
     pub include_paths: Vec<String>,
+    /// Path prefixes whose files are demoted out of the `understand` MAP tier
+    /// (REV-WARPFS-6): sample corpora and demo trees whose symbol-dense files
+    /// otherwise outrank the implementation a task is about. Matching is at
+    /// path-component boundaries (`tests/fixtures` covers
+    /// `tests/fixtures/…`, never `tests/fixtures_go_here`). The demotion is a
+    /// ranking change only — DETAIL keeps every file. Defaults to
+    /// [`MAP_EXCLUDE_PATHS_DEFAULT`]; set an explicit empty list
+    /// (`map_exclude_paths: []`) to disable the demotion.
+    #[serde(default = "default_map_exclude_paths")]
+    pub map_exclude_paths: Vec<String>,
+}
+
+/// Default [`Graph::map_exclude_paths`] list (REV-WARPFS-6):
+/// `tests/fixtures` (tree-sitter/sample corpora), `examples` (demo trees),
+/// `vendor` (third-party trees).
+pub const MAP_EXCLUDE_PATHS_DEFAULT: [&str; 3] = ["tests/fixtures", "examples", "vendor"];
+
+fn default_map_exclude_paths() -> Vec<String> {
+    MAP_EXCLUDE_PATHS_DEFAULT
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect()
 }
 
 impl Default for Graph {
@@ -481,6 +503,7 @@ impl Default for Graph {
             deduplicate: true,
             extensions: Vec::new(),
             include_paths: Vec::new(),
+            map_exclude_paths: default_map_exclude_paths(),
         }
     }
 }
@@ -1162,6 +1185,66 @@ mod tests {
             let m = Manifest::parse(&yaml).unwrap();
             assert!(m.graph.include_paths.is_empty());
             assert!(!m.graph.cross_repo);
+        }
+    }
+
+    mod graph_map_exclude_paths {
+        use super::*;
+
+        fn minimal_manifest_yaml() -> String {
+            // `project` is the only required top-level field.
+            "project:\n  name: test\n".to_string()
+        }
+
+        #[test]
+        fn defaults_to_tests_fixtures_examples_vendor() {
+            let m = Manifest::parse(&minimal_manifest_yaml()).unwrap();
+            assert_eq!(
+                m.graph.map_exclude_paths,
+                vec!["tests/fixtures", "examples", "vendor"]
+            );
+        }
+
+        #[test]
+        fn parses_override_list() {
+            let yaml = format!(
+                "{}graph:\n  map_exclude_paths:\n    - tests/fixtures\n    - samples\n",
+                minimal_manifest_yaml()
+            );
+            let m = Manifest::parse(&yaml).unwrap();
+            assert_eq!(m.graph.map_exclude_paths, vec!["tests/fixtures", "samples"]);
+        }
+
+        #[test]
+        fn explicit_empty_list_disables_the_demotion() {
+            let yaml = format!(
+                "{}graph:\n  map_exclude_paths: []\n",
+                minimal_manifest_yaml()
+            );
+            let m = Manifest::parse(&yaml).unwrap();
+            assert!(m.graph.map_exclude_paths.is_empty());
+        }
+
+        #[test]
+        fn backward_compatible_graph_without_field() {
+            let yaml = format!("{}graph:\n  cross_repo: false\n", minimal_manifest_yaml());
+            let m = Manifest::parse(&yaml).unwrap();
+            assert_eq!(
+                m.graph.map_exclude_paths,
+                vec!["tests/fixtures", "examples", "vendor"]
+            );
+            assert!(!m.graph.cross_repo);
+        }
+
+        #[test]
+        fn default_constant_matches_manifest_default() {
+            assert_eq!(
+                default_map_exclude_paths(),
+                MAP_EXCLUDE_PATHS_DEFAULT
+                    .iter()
+                    .map(|s| (*s).to_string())
+                    .collect::<Vec<_>>()
+            );
         }
     }
 

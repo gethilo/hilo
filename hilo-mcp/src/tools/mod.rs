@@ -759,9 +759,21 @@ fn graph_understand(arguments: &serde_json::Value) -> McpResult<serde_json::Valu
     }
 
     let db = hilo_graph::GraphDB::open_read_only(GRAPH_DB_PATH)?;
+    // REV-WARPFS-6: the manifest's `graph.map_exclude_paths` drives the MAP
+    // fixture demotion (defaults: tests/fixtures, examples, vendor). The
+    // manifest only overrides the default — absent or unreadable, the same
+    // default list still applies.
+    let map_exclude_paths = match load_manifest() {
+        Ok(manifest) => manifest.graph.map_exclude_paths,
+        Err(_) => hilo_graph::signal::MAP_EXCLUDE_PATHS_DEFAULT
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect(),
+    };
     let opts = hilo_graph::SignalOpts {
         token_budget,
         resolution,
+        map_exclude_paths,
         ..Default::default()
     };
 

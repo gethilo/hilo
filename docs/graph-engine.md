@@ -210,6 +210,57 @@ When literal matching returns no anchors, the engine falls back to
 semantic search (TF-IDF + BM25 + Reciprocal Rank Fusion) to find files
 by meaning rather than literal substring matching.
 
+### MAP Ranking Heuristic (REV-WARPFS-6)
+
+Anchor discovery ranks by path-token match, so symbol-dense sample corpora can
+tie with — and alphabetically outrank — the implementation a task is about.
+Measured on hilo's own repo: `hilo graph understand "rate limiter middleware"`
+filled the MAP with 54 `hilo-graph/tests/fixtures/…` rows (a vendored ruff
+fixture tree) ahead of `hilo-mcp/src/rate_limiter.rs`.
+
+Two path-aware levers apply to the MAP tier only:
+
+1. **Excluded path prefixes** — a file under one of the excluded prefixes
+   (`tests/fixtures`, `examples`, `vendor` by default) does not render in the
+   MAP tier **at all**. The MAP is the agent's orientation budget; sample
+   corpora have high symbol density and low relevance, so they are filtered
+   from it. The filter is tier-local: the file stays in the machine-readable
+   `files` list, keeps its traversal-order tier assignment, and an
+   anchor-band fixture still gets its full DETAIL source block. If every
+   matched file is filtered, the MAP prints an explicit empty-tier marker.
+2. **Path depth weighting** — the remaining files re-order by signal score
+   minus a bounded depth demotion: a file more than 4 components below the
+   repo root loses `0.02` per extra component, capped at `0.1`. Of two
+   same-band files the shallower (closer to the repo root) leads. The cap
+   stays far below the smallest gap between traversal bands (0.3 between
+   1-hop 0.8 and 2-hop 0.5), so the weighting re-sorts ties *within* a band —
+   it can never promote a 2-hop file above an anchor.
+
+The engine's own `SignalOpts::default()` carries an **empty** exclusion list,
+so library callers and every pinned regression keep the exact historical
+order; the default list applies at the CLI and MCP surfaces.
+
+**Configuration** — `graph.map_exclude_paths` in `.vfs/manifest.yaml`
+(path-component-boundary prefixes, repo-root-relative):
+
+```yaml
+graph:
+  map_exclude_paths:
+    - tests/fixtures
+    - examples
+    - vendor
+```
+
+Defaults to `tests/fixtures`, `examples`, `vendor`. Set an explicit empty
+list (`map_exclude_paths: []`) to disable the filtering. Matching is at
+component boundaries and NOT anchored at the repo root — the prefix's
+component sequence may appear anywhere in the path, so `tests/fixtures`
+covers both `tests/fixtures/…` and (in a Cargo workspace)
+`hilo-graph/tests/fixtures/…`, but never `tests/fixtures_go_here` or
+`…/tests/fixtures.rs`. It also does **not** touch `tests/test_*.py` or
+`test/…` trees — those keep ranking normally (the wave11 recall corpora
+depend on this).
+
 ## Semantic Code Search — `vfs_graph_search`
 
 The semantic search module provides deterministic, zero-API code search
