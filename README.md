@@ -83,6 +83,38 @@ sudo apt install build-essential pkg-config libssl-dev libfuse3-dev attr
 > --no-default-features`) and for anyone who wants the build to link the
 > distro's libssl.
 
+### Low-memory builders (≤4GB RAM)
+
+Building `hilo_graph` (which depends on `libduckdb-sys`) on agents with ≤4GB
+RAM fails with:
+
+```
+libduckdb-sys C++ SIGABRT (cc-rs, core dumped)
+```
+
+The DuckDB C++ compiler tries to allocate more memory than available during
+compilation of large translation units, triggering OOM-kill → SIGABRT. This is
+a known issue with cc-rs on low-memory systems and affects all agents on the
+bunker fleet (≤4GB) and any CI runner with limited RAM.
+
+**Fix applied:** `.cargo/config.toml` sets `jobs = 1` to limit compilation
+parallelism automatically. You can also set `CARGO_BUILD_JOBS=1` explicitly
+before building — it is honoured even without the committed config:
+
+```bash
+# Explicit: one compile job (works everywhere, ~4GB-safe)
+CARGO_BUILD_JOBS=1 cargo build --release
+
+# Automatic: the committed .cargo/config.toml already sets jobs = 1
+cargo build --release
+
+# Override: allow more parallelism on bigger machines
+CARGO_BUILD_JOBS=2 cargo build --release
+```
+
+First builds are slow (~15–30 min for OpenSSL + DuckDB from source);
+incremental builds after that are fast. Leave the target/ cache in place.
+
 ### No-sudo install (bare images, no pkg-config)
 
 On a bare image — a container, an agent sandbox, a stripped-down VM — where you
