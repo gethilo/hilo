@@ -1,0 +1,18 @@
+{
+  "tick_id": "warpfs-foreman-2026-10-16-15-48-43",
+  "base_sha": "c9a190eb",
+  "workers": [
+    {
+      "task_id": "DF-WARPFS-77",
+      "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-77",
+      "branch": "wt/DF-WARPFS-77",
+      "priority": "P0",
+      "provider": "ollama-cloud",
+      "model": "deepseek-v4-pro",
+      "gitreins": "in_progress"
+    }
+  ],
+  "finished_at": "2026-10-17T00:36:24.461313Z",
+  "status": "recovered",
+  "recovery_note": "DF-WARPFS-77 already merged (f7826092 ancestor of master f311301a); board row complete; worktree removed"
+}
