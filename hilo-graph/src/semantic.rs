@@ -1661,6 +1661,105 @@ mod tests {
     }
 
     #[test]
+    fn zero_edge_file_docstring_is_searchable() {
+        // DF-WARPFS-140: dogfood run 40 added `app/consts.py` — constants
+        // plus a docstring naming "billing / plan price / monthly /
+        // discount" — and EVERY prose query answered "No results found".
+        // The doc channel rode the edge index, and a file with zero import
+        // edges is never an edge endpoint, so its prose was never indexed.
+        // DF-WARPFS-116/141 closed the corpus gap by feeding warm's
+        // parse-cache zero-edge files through `extra_documents`; the
+        // existing regression only pins the SYMBOL half of that contract
+        // (`extra_documents_reach_a_zero_edge_pythons_symbols`), which is
+        // why the dogfood query set — pure prose — had no guard. This test
+        // pins the DOCSTRING half through the same default extractors
+        // `hilo graph search` and MCP `vfs_graph_search` use.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("app")).unwrap();
+        std::fs::write(
+            dir.path().join("app/consts.py"),
+            "\"\"\"Billing constants.\n\nContains the billing plan price for the monthly\nsubscription and the discount tiers applied to enterprise accounts.\n\"\"\"\n\nPLAN_MONTHLY_PRICE = 49\nDISCOUNT_PERCENT = 5\n",
+        )
+        .unwrap();
+        // The ONLY file with an edge: `app/consts.py` declares no imports
+        // and nothing imports it, so it never enters `distinct_files()`.
+        std::fs::write(
+            dir.path().join("app/main.py"),
+            "import json\n\nprint(json.dumps({}))\n",
+        )
+        .unwrap();
+        let db_path = dir.path().join("graph.db");
+        let db = GraphDB::open(db_path.to_str().unwrap()).unwrap();
+        db.insert_edges(&[crate::Edge::new("app/main.py", "pkg:json", "imports")])
+            .unwrap();
+
+        // Warm's parse-cache keys EVERY discovered file, including the one
+        // that contributes no edges — it is the only record of the file's
+        // existence that search has. Both production surfaces read this
+        // back through `zero_edge_documents`, so the test feeds the corpus
+        // from the same loader instead of hand-writing the document list.
+        std::fs::create_dir_all(dir.path().join(".vfs/graph")).unwrap();
+        let cache = serde_json::json!({
+            "app/consts.py": {"m": 1u64, "s": 189u64, "edges": []},
+            "app/main.py": {
+                "m": 1u64,
+                "s": 35u64,
+                "edges": [{"from": "app/main.py", "to": "pkg:json", "rel": "imports"}]
+            }
+        });
+        std::fs::write(
+            dir.path().join(".vfs/graph/.parse_cache.json"),
+            serde_json::to_string(&cache).unwrap(),
+        )
+        .unwrap();
+
+        // The loader returns every discovered source key it can still see
+        // on disk — `build_with_docs` drops the ones the graph already has
+        // as edge endpoints — so the contract to pin here is that the
+        // zero-edge key is IN the feed (an absent key is the dogfood bug).
+        let discovered = super::zero_edge_documents(dir.path());
+        assert!(
+            discovered.iter().any(|d| d == "app/consts.py"),
+            "warm's zero-edge key must survive the shared loader's filters, got: {discovered:?}"
+        );
+
+        let blind = SearchOpts {
+            limit: 10,
+            index_symbols: true,
+            root: Some(dir.path().to_path_buf()),
+            extra_documents: Vec::new(),
+        };
+
+        // Precondition (the dogfood defect shape): with no zero-edge feed
+        // the docstring is invisible. This is what makes the assertion
+        // below a regression guard instead of a tautology.
+        for query in ["billing", "monthly"] {
+            let results = search(&db, query, &blind).unwrap();
+            assert!(
+                !results.iter().any(|r| r.file_path == "app/consts.py"),
+                "precondition: a zero-edge file must be absent from the corpus \
+                 without extra_documents (query {query:?}), got: {results:?}"
+            );
+        }
+
+        // AC1: with the discovered zero-edge file fed in, the docstring's
+        // own vocabulary reaches it — the full dogfood query set, not just
+        // the file's identifiers (`consts`, `plan_monthly_price`).
+        let fed = SearchOpts {
+            extra_documents: discovered,
+            ..blind
+        };
+        for query in ["billing", "monthly", "plan price", "discount"] {
+            let results = search(&db, query, &fed).unwrap();
+            assert!(
+                results.iter().any(|r| r.file_path == "app/consts.py"),
+                "zero-edge file's DOCSTRING must be searchable via extra_documents \
+                 (query {query:?}), got: {results:?}"
+            );
+        }
+    }
+
+    #[test]
     fn zero_edge_documents_filters_pseudo_nodes_unknown_ext_and_missing_files() {
         // DF-WARPFS-141: the shared loader must apply exactly the filter the
         // CLI applied inline before the refactor — pseudo-node keys are
