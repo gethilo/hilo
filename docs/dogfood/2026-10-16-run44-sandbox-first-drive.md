@@ -170,3 +170,18 @@ left pending for the foreman.
 - Board rows DF-WARPFS-150..154 + event for the REV-WARPFS-9 re-proof.
 
 Scratch (not committed): /tmp/df44/*, /home/kara/df44-ws.
+
+## Install leg (2026-10-16, same run) — PARTIAL, honest
+
+bunker-mvp was the only reachable bunker host (las-01/02/03/04 offline). Spawned
+ephemeral agent a04646a4 (2 cores, 15.6GB). The documented fresh-install path ran
+for real: rustup (needs `-y` non-interactively — small docs gap), rustc 1.99.1,
+`git clone https://github.com/gethilo/hilo.git` rc=0 at 91a9a2a,
+`cargo build --release -p hilo-cli` — 467 crates compiled clean with the now-default
+vendored OpenSSL, no sudo, no pkg-config. The build reached the hilo-cli/hilo_fuse
+tier at ~35 min but the agent hit its TTL/reaper at ~50 min (`bunker info`:
+not_found) before the artifact finished, so no binary smoke and no headline-feature
+smoke on the fresh box. NOT a silent pass and not a full PASS: the install path is
+re-proven through the compile phase; the run-35 lesson (install PASS ≠ feature works
+on the fresh box) remains unreproved on 0.4.0. Next leg: TTL ≥ 2h or pre-warmed
+target dir (2 cores + duckdb deps cannot finish inside 45m).
