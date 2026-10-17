@@ -434,9 +434,11 @@ For the init-and-graph flow above, commit these source-of-truth paths:
 - `.vfs/manifest.yaml`
 - `.vfs/graph/edges.jsonl`
 
-Do not commit `.vfs/graph/graph.db` or its sidecars. `hilo init` excludes them
-with `.vfs/graph/graph.db*`; the DuckDB cache is derived from the committed
-inventory and is rebuildable. Other workflows may add source-of-truth files
+Do not commit `.vfs/graph/graph.db` or its sidecars. `hilo init` appends a managed
+`.gitignore` section to `<root>/.gitignore` that excludes the full derived-cache set
+(`.vfs/graph/graph.db*`, `.vfs/graph/.parse_cache.json`, `.vfs/graph/.symbols_cache.json`,
+`.vfs/graph/.last_warm`, `.vfs/graph/.last_reconcile`, `.vfs/graph/coverage.json`); the
+DuckDB cache is derived from the committed inventory and is rebuildable. Other workflows may add source-of-truth files
 such as `.vfs/backends/mounts.yaml`; see
 [docs/inventory-policy.md](docs/inventory-policy.md) for the full contract.
 
