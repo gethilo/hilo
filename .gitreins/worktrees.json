@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "worktrees": [
+    {
+      "task_id": "DF-WARPFS-151",
+      "path": "/home/kara/warpfs-wt/DF-WARPFS-151",
+      "branch": "gitreins/task/DF-WARPFS-151",
+      "state": "running",
+      "created_at": 1792208656.565164,
+      "updated_at": 1792208656.565164,
+      "last_heartbeat": 1792208656.565164,
+      "brief_path": "/home/kara/warpfs-wt/DF-WARPFS-151/.gitreins/worker-brief.md",
+      "main_root": "/home/kara/warpfs",
+      "branch_point": "943fc287168688ea9e0bd7b62d6892c0f721ee57"
+    }
+  ]
+}

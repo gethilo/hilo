@@ -59,3 +59,13 @@ dagger.db
 dagger.db-shm
 dagger.db-wal
 target-local/
+
+# --- hilo managed: rebuildable .vfs cache state (installed by `hilo init`) ---
+.vfs/graph/graph.db
+.vfs/graph/graph.db.wal
+.vfs/graph/graph.duckdb
+.vfs/graph/graph.duckdb.wal
+.vfs/graph/.last_warm
+.vfs/graph/.parse_cache.json
+.vfs/graph/.symbols_cache.json
+.vfs/graph/.last_reconcile
