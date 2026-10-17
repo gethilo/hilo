@@ -131,6 +131,16 @@ impl BubblewrapExecutor {
         args.push("--proc".into());
         args.push("/proc".into());
 
+        // ── tmpfs for /tmp (BEFORE the rw binds — DF-WARPFS-150) ──
+        // Mount order matters: bwrap applies mounts in argument order,
+        // and a later mount shadows an earlier one. The tmpfs must come
+        // FIRST so the workspace / writable-path binds below win when
+        // they live under /tmp; pushed after (the pre-150 order), a
+        // workspace under /tmp was silently covered by the fresh tmpfs —
+        // writes to it vanished instead of landing in the workspace.
+        args.push("--tmpfs".into());
+        args.push("/tmp".into());
+
         // ── workspace bind-mount (read-write) ─────────────────
         // Bind the workspace at its OWN absolute path, not a fixed
         // `/workspace`: under a read-only root there is no
@@ -145,7 +155,7 @@ impl BubblewrapExecutor {
         let workspace_path = workspace_abs.to_string_lossy().to_string();
         args.push("--bind".into());
         args.push(workspace_path.clone());
-        args.push(workspace_path);
+        args.push(workspace_path.clone());
 
         // ── writable paths ─────────────────────────────────────
         for wp in &self.config.writable_paths {
@@ -154,9 +164,16 @@ impl BubblewrapExecutor {
             args.push(wp.clone());
         }
 
-        // ── tmpfs for /tmp ─────────────────────────────────────
-        args.push("--tmpfs".into());
-        args.push("/tmp".into());
+        // ── start in the workspace (DF-WARPFS-150) ─────────────
+        // §14.1 "the agent's shell (cd /workspace)": the child starts in
+        // the workspace, not the caller's host cwd. Without this, an exec
+        // from a foreign directory with a read-only root fails on its
+        // first write ("Read-only file system") with no hint that the
+        // workspace is elsewhere. `--chdir` makes the path explicit and
+        // covers the captured (`run`) and inherited-stdio (`run_inherit`)
+        // paths alike; the workspace is already bind-mounted rw above.
+        args.push("--chdir".into());
+        args.push(workspace_path.clone());
 
         // ── user's command ─────────────────────────────────────
         args.push("--".into());
@@ -334,6 +351,45 @@ mod tests {
         assert_eq!(bind_count, 4); // workspace + 3 writable paths
     }
 
+    // ── DF-WARPFS-150: chdir + mount order ─────────────────────
+
+    #[test]
+    fn test_build_args_chdir_workspace() {
+        let cfg = BubblewrapConfig::from_manifest(&sandbox_enabled());
+        let exec = BubblewrapExecutor::new(cfg, "/tmp/test-workspace");
+        let args = exec.build_args(&["echo".into(), "hi".into()]);
+
+        // --chdir <workspace> is present right before the user command.
+        let chdir_pos = args
+            .iter()
+            .position(|a| a == "--chdir")
+            .expect("--chdir missing");
+        assert_eq!(args[chdir_pos + 1], "/tmp/test-workspace");
+        assert_eq!(args[chdir_pos + 2], "--");
+    }
+
+    #[test]
+    fn test_build_args_tmpfs_before_workspace_bind() {
+        // DF-WARPFS-150: with read_only_root the tmpfs on /tmp must be
+        // mounted BEFORE the workspace / writable-path binds, because
+        // bwrap applies mounts in argument order and a later mount
+        // shadows an earlier one — a workspace under /tmp would
+        // otherwise be covered by the fresh tmpfs.
+        let cfg = BubblewrapConfig::from_manifest(&sandbox_enabled());
+        let exec = BubblewrapExecutor::new(cfg, "/tmp/ws");
+        let args = exec.build_args(&["true".into()]);
+
+        let tmpfs_pos = args.iter().position(|a| a == "--tmpfs").unwrap();
+        let workspace_bind_pos = args
+            .windows(3)
+            .position(|w| w[0] == "--bind" && w[1] == "/tmp/ws")
+            .unwrap();
+        assert!(
+            tmpfs_pos < workspace_bind_pos,
+            "tmpfs ({tmpfs_pos}) must precede the workspace bind ({workspace_bind_pos})"
+        );
+    }
+
     // ── live execution (bwrap installed) ────────────────────────
     //
     // DF-WARPFS-77 regression: the old build_args produced a bwrap
@@ -421,6 +477,66 @@ mod tests {
             "network was reachable inside the sandbox — isolate_network is broken"
         );
         eprintln!("network blocked inside sandbox (curl {stdout})");
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    // ── workspace-relative cwd (bwrap installed) ────────────────
+    //
+    // DF-WARPFS-150 regression: the child must START in the workspace
+    // (§14.1 "the agent's shell (cd /workspace)"), not in the host cwd —
+    // under `read_only_root: true` the pre-fix behavior made the first
+    // write fail with "Read-only file system". Prove `pwd` prints the
+    // workspace path AND a write to `.` lands as a file inside it (with
+    // read_only_root: true the only writable spot is the rw workspace
+    // bind, so a successful write to `.` already implies the workspace
+    // cwd). Skips when bwrap is not installed or cannot spawn (same
+    // guard as the live-execution test).
+
+    #[test]
+    fn test_run_starts_in_workspace_directory() {
+        if !BubblewrapExecutor::is_available() {
+            eprintln!("skipping: bwrap not installed on this host");
+            return;
+        }
+        let ws = std::env::temp_dir().join(format!("hilo-bwrap-cwd-{}", std::process::id()));
+        std::fs::create_dir_all(&ws).unwrap();
+
+        let mut sandbox = sandbox_enabled();
+        sandbox.writable_paths = vec![];
+        let cfg = BubblewrapConfig::from_manifest(&sandbox);
+        let exec = BubblewrapExecutor::new(cfg, ws.to_str().unwrap());
+
+        let output = match exec.run(&[
+            "sh".into(),
+            "-c".into(),
+            "pwd && echo cwd-marker > ./df150marker.out".into(),
+        ]) {
+            Ok(o) => o,
+            Err(e) => {
+                eprintln!("skipping: bwrap could not run ({e})");
+                let _ = std::fs::remove_dir_all(&ws);
+                return;
+            }
+        };
+
+        assert!(output.status.success(), "bwrap exit: {}", output.status);
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let expected = ws.to_string_lossy().to_string();
+        assert!(
+            stdout.split('\n').any(|l| l == expected),
+            "child cwd is not the workspace: pwd printed {stdout:?}, expected {expected:?}"
+        );
+        // A write to `.` inside the sandbox must land in the workspace dir.
+        assert!(
+            ws.join("df150marker.out").exists(),
+            "marker file missing from the workspace — the child's `.` is not the workspace"
+        );
+        assert_eq!(
+            std::fs::read_to_string(ws.join("df150marker.out"))
+                .unwrap()
+                .trim(),
+            "cwd-marker",
+        );
         let _ = std::fs::remove_dir_all(&ws);
     }
 

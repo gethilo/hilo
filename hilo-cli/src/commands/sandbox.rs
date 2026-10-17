@@ -35,7 +35,10 @@ pub enum SandboxCommand {
     /// exit status becomes this command's exit status. The command runs with
     /// the sandbox's manifest settings: read-only root, network isolation
     /// (`isolate_network: true` blocks all sockets), PID isolation, and
-    /// writable paths. This is the production launch surface for sandboxed
+    /// writable paths. The child STARTS in the workspace directory
+    /// (bwrap `--chdir`, DF-WARPFS-150), so writes to `.` land in the
+    /// workspace even when the caller invoked `hilo` from elsewhere.
+    /// This is the production launch surface for sandboxed
     /// agent shells on a mounted workspace.
     Exec(SandboxExecArgs),
 }
