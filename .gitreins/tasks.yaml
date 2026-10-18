@@ -2263,3 +2263,13 @@ tasks:
   status: complete
   created_at: '2026-10-16T18:07:49.166572+00:00'
   completed_at: '2026-10-16T18:07:53.907379+00:00'
+- id: DF-WARPFS-142
+  title: "Document build memory requirements and provide low-memory build recipe for\
+    \ \u22644GB agents"
+  criteria:
+  - README documents minimum build memory; low-memory build recipe (reduced parallelism
+    or split duckdb TU) works on 4GB agent; cc-rs build failures name their likely
+    cause (OOM hint); cargo test -p hilo_graph passes
+  status: complete
+  created_at: '2026-10-18T03:25:17.179671+00:00'
+  completed_at: '2026-10-18T03:50:31.345398+00:00'
