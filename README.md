@@ -85,8 +85,9 @@ sudo apt install build-essential pkg-config libssl-dev libfuse3-dev attr
 
 ### Low-memory builders (≤4GB RAM)
 
-Building `hilo_graph` (which depends on `libduckdb-sys`) on agents with ≤4GB
-RAM fails with:
+**Minimum build memory: 8GB RAM recommended; 4GB agents may fail during
+libduckdb-sys compilation.** Building `hilo_graph` (which depends on
+`libduckdb-sys`) on agents with ≤4GB RAM fails with:
 
 ```
 libduckdb-sys C++ SIGABRT (cc-rs, core dumped)
@@ -95,7 +96,14 @@ libduckdb-sys C++ SIGABRT (cc-rs, core dumped)
 The DuckDB C++ compiler tries to allocate more memory than available during
 compilation of large translation units, triggering OOM-kill → SIGABRT. This is
 a known issue with cc-rs on low-memory systems and affects all agents on the
-bunker fleet (≤4GB) and any CI runner with limited RAM.
+bunker fleet (≤4GB) and any CI runner with limited RAM. The failure is
+**non-deterministic**: on identical 4GB hosts one fresh build passed in
+~60 minutes while a sibling aborted mid-compile, because the abort depends on
+what else the host is doing at that moment (sibling builds pushed the failing
+host to loadavg 64 with 3.8/4.0 GB memory in use). `jobs = 1` lowers the
+pressure sharply but cannot make a 4GB host safe under external contention —
+if the abort persists even with `CARGO_BUILD_JOBS=1`, build on a machine with
+more RAM.
 
 **Fix applied:** `.cargo/config.toml` sets `jobs = 1` to limit compilation
 parallelism automatically. You can also set `CARGO_BUILD_JOBS=1` explicitly
@@ -111,6 +119,17 @@ cargo build --release
 # Override: allow more parallelism on bigger machines
 CARGO_BUILD_JOBS=2 cargo build --release
 ```
+
+cc-rs reports the abort as a bare `SIGABRT` with no cause. When the build dies
+through `make release`, the wrapper names it instead:
+
+```
+Build failed: likely out-of-memory (OOM). Try reducing parallelism with CARGO_BUILD_JOBS=1 or use a machine with more RAM.
+```
+
+`make release` runs `scripts/build-hilo.sh`, which classifies SIGABRT/SIGKILL
+exit codes and cc-rs `signal:` messages and prints that hint, while leaving
+cargo's exit codes unchanged for normal compile errors.
 
 First builds are slow (~15–30 min for OpenSSL + DuckDB from source);
 incremental builds after that are fast. Leave the target/ cache in place.
@@ -172,6 +191,11 @@ Notes:
 - There is no prebuilt tarball to fall back on: as of v0.3.0 the
   [Releases](https://github.com/gethilo/hilo/releases) page publishes **no
   assets**, so every install path is a source build.
+- On a ≤4GB host this build can abort mid-compile with `libduckdb-sys C++
+  SIGABRT (cc-rs, core dumped)` — see [Low-memory
+  builders](#low-memory-builders-4gb-ram) for the memory requirement and the
+  `CARGO_BUILD_JOBS=1` recipe (the committed `.cargo/config.toml` already
+  caps `jobs = 1`).
 - If you *do* have `apt`/`apt-get` plus network access and specifically want
   the `libfuse3`-linked binary without root, [Source build without
   sudo](#source-build-without-sudo) below unpacks the FUSE `.deb`s into

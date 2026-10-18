@@ -24,8 +24,11 @@ check:
 
 # Shippable CLI artefact. The default release profile keeps debug line tables
 # and symbols on purpose (PERF-006 profiling), so build then strip.
+# The build goes through scripts/build-hilo.sh, which wraps cargo and names
+# likely-OOM (SIGABRT/SIGKILL) cc-rs failures on <=4GB agents with the
+# low-memory recipe (DF-WARPFS-142); exit codes are cargo's, unchanged.
 release:
-	cargo build --release -p hilo-cli
+	scripts/build-hilo.sh -p hilo-cli
 	strip target/release/hilo
 	ls -lh target/release/hilo
 

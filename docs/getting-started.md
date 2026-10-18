@@ -19,6 +19,12 @@ hilo --help
 
 - Rust 1.80+ — `cargo` is required by every install path (no prebuilt
   binaries are published yet)
+- **Memory: 8GB RAM recommended for the build; 4GB agents may fail during
+  `libduckdb-sys` compilation** (the bundled DuckDB C++ build) with
+  `cc-rs ... status code signal: 6 (SIGABRT)`. The repo pins
+  `.cargo/config.toml` to `jobs = 1` and `scripts/build-hilo.sh` (used by
+  `make release`) prints an OOM hint if the build still dies of a signal. See
+  the README's *Low-memory builders* section for the full recipe.
 - `libfuse3-dev` and `pkg-config` — needed to **build** (the FUSE bindings);
   a prebuilt binary needs only the `libfuse3-4` runtime library. Building with
   `--no-default-features` (see [No sudo?](#no-sudo-install-without-root) below)
