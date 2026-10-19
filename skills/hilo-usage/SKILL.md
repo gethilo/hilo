@@ -988,3 +988,20 @@ For a local-dir sync stand-in, use `rclone serve s3` as shown, or the
   — undocumented schema, DF-WARPFS-148.
 - Cross-surface xattr parity is real: FFI-set ↔ getfattr ↔ `hilo meta` all agree, both
   directions. Numbers: import 9ms; 13-call session 316ms ±12 warm; cold first query 53ms.
+
+
+## Run 45 field notes — `mount --daemon` logging (2026-10-13, HEAD 5deb8880)
+
+- `--daemon` now always gets a log file: `--log-file <PATH>` or `<mount_point>/.vfs/logs/mount-daemon.log`.
+  The banner prints the resolved path and the child pid — capture that line, it is the only handle on the daemon.
+- The log is served BY the mount. After the daemon exits, reading it gives
+  `Os { code: 107, kind: NotConnected, "Transport endpoint is not connected" }`, and the mountpoint still shows in
+  `/proc/mounts`; `fusermount3 -u <dir>` may refuse and `umount -l <dir>` clears it. Read the log via a path
+  outside the mount, or copy it before tearing the mount down.
+- Harness, not product: run the daemon as a tracked background process, never under a tool `timeout` — a killed
+  `hilo mount --daemon` looks like success and leaves a half-torn-down kernel mount.
+- `--triggers` watches the mount PROCESS's CWD (DF-WARPFS-145) and `mount <path>` can serve the CWD
+  (DF-WARPFS-144): drive trigger probes from the tree you actually mounted, and verify the served tree's identity
+  before trusting any trigger result.
+- Build-env trap: with `CARGO_TARGET_DIR` set (this host: `/var/tmp/hermes-cargo-target`) the binary is NOT at
+  `target/release/hilo`; confirm the commit via the binary's own `--version` build stamp.

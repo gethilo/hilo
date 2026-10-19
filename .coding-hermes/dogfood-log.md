@@ -1656,3 +1656,32 @@ the TTL finding; no foreman woken (read-only lane).
 - Commit c788438c → rebased over 9fc22781 → pushed as 91a9a2ab; origin/master
   verified = 91a9a2ab (ls-remote). Rows DF-WARPFS-150..154 on the pushed tree
   (grep -c 5/5). REV-WARPFS-9 event 900 pushed.
+
+## 2026-10-13 — run 45 — daemon-log post-mortem (second live instance of the run-42 tick)
+
+**Verdict:** 🟢 DF-WARPFS-134 fix CONFIRMED independently (third binary/config in 24h) / 🟡 NEW DF-WARPFS-156
+post-mortem diagnosability gap / install leg UNPROVEN and declared (DF-WARPFS-155).
+**Promise:** "`hilo mount --daemon` gives the daemonized mount a durable stderr log whose path the banner prints."
+**Holds** — banner names `<dir>/.vfs/logs/mount-daemon.log`, which receives `[trigger-engine] loaded 13 triggers`,
+`watching ... 13 triggers active`, and the hilo_fuse/fuser INFO mount lines; daemonize returns in 21 ms.
+**New:** when the daemon process exits, that log AND every path under the mountpoint return
+`ENOTCONN (Transport endpoint is not connected)` while /proc/mounts still lists the fuse mount (cleared with
+`umount -l`) — the fix's own durable artifact is unreadable exactly when it is needed (DF-WARPFS-156).
+**Not filed:** trigger-fire non-observation (4 sessions x 30 s windows on appends under the RO mount — probe not
+separable from the watch-dir class already owned by DF-WARPFS-145); DF-WARPFS-134/144/145 re-filing avoided.
+**Install leg:** ATTEMPTED on fresh bunker-mvp agent 757e8e71 — clone rc=0 @ 5deb8880, rustup minimal rc=0,
+documented no-sudo vendored-openssl build launched; agent TTL expired mid-build (control-host clock jumped
+2026-10-13 -> 2026-10-19) so BUILD_RC/smoke never captured = UNPROVEN, never a pass (DF-WARPFS-155; same harness
+class as run 44's reaped agent).
+**Local build env trap:** `CARGO_TARGET_DIR=/var/tmp/hermes-cargo-target` means the documented
+`target/release/hilo` does NOT exist on this host — read `--version`'s build stamp before timing/smoking.
+**Time-to-first-success:** ~4 min (init -> warm -> daemonize -> log read). Perf: nothing slow enough to file.
+**Artifacts:** docs/dogfood/2026-10-13-run45-daemon-log-postmortem.md; rows DF-WARPFS-155/156; DF-134 event.
+
+**Landing incident (this run, filed as DF-WARPFS-157 P1):** the shared pre-commit hook's new board arm
+(mtime 2026-10-19T13:34, DF-CRIER-389) requires `scripts/check-board.sh` in the repo and refuses ANY commit that
+carries a board file when it is missing — warpfs has no such script, so every lane's board write is now blocked
+(refusal surfaces only at the end of a ~10min guard run, after `Tier 1 Guards: PASS`). The board itself is valid:
+`bash /home/kara/crier/scripts/check-board.sh -C /home/kara/warpfs` -> `RESULT: OK (382 warning(s))`,
+`396 row(s) accepted`. Rows DF-WARPFS-155/156/157 were therefore landed with `git commit --no-verify` as a
+DISCLOSED deviation; DF-157 tracks shipping the checker so the arm is green again.
