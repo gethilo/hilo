@@ -1,6 +1,7 @@
 // S3 read-only + write-through backend implementation
 use aws_config;
 use aws_sdk_s3 as s3;
+use aws_sdk_s3::config::ProvideCredentials;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -212,6 +213,75 @@ struct BlobEntry {
     pub uploaded_at: u64,
 }
 
+/// Human-readable list of the credential sources the SDK's default provider
+/// chain consults, expanded with the concrete profile / files that are in
+/// play (DF-WARPFS-65).
+///
+/// Pure so the wording is unit-testable without touching the process
+/// environment; [`aws_credential_source_env`] resolves the values from the
+/// same env overrides the SDK honours.
+fn aws_credential_sources_checked(
+    profile: &str,
+    credentials_file: &str,
+    config_file: &str,
+) -> String {
+    format!(
+        "env vars (AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY), \
+         shared credentials profile '{profile}' ({credentials_file}), \
+         shared config profile '{profile}' ({config_file}), \
+         web identity token (AWS_WEB_IDENTITY_TOKEN_FILE), \
+         container credentials (AWS_CONTAINER_CREDENTIALS_RELATIVE_URI/FULL_URI), \
+         EC2 instance metadata (IMDS)"
+    )
+}
+
+/// Resolve the `(profile, credentials_file, config_file)` triple the SDK's
+/// chain will actually consult, honouring the same environment overrides the
+/// provider itself honours (`AWS_PROFILE` / `AWS_DEFAULT_PROFILE`,
+/// `AWS_SHARED_CREDENTIALS_FILE`, `AWS_CONFIG_FILE`).
+fn aws_credential_source_env() -> (String, String, String) {
+    fn non_empty(key: &str) -> Option<String> {
+        std::env::var(key)
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    }
+
+    let profile = non_empty("AWS_PROFILE")
+        .or_else(|| non_empty("AWS_DEFAULT_PROFILE"))
+        .unwrap_or_else(|| "default".to_string());
+    let credentials_file = non_empty("AWS_SHARED_CREDENTIALS_FILE")
+        .unwrap_or_else(|| "~/.aws/credentials".to_string());
+    let config_file =
+        non_empty("AWS_CONFIG_FILE").unwrap_or_else(|| "~/.aws/config".to_string());
+    (profile, credentials_file, config_file)
+}
+
+/// Build the DF-WARPFS-65 failure: name every credential source that was
+/// consulted so the operator sees *why* the client refuses to build, instead
+/// of the empty-credential request failing later as
+/// `InvalidArgument (400): service error`.
+fn missing_credentials_error(endpoint: &str, sources: &str, detail: Option<&str>) -> S3Error {
+    let detail = detail.map(str::trim).filter(|d| !d.is_empty());
+    match detail {
+        Some(d) => S3Error::Aws(format!(
+            "no AWS credentials found for endpoint {endpoint} (checked: {sources}) \
+             — provider chain said: {d}"
+        )),
+        None => S3Error::Aws(format!(
+            "no AWS credentials found for endpoint {endpoint} (checked: {sources})"
+        )),
+    }
+}
+
+/// A resolved credential pair is only usable when BOTH parts are non-blank.
+/// A provider handing back blanks is exactly the defect this ticket fixes:
+/// signing with empty strings makes every request fail as a 400, so blank
+/// pairs are reported as "no credentials found" instead.
+fn credentials_are_usable(access_key_id: &str, secret_access_key: &str) -> bool {
+    !access_key_id.trim().is_empty() && !secret_access_key.trim().is_empty()
+}
+
 /// S3 read-only / write-through client with local cache.
 pub struct S3Client {
     client: s3::Client,
@@ -230,11 +300,12 @@ impl S3Client {
     /// ttl_seconds: cache TTL; 0 means never expire
     ///
     /// If AWS_ENDPOINT_URL is set (S3-compatible endpoint such as MinIO),
-    /// the client is configured explicitly for that endpoint with static
-    /// credentials from AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY and
-    /// path-style addressing, which MinIO requires. Otherwise the ambient
-    /// AWS config chain is used. The resolved endpoint is recorded on the
-    /// client ([`S3Client::endpoint`]) for disclosure.
+    /// the client is configured explicitly for that endpoint with
+    /// path-style addressing, which MinIO requires, and credentials taken
+    /// from the full AWS credential chain (`AWS_PROFILE`, env vars, SSO /
+    /// web identity, container credentials, instance metadata). Otherwise
+    /// the ambient AWS config chain is used. The resolved endpoint is
+    /// recorded on the client ([`S3Client::endpoint`]) for disclosure.
     pub async fn new(
         region: &str,
         cache_dir: &Path,
@@ -266,7 +337,7 @@ impl S3Client {
         writable: bool,
     ) -> S3Result<Self> {
         let client = match endpoint {
-            S3Endpoint::Url(u) if !u.is_empty() => Self::endpoint_client(region, u),
+            S3Endpoint::Url(u) if !u.is_empty() => Self::endpoint_client(region, u).await?,
             _ => Self::default_client(region).await,
         };
         Ok(Self {
@@ -289,18 +360,80 @@ impl S3Client {
 
     /// Client for an explicit S3-compatible endpoint (MinIO et al.).
     /// Path-style addressing is required by MinIO.
-    fn endpoint_client(region: &str, endpoint: &str) -> s3::Client {
-        let access_key = std::env::var("AWS_ACCESS_KEY_ID").unwrap_or_default();
-        let secret_key = std::env::var("AWS_SECRET_ACCESS_KEY").unwrap_or_default();
-        let creds = s3::config::Credentials::new(access_key, secret_key, None, None, "static");
+    ///
+    /// Credentials come from the FULL ambient AWS credential chain — env
+    /// vars, the shared profile selected by `AWS_PROFILE`, SSO / web identity
+    /// token, container credentials, instance metadata — resolved through
+    /// `aws_config`'s loader (DF-WARPFS-65).
+    ///
+    /// The old implementation read ONLY `AWS_ACCESS_KEY_ID` /
+    /// `AWS_SECRET_ACCESS_KEY` with `unwrap_or_default()`, so a profile-only
+    /// setup silently produced a client with an empty key pair and the first
+    /// request failed as `InvalidArgument (400): service error` (while
+    /// `backend setup` reported "credentials: found", because it scans the
+    /// shared credentials file). Two changes fix that:
+    ///
+    /// 1. the chain is resolved ONCE here, so missing credentials fail at
+    ///    construction with a message naming every source that was checked,
+    ///    instead of surfacing as an opaque service error later;
+    /// 2. the resolved *provider* (not a credential snapshot) is handed to
+    ///    the client, so rotating / expiring credentials refresh as usual.
+    async fn endpoint_client(region: &str, endpoint: &str) -> S3Result<s3::Client> {
+        let provider = Self::ambient_credentials_provider(region, endpoint).await?;
+
         let config = s3::Config::builder()
             .behavior_version(s3::config::BehaviorVersion::latest())
             .region(s3::config::Region::new(region.to_string()))
             .endpoint_url(endpoint)
-            .credentials_provider(creds)
+            .credentials_provider(provider)
             .force_path_style(true)
             .build();
-        s3::Client::from_conf(config)
+        Ok(s3::Client::from_conf(config))
+    }
+
+    /// Resolve the credential provider the explicit-endpoint client signs
+    /// with, from the FULL ambient AWS chain (DF-WARPFS-65).
+    ///
+    /// Split out from [`S3Client::endpoint_client`] so the resolved identity is
+    /// directly assertable in tests: "a client was constructed" cannot
+    /// distinguish profile credentials from the empty pair the old env-only
+    /// code produced, but "this provider yields the profile's access key" can.
+    async fn ambient_credentials_provider(
+        region: &str,
+        endpoint: &str,
+    ) -> S3Result<s3::config::SharedCredentialsProvider> {
+        let base = aws_config::defaults(aws_config::BehaviorVersion::latest())
+            // Region is honoured by the chain too: SSO / web-identity providers
+            // build their STS endpoint from it.
+            .region(s3::config::Region::new(region.to_string()))
+            .load()
+            .await;
+
+        let (profile, credentials_file, config_file) = aws_credential_source_env();
+        let sources =
+            aws_credential_sources_checked(&profile, &credentials_file, &config_file);
+
+        // The loader always installs a provider for the default chain; a
+        // missing one means the chain could not be assembled at all.
+        let provider = base
+            .credentials_provider()
+            .ok_or_else(|| missing_credentials_error(endpoint, &sources, None))?;
+
+        // Resolve eagerly so "no credentials anywhere" is a clear error here
+        // rather than a signing failure signed with blanks on the first call.
+        let creds = provider
+            .provide_credentials()
+            .await
+            .map_err(|e| missing_credentials_error(endpoint, &sources, Some(&e.to_string())))?;
+        if !credentials_are_usable(creds.access_key_id(), creds.secret_access_key()) {
+            return Err(missing_credentials_error(
+                endpoint,
+                &sources,
+                Some("the chain resolved a blank access key / secret access key"),
+            ));
+        }
+
+        Ok(provider)
     }
 
     /// Read an object from S3, caching it locally.
@@ -689,9 +822,68 @@ mod tests {
         );
     }
 
-    // The client actually CONSTRUCTS for the explicit endpoint (static-cred,
-    // path-style client — not the ambient chain) and records exactly what it
-    // was given; `new` records the env resolution.
+    // DF-WARPFS-65: env-var save/restore for the credential-chain tests. The
+    // AWS SDK reads PROCESS-GLOBAL env, so every var that can supply
+    // credentials is captured and restored on drop — a failed assertion must
+    // not leak (or wipe) credentials for the sibling tests in this binary.
+    struct EnvGuard {
+        saved: Vec<(&'static str, Option<String>)>,
+    }
+
+    /// Every env var the SDK's default chain can read a credential (or a
+    /// credential pointer) from. Tests that assert "profile only" or "nothing
+    /// at all" must clear ALL of them: one ambient value on the host turns the
+    /// assertion into a tautology.
+    const CREDENTIAL_ENV_KEYS: &[&str] = &[
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "AWS_PROFILE",
+        "AWS_DEFAULT_PROFILE",
+        "AWS_SHARED_CREDENTIALS_FILE",
+        "AWS_CONFIG_FILE",
+        "AWS_WEB_IDENTITY_TOKEN_FILE",
+        "AWS_ROLE_ARN",
+        "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+        "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+        "AWS_EC2_METADATA_DISABLED",
+    ];
+
+    impl EnvGuard {
+        fn capture(keys: &[&'static str]) -> Self {
+            Self {
+                saved: keys
+                    .iter()
+                    .map(|k| (*k, std::env::var(k).ok()))
+                    .collect(),
+            }
+        }
+
+        fn set(&self, key: &'static str, value: &str) {
+            std::env::set_var(key, value);
+        }
+
+        fn unset(&self, key: &'static str) {
+            std::env::remove_var(key);
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (key, value) in &self.saved {
+                match value {
+                    Some(v) => std::env::set_var(key, v),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+
+    // The client actually CONSTRUCTS for the explicit endpoint (path-style
+    // client over the ambient credential chain — not the old env-only static
+    // credentials) and records exactly what it was given; `new` records the
+    // env resolution.
     // Holding the std-Mutex env lock across the awaits is the POINT: the env
     // must stay pinned for the whole construction body, and these tests run
     // on their own single-threaded runtime, so no other task can observe the
@@ -700,6 +892,16 @@ mod tests {
     #[allow(clippy::await_holding_lock)]
     async fn client_records_endpoint_it_was_constructed_with() {
         let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // DF-WARPFS-65: the explicit-endpoint client now resolves the ambient
+        // credential chain and fails loudly when it finds nothing, so pin a
+        // known credential pair instead of relying on the CI host's env.
+        let _env = EnvGuard::capture(CREDENTIAL_ENV_KEYS);
+        std::env::set_var("AWS_ACCESS_KEY_ID", "AKIAIOSFODNN7EXAMPLE");
+        std::env::set_var(
+            "AWS_SECRET_ACCESS_KEY",
+            "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        );
+        std::env::set_var("AWS_EC2_METADATA_DISABLED", "true");
         let tmp = tempfile::tempdir().unwrap();
         std::env::set_var("AWS_ENDPOINT_URL", "http://env-endpoint:9000");
         let explicit = S3Client::with_endpoint(
@@ -720,6 +922,175 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(env_client.endpoint, S3Endpoint::DefaultChain);
+    }
+
+    // DF-WARPFS-65 acceptance: `AWS_PROFILE` ALONE must produce a usable
+    // client for an explicit endpoint. Every env-provided credential source is
+    // cleared, so a client that still reads AWS_ACCESS_KEY_ID directly (the
+    // old `unwrap_or_default()` behaviour) cannot pass this.
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn endpoint_client_accepts_profile_only_credentials() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let env = EnvGuard::capture(CREDENTIAL_ENV_KEYS);
+        let tmp = tempfile::tempdir().unwrap();
+        let creds_path = tmp.path().join("credentials");
+        std::fs::write(
+            &creds_path,
+            // Sample keys from the AWS docs — never valid, never secret.
+            "[acme]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\n\
+             aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n",
+        )
+        .unwrap();
+        let config_path = tmp.path().join("config");
+        std::fs::write(&config_path, "[profile acme]\nregion = us-east-1\n").unwrap();
+
+        for key in [
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "SECRET_ACCESS_KEY",
+            "AWS_SESSION_TOKEN",
+        ] {
+            env.unset(key);
+        }
+        env.set("AWS_PROFILE", "acme");
+        env.set(
+            "AWS_SHARED_CREDENTIALS_FILE",
+            creds_path.to_str().expect("utf-8 temp path"),
+        );
+        env.set(
+            "AWS_CONFIG_FILE",
+            config_path.to_str().expect("utf-8 temp path"),
+        );
+        env.set("AWS_EC2_METADATA_DISABLED", "true");
+
+        // The provider the client signs with must carry the PROFILE's key, not
+        // an empty string pair — `is_ok()` alone cannot tell those apart, and
+        // the empty pair is exactly what produced
+        // `InvalidArgument (400): service error` before DF-WARPFS-65.
+        let provider = S3Client::ambient_credentials_provider("us-east-1", "http://127.0.0.1:9000")
+            .await
+            .expect("AWS_PROFILE-only credentials must resolve");
+        let creds = provider
+            .provide_credentials()
+            .await
+            .expect("resolved provider must yield credentials");
+        assert_eq!(
+            creds.access_key_id(),
+            "AKIAIOSFODNN7EXAMPLE",
+            "the shared profile's access key must reach the client"
+        );
+        assert!(credentials_are_usable(
+            creds.access_key_id(),
+            creds.secret_access_key()
+        ));
+
+        let client = S3Client::endpoint_client("us-east-1", "http://127.0.0.1:9000").await;
+        assert!(
+            client.is_ok(),
+            "AWS_PROFILE-only credentials must build a client, got: {:?}",
+            client.err().map(|e| e.to_string())
+        );
+    }
+
+    // DF-WARPFS-65 acceptance: with no credentials ANYWHERE the failure names
+    // the sources checked (and the profile it looked for), instead of
+    // surfacing later as `InvalidArgument (400): service error`.
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn endpoint_client_without_credentials_names_the_sources() {
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let env = EnvGuard::capture(CREDENTIAL_ENV_KEYS);
+        let tmp = tempfile::tempdir().unwrap();
+        // Empty shared files: no profile can supply a key, and the IMDS /
+        // container / web-identity sources are cleared below — so the chain
+        // has literally nowhere left to look.
+        let creds_path = tmp.path().join("credentials");
+        std::fs::write(&creds_path, "").unwrap();
+        let config_path = tmp.path().join("config");
+        std::fs::write(&config_path, "").unwrap();
+
+        for key in CREDENTIAL_ENV_KEYS.iter().copied() {
+            env.unset(key);
+        }
+        env.set("AWS_PROFILE", "absent-lane");
+        env.set(
+            "AWS_SHARED_CREDENTIALS_FILE",
+            creds_path.to_str().expect("utf-8 temp path"),
+        );
+        env.set(
+            "AWS_CONFIG_FILE",
+            config_path.to_str().expect("utf-8 temp path"),
+        );
+        env.set("AWS_EC2_METADATA_DISABLED", "true");
+
+        let err = S3Client::endpoint_client("us-east-1", "http://127.0.0.1:9")
+            .await
+            .expect_err("no credentials must fail at construction, not at signing time");
+        let msg = err.to_string();
+        let creds_shown = creds_path.to_str().expect("utf-8 temp path");
+        for needle in [
+            "no AWS credentials found",
+            "http://127.0.0.1:9",
+            "env vars (AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY)",
+            "profile 'absent-lane'",
+            creds_shown,
+            "container credentials",
+            "instance metadata",
+            // The SDK's own opaque wording is preserved as the detail line —
+            // it is exactly what used to reach the user as
+            // "InvalidArgument (400): service error" (DF-WARPFS-65).
+            "provider chain said: the credential provider was not enabled",
+        ] {
+            assert!(msg.contains(needle), "missing {needle:?} in: {msg}");
+        }
+    }
+
+    // DF-WARPFS-65: the failure text must be self-explanatory on its own —
+    // every source listed, the concrete profile named, and the endpoint that
+    // needed the credentials. No env access, so this pins the wording.
+    #[test]
+    fn missing_credentials_message_names_sources_and_profile() {
+        let sources =
+            aws_credential_sources_checked("acme", "/home/u/.aws/credentials", "/home/u/.aws/config");
+        let msg = missing_credentials_error("http://minio:9000", &sources, None).to_string();
+        for needle in [
+            "no AWS credentials found",
+            "http://minio:9000",
+            "env vars (AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY)",
+            "shared credentials profile 'acme' (/home/u/.aws/credentials)",
+            "shared config profile 'acme' (/home/u/.aws/config)",
+            "container credentials",
+            "EC2 instance metadata (IMDS)",
+        ] {
+            assert!(msg.contains(needle), "missing {needle:?} in: {msg}");
+        }
+        // A detail-less call must not leave a dangling separator behind.
+        assert!(!msg.contains("provider chain said"), "unexpected detail: {msg}");
+
+        let with_detail = missing_credentials_error(
+            "http://minio:9000",
+            &sources,
+            Some("  the credential provider was not enabled  "),
+        )
+        .to_string();
+        assert!(
+            with_detail
+                .contains("provider chain said: the credential provider was not enabled"),
+            "detail must be carried (trimmed) verbatim: {with_detail}"
+        );
+    }
+
+    // The blank-pair case is the original defect in miniature: signing with an
+    // empty key/secret must never be accepted as "credentials found".
+    #[test]
+    fn blank_credential_pairs_are_not_usable() {
+        assert!(credentials_are_usable("AKIAIOSFODNN7EXAMPLE", "secret"));
+        assert!(!credentials_are_usable("", "secret"));
+        assert!(!credentials_are_usable("AKIAIOSFODNN7EXAMPLE", ""));
+        assert!(!credentials_are_usable("", ""));
+        assert!(!credentials_are_usable("   ", "secret"));
+        assert!(!credentials_are_usable("AKIAIOSFODNN7EXAMPLE", "\t\n"));
     }
 
     // DF-WARPFS-24: the SDK-error → S3Error mapping must preserve the typed
