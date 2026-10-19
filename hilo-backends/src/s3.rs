@@ -1046,6 +1046,102 @@ mod tests {
         }
     }
 
+    // DF-WARPFS-65 end-to-end: the request that actually leaves the client is
+    // signed with the PROFILE's key. A loopback listener captures the request
+    // head and answers a minimal ListObjectsV2 document, so this covers the
+    // wiring the unit-level provider assertion cannot: endpoint_client must
+    // install THAT provider on the client it returns. An empty key pair — the
+    // pre-fix behaviour — shows up here as `Credential=/" or no auth at all.
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn profile_credentials_sign_requests_end_to_end() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let _g = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let env = EnvGuard::capture(CREDENTIAL_ENV_KEYS);
+        let tmp = tempfile::tempdir().unwrap();
+        let creds_path = tmp.path().join("credentials");
+        std::fs::write(
+            &creds_path,
+            "[acme]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\n\
+             aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n",
+        )
+        .unwrap();
+        let config_path = tmp.path().join("config");
+        std::fs::write(&config_path, "[profile acme]\nregion = us-east-1\n").unwrap();
+        for key in [
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "SECRET_ACCESS_KEY",
+            "AWS_SESSION_TOKEN",
+        ] {
+            env.unset(key);
+        }
+        env.set("AWS_PROFILE", "acme");
+        env.set(
+            "AWS_SHARED_CREDENTIALS_FILE",
+            creds_path.to_str().expect("utf-8 temp path"),
+        );
+        env.set(
+            "AWS_CONFIG_FILE",
+            config_path.to_str().expect("utf-8 temp path"),
+        );
+        env.set("AWS_EC2_METADATA_DISABLED", "true");
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut sock, _peer) = listener.accept().await.unwrap();
+            let mut head = Vec::new();
+            let mut chunk = [0u8; 2048];
+            // Read until the end of the request head; a single read can return
+            // a partial line under load, and a truncated head would make the
+            // Authorization assertion lie.
+            loop {
+                let n = sock.read(&mut chunk).await.unwrap();
+                if n == 0 {
+                    break;
+                }
+                head.extend_from_slice(&chunk[..n]);
+                if head.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let body = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\
+                        <ListBucketResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">\
+                        <Name>b</Name><KeyCount>0</KeyCount><MaxKeys>1000</MaxKeys>\
+                        <IsTruncated>false</IsTruncated></ListBucketResult>";
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/xml\r\n\
+                 content-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = sock.write_all(resp.as_bytes()).await;
+            let _ = sock.shutdown().await;
+            String::from_utf8_lossy(&head).to_string()
+        });
+
+        let client = S3Client::endpoint_client("us-east-1", &format!("http://{addr}"))
+            .await
+            .expect("profile credentials must build a client");
+        // The response shape is not the point here; the captured request is.
+        let _ = client.list_objects_v2().bucket("b").send().await;
+        let head = server.await.unwrap();
+
+        // hyper emits lower-case header names on the wire, so compare folded.
+        let lower = head.to_lowercase();
+
+        assert!(
+            lower.contains("authorization: aws4-hmac-sha256"),
+            "request must carry a SigV4 signature, got:\n{head}"
+        );
+        assert!(
+            lower.contains("credential=akiaiosfodnn7example/"),
+            "request must be signed with the PROFILE key, got:\n{head}"
+        );
+    }
+
     // DF-WARPFS-65: the failure text must be self-explanatory on its own —
     // every source listed, the concrete profile named, and the endpoint that
     // needed the credentials. No env access, so this pins the wording.
