@@ -1948,3 +1948,38 @@ left untouched. Full stage log: `/tmp/df9b/evidence/warpfs-leg.log` (935 lines).
 blob; `boardctl validate` unchanged; the doc `docs/dogfood/2026-10-20-run46c-map-numbers-audit.md` and the log entry are
 on `origin/master`. The two sibling runs of this batch (`afd49c4e` = run 46, `d5838c95` = run 46d) are untouched by
 this turn and their rows keep their own ids.
+
+## 2026-10-20 — run 46c addendum 3 (from the ORIGINAL 46c instance) — host-side view of the torn-down leg + batch provenance
+
+Written by the instance that filed `DF-WARPFS-163/164` and committed `39926b06`. It **does not re-derive**
+addendum 2 (the resumed duplicate delivery already recorded the leg's stage stamps, the teardown decision
+and the SKIPPED-install-incomplete verdict); it adds only what that turn could not see from the control
+host, plus the batch's provenance. No legs re-run, no rows added.
+
+**Host-side view of the leg (bunker-mvp, via `ssh bunker-mvp`).** Last live contact `12:46:58Z`: still
+compiling (wasmtime/rayon chain), `target/` **3.0G**, and the SHARED host root FS at **138G/150G — 96%,
+6.1G free with three agents resident** (`crier-lab`, the sibling's `11d784da`, `df20-warpfs-install`). At
+`12:54:23Z` `bunker info` answered `not_found` and `bunker list --status all` no longer carried the agent
+while `11d784da` stayed `running`; the host was back to 93% (12G free). On the host the agent's home
+`/home/bunker-df20-warpfs-install` **still exists but is EMPTY** (contents deleted, dir mtime `12:47`):
+`leg.log`, `leg.done`, `leg-install.sh`, the `hilo` clone and the 3.0G `target/` are gone from it. So a
+reader who goes looking at the fresh box finds nothing — **the only surviving copy of the leg's stage log
+is the control-host one addendum 2 names** (`/tmp/df9b/evidence/warpfs-leg.log`, 935 lines). That is the
+operational note worth keeping: on this harness, the evidence of a reaped leg lives on the CONTROL host or
+not at all. Verdict unchanged and never a pass: **SKIPPED-install-incomplete** (no BUILD_RC, no smoke),
+with the compile envelope measured at **>38 min and still unfinished** on an 8-core/15GB agent because the
+repo's committed `.cargo/config.toml` pins `jobs = 1`. Owned classes, cited not re-filed:
+`QA-WARPFS-025/027` (host disk + not-gradeable battery), `DF-WARPFS-155` (install unproven), `RELEASE-*`
+(no published artifacts ⇒ every fresh install is a source build on the same host).
+
+**Batch provenance (four dogfood runs, one checkout — read this before filing a fifth).** Scheduler batch
+`2026-10-20-12-00-33` produced: run 46 (`afd49c4e`, lane `warpfs-dogfood`) → run **46c** (this run,
+`39926b06`, lane `coding-hermes-tools-dogfood`) → run 46d (`d5838c95`, `a36755ae`, `99bc1941` — the
+duplicate fire of the `warpfs-dogfood` lane, whose doc filename still says `run46b` while its commits say
+46d, exactly the label collision this run renamed itself out of). Aggregate verified at close:
+`git log --oneline origin/master` orders them 46 → 46c → 46d; `39926b06` is an ancestor of `origin/master`;
+`DF-WARPFS-163/164` appear exactly once in the remote board blob; the sibling ids (`DF-WARPFS-158..162`,
+`64-R2`, `GAP-104-R2`) are untouched. **Lesson for the scheduler, not the product:** the tick label carries
+the batch timestamp but not the delivery, so when a second delivery of the same tick lands on a checkout
+that already holds an uncommitted sibling run, only **commit order** establishes lineage — rename yourself
+(with a disclosure line) before you write, and never re-mint an id you reserved minutes earlier.

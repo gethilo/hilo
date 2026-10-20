@@ -228,6 +228,13 @@ path** from `$HOME/leg-install.sh` (staged via `bunker cp`, per the piping rule)
   `bunker-qa.sh` fresh-install cell on the same host in parallel (agent `11d784da`, ttl 4h) — its
   evidence owns that path; this run does not re-drive it.
 
+**Postscript (added at close, after the leg was torn down):** the leg ended
+**SKIPPED-install-incomplete** — no BUILD_RC and no post-install smoke. The agent was reclaimed at a
+resumed delivery of this same tick while the build was still running (`target/` 3.0G, host disk at 96%,
+6.1G free, three agents resident), and its home came back empty on the host; the surviving stage log is
+on the control host. See the **run 46c addendum 3** entry in `.coding-hermes/dogfood-log.md`.
+**Never read this run as an install PASS.**
+
 ## Verdict
 
 🟡 **PROMISING-BUT-ROUGH.** The map itself is real, fast, and honest about its own scope (ignore stack,
