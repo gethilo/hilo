@@ -1844,3 +1844,67 @@ the battery never finishes: `bunker destroy 11d784da --server bunker-mvp`.
 reach the binary?), ci-pass (`act --bind`), the native suite, and the four chaos cells — i.e. no install
 PASS claim is made, and the run-35-era premise ("an install PASS does not imply the headline feature works
 on the fresh box") stays exactly where it was.
+
+## 2026-10-20 — run 46d (same tick, third angle) — a Go-consumer correctness oracle + the ancestor-root A/B — 🟢 headline promise holds / 🔴 query root is not your project
+
+**Why 46d and not 46b:** tick `warpfs-dogfood-2026-10-20-12-00-33` fired MULTIPLE times into this
+checkout. Angle 1 (`afd49c4e`, Python corpus task-router) and angle 2/46c (`39926b06`, the map's
+numbers on Hilo's own tree) landed first; the label `run-46b` is already used by 46c's SKILL.md
+note, so this angle is recorded as **46d**. Angle 1's files and rows were left byte-untouched.
+
+**Promise tested:** README:3 — an agent gets dependencies/entrypoints/coverage/blast radius of any
+codebase from a pre-built map, without reading files.
+
+**Corpus (new to this run): a real Hilo consumer.** Fresh `git clone --no-hardlinks` of the fleet's
+**crier** repo at `6f6a533` (595 `.go`) — `AGENTS.md` there documents `.vfs/` as its local hilo
+graph cache, `manifest.yaml` is tracked, and `edges.jsonl` is deliberately gitignored (a real
+deployment of the *other* documented inventory policy). HEAD `33ce3a24`; binary
+`/var/tmp/hermes-cargo-target/release/hilo` build stamp `v0.3.0-530-g33ce3a24-dirty`.
+
+**What worked (measured):** documented path driven verbatim —
+`hilo init` → `graph warm` (**23.13 s** one-shot, 638 files, `Discovered 8895 edges across 635
+files (4 languages)`) → `classify` → `stats`/`impact`/`related`. Blast radius scored against a
+grep oracle over 6 packages: **131/131 dependents found, 0 false dependents** (precision 1.00,
+file-level recall 1.00); `related --direction reverse` agrees with `impact`. One relation-level
+delta: `config/config_test.go` is reported as `tested_by` (heuristic 0.80) where `edges.jsonl` also
+carries the ast_exact `imports` edge — the dependent is never hidden, so **no row filed** for it.
+Documented cold-clone claim also holds: first query in a clone that tracks `edges.jsonl` rebuilt
+`graph.db` in **5.51 s** with a self-explaining `DF-WARPFS-61` reconcile line and correct numbers;
+transcripts: `evidence/10-oracle.json`, `evidence/16-file-vs-relation-recall.txt`.
+
+**What failed (evidence added to `DF-WARPFS-161`, row updated, no duplicate minted):** the graph
+query verbs resolve their project root to the nearest ancestor that has a usable cache, ignoring
+the cwd's own `.vfs/manifest.yaml`. Deterministic A/B (`repro_root2.sh`, `evidence/15-root-ab.txt`):
+two Hilo projects, `inner` nested in a warmed `outer`; `inner` has a real importer
+(`cmd/other/main.go`) in its own tree. Not warmed: `hilo graph impact internal/guard/types.go
+--max-depth 3` → subject echoed **relative to `outer`** and "no dependents", **rc=0**. After ONE
+`hilo graph warm` in the cwd: the same command returns the real importer. At fleet scale, a fresh
+crier clone three levels under `/tmp` (where an old `/tmp/.vfs` exists) answered with a `/tmp`-relative
+path and "no dependents" while the same file's package has 20 importers in the cwd's own project.
+The only hint is a warning naming the foreign manifest, and it appears **only because that ancestor
+manifest is corrupt** — with a valid ancestor manifest there is no warning at all. `graph stats` in
+the same cwd reads the cwd's empty cache and says "Graph cache is empty" — two verbs, one directory,
+two different projects. This is the shape `docs/graph-engine.md` already forbids for `graph surfaces`
+("a refusal, never a success-shaped empty report"); it compounds `DF-WARPFS-64-R2`.
+
+**Perf (Step 2b, hyperfine 1.20.0, 15 runs, warmup 3):** stats 37.3±3.0 ms, impact 45.6±3.5 ms,
+related 20.4±0.9 ms, search 79.3±3.0 ms on the warmed 638-file graph; cold one-shots: warm 23.13 s,
+read-through reconcile 5.51 s. **No `PERF-<n>` row** — nothing a user would feel (20–80 ms queries
+against a "<1 s" promise; the two one-shot costs are first-use and documented).
+
+**Install leg (Step 5): PARTIAL — RAN, no cell graded, fresh-install cell still building.** Angle 1
+launched it (`bunker-qa.sh launch /home/kara/warpfs --keep`, agent `11d784da` @ bunker-mvp, ttl 4h,
+HEAD `33ce3a24`, evidence `/tmp/bunker-qa-evidence-20261020T121154Z-2722236.jsonl`); 46c's own agent
+`df20-warpfs-install` was also live. **No third agent was spawned** (a re-spawn re-measures the host
+and clobbers the first pass's evidence). Verified live at 12:20Z by reading the agent: cells
+`repo-head` OK, `launch` OK, `toolchain-bootstrap` OK ×4 (go 1.27.3 / rust stable / gcc-g++ / make)
+plus an INFO that `libssl-dev` is absent (rust cells graded ENV-BLOCKED on failure); `inst.log`
+(23.6 KB, growing) showed cargo mid-build (`serde_yaml`, `hyper`, `arrow-*`, `openssl-sys`). My own
+`bunker-qa.sh collect` at 12:28Z → "battery still running on agent=11d784da — agent left intact".
+Close-out commit `bc284ff3` (same tick) records the same verdict: **PARTIAL, no cell graded** — never
+a pass. The foreman must collect before anyone calls the install verified.
+
+**Left behind:** `docs/dogfood/2026-10-20-run46b-go-oracle-and-root-ab.md` (this angle's report;
+filename retains `b` from its first draft), `DF-WARPFS-161` extended (P3 → **P2**, A/B transcript,
+mechanism, acceptance criteria), this entry. No code changed; no visibility/permissions touched; no
+row minted; foreman NOT woken (read-only lane contract). Angle 1's and 46c's artifacts untouched.
