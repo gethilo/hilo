@@ -1924,3 +1924,27 @@ returned `battery still running … agent left intact`, the local evidence file 
 `df20-warpfs-install`, owned by the 46c angle, is at 4.8 GB). Verdict therefore stands as PARTIAL —
 no cell graded, never a pass. Finish command unchanged:
 `bunker-qa.sh collect --evidence /tmp/bunker-qa-evidence-20261020T121154Z-2722236.jsonl`.
+
+## 2026-10-20 — run 46c addendum 2 — resumed tick: install leg torn down, verdict SKIPPED-incomplete
+
+Duplicate delivery of tick `coding-hermes-tools-dogfood-2026-10-20-12-00-33` arrived after run 46c had landed (rows
+`DF-WARPFS-163/164`, commit `39926b06` — still an ancestor of `origin/master`). This turn verifies and closes out
+rather than re-driving: per the skill's resumed-tick rule, run 46c's real-use legs were not re-run.
+
+**Install leg final state.** My own ephemeral agent `df20-warpfs-install` (bunker-mvp, `--cpu 6 --memory 8G`,
+TTL 2h, created 12:07:47Z) drove the README's documented no-sudo path to the compile stage and **never reached a
+binary**: stage stamps harvested before teardown (`t_0`/`t_1` = rustup 12:08:08Z, `t_2` = clone done 12:08:20Z,
+`t_3` = build launched 12:08:22Z, `leg.done` never written); the last log line at 12:38Z was still
+`Compiling wasmtime-internal-cranelift` with `target/` at 2.6 GB. Proven: the documented rustup line fails
+non-interactively (rc=1 `Unable to run interactively`) and its `-y` rescue succeeds (rustc 1.99.1), the uncredentialed
+HTTPS clone succeeds at `33ce3a24`, and the documented no-sudo build compiles cleanly — but with the repo's committed
+`.cargo/config.toml` pinning `jobs = 1` it was still compiling after 30 minutes on an 8-core box. **Verdict:
+SKIPPED-install-incomplete** — no BUILD_RC, no post-install smoke, hence never a pass (same class as DF-WARPFS-155).
+The agent was destroyed at the resume (home archived by the daemon) rather than left to burn a 2h TTL on a shared host
+that had reached 96% disk with three concurrent agent builds; the sibling lane's own battery agent (`11d784da`) was
+left untouched. Full stage log: `/tmp/df9b/evidence/warpfs-leg.log` (935 lines).
+
+**Landed state re-verified:** `DF-WARPFS-163` and `DF-WARPFS-164` each appear exactly once in `origin/master`'s board
+blob; `boardctl validate` unchanged; the doc `docs/dogfood/2026-10-20-run46c-map-numbers-audit.md` and the log entry are
+on `origin/master`. The two sibling runs of this batch (`afd49c4e` = run 46, `d5838c95` = run 46d) are untouched by
+this turn and their rows keep their own ids.
