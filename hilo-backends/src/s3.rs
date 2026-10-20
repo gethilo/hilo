@@ -252,8 +252,7 @@ fn aws_credential_source_env() -> (String, String, String) {
         .unwrap_or_else(|| "default".to_string());
     let credentials_file = non_empty("AWS_SHARED_CREDENTIALS_FILE")
         .unwrap_or_else(|| "~/.aws/credentials".to_string());
-    let config_file =
-        non_empty("AWS_CONFIG_FILE").unwrap_or_else(|| "~/.aws/config".to_string());
+    let config_file = non_empty("AWS_CONFIG_FILE").unwrap_or_else(|| "~/.aws/config".to_string());
     (profile, credentials_file, config_file)
 }
 
@@ -410,8 +409,7 @@ impl S3Client {
             .await;
 
         let (profile, credentials_file, config_file) = aws_credential_source_env();
-        let sources =
-            aws_credential_sources_checked(&profile, &credentials_file, &config_file);
+        let sources = aws_credential_sources_checked(&profile, &credentials_file, &config_file);
 
         // The loader always installs a provider for the default chain; a
         // missing one means the chain could not be assembled at all.
@@ -853,10 +851,7 @@ mod tests {
     impl EnvGuard {
         fn capture(keys: &[&'static str]) -> Self {
             Self {
-                saved: keys
-                    .iter()
-                    .map(|k| (*k, std::env::var(k).ok()))
-                    .collect(),
+                saved: keys.iter().map(|k| (*k, std::env::var(k).ok())).collect(),
             }
         }
 
@@ -1147,8 +1142,11 @@ mod tests {
     // needed the credentials. No env access, so this pins the wording.
     #[test]
     fn missing_credentials_message_names_sources_and_profile() {
-        let sources =
-            aws_credential_sources_checked("acme", "/home/u/.aws/credentials", "/home/u/.aws/config");
+        let sources = aws_credential_sources_checked(
+            "acme",
+            "/home/u/.aws/credentials",
+            "/home/u/.aws/config",
+        );
         let msg = missing_credentials_error("http://minio:9000", &sources, None).to_string();
         for needle in [
             "no AWS credentials found",
@@ -1162,7 +1160,10 @@ mod tests {
             assert!(msg.contains(needle), "missing {needle:?} in: {msg}");
         }
         // A detail-less call must not leave a dangling separator behind.
-        assert!(!msg.contains("provider chain said"), "unexpected detail: {msg}");
+        assert!(
+            !msg.contains("provider chain said"),
+            "unexpected detail: {msg}"
+        );
 
         let with_detail = missing_credentials_error(
             "http://minio:9000",
@@ -1171,8 +1172,7 @@ mod tests {
         )
         .to_string();
         assert!(
-            with_detail
-                .contains("provider chain said: the credential provider was not enabled"),
+            with_detail.contains("provider chain said: the credential provider was not enabled"),
             "detail must be carried (trimmed) verbatim: {with_detail}"
         );
     }

@@ -3754,3 +3754,5 @@
 {"from":"hilo-cli/src/commands/mount.rs","to":"pkg:hilo_core","rel":"imports","provenance":"ast_exact","confidence":1.0}
 {"from":"hilo-cli/src/commands/mount.rs","to":"pkg:hilo_core::sandbox::BubblewrapConfig","rel":"imports","provenance":"ast_exact","confidence":1.0}
 {"from":"hilo-cli/src/commands/mount.rs","to":"pkg:hilo_core::sandbox::BubblewrapExecutor","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-backends/src/s3.rs","to":"pkg:tokio::io::AsyncReadExt","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-backends/src/s3.rs","to":"pkg:tokio::io::AsyncWriteExt","rel":"imports","provenance":"ast_exact","confidence":1.0}
