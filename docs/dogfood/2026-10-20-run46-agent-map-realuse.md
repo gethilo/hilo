@@ -216,7 +216,19 @@ LAUNCHED  evidence=/tmp/bunker-qa-evidence-20261020T121154Z-2722236.jsonl
 
 Evidence rows present: `repo-head` OK (tested HEAD recorded), `launch` OK (script_bytes=123362). The
 battery is a 4 h TTL agent this time (the 45 m TTL that reaped runs 44/45 is not the limit here).
-See the log entry for the final cell-by-cell outcome.
+
+**FINAL STATE AT TICK CLOSE (12:40Z): PARTIAL — the leg RAN, no cell was graded.** Four `collect` calls
+over 28 min each returned `RUNNING agent=11d784da … agent left intact`; read directly over
+`bunker exec 11d784da --server bunker-mvp -- …`, `~/qa-warpfs` was synced (mtime 12:14),
+`~/qa-run.log` still carried only the `QA-HEAD` line, **two `cargo` processes were live** (etimes 11:15
+and 06:41), `~/qa-warpfs/target` grew 712 MB → 718 MB, an `act` process appeared at 12:35 — and the shared
+host's root FS read **133/150 GB (12 GB free, 93 %)**, the QA-WARPFS-025 disk-pressure shape, while the
+build target was still growing. So: fresh-install cell IN PROGRESS, `ci-pass` / native suite / 4 chaos
+cells not reached; **no install PASS is claimed, and no `SKIPPED-install-bunker` row was filed — the leg
+did not fail to run.** Finish it with
+`bunker-qa.sh collect --evidence /tmp/bunker-qa-evidence-20261020T121154Z-2722236.jsonl` (idempotent;
+destroys the agent on `CELLS-DONE`); manual cleanup `bunker destroy 11d784da --server bunker-mvp`.
+Full ladder + event 918 in `.coding-hermes/dogfood-log.md`.
 
 ## Left behind
 

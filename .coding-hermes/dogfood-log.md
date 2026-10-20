@@ -1807,3 +1807,40 @@ this entry, `skills/hilo-usage/SKILL.md` run-46b number-reading rules, and the s
 `/tmp/df20-warpfs/` (recompute scripts: `split-sources.py`, `recompute-stats.py`, `impact-recall.py`,
 `tier-audit.py`; raw outputs in `/tmp/df20-warpfs/out/`). No product code changed; no visibility or
 permissions touched; the foreman was not woken (read-only lane contract).
+
+### Run 46 — install leg outcome (final state at tick close, 2026-10-20T12:40Z)
+
+**PARTIAL — the leg RAN; no cell was graded at tick close: the fresh-install cell was still building.**
+This is not a silent pass and not a skip: preflight, spawn, sync and the battery start all reported OK,
+and the build was measurably progressing when this tick closed.
+
+Ladder, with evidence at each rung:
+1. `bunker-qa.sh status` -> `bunkerd=active docker=yes act=no uidmap=yes`, server `bunker-mvp`.
+2. `bunker-qa.sh launch /home/kara/warpfs --keep` -> evidence file
+   `/tmp/bunker-qa-evidence-20261020T121154Z-2722236.jsonl`, rows `repo-head` OK
+   (`tested HEAD=33ce3a245cd9fcd83be11f3fdba68de7a0d9a20c at launch=2026-10-20T12:12:32Z`,
+   `pull=clone dirty — pull skipped, testing recorded sha`) and `launch` OK
+   (`agent=11d784da server=bunker-mvp ttl=4h script_bytes=123362`). **TTL is 4 h** — the 45 m TTL that
+   reaped the run-44/run-45 agents is NOT the binding limit this time.
+3. Remote state, read directly over `bunker exec 11d784da --server bunker-mvp -- ...` (the `--server`
+   flag must follow the agent id; before it, the CLI rejects it): repo synced to `~/qa-warpfs`
+   (mtime 12:14), `~/qa-run.log` carries only `QA-HEAD=33ce3a24… (pull: clone dirty — pull skipped)`,
+   **two `cargo` processes live** (etimes 11:15 and 06:41 at 12:35), `~/qa-warpfs/target` grew 712 MB ->
+   718 MB between 12:22 and 12:35, and an `act` process appeared at 12:35.
+4. `bunker-qa.sh collect --evidence <file>` (called 4x over 28 min) each returned
+   `RUNNING agent=11d784da (bunker-mvp) — agent left intact`; no `CELLS-DONE`, so no cell is gradeable yet.
+
+**Disk pressure to watch (QA-WARPFS-025's family, live):** the shared host's root FS read
+`150G 133G 12G 93%` at 12:35 while `target/` was still growing — that is the shape that produced the
+run-25/26 batch of ENOSPC mid-battery failures. If this battery dies at the build, the cause is capacity,
+not the product.
+
+**How to finish it (any lane; the agent is kept and holds a slot until its 4 h TTL):**
+`bunker-qa.sh collect --evidence /tmp/bunker-qa-evidence-20261020T121154Z-2722236.jsonl` — idempotent;
+it pulls the per-cell rows and destroys the agent when the battery reports `CELLS-DONE`. Manual cleanup if
+the battery never finishes: `bunker destroy 11d784da --server bunker-mvp`.
+
+**What is therefore UNPROVEN this tick:** the fresh-install cell's own verdict (does a clean-machine build
+reach the binary?), ci-pass (`act --bind`), the native suite, and the four chaos cells — i.e. no install
+PASS claim is made, and the run-35-era premise ("an install PASS does not imply the headline feature works
+on the fresh box") stays exactly where it was.
