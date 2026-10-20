@@ -1453,3 +1453,46 @@ First drive of a landed fix = the re-proof AND the first real use of the new doo
   cwd → DF-WARPFS-150 P1. The sandbox today is a filesystem namespace, not an
   environment boundary — the §14.2 table overclaims.
 - HTTP/rate-limiter work as REV-3/5 promised; 404 discoverability gap → DF-WARPFS-154.
+
+
+## Run 46 — 2026-10-20 (warpfs-dogfood tick warpfs-dogfood-2026-10-20-12-00-33) — using the map as an agent, on a repo that is not Hilo
+
+**Why this angle:** 45 prior runs covered every *surface* (mount, sync, triggers, MCP, FFI, sandbox,
+coverage links). None of them asked the product's own headline question as a user would: **"I have a repo I
+do not know, I am about to change a file — does the map tell me the truth?"** That is what run 46 does, and
+it is also the only angle where the environment (a real 314-file Python repo, no `.vfs`, a scope the
+previous runs never used) is the variable, not the harness.
+
+**How the environment was built (so it can be rebuilt):** `git clone --local /home/kara/task-router
+/tmp/df46-1206/tr` — a *local* clone, so the corpus is the repo's real HEAD (`d643ef4`) without network or
+credentials; the three scratch trees (`tr` warm, `cold/trc` unwarmed inside `/tmp`, `/var/tmp/df46b/trb`
+unwarmed outside `/tmp`) exist to separate the warm/cold and ancestor-`.vfs` variables. Binary:
+`/var/tmp/hermes-cargo-target/release/hilo` (HEAD build) — deliberately NOT the PATH binary, which was
+12 days stale (`v0.3.0-293-g3adfb9ed`); `CARGO_TARGET_DIR=/var/tmp/hermes-cargo-target` means
+`./target/release/hilo` is *older still* (run-45's trap, re-confirmed).
+
+**What the failure mode looks like in practice, and why it is the finding rather than the graph quality:**
+the dependency data this run produced is *good* — 3337 edges, and the one blast-radius answer that could be
+checked against grep was set-identical over 41 files. The defect is not accuracy on the happy path, it is
+**the absence of a "you have not built the map yet" signal on four of the five data consumers**, and
+**the absence of a "this module's file node cannot be joined to its pkg node" signal** in the one query
+form a user actually holds (a path). Both produce rc=0 and a confident sentence. An agent does not get a
+second chance to notice: it will delete the file "nothing depends on", or rewrite the tests for the module
+"without coverage".
+
+**Measurement discipline used here (repeat it):** one command per operation; `hyperfine --warmup 3
+--runs 10` for repeatable queries, `/usr/bin/time -p` for the one-shot warm; `strace -f -e trace=openat`
+to *decide* whether a suspected re-read/re-parse actually happens rather than profiling a number that was
+already fast — that is what turned DF-WARPFS-76 from "a P0 nobody re-checked" into a precise half-true
+(re-read yes, re-parse no, 314 opens, 57.8 ms). No PERF row was filed: nothing here crosses the
+user-noticeable threshold, and a row that says "improved performance" with no felt cost devalues the ones
+that matter.
+
+**Footprint discipline (learned the hard way this run):** using the product the documented way
+(`clone → init → warm`) **mutated host state outside the repo** — `hilo init` resolved
+`core.hooksPath=/home/kara/.hermes/hooks` and rewrote the shared post-commit/post-merge blocks
+(DF-WARPFS-162). Two lessons: (1) snapshot any file a candidate command might touch *before* the first
+run, not after; (2) when in doubt about remediation, prefer leaving a functionally-equivalent artifact in
+place and disclosing loudly over "restoring" to a reconstruction you cannot prove byte-exact — the
+strip-the-block arithmetic did not reproduce the pre-tick size (301 vs 410 bytes), so the revert was
+refused by its own check and the delta is documented instead of guessed at.

@@ -1,7 +1,7 @@
 ---
 name: hilo-usage
-description: "How to USE hilo (warpfs) — the agent-first virtual filesystem — for real work: fresh-machine no-sudo install (run 35), init/warm/query workflows, verified per-language workarounds, sandbox reality + MCP HTTP facts as of 2026-10-16 (run 44)."
-version: "1.3.0"
+description: "How to USE hilo (warpfs) — the agent-first virtual filesystem — for real work: fresh-machine no-sudo install (run 35), init/warm/query workflows, verified per-language workarounds, sandbox reality + MCP HTTP facts as of 2026-10-16 (run 44); run 46 (2026-10-20) adds the warm-before-query law, the pkg-vs-file query-form gap, and the core.hooksPath check before init."
+version: "1.4.0"
 category: software-development
 ---
 
@@ -1005,3 +1005,45 @@ For a local-dir sync stand-in, use `rclone serve s3` as shown, or the
   before trusting any trigger result.
 - Build-env trap: with `CARGO_TARGET_DIR` set (this host: `/var/tmp/hermes-cargo-target`) the binary is NOT at
   `target/release/hilo`; confirm the commit via the binary's own `--version` build stamp.
+
+
+## Run 46 (2026-10-20, tick warpfs-dogfood-2026-10-20-12-00-33) — the map on a REAL consumer repo: warm FIRST, and never trust an unwarmed answer
+
+Corpus: fresh clone of task-router @ d643ef4 (314 `.py`), HEAD `33ce3a24`,
+binary `/var/tmp/hermes-cargo-target/release/hilo` (`v0.3.0-530-g33ce3a24-dirty`). Rules, in the
+order they will burn you:
+
+1. **Read the build stamp before anything.** The PATH binary is regularly STALE
+   (`/home/kara/.cargo/bin/hilo` was `v0.3.0-293-g3adfb9ed`, 12 days behind HEAD). Use
+   `$CARGO_TARGET_DIR/release/hilo` and check `--version` names the commit you think you are testing.
+2. **`hilo graph warm` FIRST — before any query.** On an unwarmed tree `graph search` correctly refuses
+   (`No graph data. Run \`hilo graph warm\` first.`), but **`impact`, `untested`, `stats` and `module`
+   answer confidently with rc=0 over a one-file graph that the query itself parsed on demand**:
+   `impact <file>` → "no dependents …", `untested` → "1 untested file(s)", `stats` → "Total files: 1"
+   for a 314-file repo (DF-WARPFS-64-R2). Verified warm numbers for that corpus: 8.28 s warm → 3337 edges,
+   then search 57.8 ms · impact 54.9 ms · related 21.3 ms · stats 41.4 ms · understand 195.3 ms.
+3. **Query form matters, and the failure is silent.** File-form `graph impact <path>` was EXACT for a flat
+   module (41 dependents, byte-for-byte the same set as `grep` for a real import statement) and EMPTY for a
+   module in a **subdirectory imported by basename** (`impact scripts/drivers/base.py` → "no dependents"
+   while 6 importers exist; `impact pkg:base` returns all 6, and the edges are in edges.jsonl). For a
+   script-collection / sys.path-style package, query the **pkg form** as well and compare; the same gap
+   makes `graph untested` list test-imported modules as untested (GAP-104-R2).
+4. **Coverage on a foreign repo = 4 commands, not 8.** `graph surfaces` refuses by design outside Hilo
+   (rc=1, `scope: foreign`), and `coverage-links`, `test-classes`, `rollup` then hard-fail rc=1 pointing at
+   that refused command. Reachable: `untested`, `module`, `audit`, `wiring` (wiring prints its absence note
+   and still reports) — DF-WARPFS-159.
+5. **`untested` means "no test file IMPORTS this file".** A script exercised only through
+   `subprocess`/CLI (37 of the 61 it listed on this corpus, e.g. `scripts/router_circuit.py`) is reported
+   as having no coverage — DF-WARPFS-160.
+6. **`graph understand` at the default budget can be a 27 KB symbol dump with ZERO context** —
+   `## DETAIL (no files in this tier) — no detail block fits the 14400-char budget`, and `--budget 1000`
+   produces the same 27,339 bytes as `--budget 6000`. Use `--budget 20000`+ when you actually want file
+   context (DF-WARPFS-158).
+7. **Before you run `hilo init` anywhere, check `git config core.hooksPath`.** init installs to whatever
+   that resolves to — with a global hooksPath it edited this host's SHARED hooks dir
+   (`/home/kara/.hermes/hooks/{post-commit,post-merge}`, +40 bytes each, editing a block that was NOT
+   created by this run) and wrote no backup (DF-WARPFS-162). Snapshot the hook files first. Also: with
+   core.hooksPath set, hilo's per-repo `.git/hooks/*` blocks are never executed at all.
+8. `hilo classify --dry-run -v` (175 test / 98 entrypoint / 32 library / 9 unknown here) and
+   `graph audit` (948 public fns; unreachable 8 / unlinked 354 / ok 586) are the two surfaces that
+   behaved well on a foreign repo with no configuration.

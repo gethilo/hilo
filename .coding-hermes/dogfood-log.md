@@ -1685,3 +1685,57 @@ carries a board file when it is missing — warpfs has no such script, so every 
 `bash /home/kara/crier/scripts/check-board.sh -C /home/kara/warpfs` -> `RESULT: OK (382 warning(s))`,
 `396 row(s) accepted`. Rows DF-WARPFS-155/156/157 were therefore landed with `git commit --no-verify` as a
 DISCLOSED deviation; DF-157 tracks shipping the checker so the arm is green again.
+
+## 2026-10-20 — warpfs (Hilo) — 🟡 PROMISING-BUT-ROUGH (run 46, tick warpfs-dogfood-2026-10-20-12-00-33)
+
+**Promise tested (README:3):** give an agent a pre-built map of a codebase it does not know —
+dependencies, entrypoints, test coverage, blast radius — without burning context on file reads.
+**Method:** the map was USED, not tested. A fresh `git clone --local` of the real task-router repo
+@ d643ef4 (730 files, 314 `.py`, no `.vfs`) at HEAD `33ce3a24`, current-HEAD release binary
+(`v0.3.0-530-g33ce3a24-dirty`; the PATH binary was 12 days stale and was NOT used). Every claim below is
+a command run in that clone; the unmet promise is measured against `grep` ground truth.
+
+**Hold:** `init`+`warm` = 8.28 s for 314 files → 3337 edges / 304 contributors. `graph impact` on a flat
+module returned **exactly** the right dependent set (41 files, set-identical to grep for a real import
+statement, 0 extra / 0 missed). `graph search` put the right file first for both real queries
+("circuit breaker" → router_circuit.py; "provider health probe" → provider_health_probe.py).
+`classify --dry-run -v` gave 175 test / 98 entrypoint / 32 library / 9 unknown, spot-check correct.
+`graph audit` answered on a foreign repo (948 public fns, unreachable 8 / unlinked 354 / ok 586).
+Speed: warm queries 21-196 ms (hyperfine ×10) — nothing a user would feel, so **no PERF row filed**.
+
+**Break (rows filed, all evidence in the run report):**
+- **DF-WARPFS-64-R2 (P1)** — with no `graph warm`, `impact`/`untested`/`stats`/`module` answer
+  CONFIDENTLY at rc=0 over a one-file on-demand graph ("no dependents", "1 untested file(s)",
+  "Total files: 1" for a 314-file repo) while `graph search` alone refuses with the warm hint.
+- **GAP-104-R2 (P1)** — file-form `impact scripts/drivers/base.py` = "no dependents" while 6 real
+  importers exist and `impact pkg:base` lists all 6: a subdirectory module imported by basename has no
+  file↔pkg join. Same cause → `untested` lists 3 test-imported modules as untested.
+- **DF-WARPFS-158 (P2)** — `graph understand` default budget → 27,340 bytes with an EMPTY DETAIL tier
+  ("no detail block fits the 14400-char budget"); `--budget 1000` ≡ `--budget 6000` (27,339 B);
+  the first non-fitting block `break`s the tier (hilo-graph/src/signal.rs:2635/2647).
+- **DF-WARPFS-159 (P2)** — `graph surfaces` refuses on a foreign repo, so `coverage-links`,
+  `test-classes` and `rollup` all exit 1 pointing at the refused command: 4 of the 8 coverage commands
+  are unreachable where "test coverage" is promised.
+- **DF-WARPFS-160 (P3)** — `untested` = "not imported by a test": 37 of its 61 rows are exercised
+  through subprocess/CLI, only 21 are unmentioned anywhere under tests/.
+- **DF-WARPFS-161 (P3)** — a stray ancestor `/tmp/.vfs` (binary manifest) made the first command read a
+  foreign root and echo the subject path with the resolved root's prefix stripped.
+- **DF-WARPFS-162 (P1)** — `hilo init` honours `core.hooksPath`: a throwaway clone's init edited the
+  HOST-WIDE shared hooks (`/home/kara/.hermes/hooks/{post-commit,post-merge}`, 410→450 / 539→579 B,
+  mtime moved by this run), replacing ~109 bytes of prior content with **no backup**. Disclosed:
+  the pre-image is unrecoverable and no pre-tick snapshot existed; the block (already present pre-tick)
+  was left in place rather than removed, and snapshots are kept at `/tmp/df46-1206/hooks-before/`.
+- **DF-WARPFS-76 discrimination (event 917, row NOT re-filed)** — strace at HEAD: search opens all 314
+  corpus `.py` files every invocation (re-READ live) but consult the parse/symbol caches (11 cache opens,
+  no re-PARSE; 57.8 ms vs 8.28 s to parse). The P0 row's "re-parses" half does not reproduce.
+
+**Install leg (Step 5):** RUN, verdict in the entry below. `bunker-qa.sh` preflight OK
+(`bunkerd=active docker=yes act=no uidmap=yes`, server bunker-mvp); `launch /home/kara/warpfs --keep`
+recorded HEAD `33ce3a24` (repo-head OK) and spawned agent `11d784da` with **ttl 4h**
+(script_bytes=123362) — the 45 m TTL that reaped runs 44/45 is not the binding limit this time.
+Evidence: `/tmp/bunker-qa-evidence-20261020T121154Z-2722236.jsonl`.
+
+**Left behind:** `docs/dogfood/2026-10-20-run46-agent-map-realuse.md`, rows `DF-WARPFS-64-R2`,
+`GAP-104-R2`, `DF-WARPFS-158`…`162`, event `917`, this entry, `diagnostics.md`, and the
+`skills/hilo-usage/SKILL.md` run-46 rules (warm-before-query; query-form comparison; hooksPath check
+before init). **No code changed; no visibility/permissions touched; foreman NOT woken (read-only lane).**
