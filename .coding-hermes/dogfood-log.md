@@ -1908,3 +1908,19 @@ a pass. The foreman must collect before anyone calls the install verified.
 filename retains `b` from its first draft), `DF-WARPFS-161` extended (P3 → **P2**, A/B transcript,
 mechanism, acceptance criteria), this entry. No code changed; no visibility/permissions touched; no
 row minted; foreman NOT woken (read-only lane contract). Angle 1's and 46c's artifacts untouched.
+
+### Run 46d — duplicate-delivery note (same tick re-delivered, 2026-10-20T12:38Z)
+
+Tick `warpfs-dogfood-2026-10-20-12-00-33` was delivered a SECOND time into the same session
+(`efc17bb8-e330-4ebf-a5cd-34b99ab0336e`) after the first half had already run the whole loop.
+Nothing was re-run, re-appended or re-minted; the close was verify-and-stop. Re-verified read-only at
+12:38Z: HEAD `99bc1941` == `origin/master`, 0 unpushed, working tree clean; this run's log entry ×1,
+`DF-WARPFS-161` ×1 (P2), event 919 ×1 in the committed tree; `boardctl validate` -> `RESULT: OK
+(573 warning(s))`, 0 errors. **Deliberately NOT re-run:** the real-use pass (its evidence is committed),
+the oracle/perf measurements (re-measuring re-measures the substrate), and the install leg — the
+battery on agent `11d784da` (bunker-mvp, ttl 4h) is STILL RUNNING: `bunker-qa.sh collect` at 12:38Z
+returned `battery still running … agent left intact`, the local evidence file still holds only the
+`repo-head` + `launch` rows, and the agent's disk use grew 2.5 GB -> 4.2 GB since 12:12Z (its sibling
+`df20-warpfs-install`, owned by the 46c angle, is at 4.8 GB). Verdict therefore stands as PARTIAL —
+no cell graded, never a pass. Finish command unchanged:
+`bunker-qa.sh collect --evidence /tmp/bunker-qa-evidence-20261020T121154Z-2722236.jsonl`.
