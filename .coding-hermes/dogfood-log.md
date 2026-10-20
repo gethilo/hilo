@@ -1739,3 +1739,71 @@ Evidence: `/tmp/bunker-qa-evidence-20261020T121154Z-2722236.jsonl`.
 `GAP-104-R2`, `DF-WARPFS-158`…`162`, event `917`, this entry, `diagnostics.md`, and the
 `skills/hilo-usage/SKILL.md` run-46 rules (warm-before-query; query-form comparison; hooksPath check
 before init). **No code changed; no visibility/permissions touched; foreman NOT woken (read-only lane).**
+
+## 2026-10-20 — run 46c — the map's NUMBERS, recomputed (second angle of batch `2026-10-20-12-00-33`; sibling lane `warpfs-dogfood` = run 46 at `afd49c4e`)
+
+**Tick:** `coding-hermes-tools-dogfood-2026-10-20-12-00-33` · **Target:** warpfs (`/home/kara/warpfs`) ·
+**HEAD:** `33ce3a24` · **Binary:** `/var/tmp/hermes-cargo-target/release/hilo`, build stamp
+`v0.3.0-530-g33ce3a24-dirty`, built `2026-10-20T10:32:47Z` (PATH binary `v0.3.0-293-g3adfb9ed` NOT used).
+
+**Why a second angle instead of a cede:** the sibling lane `warpfs-dogfood` fired in the same scheduler
+batch on the same project and, at my first repo read, held **uncommitted** artifacts (board `M`,
+`tasks.jsonl.df46*.bak`, an untracked run-46 doc). I waited for its close-out (it landed `afd49c4e`,
+7 rows `DF-WARPFS-64-R2`, `GAP-104-R2`, `DF-WARPFS-158..162` + doc + diagnostics + skill rules), then took
+the one surface its rows do not cover: **the served numbers of the map, recomputed from ground truth**
+(`references/metric-surface-audit.md`). None of its row ids were re-minted; its rows are byte-untouched.
+
+**Verdict:** 🟡 **PROMISING-BUT-ROUGH** — operations are fast and the derived semantics are honest
+(ignore stack, fixture demotion, extraction scope, wiring exit code, understand budget rules all behave as
+documented), but two served NUMBERS on the summary surfaces are wrong and self-contradicted.
+
+**Findings (rows minted at append time on top of `afd49c4e`):**
+- `DF-WARPFS-163` (P2) — `graph stats` counts symbol nodes (`type:`/`iface:`) as FILES: `Total files: 297`
+  vs 219 real file sources on hilo's own clone (**+36 %**), the component roster invents a repo-root
+  `.` component out of 78 `type:` nodes (`.: 78 files, 81 edges`, while 0 real root-level sources exist),
+  and the census line blames *"stale entries no longer on disk"* on a graph rebuilt by `graph clean` +
+  a full `warm` (237/237 files, 9.59 s). 2-file minimal repro: `Total files: 2`, `.: 1 files`.
+  `graph understand` shows the same class: MAP 54 entries = 33 files + **21** `type:`/`iface:` rows
+  (`type:CacheConfig → (no symbols extracted)`). Root cause cited at `hilo-graph/src/graph.rs:2450`,
+  `:2547-2554`, `hilo-graph/src/resolution.rs:366`, `hilo-cli/src/commands/graph.rs:1486-1516`.
+- `DF-WARPFS-164` (P3) — `graph audit` prints *"every source file in the corpus is in a language with a
+  public-function extractor … nothing was left unaudited"* while its own census lists `c: 1`, `cpp: 13`,
+  `java: 12` files with *"no public-function extractor"* (**26 unaudited files**, headline says none).
+  Mechanism: the test/generated skip at `hilo-graph/src/audit.rs:421-423` precedes the
+  unsupported-language branch at `:425-429`, so `unknown_files` stays empty and the reassurance text at
+  `:611-616` fires. `docs/cli-reference.md` promises the opposite (*"named under `unknown`"*).
+
+**Non-findings (each checked against the product's own docs before declining to file):**
+`.hiloignore` does not scope graph discovery — **documented** in `graph warm --help` (verified live: adding
+`hilo-graph/tests/fixtures/` + `graph clean` + full warm still parsed all 237 files); `graph.map_exclude_paths`
+scope (MAP tier only) is documented in `docs/graph-engine.md:282-301` and the demotion **works**
+(MAP contains 0 fixture rows; SIGNATURES keeps 170/278 by that documented scope); `hilo graph wiring`
+rc=1 on findings is documented (`docs/cli-reference.md`: *"so CI can gate on it"*); `understand`'s
+6000-token budget is documented as a DETAIL-tier cap, not an output cap (measured 47 446 B at the default);
+Rust extraction is `use …`/`extern crate …` only (`docs/graph-engine.md:15`) so `impact` is a `use`-graph —
+measured consequence: it misses **4 of the 20** textual referencers of `hilo-core/src/manifest.rs`
+(all four inline fully-qualified calls, no `use`), recorded as a documented limitation;
+the documented rustup bootstrap failing non-interactively (`rc=1 Unable to run interactively`) was
+reproduced and is **already assessed and declined** by run 45's row, so it is not re-filed.
+
+**Perf (Step 2b, `time -p`, all on the HEAD build):** `graph warm` **9.62 s cold** (237 files, 3818 edges;
+`user 15.30`) → **0.65 s warm** (parse cache 237/237); `graph clean` + full re-warm 9.59 s;
+`stats` 0.03 s; `understand` 1.05-1.08 s; `audit` 0.61 s; `impact` 0.12 s; `surfaces` 0.11 s;
+`coverage-links` 1.21 s; `test-classes`/`rollup` 0.11 s. **Nothing slow enough that a user would notice →
+no `PERF-<n>` row filed**, and no flamegraph was warranted (no operation above 10 s).
+
+**Install leg (Step 5):** ATTEMPTED, **UNPROVEN at close** — my own ephemeral agent `df20-warpfs-install`
+(bunker-mvp, `--cpu 6 --memory 8G --ttl 2h`, created `2026-10-20T12:07:47Z`, expires `14:07:47Z`) drove the
+README's documented no-sudo path from `$HOME/leg-install.sh`: fresh image with `cargo` MISSING and
+`cc/gcc/g++/perl/pkg-config/fuse` present; documented rustup line rc=1 (`Unable to run interactively`) →
+`-y` rescue rc=0 (rustc 1.99.1); documented clone rc=0 at `33ce3a24`; documented build launched
+`12:08:22Z` and **still compiling at close** (`target/` 1.1 GB, host disk 15 GB free) — the repo's
+committed `.cargo/config.toml` pins `jobs = 1`, so an 8-core agent builds single-threaded. BUILD_RC and
+the post-install smoke never landed ⇒ **never read as a pass**. The sibling lane's own `bunker-qa.sh`
+fresh-install cell ran in parallel on the same host (agent `11d784da`, ttl 4h) and owns that path.
+
+**Left behind:** `docs/dogfood/2026-10-20-run46c-map-numbers-audit.md`, rows `DF-WARPFS-163/DF-WARPFS-164`,
+this entry, `skills/hilo-usage/SKILL.md` run-46b number-reading rules, and the scratch evidence dir
+`/tmp/df20-warpfs/` (recompute scripts: `split-sources.py`, `recompute-stats.py`, `impact-recall.py`,
+`tier-audit.py`; raw outputs in `/tmp/df20-warpfs/out/`). No product code changed; no visibility or
+permissions touched; the foreman was not woken (read-only lane contract).

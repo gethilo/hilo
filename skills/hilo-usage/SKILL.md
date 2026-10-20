@@ -1,7 +1,7 @@
 ---
 name: hilo-usage
-description: "How to USE hilo (warpfs) — the agent-first virtual filesystem — for real work: fresh-machine no-sudo install (run 35), init/warm/query workflows, verified per-language workarounds, sandbox reality + MCP HTTP facts as of 2026-10-16 (run 44); run 46 (2026-10-20) adds the warm-before-query law, the pkg-vs-file query-form gap, and the core.hooksPath check before init."
-version: "1.4.0"
+description: "How to USE hilo (warpfs) — the agent-first virtual filesystem — for real work: fresh-machine no-sudo install (run 35), init/warm/query workflows, verified per-language workarounds, sandbox reality + MCP HTTP facts as of 2026-10-16 (run 44); run 46 (2026-10-20) adds the warm-before-query law, the pkg-vs-file query-form gap, and the core.hooksPath check before init; run 46c (2026-10-20) adds the number-reading rules (symbol nodes counted as files, the audit unknown-bucket claim, what impact does NOT see) and measured timings."
+version: "1.5.0"
 category: software-development
 ---
 
@@ -1047,3 +1047,49 @@ order they will burn you:
 8. `hilo classify --dry-run -v` (175 test / 98 entrypoint / 32 library / 9 unknown here) and
    `graph audit` (948 public fns; unreachable 8 / unlinked 354 / ok 586) are the two surfaces that
    behaved well on a foreign repo with no configuration.
+
+## Run 46c (2026-10-20, HEAD 33ce3a24) — reading the map's NUMBERS honestly
+
+Second angle of the same batch as run 46: instead of driving the map on a foreign repo, recompute the
+numbers the map SERVES from `edges.jsonl` ground truth. Two of them are wrong today; check before you
+quote either to a user.
+
+1. **`graph stats`'s `Total files` counts SYMBOL NODES as files.** On a fresh clone of Hilo itself it
+   prints `Total files: 297` where only **219** distinct file-like sources exist — the other 78 are
+   `type:<Name>` conformance nodes (`{"from":"type:AuditOptions","to":"iface:Default","rel":"implements"}`).
+   Same for the component roster: `.: 78 files, 81 edges` is the symbol-node bucket, not a root directory
+   (this repo has **0** root-level source files). Minimal case: a 2-file crate that implements one trait
+   reports `Total files: 2` and a `.: 1 files` component. Cross-check before quoting:
+   `jq -r 'select(.from|test("^(pkg|sys|std|external|iface|type|module):")|not)|.from' .vfs/graph/edges.jsonl | sort -u | wc -l`
+   — that number, not `Total files`, is the file count. (`DF-WARPFS-163`)
+2. **The census line's "some sources may be stale entries no longer on disk" is not a staleness signal.**
+   It fires whenever `Total files` exceeds warm's contributor count, which the symbol-node over-count
+   guarantees on every repo with trait implementations — including immediately after `graph clean` +
+   a full `warm`. Never conclude "deleted files are still in the graph" from that sentence alone; diff the
+   edge sources against disk first.
+3. **`graph understand` can hand an agent rows that are not files.** Its MAP tier printed 54 entries for a
+   task on this repo, of which **21** were `type:`/`iface:` pseudo-nodes rendered as files
+   (`type:CacheConfig → (no symbols extracted)`). When feeding output to another agent, filter rows
+   starting with `type:`, `iface:`, `pkg:`, `sys:`, `std:`, `external:`, `module:`.
+4. **`graph audit`'s `unknown: 0 … nothing was left unaudited` is not a guarantee.** It is keyed on
+   unsupported-language files that are neither test-bearing nor generated, so a corpus whose c/cpp/java
+   files all live under `tests/fixtures/` (26 of 237 here) reports 0 while the census right below lists
+   `c: 1`, `cpp: 13`, `java: 12` as `no public-function extractor`. Read the `census:` block, never the
+   summary sentence. (`DF-WARPFS-164`)
+5. **Verified-fast numbers on the HEAD build** (use these to size a plan, and re-measure after any
+   rebuild): `graph warm` **9.6 s cold** / **0.65 s warm** for 237 files (3818 edges, 8 languages);
+   `stats` 0.03 s; `understand` ~1.05 s; `audit` 0.61 s; `impact` 0.12 s; `surfaces` 0.11 s;
+   `coverage-links` 1.21 s; `test-classes`/`rollup` 0.11 s; `hilo init` ~0 s. Nothing here is
+   user-noticeable; the only felt cost is the first cold warm.
+6. **`impact` is a `use`-statement graph, not an identifier graph.** Rust extraction is `use …` /
+   `extern crate …` only, so a file that calls `hilo_core::manifest::Manifest::from_file(...)` inline with
+   no `use` is invisible: on this repo `graph impact hilo-core/src/manifest.rs` returned 101 rows and
+   missed **4 of the 20** textual referencers (`hilo-cli/src/commands/serve.rs:121`,
+   `hilo-ffi/src/lib.rs:438`, `hilo-fuse/src/daemon.rs:24`,
+   `hilo-core/tests/plugins_not_implemented.rs:24`). Report a blast radius as "importers in the graph",
+   not "all callers".
+7. **Two knobs that do NOT do what their names suggest** (both documented, easy to lose an hour to):
+   `.hiloignore` controls BACKEND SYNC only and never scopes graph discovery (`graph warm --help` says so);
+   `graph.map_exclude_paths` demotes trees out of the **MAP tier only** — SIGNATURES/DETAIL still carry
+   every file (on this repo 170 of 278 SIGNATURES rows were `tests/fixtures`, which is the documented
+   scope, not a bug). To re-include a pruned tree use `graph.include_paths`.
