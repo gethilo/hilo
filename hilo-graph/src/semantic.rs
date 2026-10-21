@@ -355,6 +355,10 @@ pub struct SearchOpts {
     /// one-shot search/understand inject their on-disk cache (PERF-009);
     /// other callers that need exact-symbol recall — including MCP
     /// `vfs_graph_search` — opt in here.
+    ///
+    /// When set with no explicit extractor, the channels come from warm's
+    /// fingerprint-keyed parse cache ([`ParseCacheTerms`], DF-WARPFS-76):
+    /// unchanged files cost a `stat`, not a read+parse.
     pub index_symbols: bool,
     /// Root directory the default symbol extractor reads fixture files
     /// from. `None` (the default) reads the process CWD — the historical
@@ -385,7 +389,30 @@ impl Default for SearchOpts {
     }
 }
 
-/// Parse-cache keys that are real, in-language source files on disk.
+/// Keys of `<root>/.vfs/graph/.parse_cache.json`, without materialising the
+/// per-file payloads.
+///
+/// Every search-side consumer of the parse cache wants the KEY SET — the
+/// corpus inventory (DF-WARPFS-116/141) and the symbol corpus
+/// (`load_or_build_symbol_cache` in the CLI) both only ask "which files does
+/// warm know about?". Parsing the entries into `serde_json::Value` trees
+/// drags every cached edge, symbol name and doc token through the allocator
+/// twice per query (DF-WARPFS-76); `IgnoredAny` skips the payloads entirely.
+/// Returns an empty vector when the cache is missing or unparseable —
+/// searching before a warm is answered by the upstream "no graph data" paths.
+pub fn parse_cache_keys(root: &std::path::Path) -> Vec<String> {
+    let cache_path = root.join(".vfs").join("graph").join(".parse_cache.json");
+    let Ok(raw) = std::fs::read_to_string(&cache_path) else {
+        return Vec::new();
+    };
+    let Ok(cache) = serde_json::from_str::<HashMap<String, serde::de::IgnoredAny>>(&raw) else {
+        return Vec::new();
+    };
+    cache.into_keys().collect()
+}
+
+/// Parse-cache keys that are real, in-language source files on disk — the
+/// zero-edge corpus loader shared by both search surfaces.
 ///
 /// `hilo graph warm` keys EVERY discovered file in
 /// `.vfs/graph/.parse_cache.json` (repo-relative path → `{m, s, edges}`,
@@ -408,27 +435,16 @@ impl Default for SearchOpts {
 /// document order. A missing or unparseable cache yields an empty set:
 /// searching without a warm is already answered by the "no graph data"
 /// paths upstream.
-pub fn zero_edge_documents(graph_root: &std::path::Path) -> Vec<String> {
-    let cache_path = graph_root
-        .join(".vfs")
-        .join("graph")
-        .join(".parse_cache.json");
-    let Ok(raw) = std::fs::read_to_string(&cache_path) else {
-        return Vec::new();
-    };
-    let Ok(cache) = serde_json::from_str::<HashMap<String, serde_json::Value>>(&raw) else {
-        return Vec::new();
-    };
-    let mut docs: Vec<String> = cache
-        .into_keys()
+pub fn zero_edge_documents_for(graph_root: &std::path::Path, keys: &[String]) -> Vec<String> {
+    let mut docs: Vec<String> = keys
+        .iter()
         .filter(|key| {
             !key.starts_with("pkg:")
                 && !key.starts_with("local:")
                 && !key.starts_with("sys:")
                 && !key.starts_with("std:")
                 && !key.starts_with("external:")
-                && crate::parser::Language::from_path(std::path::Path::new(key.as_str()))
-                    .is_some()
+                && crate::parser::Language::from_path(std::path::Path::new(key.as_str())).is_some()
                 // Warm writes repo-RELATIVE keys, so existence is judged
                 // against `graph_root` — the same directory the CLI's CWD
                 // and the MCP `graph_root()` confinement root name. (A
@@ -437,9 +453,201 @@ pub fn zero_edge_documents(graph_root: &std::path::Path) -> Vec<String> {
                 // is not the process CWD.)
                 && graph_root.join(key.as_str()).exists()
         })
+        .cloned()
         .collect();
     docs.sort();
     docs
+}
+
+pub fn zero_edge_documents(graph_root: &std::path::Path) -> Vec<String> {
+    zero_edge_documents_for(graph_root, &parse_cache_keys(graph_root))
+}
+
+/// Per-document search-index vocabulary: the names a file DEFINES and the
+/// prose that documents it — the two channels `graph search` and MCP
+/// `vfs_graph_search` index beside the file path (GAP-077 / GAP-116).
+///
+/// Both are derived from the same source bytes, so the parse cache persists
+/// them together (DF-WARPFS-76).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct IndexTerms {
+    /// Top-level definition names, in AST order.
+    pub symbols: Vec<String>,
+    /// Comment/docstring vocabulary, capped at [`DOC_TOKEN_BUDGET`].
+    pub doc: Vec<String>,
+}
+
+/// `hilo graph warm`'s per-file parse cache, read back as index vocabulary.
+///
+/// Warm keys EVERY discovered source file in
+/// `<root>/.vfs/graph/.parse_cache.json` as
+/// `rel path → {m, s, edges, symbols?, doc?}` (PERF-002). Symbols and
+/// documentation used to be re-derived by reading and tree-sitter-parsing
+/// the whole corpus on EVERY query — the `search`/MCP path with
+/// `index_symbols: true` paid warm's parse bill again per invocation
+/// (DF-WARPFS-76: 4.2 s on a 539-file corpus against 33 ms path-only).
+///
+/// This loader turns that cache into an index source:
+///
+/// - an entry whose recorded `{m, s}` (mtime nanos, size — the same
+///   fingerprint warm uses to skip a re-parse) still matches the live file
+///   supplies its cached symbols and doc tokens with **no read at all**;
+/// - anything else — no entry, a stale fingerprint, a file deleted or
+///   unreadable, or an entry written by a pre-DF-WARPFS-76 warm that carries
+///   no `symbols`/`doc` — is read once and extracted exactly as
+///   [`default_symbol_extractor`] / [`default_doc_extractor`] would,
+///   memoized for the rest of the index build.
+///
+/// Queries never write the cache: it is warm's artifact, and a search that
+/// rewrote it would race a sibling reader (and re-open the very cost this
+/// closes). A cache written before this schema is therefore enriched by the
+/// next `hilo graph warm`, not by a query.
+pub struct ParseCacheTerms {
+    root: std::path::PathBuf,
+    /// Warm's raw entries, kept as JSON so an entry with a future/unknown
+    /// shape is treated as absent instead of failing the whole load.
+    entries: HashMap<String, serde_json::Value>,
+    /// One read+extract per document per index build, whichever channel
+    /// asks first (the CLI used to read a file twice — once per channel).
+    memo: std::cell::RefCell<HashMap<String, IndexTerms>>,
+}
+
+/// Size cap shared by both default extractors: larger files are generated or
+/// minified blobs whose definitions and prose only pollute the index.
+const MAX_INDEXED_SOURCE_BYTES: u64 = 1_000_000;
+
+/// `(mtime nanos, size)` of a live file — byte-for-byte the fingerprint warm
+/// records in the parse cache (see `hilo-cli`'s `file_fingerprint`).
+fn live_fingerprint(path: &std::path::Path) -> Option<(u64, u64)> {
+    let meta = std::fs::metadata(path).ok()?;
+    let nanos = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos() as u64;
+    Some((nanos, meta.len()))
+}
+
+/// Pseudo-nodes are import STRINGS, not openable documents (GAP-091).
+fn is_pseudo_node_prefix(path: &str) -> bool {
+    path.starts_with("pkg:")
+        || path.starts_with("local:")
+        || path.starts_with("sys:")
+        || path.starts_with("std:")
+        || path.starts_with("external:")
+}
+
+/// A cached entry still describes the live file: same mtime, same size.
+fn entry_is_fresh(entry: &serde_json::Value, full: &std::path::Path) -> bool {
+    let Some((nanos, size)) = live_fingerprint(full) else {
+        return false;
+    };
+    entry.get("m").and_then(|v| v.as_u64()) == Some(nanos)
+        && entry.get("s").and_then(|v| v.as_u64()) == Some(size)
+}
+
+/// A JSON array of strings, if the entry carries one (a pre-DF-WARPFS-76
+/// entry carries neither key at all).
+fn json_string_array(value: Option<&serde_json::Value>) -> Option<Vec<String>> {
+    value?.as_array().map(|items| {
+        items
+            .iter()
+            .filter_map(|item| item.as_str().map(str::to_string))
+            .collect()
+    })
+}
+
+impl ParseCacheTerms {
+    /// Load `<root>/.vfs/graph/.parse_cache.json`. A missing or unparseable
+    /// cache yields an empty set — every document is then read+extracted,
+    /// which is the pre-DF-WARPFS-76 behaviour, never an error.
+    pub fn load(root: &std::path::Path) -> Self {
+        let cache_path = root.join(".vfs").join("graph").join(".parse_cache.json");
+        let entries = std::fs::read_to_string(&cache_path)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<HashMap<String, serde_json::Value>>(&raw).ok())
+            .unwrap_or_default();
+        Self {
+            root: root.to_path_buf(),
+            entries,
+            memo: std::cell::RefCell::new(HashMap::new()),
+        }
+    }
+
+    /// Number of parse-cache entries loaded — observability for callers that
+    /// want to report whether the fast path is even available.
+    pub fn cached_entries(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Index vocabulary of one document.
+    pub fn terms(&self, doc_path: &str) -> IndexTerms {
+        if let Some(hit) = self.memo.borrow().get(doc_path) {
+            return hit.clone();
+        }
+        let out = self.extract(doc_path);
+        self.memo
+            .borrow_mut()
+            .insert(doc_path.to_string(), out.clone());
+        out
+    }
+
+    /// Symbols channel only — the [`SymbolExtractor`] shape.
+    pub fn symbols(&self, doc_path: &str) -> Vec<String> {
+        self.terms(doc_path).symbols
+    }
+
+    /// Documentation channel only — the [`DocExtractor`] shape.
+    pub fn doc_tokens(&self, doc_path: &str) -> Vec<String> {
+        self.terms(doc_path).doc
+    }
+
+    fn extract(&self, doc_path: &str) -> IndexTerms {
+        if is_pseudo_node_prefix(doc_path) {
+            return IndexTerms::default();
+        }
+        let full = self.root.join(doc_path);
+        if let Some(entry) = self.entries.get(doc_path) {
+            if entry_is_fresh(entry, &full) {
+                let symbols = json_string_array(entry.get("symbols"));
+                let doc = json_string_array(entry.get("doc"));
+                if let (Some(symbols), Some(doc)) = (symbols, doc) {
+                    return IndexTerms { symbols, doc };
+                }
+            }
+        }
+        // No entry, a stale one, or one written before this schema existed:
+        // read the file once and extract both channels off the same bytes.
+        // Every guard here mirrors the default extractors, so a document
+        // yields exactly the vocabulary search indexed before the cache
+        // carried it.
+        let Ok(meta) = std::fs::metadata(&full) else {
+            return IndexTerms::default();
+        };
+        if meta.len() > MAX_INDEXED_SOURCE_BYTES {
+            return IndexTerms::default();
+        }
+        let Ok(source) = std::fs::read_to_string(&full) else {
+            return IndexTerms::default();
+        };
+        IndexTerms {
+            symbols: crate::signal::extract_symbol_names_for_index(doc_path, &source),
+            doc: extract_doc_tokens(doc_path, &source),
+        }
+    }
+}
+
+/// Symbol channel over [`ParseCacheTerms`] — the drop-in replacement for
+/// [`default_symbol_extractor`] on paths where a warm can be present.
+pub fn parse_cache_symbol_extractor(terms: &ParseCacheTerms) -> impl Fn(&str) -> Vec<String> + '_ {
+    move |doc_path: &str| terms.symbols(doc_path)
+}
+
+/// Documentation channel over [`ParseCacheTerms`] — the drop-in replacement
+/// for [`default_doc_extractor`] on the same paths.
+pub fn parse_cache_doc_extractor(terms: &ParseCacheTerms) -> impl Fn(&str) -> Vec<String> + '_ {
+    move |doc_path: &str| terms.doc_tokens(doc_path)
 }
 
 // ──────────────────────────── Tokenization ────────────────────────────
@@ -1221,8 +1429,18 @@ pub fn search_with_symbols_and_docs(
                 .root
                 .clone()
                 .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-            let extracted = default_symbol_extractor(&root_tmp);
-            let extracted_docs = default_doc_extractor(&root_tmp);
+            // DF-WARPFS-76: take both channels from warm's per-file parse
+            // cache, whose `{m, s}` fingerprint is the same one that lets a
+            // no-change `graph warm` skip parsing. A fresh entry supplies its
+            // symbols and doc tokens with no read at all; only missing/stale
+            // entries (and entries from a warm older than this schema) are
+            // read+extracted, once per build. This is the path MCP
+            // `vfs_graph_search` and `understand`'s semantic fallback take —
+            // they have no caller-supplied cache, so they used to re-parse
+            // the entire corpus on every call.
+            let terms = ParseCacheTerms::load(&root_tmp);
+            let extracted = parse_cache_symbol_extractor(&terms);
+            let extracted_docs = parse_cache_doc_extractor(&terms);
             let index = TfIdfIndex::build_with_docs(
                 db,
                 Some(&extracted),
@@ -3378,5 +3596,196 @@ mod tests {
         let r1 = search(&db, "product catalog service", &opts).unwrap();
         let r2 = search(&db, "product catalog service", &opts).unwrap();
         assert_eq!(r1, r2, "edge-aware search must be deterministic");
+    }
+
+    // ── DF-WARPFS-76: parse-cache vocabulary serves the default extractor ──
+
+    /// The `(mtime nanos, size)` identity warm records for a live file.
+    fn live_stat(root: &std::path::Path, rel: &str) -> (u64, u64) {
+        let meta = std::fs::metadata(root.join(rel)).unwrap();
+        let nanos = meta
+            .modified()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64;
+        (nanos, meta.len())
+    }
+
+    fn write_parse_cache(root: &std::path::Path, entries: serde_json::Value) {
+        let graph_dir = root.join(".vfs/graph");
+        std::fs::create_dir_all(&graph_dir).unwrap();
+        std::fs::write(
+            graph_dir.join(".parse_cache.json"),
+            serde_json::to_string(&entries).unwrap(),
+        )
+        .unwrap();
+    }
+
+    /// A corpus file whose live content is deliberately DIFFERENT from the
+    /// vocabulary the cache will claim, so "did the extractor read the file?"
+    /// is observable in the returned terms (no permission tricks needed).
+    fn parse_cache_fixture() -> (tempfile::TempDir, GraphDB) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(
+            dir.path().join("src/hidden.py"),
+            "\"\"\"Live module prose.\"\"\"\n\n\ndef live_only_symbol():\n    return 1\n",
+        )
+        .unwrap();
+        let db = GraphDB::open(dir.path().join("graph.db").to_str().unwrap()).unwrap();
+        db.insert_edges(&[edge("src/hidden.py", "pkg:math", "imports")])
+            .unwrap();
+        (dir, db)
+    }
+
+    #[test]
+    fn parse_cache_terms_serve_a_fresh_entry_without_reading_the_file() {
+        let (dir, _db) = parse_cache_fixture();
+        let (m, s) = live_stat(dir.path(), "src/hidden.py");
+        write_parse_cache(
+            dir.path(),
+            serde_json::json!({
+                "src/hidden.py": {
+                    "m": m, "s": s, "edges": [],
+                    "symbols": ["cached_symbol"],
+                    "doc": ["cached", "prose"],
+                }
+            }),
+        );
+
+        let terms = ParseCacheTerms::load(dir.path());
+        assert_eq!(terms.cached_entries(), 1, "the warm entry must load");
+        let served = terms.terms("src/hidden.py");
+        assert_eq!(
+            served.symbols,
+            vec!["cached_symbol".to_string()],
+            "a fresh {m, s} entry must be served verbatim — a read would \
+             have returned live_only_symbol"
+        );
+        // Channel accessors must agree with the combined view (one memoized
+        // extraction per document per index build).
+        assert_eq!(terms.symbols("src/hidden.py"), served.symbols);
+        assert_eq!(terms.doc_tokens("src/hidden.py"), served.doc);
+        assert_eq!(served.doc, vec!["cached".to_string(), "prose".to_string()]);
+    }
+
+    #[test]
+    fn parse_cache_terms_reread_a_stale_or_pre_upgrade_entry() {
+        let (dir, _db) = parse_cache_fixture();
+        let (m, s) = live_stat(dir.path(), "src/hidden.py");
+
+        // Stale fingerprint (`m` one nanosecond off): the cached vocabulary
+        // belongs to an older revision of the file and must be discarded.
+        write_parse_cache(
+            dir.path(),
+            serde_json::json!({
+                "src/hidden.py": {
+                    "m": m.wrapping_sub(1), "s": s, "edges": [],
+                    "symbols": ["stale_symbol"],
+                    "doc": ["stale"],
+                }
+            }),
+        );
+        let stale = ParseCacheTerms::load(dir.path()).terms("src/hidden.py");
+        assert_eq!(
+            stale.symbols,
+            vec!["live_only_symbol".to_string()],
+            "a stale entry must fall back to the file's own definitions"
+        );
+
+        // An entry written before the cache carried vocabulary (no `symbols`
+        // /`doc` keys at all) is equally a miss — the schema upgrade must not
+        // serve an empty channel silently.
+        write_parse_cache(
+            dir.path(),
+            serde_json::json!({ "src/hidden.py": { "m": m, "s": s, "edges": [] } }),
+        );
+        let pre_upgrade = ParseCacheTerms::load(dir.path()).terms("src/hidden.py");
+        assert_eq!(pre_upgrade.symbols, vec!["live_only_symbol".to_string()]);
+        assert!(
+            pre_upgrade.doc.iter().any(|t| t == "prose"),
+            "the doc channel must be re-derived too, got {:?}",
+            pre_upgrade.doc
+        );
+    }
+
+    #[test]
+    fn parse_cache_terms_treat_a_size_change_as_stale() {
+        let (dir, _db) = parse_cache_fixture();
+        let (m, s) = live_stat(dir.path(), "src/hidden.py");
+        write_parse_cache(
+            dir.path(),
+            serde_json::json!({
+                "src/hidden.py": {
+                    "m": m, "s": s + 1, "edges": [],
+                    "symbols": ["stale_symbol"], "doc": []
+                }
+            }),
+        );
+        assert_eq!(
+            ParseCacheTerms::load(dir.path())
+                .terms("src/hidden.py")
+                .symbols,
+            vec!["live_only_symbol".to_string()],
+            "a size mismatch invalidates the entry even when mtime matches"
+        );
+    }
+
+    #[test]
+    fn search_default_extractor_reads_symbols_from_the_parse_cache() {
+        // The whole DF-WARPFS-76 contract on the surface MCP and
+        // `understand` use (`search` with `index_symbols`, no extractor
+        // argument): a warm parse cache REPLACES the per-query file read, so
+        // the cached vocabulary is what the index carries.
+        let (dir, db) = parse_cache_fixture();
+        let (m, s) = live_stat(dir.path(), "src/hidden.py");
+        write_parse_cache(
+            dir.path(),
+            serde_json::json!({
+                "src/hidden.py": {
+                    "m": m, "s": s, "edges": [],
+                    "symbols": ["zebra_cached_symbol"], "doc": []
+                }
+            }),
+        );
+        let opts = SearchOpts {
+            limit: 10,
+            index_symbols: true,
+            root: Some(dir.path().to_path_buf()),
+            extra_documents: Vec::new(),
+        };
+
+        let cached_hit = search(&db, "zebra_cached_symbol", &opts).unwrap();
+        assert!(
+            cached_hit.iter().any(|r| r.file_path == "src/hidden.py"),
+            "the cached symbol must reach the index without a read, got: {cached_hit:?}"
+        );
+
+        // Negative premise: the LIVE definition must NOT be indexed while the
+        // fresh entry stands — otherwise the hit above could have come from
+        // a parse that happened anyway.
+        let live_miss = search(&db, "live_only_symbol", &opts).unwrap();
+        assert!(
+            !live_miss.iter().any(|r| r.file_path == "src/hidden.py"),
+            "a fresh cache entry must suppress the parse, got: {live_miss:?}"
+        );
+
+        // Invalidate the entry and the live definition becomes findable
+        // again — the fallback path is intact.
+        write_parse_cache(
+            dir.path(),
+            serde_json::json!({
+                "src/hidden.py": {
+                    "m": m.wrapping_sub(1), "s": s, "edges": [],
+                    "symbols": ["zebra_cached_symbol"], "doc": []
+                }
+            }),
+        );
+        let live_hit = search(&db, "live_only_symbol", &opts).unwrap();
+        assert!(
+            live_hit.iter().any(|r| r.file_path == "src/hidden.py"),
+            "a stale entry must fall back to a real parse, got: {live_hit:?}"
+        );
     }
 }

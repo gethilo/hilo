@@ -6,6 +6,36 @@ All notable changes to Hilo are documented in this file.
 
 ### Added
 
+- **Search index vocabulary persisted, so a query stops re-reading the
+  corpus** (DF-WARPFS-76). `hilo graph warm` now records each file's
+  definition names (`symbols`) and comment/docstring tokens (`doc`) in its
+  per-file parse cache, and the search surfaces consume them instead of
+  re-deriving them per invocation:
+
+  - `hilo_graph::ParseCacheTerms` serves the default extractor path
+    (`search` + `index_symbols` with no caller-supplied extractor — MCP
+    `vfs_graph_search` and `understand`'s semantic fallback) from warm's
+    entry under the same `{m, s}` fingerprint warm already trusts. Only a
+    missing/stale entry, or one written by an older warm, is read and
+    extracted; a query never writes the cache.
+  - `.symbols_cache.json` (version 3) records each file's
+    `(mtime nanos, size)` as scanned, so an unchanged corpus is validated by
+    `stat` alone — the previous version re-read and re-hashed every source
+    file on every one-shot query. Any mismatch (or an older cache) still goes
+    through the content scan, which is what proves the new bytes; a file that
+    moves under the scan is recorded `Volatile` and can never satisfy the
+    fast path.
+  - Both surfaces now parse warm's cache keys ONCE per query
+    (`parse_cache_keys` + `zero_edge_documents_for`), instead of parsing the
+    same JSON twice (`IgnoredAny` skips the payloads).
+
+  Measured on a warmed 935-file redis checkout, `hilo graph search "append
+  list value"`: 97.7 ms → 86.5 ms mean (`--no-symbols` floor ~48 ms); the
+  symbol channel's incremental cost over the path-only index fell from
+  ~50 ms to ~14 ms across paired runs, and the top-20 result list is
+  byte-identical. The search path opens no source file when the caches are
+  current.
+
 - **Edge deduplication for `edges.jsonl` + `hilo graph gc`**
   (REV-WARPFS-8): every writer now enforces the `(from, to, rel,
   provenance)` identity — the trigger/watcher append path went through
