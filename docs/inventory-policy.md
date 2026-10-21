@@ -44,7 +44,7 @@ gitignored:
 | File | Role |
 |------|------|
 | `graph.db` | DuckDB query cache, loaded from edges.jsonl at open time; reloaded/reconciled against the JSONL whenever the stamp (mtime+size) says the JSONL moved, and since GAP-094 resumed from the checkpoint offset rather than replayed from byte 0. A missing graph.db is not an error — commands rebuild it. |
-| `.parse_cache.json` | Per-file parse cache (content hash + mtime), the PERF-002 incremental-warm state. |
+| `.parse_cache.json` | Per-file parse cache (mtime + size), the PERF-002 incremental-warm state. Each entry also carries the file's search-index vocabulary — definition names (`symbols`) and comment/docstring tokens (`doc`) — so a query reads it instead of re-parsing the corpus (DF-WARPFS-76); an entry from an older warm simply lacks those keys and is re-derived (and re-recorded by the next warm). |
 | `.last_warm` | mtime marker that scopes `warm --changed`. |
 | `.last_reconcile` | PERF-001 fingerprint stamp (mtime+size of edges.jsonl) letting read-only opens skip cache re-validation; since GAP-094 also a checkpoint — consumed byte offset, a digest of that prefix, and whether the ingest reached EOF (`v2:` line). A stopped-at-budget checkpoint is a resume point, never a claim that the cache is fresh. |
 

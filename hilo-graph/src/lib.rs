@@ -79,9 +79,11 @@ pub use wiring_report::{
 
 pub use semantic::tokenize as semantic_tokenize;
 pub use semantic::{
-    default_doc_extractor, default_symbol_extractor, extract_doc_tokens, reciprocal_rank_fusion,
-    search, search_with_symbols, search_with_symbols_and_docs, zero_edge_documents, DocExtractor,
-    SearchOpts, SearchResult, TfIdfIndex, DOC_TOKEN_BUDGET,
+    default_doc_extractor, default_symbol_extractor, extract_doc_tokens, parse_cache_doc_extractor,
+    parse_cache_keys, parse_cache_symbol_extractor, reciprocal_rank_fusion, search,
+    search_with_symbols, search_with_symbols_and_docs, zero_edge_documents,
+    zero_edge_documents_for, DocExtractor, IndexTerms, ParseCacheTerms, SearchOpts, SearchResult,
+    TfIdfIndex, DOC_TOKEN_BUDGET,
 };
 
 pub use surfaces::{

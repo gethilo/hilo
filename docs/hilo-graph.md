@@ -89,8 +89,18 @@ not dilute the match. Both identifier channels keep the historical BM25 length
 accounting, so pre-existing rankings are preserved by construction.
 
 The CLI persists each file's documentation vocabulary in
-`.vfs/graph/.symbols_cache.json` (version 2) beside its symbols, so a query
-never re-reads the corpus. `--no-symbols` restores the path-only index.
+`.vfs/graph/.symbols_cache.json` (version 3) beside its symbols, so a query
+never re-reads the corpus. Version 3 also records each file's
+`(mtime nanos, size)` as it was scanned, so an unchanged corpus is validated
+by `stat` alone instead of being re-read and re-hashed on every query
+(DF-WARPFS-76); any mismatch falls back to the content scan, which is what
+actually proves the new bytes. `--no-symbols` restores the path-only index.
+
+Warm also stores the same vocabulary (`symbols`, `doc`) in its per-file parse
+cache, so the surfaces without a caller-supplied extractor — MCP
+`vfs_graph_search` and `understand`'s semantic fallback — take it from
+`ParseCacheTerms` under the `{m, s}` fingerprint warm already trusts, reading
+only the files whose entry is missing or stale.
 
 `tests/wave11_search_test.rs` pins the Wave 11 intent/exact cases over a
 checked-in corpus of the real upstream files (`tests/fixtures/wave11/`); see

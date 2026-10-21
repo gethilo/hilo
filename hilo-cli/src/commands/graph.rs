@@ -79,12 +79,42 @@ fn file_fingerprint(p: &Path) -> Option<(u128, u64)> {
     Some((nanos, m.len()))
 }
 
+/// Per-file search-index vocabulary persisted beside the parse fingerprint
+/// (DF-WARPFS-76): the definition names and documentation tokens `hilo graph
+/// search` and MCP `vfs_graph_search` index, extracted ONCE during warm
+/// instead of on every query.
+///
+/// Exactly the two calls the search-side default extractors make
+/// (`hilo_graph::signal::extract_symbol_names_for_index` and
+/// `hilo_graph::semantic::extract_doc_tokens`), on the same bytes, so a warm
+/// entry yields the vocabulary the query would have derived itself. Files
+/// over the extractor's size cap get empty channels — the same documents the
+/// default extractors refuse to index.
+fn parse_cache_terms(rel: &str, source: &str) -> (Vec<String>, Vec<String>) {
+    if source.len() as u64 > MAX_SYMBOL_SOURCE_BYTES {
+        return (Vec::new(), Vec::new());
+    }
+    (
+        hilo_graph::signal::extract_symbol_names_for_index(rel, source),
+        hilo_graph::semantic::extract_doc_tokens(rel, source),
+    )
+}
+
 // PERF-009: one-shot `graph search` and `graph understand` processes share
-// source-defined symbols through a content-validated cache. This cache is
-// deliberately separate from `.parse_cache.json`: warm's cache is keyed by
-// mtime+size and stores import edges, while exact-symbol recall must reject a
-// same-size/same-mtime source rewrite.
-const SYMBOL_CACHE_VERSION: u32 = 2;
+// source-defined symbols through a persisted cache. This cache is
+// deliberately separate from `.parse_cache.json`: warm's cache stores import
+// edges plus (DF-WARPFS-76) the index vocabulary a query wants, while this
+// one is the QUERY-side view — path → symbols + doc tokens for every corpus
+// document, root-scoped and versioned.
+//
+// DF-WARPFS-76 validation: reusing it used to cost a content hash of every
+// source file per query (the whole corpus read on every `graph search`).
+// The cache now records each file's `{mtime nanos, size}` — the identity
+// warm's parse cache has trusted since PERF-002 — and a load reuses the
+// persisted maps when EVERY path still matches, opening no file at all.
+// Any mismatch (or a cache from an older version) falls back to the
+// content scan, which is what actually proves the new bytes.
+const SYMBOL_CACHE_VERSION: u32 = 3;
 const SYMBOL_CACHE_FILE: &str = ".symbols_cache.json";
 const MAX_SYMBOL_SOURCE_BYTES: u64 = 1_000_000;
 static SYMBOL_CACHE_TEMP_ID: AtomicUsize = AtomicUsize::new(0);
@@ -92,6 +122,32 @@ static SYMBOL_CACHE_TEMP_ID: AtomicUsize = AtomicUsize::new(0);
 /// Per-file search-index vocabulary: path → terms (symbol names, or
 /// documentation tokens).
 type SymbolMap = BTreeMap<String, Vec<String>>;
+
+/// How a symbol-cache entry saw one source file, so a later load can decide
+/// whether the persisted vocabulary is still the one a rescan would derive.
+///
+/// `Fingerprint` is `(mtime nanos, size)` — the same identity warm's parse
+/// cache uses to skip a re-parse. `Volatile` records a file that changed
+/// while it was being scanned: its own terms may pair one revision's bytes
+/// with another revision's metadata, so it must never satisfy the fast path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum SymbolFileStat {
+    Fingerprint { m: u64, s: u64 },
+    Unreadable,
+    Volatile,
+}
+
+/// One full pass over the symbol sources: the corpus fingerprint, the two
+/// vocabulary maps, and the per-file stat identity that lets the NEXT load
+/// skip the pass entirely.
+#[derive(Debug)]
+struct SymbolScan {
+    fingerprint: String,
+    symbols: SymbolMap,
+    index_doc: SymbolMap,
+    files: BTreeMap<String, SymbolFileStat>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PersistedSymbolCache {
@@ -104,6 +160,11 @@ struct PersistedSymbolCache {
     /// that describes a behaviour without re-reading the corpus per query.
     #[serde(default)]
     index_doc: SymbolMap,
+    /// DF-WARPFS-76: per-file stat identity from the scan that produced
+    /// `symbols`/`index_doc`. Empty (or absent, in a pre-v3 cache) means the
+    /// fast path is unavailable and the next load rescans.
+    #[serde(default)]
+    files: BTreeMap<String, SymbolFileStat>,
 }
 
 #[derive(Debug)]
@@ -120,7 +181,11 @@ fn symbol_cache_path(root: &Path) -> PathBuf {
 
 /// Graph documents that can carry source-defined symbols, sorted so both the
 /// fingerprint and serialized cache are deterministic.
-fn symbol_source_paths(graph: &GraphDB) -> Result<Vec<String>> {
+///
+/// `cache_keys` is warm's parse-cache key set, already loaded by the caller
+/// (DF-WARPFS-76: the CLI asks the same cache for the zero-edge corpus, so one
+/// read serves both questions).
+fn symbol_source_paths(graph: &GraphDB, cache_keys: &[String]) -> Result<Vec<String>> {
     let mut paths = symbol_edge_endpoint_paths(graph)?;
 
     // DF-WARPFS-116: the graph DB stores only edge ENDPOINTS, so a
@@ -129,18 +194,15 @@ fn symbol_source_paths(graph: &GraphDB) -> Result<Vec<String>> {
     // AND the search corpus. Warm's parse cache keys EVERY discovered file,
     // so its zero-edge keys (files on disk with a known language extension,
     // absent from the endpoint set) join the corpus.
-    if let Ok(cwd) = std::env::current_dir() {
-        let cache = load_parse_cache(&cwd);
-        for key in cache.keys() {
-            if !paths.contains(key)
-                && Language::from_path(std::path::Path::new(key)).is_some()
-                && std::path::Path::new(key).exists()
-            {
-                paths.push(key.clone());
-            }
+    for key in cache_keys {
+        if !paths.contains(key)
+            && Language::from_path(std::path::Path::new(key)).is_some()
+            && std::path::Path::new(key).exists()
+        {
+            paths.push(key.clone());
         }
-        paths.sort();
     }
+    paths.sort();
     Ok(paths)
 }
 
@@ -168,17 +230,23 @@ fn symbol_edge_endpoint_paths(graph: &GraphDB) -> Result<Vec<String>> {
 /// a concurrent edit from pairing one revision's key with another revision's
 /// symbols. Missing/unopenable files get a deterministic empty-symbol marker,
 /// so a formerly readable file can never reuse its old symbols.
+///
+/// DF-WARPFS-76: the scan also records each file's `(mtime nanos, size)` as it
+/// read it, so the NEXT load can prove "nothing changed" with `stat` alone
+/// instead of re-reading every source. A file that moves under the read is
+/// recorded `Volatile` and can never satisfy that fast path.
 fn scan_symbol_sources(
     root: &Path,
     root_id: &str,
     paths: &[String],
     extract: bool,
-) -> Result<(String, SymbolMap, SymbolMap)> {
+) -> Result<SymbolScan> {
     let mut corpus = Sha256::new();
     hash_field(&mut corpus, &SYMBOL_CACHE_VERSION.to_le_bytes());
     hash_field(&mut corpus, root_id.as_bytes());
     let mut symbols = BTreeMap::new();
     let mut index_doc = BTreeMap::new();
+    let mut files: BTreeMap<String, SymbolFileStat> = BTreeMap::new();
 
     for rel in paths {
         hash_field(&mut corpus, rel.as_bytes());
@@ -186,9 +254,10 @@ fn scan_symbol_sources(
         match std::fs::File::open(&full) {
             Ok(mut file) => {
                 hash_field(&mut corpus, b"file");
+                let opened_at = file.metadata().ok();
                 let collect_source = extract
-                    && file
-                        .metadata()
+                    && opened_at
+                        .as_ref()
                         .map(|m| m.len() <= MAX_SYMBOL_SOURCE_BYTES)
                         .unwrap_or(false);
                 let mut source = collect_source.then(Vec::new);
@@ -212,6 +281,12 @@ fn scan_symbol_sources(
                 }
                 hash_field(&mut corpus, &file_hash.finalize());
 
+                // The identity recorded for the fast path is the one the file
+                // had when it was opened AND when the read finished: if those
+                // disagree the terms just extracted may belong to neither
+                // revision, so the entry is marked unusable instead.
+                files.insert(rel.clone(), symbol_file_stat(&full, opened_at));
+
                 let text = source.and_then(|bytes| String::from_utf8(bytes).ok());
                 let names = text
                     .as_deref()
@@ -232,6 +307,7 @@ fn scan_symbol_sources(
             Err(error) => {
                 hash_field(&mut corpus, b"unreadable");
                 hash_field(&mut corpus, format!("{:?}", error.kind()).as_bytes());
+                files.insert(rel.clone(), SymbolFileStat::Unreadable);
                 if extract {
                     symbols.insert(rel.clone(), Vec::new());
                     index_doc.insert(rel.clone(), Vec::new());
@@ -240,7 +316,46 @@ fn scan_symbol_sources(
         }
     }
 
-    Ok((format!("{:x}", corpus.finalize()), symbols, index_doc))
+    Ok(SymbolScan {
+        fingerprint: format!("{:x}", corpus.finalize()),
+        symbols,
+        index_doc,
+        files,
+    })
+}
+
+/// Stat identity of one source file for the symbol cache: the `(mtime nanos,
+/// size)` warm's parse cache keys on, taken before and after the read so a
+/// file that moved mid-scan is recorded `Volatile` (and can never be reused
+/// without a rescan).
+fn symbol_file_stat(full: &Path, opened_at: Option<std::fs::Metadata>) -> SymbolFileStat {
+    let Some(before) = opened_at.as_ref().and_then(metadata_nanos_and_len) else {
+        return SymbolFileStat::Volatile;
+    };
+    let Some(after) = std::fs::metadata(full)
+        .ok()
+        .as_ref()
+        .and_then(metadata_nanos_and_len)
+    else {
+        return SymbolFileStat::Volatile;
+    };
+    if before != after {
+        return SymbolFileStat::Volatile;
+    }
+    SymbolFileStat::Fingerprint {
+        m: before.0,
+        s: before.1,
+    }
+}
+
+fn metadata_nanos_and_len(meta: &std::fs::Metadata) -> Option<(u64, u64)> {
+    let nanos = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos() as u64;
+    Some((nanos, meta.len()))
 }
 
 fn hash_field(hasher: &mut Sha256, bytes: &[u8]) {
@@ -248,13 +363,46 @@ fn hash_field(hasher: &mut Sha256, bytes: &[u8]) {
     hasher.update(bytes);
 }
 
+/// True when the persisted vocabulary still describes the corpus: the same
+/// document set in the same order, and every file's recorded stat identity
+/// still matching the live file. Costs one `stat` per document and opens
+/// nothing — the DF-WARPFS-76 fast path.
+fn symbol_cache_is_current(cached: &PersistedSymbolCache, root: &Path, paths: &[String]) -> bool {
+    if cached.symbols.keys().ne(paths.iter()) || cached.index_doc.keys().ne(paths.iter()) {
+        return false;
+    }
+    if cached.files.len() != paths.len() {
+        return false;
+    }
+    paths.iter().all(|rel| {
+        let live = file_fingerprint(&root.join(rel)).map(|(nanos, size)| (nanos as u64, size));
+        match (cached.files.get(rel), live) {
+            (Some(SymbolFileStat::Fingerprint { m, s }), Some((lm, ls))) => *m == lm && *s == ls,
+            (Some(SymbolFileStat::Unreadable), None) => true,
+            _ => false,
+        }
+    })
+}
+
 fn load_or_build_symbol_cache(root: &Path, graph: &GraphDB) -> Result<SymbolCacheLoad> {
+    let cache_keys = hilo_graph::parse_cache_keys(root);
+    load_or_build_symbol_cache_from_keys(root, graph, &cache_keys)
+}
+
+/// [`load_or_build_symbol_cache`] with warm's parse-cache keys already in
+/// hand — the CLI's `graph search` reads them once for the zero-edge corpus
+/// (DF-WARPFS-76) and passes them here instead of re-reading the cache.
+fn load_or_build_symbol_cache_from_keys(
+    root: &Path,
+    graph: &GraphDB,
+    cache_keys: &[String],
+) -> Result<SymbolCacheLoad> {
     let root_id = root
         .canonicalize()
         .with_context(|| format!("failed to resolve graph root {}", root.display()))?
         .to_string_lossy()
         .into_owned();
-    let paths = symbol_source_paths(graph)?;
+    let paths = symbol_source_paths(graph, cache_keys)?;
     let cache_path = symbol_cache_path(root);
 
     let cached = std::fs::read(&cache_path)
@@ -262,8 +410,19 @@ fn load_or_build_symbol_cache(root: &Path, graph: &GraphDB) -> Result<SymbolCach
         .and_then(|raw| serde_json::from_slice::<PersistedSymbolCache>(&raw).ok());
     if let Some(cached) = cached {
         if cached.version == SYMBOL_CACHE_VERSION && cached.root == root_id {
-            let (current, _, _) = scan_symbol_sources(root, &root_id, &paths, false)?;
-            if current == cached.fingerprint {
+            // DF-WARPFS-76 fast path: nothing has been touched since the scan
+            // that wrote this cache, so the persisted vocabulary IS what a
+            // rescan would derive. No source file is opened.
+            if symbol_cache_is_current(&cached, root, &paths) {
+                return Ok(SymbolCacheLoad {
+                    symbols: cached.symbols,
+                    index_doc: cached.index_doc,
+                    #[cfg(test)]
+                    rebuilt: false,
+                });
+            }
+            let scan = scan_symbol_sources(root, &root_id, &paths, false)?;
+            if scan.fingerprint == cached.fingerprint {
                 return Ok(SymbolCacheLoad {
                     symbols: cached.symbols,
                     index_doc: cached.index_doc,
@@ -274,13 +433,14 @@ fn load_or_build_symbol_cache(root: &Path, graph: &GraphDB) -> Result<SymbolCach
         }
     }
 
-    let (fingerprint, symbols, index_doc) = scan_symbol_sources(root, &root_id, &paths, true)?;
+    let scan = scan_symbol_sources(root, &root_id, &paths, true)?;
     let cache = PersistedSymbolCache {
         version: SYMBOL_CACHE_VERSION,
         root: root_id,
-        fingerprint,
-        symbols,
-        index_doc,
+        fingerprint: scan.fingerprint,
+        symbols: scan.symbols,
+        index_doc: scan.index_doc,
+        files: scan.files,
     };
     write_symbol_cache_atomic(&cache_path, &cache)?;
     Ok(SymbolCacheLoad {
@@ -692,6 +852,39 @@ pub fn run_warm_in(
                                 .iter()
                                 .filter_map(|e| serde_json::from_value(e.clone()).ok())
                                 .collect();
+                            // DF-WARPFS-76: an entry written before the parse
+                            // cache carried search vocabulary (symbols + doc
+                            // tokens) is enriched on THIS warm — the only
+                            // writer that may touch the cache — so every later
+                            // query reads nothing at all. Entries that already
+                            // carry both channels stay a pure stat hit.
+                            if entry.get("symbols").is_none() || entry.get("doc").is_none() {
+                                // Oversized blobs are indexable-but-empty by
+                                // contract (both extractors refuse them), so
+                                // they are recorded as empty rather than
+                                // retried on every warm. A file that cannot be
+                                // read right now is left UNrecorded: the entry
+                                // stays a miss, so the next query re-derives
+                                // and the next warm tries again.
+                                let size = file_fingerprint(file).map(|(_, s)| s).unwrap_or(0);
+                                let terms = if size > MAX_SYMBOL_SOURCE_BYTES {
+                                    Some((Vec::new(), Vec::new()))
+                                } else {
+                                    std::fs::read_to_string(file)
+                                        .ok()
+                                        .map(|source| parse_cache_terms(&rel, &source))
+                                };
+                                if let Some((symbols, doc)) = terms {
+                                    let enriched = serde_json::json!({
+                                        "m": file_fingerprint(file).map(|(n, _)| n as u64).unwrap_or(0),
+                                        "s": file_fingerprint(file).map(|(_, s)| s).unwrap_or(0),
+                                        "edges": edges,
+                                        "symbols": symbols,
+                                        "doc": doc,
+                                    });
+                                    new_entries.lock().unwrap().insert(rel.clone(), enriched);
+                                }
+                            }
                             cached_files.fetch_add(1, Ordering::Relaxed);
                             // GAP-065: classify cache hits with the same
                             // rules as fresh parses (a cached __init__.py is
@@ -739,10 +932,16 @@ pub fn run_warm_in(
             }
 
             // record fingerprint + serialized edges for next run
+            // DF-WARPFS-76: also persist the file's search-index vocabulary
+            // (definition names + doc tokens) so a query never re-reads or
+            // re-parses it. Warm already holds the source in memory here.
+            let (symbols, doc) = parse_cache_terms(&rel, &source);
             let entry = serde_json::json!({
                 "m": file_fingerprint(file).map(|(n, _)| n as u64).unwrap_or(0),
                 "s": file_fingerprint(file).map(|(_, s)| s).unwrap_or(0),
                 "edges": edges,
+                "symbols": symbols,
+                "doc": doc,
             });
             new_entries.lock().unwrap().insert(rel.clone(), entry);
             let outcome = FileOutcome::from_edges(file, &edges);
@@ -2921,12 +3120,15 @@ pub fn run_search(query: &str, limit: Option<usize>, no_symbols: bool) -> Result
     // SAME implementation — the CLI-private copy here was byte-equivalent
     // but the MCP tool kept an empty `extra_documents`, so the identical
     // corpus answered the CLI with a hit and MCP with zero results.
-    opts.extra_documents = hilo_graph::zero_edge_documents(&cwd);
+    // DF-WARPFS-76: warm's key set is loaded ONCE and shared with the symbol
+    // cache below — the two questions used to parse the same JSON twice.
+    let parse_cache_keys = hilo_graph::parse_cache_keys(&cwd);
+    opts.extra_documents = hilo_graph::zero_edge_documents_for(&cwd, &parse_cache_keys);
 
     let results = if no_symbols {
         hilo_graph::semantic::search(&graph, query, &opts)
     } else {
-        let cache = load_or_build_symbol_cache(&cwd, &graph)?;
+        let cache = load_or_build_symbol_cache_from_keys(&cwd, &graph, &parse_cache_keys)?;
         // GAP-116: index each file's documentation vocabulary beside its
         // symbols, so an intent prompt ("a property derived from other model
         // fields … serialization JSON Schema") can reach the file whose own
@@ -3554,6 +3756,124 @@ mod tests {
             })
             .count();
         assert_eq!(temp_files, 0, "atomic publish must leave no temp file");
+    }
+
+    /// Build a two-file project whose only edge makes both files corpus
+    /// documents, returning the root and its graph.
+    fn symbol_cache_two_file_fixture() -> (TempDir, GraphDB) {
+        let root = TempDir::new().unwrap();
+        let graph_dir = root.path().join(".vfs").join("graph");
+        let src_dir = root.path().join("src");
+        fs::create_dir_all(&graph_dir).unwrap();
+        fs::create_dir_all(&src_dir).unwrap();
+        fs::write(src_dir.join("plain.rs"), "pub fn CachedNeedle() {}\n").unwrap();
+        fs::write(src_dir.join("dep.rs"), "pub fn Dependency() {}\n").unwrap();
+        let graph = GraphDB::open(graph_dir.join("graph.db").to_str().unwrap()).unwrap();
+        graph
+            .insert_edges(&[Edge::new("src/plain.rs", "src/dep.rs", "imports")])
+            .unwrap();
+        (root, graph)
+    }
+
+    /// DF-WARPFS-76: an unchanged corpus is validated by `stat` alone. The
+    /// proof is that the sources are made UNREADABLE between the two loads
+    /// while their stat identity survives — a load that re-scanned would
+    /// classify both files as unreadable, change the corpus fingerprint and
+    /// rebuild with EMPTY vocabulary. Symbols surviving asserts the fast
+    /// path, not a lucky cache hit.
+    #[cfg(unix)]
+    #[test]
+    fn symbol_cache_stat_fast_path_skips_the_rescan() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (root, graph) = symbol_cache_two_file_fixture();
+        let first = load_or_build_symbol_cache(root.path(), &graph).unwrap();
+        assert!(first.rebuilt, "first load must build the cache");
+        let paths = ["src/plain.rs", "src/dep.rs"];
+        let set_mode = |mode: u32| {
+            for rel in paths {
+                let path = root.path().join(rel);
+                let mut perms = fs::metadata(&path).unwrap().permissions();
+                perms.set_mode(mode);
+                fs::set_permissions(&path, perms).unwrap();
+            }
+        };
+
+        set_mode(0o000);
+        let cached = load_or_build_symbol_cache(root.path(), &graph).unwrap();
+        set_mode(0o644); // let TempDir cleanup recurse again
+
+        assert!(
+            !cached.rebuilt,
+            "an unchanged corpus must be validated by stat, not by re-reading \
+             every source"
+        );
+        assert_eq!(
+            cached.symbols.get("src/plain.rs").unwrap(),
+            &vec!["CachedNeedle".to_string()],
+            "the persisted vocabulary must survive a stat-only load"
+        );
+        assert_eq!(cached.symbols, first.symbols);
+    }
+
+    /// The fast path may never hide a corpus membership change: a new edge
+    /// endpoint is a new document, so the persisted maps cannot be reused.
+    #[test]
+    fn symbol_cache_rebuilds_when_corpus_membership_changes() {
+        let (root, graph) = symbol_cache_two_file_fixture();
+        let first = load_or_build_symbol_cache(root.path(), &graph).unwrap();
+        assert!(first.rebuilt);
+        assert!(!first.symbols.contains_key("src/extra.rs"));
+
+        fs::write(
+            root.path().join("src/extra.rs"),
+            "pub fn ExtraNeedle() {}\n",
+        )
+        .unwrap();
+        graph
+            .insert_edges(&[Edge::new("src/dep.rs", "src/extra.rs", "imports")])
+            .unwrap();
+
+        let second = load_or_build_symbol_cache(root.path(), &graph).unwrap();
+        assert!(
+            second.rebuilt,
+            "a document joining the corpus must invalidate the persisted maps"
+        );
+        assert_eq!(
+            second.symbols.get("src/extra.rs").unwrap(),
+            &vec!["ExtraNeedle".to_string()]
+        );
+    }
+
+    /// A file that MOVES under the scan must never satisfy the fast path: its
+    /// recorded identity is `Volatile`, so the next load rescans instead of
+    /// trusting terms that may describe neither revision.
+    #[test]
+    fn symbol_cache_records_volatile_files_as_never_current() {
+        let root = TempDir::new().unwrap();
+        let src = root.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let path = src.join("plain.rs");
+        fs::write(&path, "pub fn CachedNeedle() {}\n").unwrap();
+
+        // Same size, newer mtime: exactly the rewrite the fast path must
+        // refuse when the scan could not see one stable revision.
+        let opened_at = fs::metadata(&path).unwrap();
+        fs::write(&path, "pub fn MutantNeedle() {}\n").unwrap();
+        let stat = symbol_file_stat(&path, Some(opened_at));
+        assert_eq!(
+            stat,
+            SymbolFileStat::Volatile,
+            "a stat identity that moved under the read must be marked volatile"
+        );
+
+        // And a stable file records the fingerprint warm's parse cache uses.
+        let opened_at = fs::metadata(&path).unwrap();
+        let stable = symbol_file_stat(&path, Some(opened_at));
+        assert!(
+            matches!(stable, SymbolFileStat::Fingerprint { .. }),
+            "an untouched file must record a usable fingerprint, got {stable:?}"
+        );
     }
 
     #[test]
