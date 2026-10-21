@@ -112,8 +112,13 @@ fn write_symbol_index(root: &std::path::Path, entries: &[(&str, &[&str])]) {
         .iter()
         .map(|(path, names)| ((*path).to_string(), serde_json::json!(names)))
         .collect();
+    // DF-WARPFS-165: this fixture writes the schema version the WRITER uses
+    // (`hilo-cli`'s warm/search), taken from the shared constant rather than a
+    // literal. Pinned at the old literal 2, it kept passing while the writer
+    // had moved to 3 and the reader still rejected 3 — the exact drift that
+    // broke every bare-symbol `graph impact` without a red here.
     let cache = serde_json::json!({
-        "version": 2,
+        "version": hilo_graph::resolution::SYMBOL_CACHE_VERSION,
         "root": root.to_string_lossy(),
         "fingerprint": "fixture",
         "symbols": symbols,

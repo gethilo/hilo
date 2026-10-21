@@ -53,8 +53,26 @@ use serde::Deserialize;
 
 use crate::error::GraphResult;
 
-const SYMBOL_CACHE_FILE: &str = ".symbols_cache.json";
-const SYMBOL_CACHE_VERSION: u32 = 2;
+/// File name of the persisted symbol index — the query-side vocabulary
+/// `hilo graph warm`/`search` write into `<root>/.vfs/graph/`.
+///
+/// DF-WARPFS-165: this constant and [`SYMBOL_CACHE_VERSION`] are the
+/// WRITE/READ CONTRACT between `hilo-cli` (writer) and [`symbol_owners`]
+/// (reader). They are defined here, once, and the CLI imports them: a
+/// duplicated literal let DF-WARPFS-76 bump the writer to 3 while this
+/// reader still demanded 2, so every bare-symbol `graph impact` answered
+/// "not in the graph" for a cache the same binary had just written.
+pub const SYMBOL_CACHE_FILE: &str = ".symbols_cache.json";
+
+/// Current schema version of [`SYMBOL_CACHE_FILE`]. Bump it in this file
+/// (never in a per-crate copy) when the persisted shape changes.
+pub const SYMBOL_CACHE_VERSION: u32 = 3;
+
+/// Oldest schema whose `symbols` channel this reader still understands.
+/// v2 → v3 only ADDED the `files` stat-fingerprint map, so the symbol map a
+/// v2 writer persisted is read verbatim; anything older or newer is treated
+/// as absent (the caller keeps the historical unknown-subject error).
+pub const SYMBOL_CACHE_MIN_READABLE_VERSION: u32 = 2;
 
 #[derive(Debug, Deserialize)]
 struct PersistedSymbolCache {
@@ -64,9 +82,12 @@ struct PersistedSymbolCache {
 
 /// Match a query against the identifier portion of an indexed symbol entry.
 ///
-/// Older index entries may carry a language signature (`wsgi_app(self, ...):`)
-/// rather than just the identifier. Keep that persisted representation stable,
-/// but make bare-subject lookup operate on the symbol id.
+/// An entry may carry a language signature (`wsgi_app(self, ...):`) rather than
+/// just the identifier: caches persisted by an older binary still hold that
+/// form, and the extractors for several languages report it. Keep the persisted
+/// representation stable, but make bare-subject lookup operate on the symbol id
+/// (DF-WARPFS-165 fixed the Python extractor itself, which was the main source
+/// of signature-shaped names).
 fn symbol_entry_matches(entry: &str, symbol: &str) -> bool {
     if entry == symbol {
         return true;
@@ -97,7 +118,7 @@ pub fn symbol_owners(root: &Path, symbol: &str) -> GraphResult<Vec<String>> {
     let Ok(cache) = serde_json::from_slice::<PersistedSymbolCache>(&raw) else {
         return Ok(Vec::new());
     };
-    if cache.version != SYMBOL_CACHE_VERSION {
+    if !(SYMBOL_CACHE_MIN_READABLE_VERSION..=SYMBOL_CACHE_VERSION).contains(&cache.version) {
         return Ok(Vec::new());
     }
 
@@ -2405,5 +2426,70 @@ mod tests {
             "?query / #hash suffixes must not be part of the path"
         );
         drop(dir);
+    }
+
+    /// DF-WARPFS-165: the reader must accept the schema the WRITER persists.
+    /// The two sides used to carry independent literals, so a writer bump
+    /// (DF-WARPFS-76: 2 -> 3) made `symbol_owners` reject a cache the same
+    /// binary had just written and every bare-symbol `graph impact` answered
+    /// "not in the graph". The version constant now lives here and the CLI
+    /// imports it, so this test pins the read side of that contract.
+    #[test]
+    fn symbol_owners_read_the_current_cache_schema() {
+        let dir = tempfile::tempdir().unwrap();
+        let graph_dir = dir.path().join(".vfs/graph");
+        std::fs::create_dir_all(&graph_dir).unwrap();
+        let cache_path = graph_dir.join(SYMBOL_CACHE_FILE);
+
+        let write_cache = |version: u32| {
+            let cache = serde_json::json!({
+                "version": version,
+                "root": "/whatever",
+                "fingerprint": "deadbeef",
+                "symbols": {
+                    "src/owner.py": ["unique_symbol():"],
+                    "src/dep.py": ["dep_symbol"],
+                },
+                "index_doc": {},
+                "files": {},
+            });
+            std::fs::write(&cache_path, serde_json::to_string(&cache).unwrap()).unwrap();
+        };
+
+        // Current schema: the signature-shaped entry resolves to its bare id.
+        write_cache(SYMBOL_CACHE_VERSION);
+        assert_eq!(
+            symbol_owners(dir.path(), "unique_symbol").unwrap(),
+            vec!["src/owner.py".to_string()],
+            "a cache written at the current schema version must resolve a bare symbol"
+        );
+        assert_eq!(
+            symbol_owners(dir.path(), "dep_symbol").unwrap(),
+            vec!["src/dep.py".to_string()],
+            "a bare-identifier entry resolves too"
+        );
+        assert!(
+            symbol_owners(dir.path(), "absent_symbol")
+                .unwrap()
+                .is_empty(),
+            "an unknown symbol stays unknown"
+        );
+
+        // Still-readable older schema (v2 -> v3 only ADDED `files`).
+        write_cache(SYMBOL_CACHE_MIN_READABLE_VERSION);
+        assert_eq!(
+            symbol_owners(dir.path(), "unique_symbol").unwrap(),
+            vec!["src/owner.py".to_string()],
+            "a pre-DF-WARPFS-76 cache is still readable"
+        );
+
+        // Unknown FUTURE schema: refuse rather than misread the symbol map.
+        write_cache(SYMBOL_CACHE_VERSION + 1);
+        assert!(
+            symbol_owners(dir.path(), "unique_symbol")
+                .unwrap()
+                .is_empty(),
+            "a schema this build does not know must not be interpreted"
+        );
     }
 }

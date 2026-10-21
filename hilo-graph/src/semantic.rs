@@ -3765,7 +3765,15 @@ mod tests {
         // Negative premise: the LIVE definition must NOT be indexed while the
         // fresh entry stands — otherwise the hit above could have come from
         // a parse that happened anyway.
-        let live_miss = search(&db, "live_only_symbol", &opts).unwrap();
+        //
+        // DF-WARPFS-165: the query must be discriminating. A full-identifier
+        // query ("live_only_symbol") shares the sub-token `symbol` with the
+        // CACHED vocabulary ("zebra_cached_symbol"), so the document scores a
+        // hit whether or not the file was ever read — the arm could never
+        // pass, and could not have proven a suppressed parse if it had.
+        // "live_only" tokenizes to `live`, which only the LIVE definition can
+        // supply, so a hit here really does mean "the file was parsed".
+        let live_miss = search(&db, "live_only", &opts).unwrap();
         assert!(
             !live_miss.iter().any(|r| r.file_path == "src/hidden.py"),
             "a fresh cache entry must suppress the parse, got: {live_miss:?}"
@@ -3782,7 +3790,7 @@ mod tests {
                 }
             }),
         );
-        let live_hit = search(&db, "live_only_symbol", &opts).unwrap();
+        let live_hit = search(&db, "live_only", &opts).unwrap();
         assert!(
             live_hit.iter().any(|r| r.file_path == "src/hidden.py"),
             "a stale entry must fall back to a real parse, got: {live_hit:?}"

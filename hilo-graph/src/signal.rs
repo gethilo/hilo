@@ -1952,18 +1952,44 @@ fn extract_python_signature(node: tree_sitter::Node, source: &[u8]) -> Option<Sy
     let first_line = text.lines().next().unwrap_or(text);
     let trimmed = first_line.trim();
 
-    let name = trimmed
-        .split_whitespace()
-        .nth(1)
-        .unwrap_or(trimmed)
-        .trim_end_matches('(')
-        .to_string();
+    // DF-WARPFS-165: the NAME must be a bare identifier, never declaration
+    // text. Reading the second whitespace token of the line yielded
+    // `live_only_symbol():` for `def live_only_symbol():` (strip of a
+    // trailing `(` never applied — the token ends in `():`), and `def`
+    // itself for `async def foo():`. That signature-shaped "name" was then
+    // what the persisted symbol index carried, so a bare-symbol query only
+    // resolved through resolution's signature-tolerant matcher. Both
+    // `function_definition` and `class_definition` expose the identifier on
+    // the AST's `name` field — authoritative under decorators, `async def`
+    // and multi-line parameter lists, and the same source every other
+    // extractor (JS/TS/Java) reads its name from.
+    let name = node
+        .child_by_field_name("name")
+        .and_then(|name_node| name_node.utf8_text(source).ok())
+        .map(str::to_string)
+        .unwrap_or_else(|| python_name_fallback(trimmed));
 
     Some(Symbol {
         name,
         line,
         signature: trimmed.to_string(),
     })
+}
+
+/// Identifier of a Python declaration line whose AST node carries no `name`
+/// field: skip the `async`/`def`/`class` keywords and cut the declaration
+/// text at its parameter list or trailing `:`.
+fn python_name_fallback(trimmed: &str) -> String {
+    let name_token = trimmed
+        .split_whitespace()
+        .find(|token| !matches!(*token, "async" | "def" | "class"))
+        .unwrap_or(trimmed);
+    name_token
+        .split('(')
+        .next()
+        .unwrap_or(name_token)
+        .trim_end_matches(':')
+        .to_string()
 }
 
 fn extract_js_signature(node: tree_sitter::Node, source: &[u8]) -> Option<Symbol> {
@@ -4238,6 +4264,42 @@ use crate::private::Hidden;
                 s.signature
             );
         }
+    }
+
+    // ── DF-WARPFS-165: a Python definition's NAME is the identifier, never ──
+    // ── the declaration text. It used to be `unique_symbol():` (the second ──
+    // ── whitespace token, never stripped), and `def` for `async def`, and ──
+    // ── that mangled form was what the persisted symbol index carried.    ──
+
+    #[test]
+    fn extract_symbols_python_def_has_real_name() {
+        let src = "def unique_symbol():\n    return 1\n";
+        let symbols = extract_symbols("src/owner.py", src);
+        assert_names_usable(&symbols);
+        assert!(
+            symbols.iter().any(|s| s.name == "unique_symbol"),
+            "expected identifier `unique_symbol`, got: {:?}",
+            symbols.iter().map(|s| &s.name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn extract_symbols_python_async_def_and_class_have_real_names() {
+        let src = "class Owner:\n    pass\n\n\nasync def fetch(session, url):\n    return url\n";
+        let symbols = extract_symbols("src/owner.py", src);
+        assert_names_usable(&symbols);
+        let names: Vec<&str> = symbols.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"Owner"), "class name missing: {names:?}");
+        assert!(
+            names.contains(&"fetch"),
+            "async def name missing: {names:?}"
+        );
+        assert!(
+            !names
+                .iter()
+                .any(|name| name.contains('(') || name.contains(':')),
+            "symbol names must be identifiers, got: {names:?}"
+        );
     }
 
     #[test]

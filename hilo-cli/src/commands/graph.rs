@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, Result};
 use hilo_graph::edges;
+use hilo_graph::resolution::{SYMBOL_CACHE_FILE, SYMBOL_CACHE_VERSION};
 use hilo_graph::{GraphDB, ImpactResult, Language, Parser};
 use hilo_metadata::inventory::{self, Edge};
 use rayon::prelude::*;
@@ -114,8 +115,13 @@ fn parse_cache_terms(rel: &str, source: &str) -> (Vec<String>, Vec<String>) {
 // persisted maps when EVERY path still matches, opening no file at all.
 // Any mismatch (or a cache from an older version) falls back to the
 // content scan, which is what actually proves the new bytes.
-const SYMBOL_CACHE_VERSION: u32 = 3;
-const SYMBOL_CACHE_FILE: &str = ".symbols_cache.json";
+//
+// DF-WARPFS-165: the schema version and file name are NOT defined here —
+// they are the write/read contract with `hilo_graph::resolution`, which
+// reads this same file back for bare-symbol subject resolution. They are
+// imported from that crate so the writer and the reader can never drift
+// apart again (DF-WARPFS-76 bumped a local copy to 3 while the reader still
+// demanded 2, and every `graph impact <symbol>` reported "not in the graph").
 const MAX_SYMBOL_SOURCE_BYTES: u64 = 1_000_000;
 static SYMBOL_CACHE_TEMP_ID: AtomicUsize = AtomicUsize::new(0);
 
