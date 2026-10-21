@@ -1,0 +1,30 @@
+GitReins guard run log — full output (the console summary is bounded)
+run_utc: 2026-10-20T23:37:32Z
+workdir: /home/kara/warpfs
+test_mode: full
+test_targets: all (full mode)
+overall: PASS
+guards: 2 (1 failed, 0 skipped)
+diagnostics:
+  first_failing_test: none detected
+  secrets_scanners: clean (gitleaks + builtin cross-check)
+  scanner_nice: scanners: nice=nice -n 10
+warnings:
+  - Guard timed out after 600s (hook_timeout). Remaining checks skipped — commit allowed to proceed (fail-open).
+
+==============================================================================
+[FAIL] tests (full)  passed=false  exit_code=3
+==============================================================================
+--- output (untruncated) ---
+scanners: nice=nice -n 10
+rust-lint: rust-analyzer ran: /home/kara/.cargo/bin/rust-analyzer — rust-analyzer 1.98.0 (88d9e12 2026-08-18)
+    Blocking waiting for file lock on build directory
+rust-lint: clippy --workspace killed by the 240s budget (cold tree?); run heavy lint on the build host
+   Compiling hilo-cli v0.4.0 (/home/kara/warpfs/hilo-cli)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 13m 40s
+
+==============================================================================
+[PASS] secrets  passed=true  exit_code=n/a
+==============================================================================
+--- output (untruncated) ---
+gitleaks: clean

@@ -1,0 +1,176 @@
+GitReins guard run log — full output (the console summary is bounded)
+run_utc: 2026-10-21T10:24:55Z
+workdir: /home/kara/warpfs
+test_mode: full
+test_targets: all (full mode)
+overall: FAIL
+guards: 2 (1 failed, 0 skipped)
+diagnostics:
+  first_failing_test: none detected
+  secrets_scanners: clean (gitleaks + builtin cross-check)
+  scanner_nice: scanners: nice=nice -n 10
+
+==============================================================================
+[FAIL] tests (full)  passed=false  exit_code=1
+==============================================================================
+--- output (untruncated) ---
+scanners: nice=nice -n 10
+rust-lint: rust-analyzer ran: /home/kara/.cargo/bin/rust-analyzer — rust-analyzer 1.98.0 (88d9e12 2026-08-18)
+    Checking libduckdb-sys v1.10504.0
+   Compiling cranelift-codegen-meta v0.130.2
+    Checking duckdb v1.10504.0
+    Checking hilo_graph v0.4.0 (/home/kara/warpfs/hilo-graph)
+error[E0308]: mismatched types
+   --> hilo-graph/src/semantic.rs:570:17
+    |
+570 |     if let Some(Some(entry)) = file_fingerprints.get(doc_path) {
+    |                 ^^^^^^^^^^^    ------------------------------- this expression has type `std::option::Option<&(u128, u64)>`
+    |                 |
+    |                 expected `(u128, u64)`, found `Option<_>`
+    |
+    = note: expected tuple `(u128, u64)`
+                found enum `std::option::Option<_>`
+
+error: variable does not need to be mutable
+   --> hilo-graph/src/semantic.rs:499:9
+    |
+499 |     let mut cached_symbols: HashMap<String, Vec<String>> = HashMap::new();
+    |         ----^^^^^^^^^^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `-D unused-mut` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_mut)]`
+
+error: variable does not need to be mutable
+   --> hilo-graph/src/semantic.rs:500:9
+    |
+500 |     let mut cached_docs: HashMap<String, Vec<String>> = HashMap::new();
+    |         ----^^^^^^^^^^^
+    |         |
+    |         help: remove this `mut`
+
+error: lifetime may not live long enough
+   --> hilo-graph/src/semantic.rs:542:5
+    |
+468 |     root: &std::path::Path,
+    |           - let's call the lifetime of this reference `'1`
+...
+542 |     (Box::new(sym_extractor), Box::new(doc_extractor))
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ returning this value requires that `'1` must outlive `'static`
+    |
+help: to declare that the trait object captures data from argument `root`, you can add an explicit `'_` lifetime bound
+    |
+470 |     Box<dyn Fn(&str) -> Vec<String> + '_>,
+    |                                     ++++
+help: to declare that the trait object captures data from argument `root`, you can add an explicit `'_` lifetime bound
+    |
+471 |     Box<dyn Fn(&str) -> Vec<String> + '_>,
+    |                                     ++++
+
+error: unused variable: `cached_symbols`
+   --> hilo-graph/src/semantic.rs:499:9
+    |
+499 |     let mut cached_symbols: HashMap<String, Vec<String>> = HashMap::new();
+    |         ^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_cached_symbols`
+    |
+    = note: `-D unused-variables` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_variables)]`
+
+error: unused variable: `cached_docs`
+   --> hilo-graph/src/semantic.rs:500:9
+    |
+500 |     let mut cached_docs: HashMap<String, Vec<String>> = HashMap::new();
+    |         ^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_cached_docs`
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `hilo_graph` (lib) due to 6 previous errors
+warning: build failed, waiting for other jobs to finish...
+rust-lint: workspace clippy reported findings; classifying with the scoped pair
+    Checking serde_json v1.0.151
+    Checking tree-sitter v0.25.10
+    Checking libduckdb-sys v1.10504.0
+    Checking duckdb v1.10504.0
+    Checking tracing-subscriber v0.3.23
+    Checking hilo_metadata v0.4.0 (/home/kara/warpfs/hilo-metadata)
+    Checking tree-sitter-nim v0.6.2 (https://github.com/alaviss/tree-sitter-nim#ac72ba30)
+    Checking tree-sitter-clojure v0.1.0
+    Checking clap_builder v4.6.2
+    Checking hilo_core v0.4.0 (/home/kara/warpfs/hilo-core)
+    Checking hilo_graph v0.4.0 (/home/kara/warpfs/hilo-graph)
+    Checking clap v4.6.3
+    Checking semver v1.0.28
+    Checking wasmparser v0.245.1
+error[E0308]: mismatched types
+   --> hilo-graph/src/semantic.rs:570:17
+    |
+570 |     if let Some(Some(entry)) = file_fingerprints.get(doc_path) {
+    |                 ^^^^^^^^^^^    ------------------------------- this expression has type `std::option::Option<&(u128, u64)>`
+    |                 |
+    |                 expected `(u128, u64)`, found `Option<_>`
+    |
+    = note: expected tuple `(u128, u64)`
+                found enum `std::option::Option<_>`
+
+error: variable does not need to be mutable
+   --> hilo-graph/src/semantic.rs:499:9
+    |
+499 |     let mut cached_symbols: HashMap<String, Vec<String>> = HashMap::new();
+    |         ----^^^^^^^^^^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `-D unused-mut` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_mut)]`
+
+error: variable does not need to be mutable
+   --> hilo-graph/src/semantic.rs:500:9
+    |
+500 |     let mut cached_docs: HashMap<String, Vec<String>> = HashMap::new();
+    |         ----^^^^^^^^^^^
+    |         |
+    |         help: remove this `mut`
+
+error: lifetime may not live long enough
+   --> hilo-graph/src/semantic.rs:542:5
+    |
+468 |     root: &std::path::Path,
+    |           - let's call the lifetime of this reference `'1`
+...
+542 |     (Box::new(sym_extractor), Box::new(doc_extractor))
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ returning this value requires that `'1` must outlive `'static`
+    |
+help: to declare that the trait object captures data from argument `root`, you can add an explicit `'_` lifetime bound
+    |
+470 |     Box<dyn Fn(&str) -> Vec<String> + '_>,
+    |                                     ++++
+help: to declare that the trait object captures data from argument `root`, you can add an explicit `'_` lifetime bound
+    |
+471 |     Box<dyn Fn(&str) -> Vec<String> + '_>,
+    |                                     ++++
+
+error: unused variable: `cached_symbols`
+   --> hilo-graph/src/semantic.rs:499:9
+    |
+499 |     let mut cached_symbols: HashMap<String, Vec<String>> = HashMap::new();
+    |         ^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_cached_symbols`
+    |
+    = note: `-D unused-variables` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unused_variables)]`
+
+error: unused variable: `cached_docs`
+   --> hilo-graph/src/semantic.rs:500:9
+    |
+500 |     let mut cached_docs: HashMap<String, Vec<String>> = HashMap::new();
+    |         ^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_cached_docs`
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `hilo_graph` (lib) due to 6 previous errors
+warning: build failed, waiting for other jobs to finish...
+rust-lint: clippy reported findings at deny level -D warnings
+
+==============================================================================
+[PASS] secrets  passed=true  exit_code=n/a
+==============================================================================
+--- output (untruncated) ---
+gitleaks: clean
