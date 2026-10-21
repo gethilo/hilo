@@ -291,9 +291,29 @@ pub struct S3Client {
     /// construction (DF-WARPFS-12). Surfaced on plan headers so a sync run
     /// always names the store it is about to write.
     pub endpoint: S3Endpoint,
+    /// DF-WARPFS-65's named failure, prebuilt at construction when the
+    /// ambient chain resolved nothing usable, and returned by
+    /// [`S3Client::ensure_credentials`] at the FIRST remote call. Construction
+    /// no longer fails on missing credentials (QA-WARPFS-024): plan-only
+    /// surfaces must disclose the store and mounts must register without
+    /// credentials; the loud named-sources error fires when a request would
+    /// actually be signed — never a blank-signed `InvalidArgument (400)`.
+    credentials_error: Option<String>,
 }
 
 impl S3Client {
+    /// The DF-WARPFS-65 failure at REQUEST time: if construction resolved no
+    /// usable credentials, every remote operation fails here with the message
+    /// naming every source checked. Plan-only paths (disclosures, mounts,
+    /// cache reads with a DefaultChain client) never reach a remote call and
+    /// therefore run credential-less (QA-WARPFS-024).
+    fn ensure_credentials(&self) -> S3Result<()> {
+        match &self.credentials_error {
+            Some(msg) => Err(S3Error::Aws(msg.clone())),
+            None => Ok(()),
+        }
+    }
+
     /// Create a new S3 client for a specific bucket/prefix.
     /// cache_dir: local directory for cached files (e.g., .vfs/cache/)
     /// ttl_seconds: cache TTL; 0 means never expire
@@ -335,9 +355,11 @@ impl S3Client {
         ttl_seconds: u32,
         writable: bool,
     ) -> S3Result<Self> {
-        let client = match endpoint {
-            S3Endpoint::Url(u) if !u.is_empty() => Self::endpoint_client(region, u).await?,
-            _ => Self::default_client(region).await,
+        // QA-WARPFS-024: construction NEVER fails on missing credentials —
+        // the DF-WARPFS-65 named failure is deferred to the first remote call.
+        let (client, credentials_error) = match endpoint {
+            S3Endpoint::Url(u) if !u.is_empty() => Self::endpoint_client(region, u).await,
+            _ => (Self::default_client(region).await, None),
         };
         Ok(Self {
             client,
@@ -345,6 +367,7 @@ impl S3Client {
             ttl_seconds,
             writable,
             endpoint: endpoint.clone(),
+            credentials_error,
         })
     }
 
@@ -372,22 +395,24 @@ impl S3Client {
     /// `backend setup` reported "credentials: found", because it scans the
     /// shared credentials file). Two changes fix that:
     ///
-    /// 1. the chain is resolved ONCE here, so missing credentials fail at
-    ///    construction with a message naming every source that was checked,
-    ///    instead of surfacing as an opaque service error later;
+    /// 1. the chain is resolved ONCE here, so missing credentials produce a
+    ///    message naming every source that was checked — deferred to the
+    ///    first remote call (QA-WARPFS-024), never an opaque service error;
     /// 2. the resolved *provider* (not a credential snapshot) is handed to
     ///    the client, so rotating / expiring credentials refresh as usual.
-    async fn endpoint_client(region: &str, endpoint: &str) -> S3Result<s3::Client> {
-        let provider = Self::ambient_credentials_provider(region, endpoint).await?;
+    async fn endpoint_client(region: &str, endpoint: &str) -> (s3::Client, Option<String>) {
+        let (provider, credentials_error) =
+            Self::ambient_credentials_provider(region, endpoint).await;
 
-        let config = s3::Config::builder()
+        let mut builder = s3::Config::builder()
             .behavior_version(s3::config::BehaviorVersion::latest())
             .region(s3::config::Region::new(region.to_string()))
             .endpoint_url(endpoint)
-            .credentials_provider(provider)
-            .force_path_style(true)
-            .build();
-        Ok(s3::Client::from_conf(config))
+            .force_path_style(true);
+        if let Some(provider) = provider {
+            builder = builder.credentials_provider(provider);
+        }
+        (s3::Client::from_conf(builder.build()), credentials_error)
     }
 
     /// Resolve the credential provider the explicit-endpoint client signs
@@ -400,7 +425,10 @@ impl S3Client {
     async fn ambient_credentials_provider(
         region: &str,
         endpoint: &str,
-    ) -> S3Result<s3::config::SharedCredentialsProvider> {
+    ) -> (
+        Option<s3::config::SharedCredentialsProvider>,
+        Option<String>,
+    ) {
         let base = aws_config::defaults(aws_config::BehaviorVersion::latest())
             // Region is honoured by the chain too: SSO / web-identity providers
             // build their STS endpoint from it.
@@ -411,32 +439,50 @@ impl S3Client {
         let (profile, credentials_file, config_file) = aws_credential_source_env();
         let sources = aws_credential_sources_checked(&profile, &credentials_file, &config_file);
 
-        // The loader always installs a provider for the default chain; a
-        // missing one means the chain could not be assembled at all.
-        let provider = base
-            .credentials_provider()
-            .ok_or_else(|| missing_credentials_error(endpoint, &sources, None))?;
+        // The loader normally installs a provider for the default chain; a
+        // missing one means the chain could not be assembled at all. Either
+        // way the client still BUILDS (QA-WARPFS-024) — the named failure is
+        // deferred to the first remote call via `ensure_credentials`.
+        let Some(provider) = base.credentials_provider() else {
+            return (
+                None,
+                Some(missing_credentials_error(endpoint, &sources, None).to_string()),
+            );
+        };
 
-        // Resolve eagerly so "no credentials anywhere" is a clear error here
-        // rather than a signing failure signed with blanks on the first call.
-        let creds = provider
-            .provide_credentials()
-            .await
-            .map_err(|e| missing_credentials_error(endpoint, &sources, Some(&e.to_string())))?;
-        if !credentials_are_usable(creds.access_key_id(), creds.secret_access_key()) {
-            return Err(missing_credentials_error(
-                endpoint,
-                &sources,
-                Some("the chain resolved a blank access key / secret access key"),
-            ));
-        }
+        // Resolve once here so "no credentials anywhere" is a clear NAMED
+        // error at the first remote call (DF-WARPFS-65) — never a signing
+        // failure signed with blanks. The failure itself is deferred
+        // (QA-WARPFS-024): plan-only paths construct and disclose without
+        // credentials.
+        let deferred = match provider.provide_credentials().await {
+            Ok(creds)
+                if credentials_are_usable(creds.access_key_id(), creds.secret_access_key()) =>
+            {
+                None
+            }
+            Ok(_) => Some(
+                missing_credentials_error(
+                    endpoint,
+                    &sources,
+                    Some("the chain resolved a blank access key / secret access key"),
+                )
+                .to_string(),
+            ),
+            Err(e) => Some(
+                missing_credentials_error(endpoint, &sources, Some(&e.to_string())).to_string(),
+            ),
+        };
 
-        Ok(provider)
+        (Some(provider), deferred)
     }
 
     /// Read an object from S3, caching it locally.
     /// Returns the local cache path on success.
     pub async fn get_object(&self, bucket: &str, key: &str) -> S3Result<PathBuf> {
+        // QA-WARPFS-024 / DF-WARPFS-65: the named credential failure
+        // fires before any remote call, never a blank-signed request.
+        self.ensure_credentials()?;
         // 1. Check cache first
         let cache_path = self.cache_path(bucket, key);
         if self.is_cache_fresh(&cache_path) {
@@ -495,6 +541,9 @@ impl S3Client {
 
     /// List objects in S3 under the given prefix.
     pub async fn list_objects(&self, bucket: &str, prefix: &str) -> S3Result<Vec<String>> {
+        // QA-WARPFS-024 / DF-WARPFS-65: the named credential failure
+        // fires before any remote call, never a blank-signed request.
+        self.ensure_credentials()?;
         let resp = self
             .client
             .list_objects_v2()
@@ -518,6 +567,9 @@ impl S3Client {
         bucket: &str,
         prefix: &str,
     ) -> S3Result<Vec<S3ObjectMeta>> {
+        // QA-WARPFS-024 / DF-WARPFS-65: the named credential failure
+        // fires before any remote call, never a blank-signed request.
+        self.ensure_credentials()?;
         let resp = self
             .client
             .list_objects_v2()
@@ -545,6 +597,9 @@ impl S3Client {
     /// (no cache, no blob index — used by the sync engine, where the
     /// destination IS the workspace copy).
     pub async fn download_to(&self, bucket: &str, key: &str, dest: &Path) -> S3Result<()> {
+        // QA-WARPFS-024 / DF-WARPFS-65: the named credential failure
+        // fires before any remote call, never a blank-signed request.
+        self.ensure_credentials()?;
         let resp = self
             .client
             .get_object()
@@ -580,6 +635,9 @@ impl S3Client {
         bucket: &str,
         key: &str,
     ) -> S3Result<Option<u64>> {
+        // QA-WARPFS-024 / DF-WARPFS-65: the named credential failure
+        // fires before any remote call, never a blank-signed request.
+        self.ensure_credentials()?;
         let resp = self
             .client
             .head_object()
@@ -603,6 +661,9 @@ impl S3Client {
         key: &str,
         data: &[u8],
     ) -> S3Result<Option<String>> {
+        // QA-WARPFS-024 / DF-WARPFS-65: the named credential failure
+        // fires before any remote call, never a blank-signed request.
+        self.ensure_credentials()?;
         if !self.writable {
             return Err(S3Error::ReadOnly);
         }
@@ -634,6 +695,9 @@ impl S3Client {
         data: &[u8],
         blob_index_dir: &Path,
     ) -> S3Result<WriteResult> {
+        // QA-WARPFS-024 / DF-WARPFS-65: the named credential failure
+        // fires before any remote call, never a blank-signed request.
+        self.ensure_credentials()?;
         if !self.writable {
             return Err(S3Error::ReadOnly);
         }
@@ -963,9 +1027,13 @@ mod tests {
         // an empty string pair — `is_ok()` alone cannot tell those apart, and
         // the empty pair is exactly what produced
         // `InvalidArgument (400): service error` before DF-WARPFS-65.
-        let provider = S3Client::ambient_credentials_provider("us-east-1", "http://127.0.0.1:9000")
-            .await
-            .expect("AWS_PROFILE-only credentials must resolve");
+        let (provider, deferred) =
+            S3Client::ambient_credentials_provider("us-east-1", "http://127.0.0.1:9000").await;
+        let provider = provider.expect("AWS_PROFILE-only credentials must resolve");
+        assert!(
+            deferred.is_none(),
+            "resolvable credentials defer no failure: {deferred:?}"
+        );
         let creds = provider
             .provide_credentials()
             .await
@@ -980,11 +1048,11 @@ mod tests {
             creds.secret_access_key()
         ));
 
-        let client = S3Client::endpoint_client("us-east-1", "http://127.0.0.1:9000").await;
+        let (_client, deferred) =
+            S3Client::endpoint_client("us-east-1", "http://127.0.0.1:9000").await;
         assert!(
-            client.is_ok(),
-            "AWS_PROFILE-only credentials must build a client, got: {:?}",
-            client.err().map(|e| e.to_string())
+            deferred.is_none(),
+            "AWS_PROFILE-only credentials must build a client with no deferred failure, got: {deferred:?}"
         );
     }
 
@@ -1019,9 +1087,23 @@ mod tests {
         );
         env.set("AWS_EC2_METADATA_DISABLED", "true");
 
-        let err = S3Client::endpoint_client("us-east-1", "http://127.0.0.1:9")
+        // QA-WARPFS-024: construction succeeds credential-less (plan-only
+        // paths must disclose the store and mounts must register); the
+        // DF-WARPFS-65 named failure fires at the FIRST remote call — clear
+        // and named, still never a blank-signed 400.
+        let client = S3Client::with_endpoint(
+            &S3Endpoint::Url("http://127.0.0.1:9".into()),
+            "us-east-1",
+            &tmp.path().join("cache"),
+            0,
+            true,
+        )
+        .await
+        .expect("construction must succeed without credentials (QA-WARPFS-024)");
+        let err = client
+            .list_objects("b", "p")
             .await
-            .expect_err("no credentials must fail at construction, not at signing time");
+            .expect_err("the first remote call must carry the named failure");
         let msg = err.to_string();
         let creds_shown = creds_path.to_str().expect("utf-8 temp path");
         for needle in [
@@ -1117,9 +1199,12 @@ mod tests {
             String::from_utf8_lossy(&head).to_string()
         });
 
-        let client = S3Client::endpoint_client("us-east-1", &format!("http://{addr}"))
-            .await
-            .expect("profile credentials must build a client");
+        let (client, deferred) =
+            S3Client::endpoint_client("us-east-1", &format!("http://{addr}")).await;
+        assert!(
+            deferred.is_none(),
+            "profile credentials defer no failure: {deferred:?}"
+        );
         // The response shape is not the point here; the captured request is.
         let _ = client.list_objects_v2().bucket("b").send().await;
         let head = server.await.unwrap();
@@ -1495,6 +1580,9 @@ mod tests {
 impl S3Client {
     /// Delete an object. Missing key → `S3Error::NotFound`.
     pub async fn delete_object(&self, bucket: &str, key: &str) -> S3Result<()> {
+        // QA-WARPFS-024 / DF-WARPFS-65: the named credential failure
+        // fires before any remote call, never a blank-signed request.
+        self.ensure_credentials()?;
         self.client
             .delete_object()
             .bucket(bucket)
@@ -1520,6 +1608,9 @@ impl S3Client {
     /// (moto, some MinIO versions) render a HEAD 404 whose Display does NOT
     /// spell "NotFound", which used to abort the whole sync (DF-WARPFS-10).
     pub async fn head_object_meta(&self, bucket: &str, key: &str) -> S3Result<Option<(i64, u64)>> {
+        // QA-WARPFS-024 / DF-WARPFS-65: the named credential failure
+        // fires before any remote call, never a blank-signed request.
+        self.ensure_credentials()?;
         let resp = self
             .client
             .head_object()
