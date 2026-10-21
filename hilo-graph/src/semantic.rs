@@ -3660,7 +3660,7 @@ mod tests {
         assert_eq!(
             served.symbols,
             vec!["cached_symbol".to_string()],
-            "a fresh {m, s} entry must be served verbatim — a read would \
+            "a fresh {{m, s}} entry must be served verbatim — a read would \
              have returned live_only_symbol"
         );
         // Channel accessors must agree with the combined view (one memoized
