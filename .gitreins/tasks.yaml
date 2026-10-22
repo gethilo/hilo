@@ -2292,3 +2292,12 @@ tasks:
     -p hilo_graph --lib PASS'
   status: in_progress
   created_at: '2026-10-22T00:23:51.749192+00:00'
+- id: DF-WARPFS-49
+  title: fix workspace mount writable flag
+  criteria:
+  - cargo test -p hilo_fuse --lib passes with new writable-mount tests; touch through
+    a writable:true workspace mount exits 0; touch through a writable:false mount
+    fails with EROFS/EACCES; mount log line matches actual mode
+  status: complete
+  created_at: '2026-10-22T02:39:45.075834+00:00'
+  completed_at: '2026-10-22T03:41:02.622806+00:00'
