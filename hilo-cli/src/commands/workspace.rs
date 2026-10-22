@@ -72,7 +72,7 @@ pub fn run_workspace_mount(manifest_path: &str, mount_point: &str, daemon: bool)
         allow_other: false,
         direct_io: false,
         auto_unmount: true,
-        read_only: true,
+        read_only: !plan.iter().any(|entry| entry.writable),
         attr_timeout: 1.0,
         entry_timeout: 1.0,
         max_read: 131_072,
