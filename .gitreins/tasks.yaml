@@ -2301,3 +2301,15 @@ tasks:
   status: complete
   created_at: '2026-10-22T02:39:45.075834+00:00'
   completed_at: '2026-10-22T03:41:02.622806+00:00'
+- id: QA-WARPFS-024-VERIFY
+  title: Verify QA-WARPFS-024 credential-less acceptance at HEAD (named target hilo-cli/tests/cli.rs)
+  criteria:
+  - "env -u AWS_PROFILE -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN\
+    \ -u AWS_ENDPOINT_URL cargo test -p hilo-cli --test cli exits 0 and its summary\
+    \ line reads \"test result: ok\" with 0 failed; the three named tests backend_sync_plan_line_prints_mounted_endpoint_and_bucket,\
+    \ workspace_sync_prints_explicit_endpoint_in_plan_header and workspace_sync_accepts_direction_flags\
+    \ each appear as ok \u2014 proving QA-WARPFS-024 acceptance at HEAD 771d32b5 (fix\
+    \ e5afc4f7 plus the DF-WARPFS-165 residual fix)"
+  status: complete
+  created_at: '2026-10-22T17:44:50.398587+00:00'
+  completed_at: '2026-10-22T17:46:37.557745+00:00'
