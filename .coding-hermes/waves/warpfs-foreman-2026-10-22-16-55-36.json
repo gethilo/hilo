@@ -4,11 +4,12 @@
   "mode": "serial-fallback",
   "wave_size": 0,
   "wave_budget": 12,
+  "status": "closed",
   "reason": "Worker model/provider field empty on this tick (documented recurring shape) -> no worker dispatch lane; selected row QA-WARPFS-024 is verification-only (fix e5afc4f7 already merged, residual closed as DF-WARPFS-165), so a worker would produce zero source writes by definition.",
   "census": {
     "tasks_jsonl_lines": 413,
     "pending_total": 66,
-    "pending_by_priority": {"P1": 18, "P2": 34, "P3": 13, "P4/S-everity": 1},
+    "pending_by_priority": {"P1": 18, "P2": 34, "P3": 13, "P4/severity": 1},
     "in_progress": ["QA-WARPFS-024"],
     "source": ".coding-hermes/board/tasks.jsonl read at tick start"
   },
@@ -16,5 +17,18 @@
   "selection": "reconcile stale in_progress row (fix landed, judge FAIL on pre-existing residual now fixed by DF-WARPFS-165) — verify acceptance at HEAD and close verification-only",
   "dispatch": "none",
   "workers": [],
-  "started_at": "2026-10-22T11:55:36-05:00"
+  "started_at": "2026-10-22T11:55:36-05:00",
+  "finished_at": "2026-10-22T13:38:00-05:00",
+  "result": {
+    "row": "QA-WARPFS-024",
+    "outcome": "complete (verification-only)",
+    "implementation_commit": "e5afc4f7",
+    "verdict": "7d8e650a PASS (QA-WARPFS-024-VERIFY, tier2)",
+    "acceptance": "env -u AWS_* cargo test -p hilo-cli --test cli => 82 passed / 0 failed; clean-TMPDIR package 269 passed / 0 failed",
+    "board_events": [927, 928],
+    "board_commit": "8ae8c98f",
+    "gitreins_commit": "4badc687",
+    "pushed": true,
+    "remote_parity": "0/0 at 4badc687"
+  }
 }
