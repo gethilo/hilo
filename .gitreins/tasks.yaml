@@ -2284,3 +2284,11 @@ tasks:
   status: complete
   created_at: '2026-10-21T11:55:41.214190+00:00'
   completed_at: '2026-10-21T16:50:08.632807+00:00'
+- id: DF-WARPFS-78
+  title: "Ruby file\u2192package resolution for impact/related"
+  criteria:
+  - 'file-form impact/related returns dependents for Ruby files (sidekiq corpus: lib/sidekiq/api.rb
+    shows 21 dependents); stats no longer lists resolved files as orphans; cargo test
+    -p hilo_graph --lib PASS'
+  status: in_progress
+  created_at: '2026-10-22T00:23:51.749192+00:00'

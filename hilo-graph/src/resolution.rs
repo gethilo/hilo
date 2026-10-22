@@ -41,6 +41,16 @@
 /// plain directory-path walk for simple `<root>/pkg/path/Class.java`
 /// layouts. See [`java_class_for_file`].
 ///
+/// Ruby sources resolve to their module path (DF-WARPFS-78): the Ruby
+/// parser emits `pkg:<module path>` edges for `require` statements (`require
+/// 'sidekiq/api'` → `pkg:sidekiq/api`), so an `.rb` file must resolve to the
+/// module it *is* — `lib/sidekiq/api.rb` is `pkg:sidekiq/api`, `lib/sidekiq.rb`
+/// is `pkg:sidekiq`. The derivation is purely syntactic (strip `.rb`, strip
+/// the conventional `lib/` source root, separators stay `/`): Ruby has no
+/// manifest or package file to walk to, and a bare filename resolves to
+/// itself. Absolute paths resolve to `None` — the no-leak rule shared with
+/// the Go resolver. See [`resolve_ruby_file_to_pkg`].
+///
 /// Resolution is query-time only: the canonical `edges.jsonl` and the
 /// DuckDB cache are untouched. Files that belong to no package (or are not
 /// files at all — `pkg:`/`sys:`/`std:`/`external:` symbol nodes) resolve to
@@ -157,6 +167,10 @@ pub struct PkgResolver {
     /// reason: a `.java` path resolves through the package-declaration /
     /// source-root walk, never through Cargo, Go, or Python.
     java_cache: HashMap<PathBuf, Option<String>>,
+    /// Ruby module nodes (`pkg:<module path>`), cached per path like the
+    /// other language caches: an `.rb` path resolves syntactically, and
+    /// repeat queries must not re-derive the module path.
+    ruby_cache: HashMap<PathBuf, Option<String>>,
 }
 
 impl PkgResolver {
@@ -188,6 +202,12 @@ impl PkgResolver {
     /// parser never emitted for it). A `.java` file with no derivable
     /// package resolves to `None`.
     ///
+    /// `.rb` sources resolve syntactically to their module path
+    /// (DF-WARPFS-78): the Ruby parser emits `pkg:<module path>` edges for
+    /// `require`, so a Ruby file must never fall back to the enclosing
+    /// Cargo crate either. An `.rb` path with no derivable module (absolute
+    /// path, no stem) resolves to `None`.
+    ///
     /// Symbol-node paths (`pkg:...`, `sys:...`, `std:...`, `external:...`)
     /// are not files and always resolve to `None` — they must never trigger
     /// a filesystem walk (a path like `pkg:globset` would otherwise be
@@ -204,6 +224,9 @@ impl PkgResolver {
         }
         if path.ends_with(".java") {
             return self.java_pkg_node(path);
+        }
+        if path.ends_with(".rb") {
+            return self.ruby_pkg_node(path);
         }
         self.crate_name(path).map(|name| format!("pkg:{name}"))
     }
@@ -260,6 +283,19 @@ impl PkgResolver {
             }
             let node = java_class_for_file(&p).map(|fqcn| format!("pkg:{fqcn}"));
             self.java_cache.insert(p, node.clone());
+            return node;
+        }
+        if path.ends_with(".rb") {
+            if is_symbol_node(&abs) {
+                return None;
+            }
+            // DF-WARPFS-78: derive the module path from the path AS STORED
+            // in the edges (repo-relative), not from the root-joined
+            // absolute form. Ruby's derivation is purely syntactic — there
+            // is no disk anchor to walk to — and an absolute path must
+            // resolve to `None` (the no-leak rule): a tempdir or home
+            // directory prefix would otherwise leak into module names.
+            let node = ruby_pkg_node_cached(path, &mut self.ruby_cache);
             return node;
         }
         // Rust crate walk (the default branch of `pkg_node`). The cache is
@@ -329,6 +365,20 @@ impl PkgResolver {
         let node = java_class_for_file(&p).map(|fqcn| format!("pkg:{fqcn}"));
         self.java_cache.insert(p, node.clone());
         node
+    }
+
+    /// Resolve an `.rb` path to its `pkg:<module path>` node
+    /// (DF-WARPFS-78), if the module path can be derived.
+    ///
+    /// Non-Ruby paths and symbol nodes return `None` without touching the
+    /// filesystem; an `.rb` path with no derivable module (absolute path,
+    /// missing stem) also returns `None`. Ruby's derivation needs no disk
+    /// walk, so unanchored and anchored resolution share one cache entry.
+    fn ruby_pkg_node(&mut self, path: &str) -> Option<String> {
+        if is_symbol_node(path) || !path.ends_with(".rb") {
+            return None;
+        }
+        ruby_pkg_node_cached(path, &mut self.ruby_cache)
     }
 
     /// Resolve `path` to its Cargo package name, if any.
@@ -797,6 +847,86 @@ fn java_fqcn_from_dirs(dir: &Path, stem: &str) -> Option<String> {
         return None;
     }
     Some(format!("{}.{}", chain.join("."), stem))
+}
+
+// ── Ruby file → module path resolution (DF-WARPFS-78) ───────────────
+
+/// Derive the Ruby module path for `file` (DF-WARPFS-78).
+///
+/// The Ruby parser emits `require 'sidekiq/api'` → `pkg:sidekiq/api`, so an
+/// `.rb` file must resolve to the module it *is*: `lib/sidekiq/api.rb` is
+/// `pkg:sidekiq/api` and `lib/sidekiq.rb` is `pkg:sidekiq`. The derivation
+/// is purely syntactic:
+///
+/// 1. Strip the `.rb` extension.
+/// 2. Strip the conventional `lib/` source root when it is the FIRST
+///    segment (`lib/sidekiq.rb` → `sidekiq`, `lib/sidekiq/api.rb` →
+///    `sidekiq/api`) — gems keep their requireable tree under `lib/` but
+///    never require the `lib/` prefix itself. A nested `.../lib/` (e.g.
+///    under `spec/` or `test/`) is left alone: only a top-level `lib/`
+///    marks the source root.
+/// 3. Normalize `.`/`..` components lexically (`app/../lib/x.rb` →
+///    `x`); a normalized path still starting with `..` (or empty after
+///    normalization) resolves to `None`.
+/// 4. Join the remaining segments with `/`.
+///
+/// Ruby has no manifest or package marker to walk to, so unlike the
+/// Cargo/Go/Python/Java resolvers this never touches the filesystem. The
+/// no-leak rule applies at its strictest: an ABSOLUTE path resolves to
+/// `None` even when it ends in `lib/...`, because there is no derivable
+/// repo-relative form to name — a tempdir or home prefix must never leak
+/// into a module name. A bare filename (`api.rb`) resolves to itself
+/// (`pkg:api`).
+pub fn resolve_ruby_file_to_pkg(file: &Path) -> Option<String> {
+    if file.is_absolute() {
+        return None;
+    }
+    let stem = file.to_str()?.strip_suffix(".rb")?;
+    if stem.is_empty() {
+        return None;
+    }
+    // Windows-authored separators never appear in edge endpoints, but a
+    // caller may pass one; normalize before the component work so
+    // `lib\sidekiq\api.rb` names the same module as the forward-slash form.
+    let stem = stem.replace('\\', "/");
+    let normalized = lexical_normalize(Path::new(&stem));
+    let chain: Vec<String> = normalized
+        .components()
+        .filter_map(|c| c.as_os_str().to_str())
+        .map(str::to_string)
+        .collect();
+    // A `..` above the relative root survives normalization (`../x.rb`);
+    // that names nothing requireable.
+    if chain.first().is_none_or(|first| first == "..") {
+        return None;
+    }
+    let module = if chain.first().is_some_and(|first| first == "lib") {
+        chain[1..].join("/")
+    } else {
+        chain.join("/")
+    };
+    if module.is_empty() {
+        return None;
+    }
+    Some(module)
+}
+
+/// Cache wrapper for the Ruby resolver: keyed on the path string as
+/// received (already normalized to forward slashes by the callers), so
+/// unanchored and anchored resolution of the same repo-relative path share
+/// one entry. Symbol-node and non-`.rb` paths are rejected by the callers
+/// before this is reached, so they never enter the cache.
+fn ruby_pkg_node_cached(
+    path: &str,
+    cache: &mut HashMap<PathBuf, Option<String>>,
+) -> Option<String> {
+    let key = PathBuf::from(path);
+    if let Some(hit) = cache.get(&key) {
+        return hit.clone();
+    }
+    let node = resolve_ruby_file_to_pkg(Path::new(path)).map(|module| format!("pkg:{module}"));
+    cache.insert(key, node.clone());
+    node
 }
 
 // ── TypeScript/JavaScript `local:` reverse resolution (GAP-069) ─────
@@ -2008,6 +2138,123 @@ mod tests {
             resolver.pkg_node(&java).as_deref(),
             Some("pkg:com.a.B"),
             "each language resolves through its own walk, never a fallback"
+        );
+        write(dir.path(), "lib/sidekiq/api.rb", "module Sidekiq\nend\n");
+        assert_eq!(
+            // Repo-relative form, exactly as the edges store it: an `.rb`
+            // file inside a Cargo workspace must NOT fall back to the crate.
+            resolver.pkg_node("lib/sidekiq/api.rb").as_deref(),
+            Some("pkg:sidekiq/api"),
+            ".rb must not fall back to the enclosing Cargo crate"
+        );
+        // Its absolute form stays None (no-leak rule) while the Java
+        // sibling in the same tree resolves from its absolute path.
+        assert_eq!(resolver.pkg_node(&rb_abs(dir.path())).as_deref(), None);
+    }
+
+    /// DF-WARPFS-78: absolute form of a repo-relative path inside `root` —
+    /// the shape the anchored arms of the other resolvers receive.
+    fn rb_abs(root: &Path) -> String {
+        root.join("lib/sidekiq/api.rb")
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    #[test]
+    fn resolves_lib_sourced_ruby_file_to_module_path() {
+        assert_eq!(
+            resolve_ruby_file_to_pkg(Path::new("lib/sidekiq/api.rb")).as_deref(),
+            Some("sidekiq/api")
+        );
+        assert_eq!(
+            resolve_ruby_file_to_pkg(Path::new("lib/sidekiq.rb")).as_deref(),
+            Some("sidekiq")
+        );
+        assert_eq!(
+            resolve_ruby_file_to_pkg(Path::new("sidekiq/api.rb")).as_deref(),
+            Some("sidekiq/api"),
+            "the repo-relative form without the lib/ prefix resolves to the same module"
+        );
+        assert_eq!(
+            resolve_ruby_file_to_pkg(Path::new("app/models/user.rb")).as_deref(),
+            Some("app/models/user"),
+            "non-lib source roots stay untouched"
+        );
+        assert_eq!(
+            resolve_ruby_file_to_pkg(Path::new("api.rb")).as_deref(),
+            Some("api"),
+            "a bare filename resolves to itself"
+        );
+        // Only a TOP-LEVEL `lib/` is a source root; a nested one (specs,
+        // fixtures) is part of the module path.
+        assert_eq!(
+            resolve_ruby_file_to_pkg(Path::new("spec/lib/helper.rb")).as_deref(),
+            Some("spec/lib/helper")
+        );
+        // `.`/`..` fold before derivation.
+        assert_eq!(
+            resolve_ruby_file_to_pkg(Path::new("app/../lib/sidekiq/api.rb")).as_deref(),
+            Some("sidekiq/api")
+        );
+        assert_eq!(
+            resolve_ruby_file_to_pkg(Path::new("lib\\sidekiq\\api.rb")).as_deref(),
+            Some("sidekiq/api"),
+            "Windows separators normalize to the same module"
+        );
+    }
+
+    #[test]
+    fn ruby_absolute_paths_and_escapes_never_resolve() {
+        assert_eq!(
+            resolve_ruby_file_to_pkg(Path::new("/tmp/leak-check/lib/sidekiq/api.rb")),
+            None,
+            "an absolute path must never leak a host prefix into a module name"
+        );
+        assert_eq!(
+            resolve_ruby_file_to_pkg(Path::new("../outside/sidekiq/api.rb")),
+            None,
+            "a `..` above the relative root names nothing requireable"
+        );
+        assert_eq!(resolve_ruby_file_to_pkg(Path::new("lib/.rb")), None);
+    }
+
+    #[test]
+    fn ruby_pkg_node_matches_parser_edge_targets() {
+        let mut resolver = PkgResolver::new();
+        assert_eq!(
+            resolver.pkg_node("lib/sidekiq/api.rb").as_deref(),
+            Some("pkg:sidekiq/api")
+        );
+        assert_eq!(
+            resolver.pkg_node("lib/sidekiq.rb").as_deref(),
+            Some("pkg:sidekiq")
+        );
+        // pkg-form input is a symbol node and stays one — never walked.
+        assert_eq!(resolver.pkg_node("pkg:sidekiq/api"), None);
+        // Absolute .rb inputs resolve to None even anchored (no-leak rule).
+        assert_eq!(resolver.pkg_node("/tmp/x/lib/sidekiq.rb"), None);
+    }
+
+    #[test]
+    fn ruby_resolution_is_root_independent_and_cached() {
+        let root = AnchoredRoot::new("/tmp/some-repo");
+        let mut resolver = PkgResolver::new();
+        let first = resolver.pkg_node_at(&root, "lib/sidekiq/api.rb");
+        let second = resolver.pkg_node_at(&root, "lib/sidekiq/api.rb");
+        assert_eq!(first.as_deref(), Some("pkg:sidekiq/api"));
+        assert_eq!(
+            first, second,
+            "anchored resolution is stable across repeat calls"
+        );
+        // A DIFFERENT root must answer identically: the derivation is
+        // syntactic on the stored (repo-relative) path and never touches
+        // the root-joined form.
+        let other = AnchoredRoot::new("/tmp/other-repo");
+        assert_eq!(
+            resolver
+                .pkg_node_at(&other, "lib/sidekiq/api.rb")
+                .as_deref(),
+            Some("pkg:sidekiq/api")
         );
     }
 
