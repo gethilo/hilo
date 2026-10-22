@@ -1,0 +1,20 @@
+{
+  "tick_id": "warpfs-foreman-2026-10-22-16-55-36",
+  "project": "warpfs",
+  "mode": "serial-fallback",
+  "wave_size": 0,
+  "wave_budget": 12,
+  "reason": "Worker model/provider field empty on this tick (documented recurring shape) -> no worker dispatch lane; selected row QA-WARPFS-024 is verification-only (fix e5afc4f7 already merged, residual closed as DF-WARPFS-165), so a worker would produce zero source writes by definition.",
+  "census": {
+    "tasks_jsonl_lines": 413,
+    "pending_total": 66,
+    "pending_by_priority": {"P1": 18, "P2": 34, "P3": 13, "P4/S-everity": 1},
+    "in_progress": ["QA-WARPFS-024"],
+    "source": ".coding-hermes/board/tasks.jsonl read at tick start"
+  },
+  "selected_row": "QA-WARPFS-024",
+  "selection": "reconcile stale in_progress row (fix landed, judge FAIL on pre-existing residual now fixed by DF-WARPFS-165) — verify acceptance at HEAD and close verification-only",
+  "dispatch": "none",
+  "workers": [],
+  "started_at": "2026-10-22T11:55:36-05:00"
+}
