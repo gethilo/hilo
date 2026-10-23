@@ -1196,15 +1196,38 @@ fn mcp_graph_impact_matches_cli_review_set_on_mixed_corpus() {
     assert_eq!(crate_row["scope"], SCOPE_CRATE, "{payload2}");
     assert_eq!(crate_row["depth"], 2, "{payload2}");
     let dependents2 = payload2["dependents"].as_array().unwrap();
+    let dependent_paths2: std::collections::BTreeSet<_> = dependents2
+        .iter()
+        .map(|r| r["path"].as_str().unwrap())
+        .collect();
+    let review_paths2: std::collections::BTreeSet<_> = review2
+        .iter()
+        .map(|r| r["path"].as_str().unwrap())
+        .collect();
+    assert!(
+        dependent_paths2
+            .iter()
+            .any(|path| review_paths2.contains(path)),
+        "max_depth 2 fixture must exercise overlap between dependents and review_set: {payload2}"
+    );
     let unique_paths2: std::collections::BTreeSet<_> = dependents2
         .iter()
         .chain(review2.iter())
         .map(|r| r["path"].as_str().unwrap())
         .collect();
+    assert!(
+        unique_paths2.len() < dependents2.len() + review2.len(),
+        "max_depth 2 fixture must prove the union deduplicates overlapping rows: {payload2}"
+    );
     assert_eq!(
         payload2["total"].as_u64().unwrap(),
         unique_paths2.len() as u64,
         "max_depth 2 total must count unique returned paths: {payload2}"
+    );
+    assert_eq!(
+        payload2["total"].as_u64().unwrap(),
+        review2.len() as u64,
+        "max_depth 2 total must match the CLI review-set cardinality: {payload2}"
     );
 
     // CLI arm — the same review rows the CLI's JSON view prints for the
