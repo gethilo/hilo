@@ -9,7 +9,7 @@ category: software-development
 
 Hilo pre-computes a dependency graph for a codebase and answers structural
 questions (blast radius, importers, coverage, classification) without file
-reads — via CLI, MCP (17 tools), or FUSE xattrs. Rust workspace at repo
+reads — via CLI, MCP (18 tools), or FUSE xattrs. Rust workspace at repo
 root; binary is `hilo` (not `hilo-cli`).
 
 ## Fresh-machine no-sudo install (run 35, 2026-10-10, PROVEN on a bare Debian 13 agent)
@@ -38,7 +38,7 @@ cp target/release/hilo ~/.cargo/bin/hilo
 
 Hilo pre-computes a dependency graph for a codebase and answers structural
 questions (blast radius, importers, coverage, classification) without file
-reads — via CLI, MCP (17 tools), or FUSE xattrs. Rust workspace at repo
+reads — via CLI, MCP (18 tools), or FUSE xattrs. Rust workspace at repo
 root; binary is `hilo` (not `hilo-cli`).
 
 ## Setup (any repo)
@@ -55,11 +55,41 @@ Requirements reality (verified on 3 fresh boxes): rustup + gcc + make.
 clang/CMake listed in README are NOT needed unless you deviate from the
 default build. libfuse3-dev only for mounts.
 
+## Run 47 (2026-10-23, real MCP client on a Go/TS repo): read this before serving MCP
+
+1. **NEVER set `performance.rate_limit_rps` above 0 with a standard MCP
+   client.** At HEAD cb65cc8a every throttled `tools/call` is answered with a
+   frame carrying `"id": null`, and the official Python SDK (`mcp==1.28.0`)
+   REFUSES it (`id.int`/`id.str` validation error), kills its stdout reader,
+   and then hangs — the client never returns, it does not raise a usable
+   error. At `rate_limit_rps: 1` even the first tool call is rejected, so the
+   server handshakes and answers nothing. Leave the knob at 0 (DF-WARPFS-166).
+2. **`graph stats`'s census line is unusable right after a commit.** The
+   `post-commit` hook runs `graph warm --changed`, which rewrites
+   `.vfs/graph/coverage.json` with the INCREMENTAL run's counts: on a 786-file
+   repo the same `graph stats` prints `Total files: 890` and `warm last
+   counted 1 discovered files` (DF-WARPFS-167). Read `Total edges` /
+   `Components`, never the census sentence, unless you just ran a FULL warm.
+3. **A fresh clone has NO hooks** — `.git/hooks/` is not tracked, so the map
+   never refreshes itself and nothing says it is stale. A new importer was
+   invisible to `graph impact` with no warning until `hilo init` installed the
+   hooks (DF-WARPFS-168). On any clone: run `hilo init` (the docs call it
+   "usually unnecessary"; it is what installs the refresh) or re-`warm` after
+   edits, and treat an impact count as an as-of-last-warm fact.
+4. **Verified correct at HEAD (use it with confidence):** MCP
+   `vfs_graph_impact` on a `pkg:` path returns `dependents` equal to the grep
+   importer set (16/16) and `total` = unique union (16, not 32) —
+   REV-WARPFS-10 holds; `hilo init` refuses a host-wide `core.hooksPath` and
+   writes nothing — DF-WARPFS-162 holds.
+
 ## The one rule that saves you: match the query form to the language
 
-The graph stores edge targets in language-specific dialects. File-form
-`impact`/`related` only resolve for Rust (crate roots). Everything else
-needs the dialect form:
+The graph stores edge targets in language-specific dialects. FILE-form
+`impact`/`related` resolves for Rust crate roots, and (verified 2026-10-23 at
+HEAD cb65cc8a on a Go repo) **for a real Go FILE** — `graph impact
+internal/context/compiler.go` listed the whole package's importers at depth 2.
+It does NOT resolve for a DIRECTORY path or for a non-crate-root path, so when
+a file-form answer is empty the dialect form below is still the reliable query:
 
 | Language | edges target | working blast-radius query |
 |---|---|---|
@@ -95,12 +125,15 @@ edges target `pkg:com.google.gson.Gson` (DF-WARPFS-34).
    `role=unknown` while tagging `metrics/**/*Benchmark.java` as `entrypoint`
    (DF-WARPFS-36); `module` reports `Tests: 0.0%` with 1744 `tested_by` edges
    present (DF-WARPFS-37).
-4. **Do not `git add -A` after `hilo init`** unless you want a 1.3 MB
-   `graph.db` and the parse caches in the commit: `hilo init` writes no
-   `.gitignore` entries, although `docs/inventory-policy.md` reads as if it
-   does (DF-WARPFS-38). Add
-   `.vfs/graph/{graph.db,graph.db.wal,.parse_cache.json,.last_reconcile,.last_warm}`
-   yourself, keeping `.vfs/manifest.yaml` and `.vfs/graph/edges.jsonl` tracked.
+4. **`hilo init` DOES write `.gitignore` entries at HEAD** (2026-10-23 run 47: on a
+   clone of a foreign project it appended 13 lines — a DuckDB wildcard section plus a
+   managed block hiding `graph.db*`, `.parse_cache.json`, `.symbols_cache.json`,
+   `.last_warm`, `.last_reconcile`). The old DF-WARPFS-38 advice ("init writes no
+   `.gitignore` entries, add them yourself") is **stale**; do not hand-maintain those
+   lines. What is still true: `.vfs/manifest.yaml` and `.vfs/graph/edges.jsonl` are
+   inventory truth and must stay tracked, and an entry `init` adds for a file the repo
+   ALREADY tracks (e.g. `.symbols_cache.json`) is a no-op, so such a repo sees that file
+   go dirty after every warm.
 
 ## FFI (Python) consumer — the working recipe (run 11, 2026-09-23)
 
@@ -150,7 +183,7 @@ directory** (hilo.py:449-451), so the copy is the whole trick. Verified calls:
    GAP-067 fixed) — previously it silently wrote a garbage xattr.
 3. **`hilo serve --mcp` is NDJSON** (one JSON-RPC message per line).
    LSP Content-Length framing → `-32700 Parse error`. stdout is pure
-   JSON (17 tools); tracing goes to stderr.
+   JSON (18 tools); tracing goes to stderr.
 4. **`hilo init` without `.git/` is fine** (skips hooks with a warning),
    but `hilo serve --mcp` requires `hilo init` in that project first.
 5. **HOME graphs are refused** without `--allow-home` (vendor/HOME guard,
@@ -183,7 +216,7 @@ printf '%s\n%s\n' \
  '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | hilo serve --mcp
 ```
 
-17 tools; `vfs_graph_impact` with a `pkg:`/`local:` dialect path works,
+18 tools; `vfs_graph_impact` with a `pkg:`/`local:` dialect path works,
 file paths on Go/Python/TS currently return `{"total":0}` without an
 error flag — same trap as the CLI.
 
@@ -371,7 +404,7 @@ it. Still missing: a checked-in example `.wasm` and a CLI section in
 
 **`hilo serve --mcp` no longer refuses to run outside a project** (the
 cli-reference.md claim is false at 0.3.0): it starts anywhere and serves all
-17 tools over an empty graph, so a mis-rooted server answers every structural
+18 tools over an empty graph, so a mis-rooted server answers every structural
 question with zeros instead of an error. Pin the server's CWD to an
 initialized project yourself, and treat empty graph answers as suspect until
 `hilo graph stats` in the same directory shows edges.
@@ -420,7 +453,7 @@ stack and the read-only mount itself.
 ## Run 12 (2026-09-23, MCP server): read this before driving `hilo serve --mcp`
 
 **Connect as a real client:** NDJSON JSON-RPC 2.0 on stdio — `initialize`
-first, then `tools/list` (returns exactly 17 tools with real schemas), then
+first, then `tools/list` (returns exactly 18 tools with real schemas), then
 `tools/call` batches. One persistent connection: spawn+handshake ≈ 1 s, but
 in-server answers are tens of ms — batching independent calls on ONE process
 is the right way (6 sessions this run, 0 protocol errors).
@@ -498,7 +531,7 @@ p = StdioServerParameters(command="hilo", args=["serve", "--mcp"], cwd="<warmed 
 async with stdio_client(p) as (r, w):
     async with ClientSession(r, w) as s:
         await s.initialize()                      # protocolVersion 2024-11-05
-        tools = await s.list_tools()              # exactly 17, schemas accurate
+        tools = await s.list_tools()              # exactly 18, schemas accurate
         res = await s.call_tool("vfs_graph_understand",
                                 {"task": "trigger debounce", "budget": 6000})
 ```

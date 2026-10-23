@@ -1496,3 +1496,55 @@ run, not after; (2) when in doubt about remediation, prefer leaving a functional
 place and disclosing loudly over "restoring" to a reconstruction you cannot prove byte-exact — the
 strip-the-block arithmetic did not reproduce the pre-tick size (301 vs 410 bytes), so the revert was
 refused by its own check and the delta is documented instead of guessed at.
+
+## 2026-10-23 — run 47: the throttle, the census, and why a clone lies about freshness
+
+**Why this run drove MCP instead of the CLI.** The project's own promise (README:3) is an AGENT
+consumer: "give your AI coding agent a pre-built map … without burning context window on file reads".
+Four earlier runs drove the CLI; REV-WARPFS-10 (MCP impact parity) had just been *closed on a fixture*
+the same morning (`40718282` + `aba56b81`, closed at `cb65cc8a`). A closure verified only by a
+hand-seeded test corpus is exactly the shape that fails in real use, so the tick spent its budget on
+the documented agent path: `init` → `graph warm` → `hilo serve --mcp`, driven by the **official** MCP
+Python SDK (`mcp==1.28.0`), on a fresh `git clone --local` of a real Go/TS project (786 files).
+
+**What that bought, in order of how it was found.**
+
+1. **The throttle kills the client, not the request.** First arm was the documented
+   `performance.rate_limit_rps` knob (docs/hilo-mcp.md). With `1`, every `tools/call` came back as a
+   JSON-RPC error frame carrying `"id": null` — a shape the spec reserves for undetectable ids, emitted
+   unconditionally at `hilo-mcp/src/server.rs:158` *before* the request id is available. The official
+   SDK rejects the frame at pydantic level and its reader task dies; the caller then waits forever.
+   The first probe run scored **rc=124 (timeout), zero output** — not an error the caller could see.
+   Lesson for the next run: a throttle is a *client-integration* surface; grade it with a real client,
+   because a raw JSON-RPC loop tolerates frames the official SDK refuses.
+2. **The steady-state hook rewrites the census it does not own.** Installing the hooks (`hilo init`)
+   and committing one new file made `post-commit` run `graph warm --changed`; that incremental run
+   overwrote `.vfs/graph/coverage.json` (`hilo-cli/src/commands/graph.rs:632`) with
+   `discovered_files: 1`. The very next `graph stats` printed `Total files: 890` and "warm last
+   counted 1 discovered files" in the same breath, plus a fabricated explanation ("some sources may be
+   stale entries no longer on disk"). A corpus-scoped ledger must not be written by a scoped run;
+   the doc comment on `write_coverage_ledger` even says "every warm that processes files".
+3. **Freshness has no signal.** Before the hooks existed (the state of every fresh clone, because
+   `.git/hooks/` is untracked) a brand-new importer was on disk and `graph impact` still answered 16
+   rows, no warning. After `init` + commit: 17. The docs' clone section calls `hilo init` "usually
+   unnecessary" — it is in fact the only thing that installs the refresh, so the documented clone path
+   silently ships a map that stops at clone time.
+4. **Two closed rows earned their closure in real use, on a real corpus.** REV-WARPFS-10: MCP
+   `dependents` = 16 = the grep importer set, `total` = 16 unique (not 32). DF-WARPFS-162: with a
+   host-wide `core.hooksPath`, `init` refused, explained, and wrote nothing (the foreign hook dir kept
+   its mtime). Recording those is as valuable as the defects — it is what lets the next reader trust
+   the map instead of re-deriving it.
+
+**Measurement note (do not repeat the mistake).** The HEAD **release** build was occupied by two
+sibling lanes in the shared target dir for the whole tick, so every number here is from the HEAD
+**dev** binary (`v0.3.0-569-gcb65cc8a`) and is an upper bound on what a user feels (stats 167 ms,
+impact 126 ms, search 408 ms; MCP stats 193 ms, understand 5.28 s, audit 5.24 s). A dev-profile
+timing is legitimate for finding a *break*; it is not legitimate for filing a claim-vs-README perf row,
+which is why the only perf row minted (PERF-012) is about the **pinned `[build] jobs = 1`** and asks
+its own ACs for the cold dependency A/B, not about these numbers.
+
+**Footprint discipline, again worth stating.** The clone's `core.hooksPath` was pointed at a foreign
+directory specifically to test DF-162; the fix refused to write there, so the arm cost nothing outside
+the scratch tree. The scratch clone lives at `/var/tmp/df1023-warpfs/canopy2` — note it was moved from
+`/tmp` on purpose: a stray `/tmp/.vfs` (DF-WARPFS-161) hijacks the workspace root for any command run
+beneath `/tmp`, which is how this run's first `graph impact` answered for the wrong root.

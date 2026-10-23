@@ -1983,3 +1983,143 @@ duplicate fire of the `warpfs-dogfood` lane, whose doc filename still says `run4
 the batch timestamp but not the delivery, so when a second delivery of the same tick lands on a checkout
 that already holds an uncommitted sibling run, only **commit order** establishes lineage — rename yourself
 (with a disclosure line) before you write, and never re-mint an id you reserved minutes earlier.
+
+## 2026-10-23 — run 47 — a real MCP consumer on a real repo: the throttle hangs the client, the hook rewrites the census — 🟡 PROMISING-BUT-ROUGH (tick `warpfs-dogfood-2026-10-23-15-01-05`)
+
+**Target:** warpfs (/home/kara/warpfs) · **HEAD:** `cb65cc8a` · **Binary:** `/var/tmp/hermes-cargo-target/debug/hilo`,
+stamp `v0.3.0-569-gcb65cc8a` (**dev profile** — the HEAD release build was occupied by sibling lanes in the shared
+target dir for the whole tick, so wall numbers are an upper bound) · **Corpus:** fresh `git clone --local` of
+hermes-canopy @ `d0ecaf86` at `/var/tmp/df1023-warpfs/canopy2` (1199 tracked files, **786 discovered** by warm,
+Go + TypeScript) · **Consumer:** the OFFICIAL MCP Python SDK `mcp==1.28.0` (not a hand-rolled JSON-RPC loop),
+because the README promise (README:3) is an agent integration.
+
+**Promise tested:** "give your AI coding agent a pre-built map … without burning context window on file reads."
+Method: `hilo init` → `hilo graph warm` → `hilo serve --mcp`, then ask the map the question an agent actually asks
+("I'm changing the context compiler — what depends on it and what covers it?") and cross-check every answer against
+`grep`. Angle chosen because REV-WARPFS-10 (MCP impact parity) was closed **on a fixture** the same morning
+(`40718282`/`aba56b81`, closed at this HEAD) — a closure verified only by a seeded test corpus is the shape that
+fails in real use.
+
+**Hold (use this with confidence):** cold `graph warm` 786 files → 7999 edges in 137.92 s. `graph impact`
+`pkg:<module>/internal/context` = **16 dependents at depth 1, set-identical to `grep -rl`** (16 files, 0 extra /
+0 missed). MCP `vfs_graph_impact` on the same path: `dependents` 16, `review_set` 16, **`total` 16** (unique union,
+not 32) in 198.7 ms — **REV-WARPFS-10 holds in real use**. `hilo init` under a host-wide `core.hooksPath` refuses,
+explains, writes nothing — **DF-WARPFS-162 holds** (row closeable). MCP `tools/list` = 18 tools; error taxonomy
+(`Unknown tool: …`, `missing 'path' argument`) is clean. Warm latency (hyperfine ×5, loadavg ≈ 20): stats 167.4 ms,
+impact 126.3 ms, search 407.7 ms — nothing a user would feel, **no perf row filed for query latency**.
+
+**Break (rows minted):**
+- **DF-WARPFS-166 (P1)** — the documented `performance.rate_limit_rps` knob makes the official MCP client HANG: every
+  throttled id-bearing call is answered `{"error":{"code":-32000,…},"id":null,"jsonrpc":"2.0"}`
+  (`hilo-mcp/src/server.rs:158`), `mcp==1.28.0` rejects it at pydantic level (`id.int`/`id.str`, input `None`), its
+  stdout reader dies, and the caller blocks forever — probe run `rc=124`, zero output. At rps=1 even the FIRST tool
+  call is throttled, so the server handshakes and answers nothing.
+- **DF-WARPFS-167 (P2)** — the documented `post-commit` hook (`graph warm --changed`) overwrites the corpus-scoped
+  `.vfs/graph/coverage.json` (`hilo-cli/src/commands/graph.rs:632`) with its incremental counts: the next
+  `graph stats` prints `Total files: 890` AND "warm last counted **1** discovered files … some sources may be stale
+  entries no longer on disk" in one breath.
+- **DF-WARPFS-168 (P2)** — a fresh clone has no hooks (`.git/hooks` untracked) and no staleness signal: a brand-new
+  importer was on disk and `graph impact` still answered 16 rows at rc=0 with no warning; after `init` + commit, 17.
+  The docs call `hilo init` "usually unnecessary" on a clone — it is the only thing installing the refresh.
+- **DF-WARPFS-169 (P2)** — `skills/hilo-usage/SKILL.md` (the coaching the next agent loads) was stale on three
+  verified points: 17 vs **18** tools, "`hilo init` writes no `.gitignore` entries" (HEAD's init appended 13
+  managed lines), and "Go file-form impact is empty" (HEAD resolves it for a real Go FILE). Corrected in this run;
+  the row asks for a guard so prose cannot drift again.
+- **PERF-012 (P2)** — `.cargo/config.toml` ships `[build] jobs = 1` for every user; the override lives in a dotfile
+  comment. Measured: a HEAD release build with a WARM target dir was still compiling at 2128 s on a 16-core box, the
+  8-core bunker install leg spent its first 33 min in duckdb-sys compilation. Controlled crate-level A/B shows the pin
+  is nearly free for the workspace's OWN crates (10.22 s vs 9.09 s), so the ACs demand the **cold dependency** A/B.
+
+**Recurrences / verifications appended as EVENTS (no duplicate ids):** DF-WARPFS-161 (a real `/tmp/.vfs` hijacked the
+root of a real clone — subject echoed as `df1023-warpfs/canopy/…`), DF-WARPFS-64-R2 (pre-warm impact says "no
+dependents" with 16 importers on disk), DF-WARPFS-163 (`Total files: 890` vs 786 discovered), DF-WARPFS-158
+(`--budget 1000` ≡ `--budget 4000` ≡ `--budget 6000` = 34 238 B; MCP `budget: 4000` → `tokens_estimate: 8559`),
+and DF-WARPFS-162 (verified fixed, real use). Events 938–942.
+
+**Install leg (Step 5):** RUN — `bunker-qa.sh launch /home/kara/warpfs --keep` → `repo-head OK
+(cb65cc8a, pull=ff-only ok)`, agent `e3e553ad` on bunker-mvp, ttl 4h, evidence
+`/tmp/bunker-qa-evidence-20261023T152200Z-3626074.jsonl`. Cells harvested: repo-head OK, launch OK,
+toolchain-bootstrap OK ×2 + INFO (`bare agent missing system deps: openssl(libssl-dev)`); the `fresh-install`
+cell was still compiling the dependency graph at tick close (duckdb-sys `cc1plus`, `target/` 1.8 GB, 33+ min in —
+the same >38 min envelope prior runs measured). Verdict for this cell: **PARTIAL, not a pass** — no BUILD_RC and no
+smoke yet; the collect that owns it is `bunker-qa.sh collect --evidence <path above>`.
+
+**Left behind:** `docs/dogfood/2026-10-23-run47-mcp-consumer.md`, the run-47 section of
+`docs/dogfood/diagnostics.md`, the three corrections + new run-47 rules in `skills/hilo-usage/SKILL.md`, rows
+`DF-WARPFS-166…169` + `PERF-012`, events 938–942, this entry. **No code changed; no visibility or permissions
+touched; the foreman was NOT woken (read-only lane).** Scratch kept for the record: `/var/tmp/df1023-warpfs/`
+(clone, `mcp1.jsonl`, `rl_raw_frames.txt`, `mcp_rl2.stderr.txt`, `warm.time`).
+
+## 2026-10-23 — run 47b — the freshness loop: does the map know it is out of date? (second delivery of tick warpfs-dogfood-2026-10-23-15-01-05)
+
+**Split disclosure (read this first).** The tick `warpfs-dogfood-2026-10-23-15-01-05` was delivered TWICE into the same
+checkout. The first delivery (rows `DF-WARPFS-166..169`, `PERF-012`, events 938–942, `docs/dogfood/2026-10-23-run47-mcp-consumer.md`,
+the run-47 section of `docs/dogfood/diagnostics.md`, and the three corrections in `skills/hilo-usage/SKILL.md`) had staged
+its work and not yet committed when this delivery began; its files were left in the index and are carried by this commit
+with that attribution stated here. This delivery's own artifacts are `docs/dogfood/2026-10-23-run47b-freshness-cache.md`,
+row `DF-WARPFS-170`, and events 943–944.
+
+**Surface.** Not the MCP client (first delivery) and not the number surfaces (run 46c): the **warmed map after the agent
+EDITS the tree**. Corpus: fresh `git clone https://github.com/gethilo/hilo.git` at `cb65cc8a` (442 tracked files, 239
+discovered), `/tmp/df23/`. Binary `/home/kara/warpfs/target/release/hilo` stamp `v0.3.0-542-gd1f88c75` (2026-10-21) — a
+HEAD build was started and was still in the `libduckdb-sys` C++ phase at close, so runtime messages are from `d1f88c75`
+while the cited cache logic was read from the HEAD tree (`git log d1f88c75..HEAD` does not touch
+`related_or_parse`/`impact_or_parse`). All product commands ran under an isolated `HOME`; the host's real
+`core.hooksPath=/var/tmp/foreign-hooks` was never written.
+
+**Verdict: 🟡 PROMISING-BUT-ROUGH.** Fast and correct at build time (cold warm 11.96 s / 3871 edges / 220 files; queries
+10–90 ms; `warm --changed` 1.49 s for one file), but the map then goes stale **silently in both directions**, and one
+direction is permanent:
+
+* ADD, no warm: created `hilo-core/src/df23new.rs` + `pub mod` + a `use` line in an already-parsed file →
+  `graph related` shows no new edge (rc=0) and `graph impact hilo-core/src/df23new.rs --max-depth 2` answers **rc=0 with
+  zero dependents** (2837 B). Explicit `warm` heals it (edge appears, 7464 B with the importer).
+* REMOVE, no warm: deleted the `use` line → `related` still prints the df23new edge and `impact` still lists
+  `virtual_dir.rs` as a dependent. A **full `graph warm` does not clear it** (append-only inventory); only
+  `graph clean` + `graph warm` does.
+* DELETE: `graph related <deleted file>` → `rc=0` "No outgoing edges" although the file is gone; `graph stats` still
+  counts it.
+* No surface reports the map's age — `graph stats` prints only the generic `…some sources may be stale entries no longer
+  on disk (edges.jsonl is append-only)` sentence, and `related`/`impact` print success-shaped answers.
+* Mechanism (HEAD source): `hilo-graph/src/graph.rs:2705-2718` — `related_or_parse` returns the cache hit whenever
+  `file_in_graph(path)` is true, so the "JIT" branch is reachable only on a cache MISS; `impact_or_parse`
+  (`:2735+`) is the same for its start file. The contract described in `hilo graph warm --help` ("auto-parse files on
+  first access") is therefore true once per file per graph lifetime, and README's "so the graph tracks the commit" holds
+  for additions only (measured: a commit deleting an import ran the hook in 8.88 s, left `edges.jsonl` at 3851 lines, and
+  the phantom edge survived).
+
+**Rows.** `DF-WARPFS-170` (P1, new): the phantom/removal direction + the JIT-once cache + the two doc claims, with a
+command-level acceptance probe. `DF-WARPFS-168` (first delivery, additive direction) and `DF-WARPFS-167` (census ledger
+clobber) are **corroborated by events 943/944** from this run rather than duplicated: 943 records that the additive stale
+shape also reproduces on an **initialized + warmed** tree (so installing hooks does not close it), 944 records the
+incremental-warm accounting clobber and the misleading `No supported source files found.` no-op line. `boardctl validate`
+is unchanged across the append: `FAIL (1 error(s), 577 warning(s))` — the pre-existing `tasks.jsonl: line 412 duplicate
+key "worker_status"`.
+
+**Step 2b — no PERF row, deliberately.** Cold warm 11.96 s (user 20.15 s, 398 MB RSS), warm-again 0.65 s, `warm
+--changed` 0.00 s no-op / 1.49 s for one file, `graph stats` 0.03 s (hyperfine mean 91.9 ms ± 21.0 over 8 runs),
+`graph impact` 0.06 s, `graph related` 0.01 s (hyperfine 73.8 ms ± 38.5), commit-with-hook 8.88 s. Everything a user
+feels is 10–90 ms; the multi-second commit is the documented hook, and the 30-min-plus **build** wait is owned by the
+release/install rows.
+
+**Install leg: PARTIAL, not a pass.** Fresh agent `df23-warpfs-install` on `bunker-mvp` (spawned 15:21Z, TTL 3 h), the
+README's documented path only: host probe (`cargo` missing, `cc`/`pkg-config`/`fuse3.pc` present, `libfuse3.so.4`
+absent, `sudo` password-gated, 8 cores/15 GB) → `curl … rustup.rs -s --profile minimal` **rc=0 in 12 s** (`cargo 1.99.1`)
+→ `git clone` **rc=0 at cb65cc8** → `make release` with the README's documented `CARGO_BUILD_JOBS=4` override **still
+compiling `libduckdb-sys` at close** (`target/` 4.2 GB, ~45 min of the agent's 8 cores, no `BUILD_RC`, no artifact, no
+smoke). Finish path (prints `LEG_DONE` and the smoke): `bunker exec df23-warpfs-install --server bunker-mvp -- bash -lc
+'bash $HOME/leg.sh'`; teardown `bunker destroy df23-warpfs-install --server bunker-mvp --force`. No skip row minted —
+`QA-WARPFS-027` and `DF-WARPFS-155` already own this class.
+
+**Coaching re-verified (skill `hilo-usage`).** `warm --changed` ~1 s: still accurate (1.49 s / 1 file, 0.00 s no-op).
+The documented GAP-070 trap (`clean` then `warm` leaves the graph EMPTY) **no longer reproduces** at this corpus (clean →
+warm rebuilt 3870 edges; stats populated) — stale in the safe direction, left in place and noted here because the first
+delivery held that file mid-edit. `hilo init` + a host-global `core.hooksPath` (`DF-WARPFS-162`): reproduced with the
+pre-fix binary (init appended its block to the **foreign** `post-commit`, 160 B, and created `post-merge` there, leaving
+`.git/hooks` empty); at HEAD the installer refuses that shape (`hilo-cli/src/commands/hooks.rs:162-187`) —
+**source-verified only, not live-graded** this tick because the HEAD build had not landed.
+
+**Left behind:** `docs/dogfood/2026-10-23-run47b-freshness-cache.md`, row `DF-WARPFS-170`, events 943–944, this entry, and
+(carried, attributed above) the first delivery's doc/diagnostics/skill edits and rows. No code changed; no board row
+closed; no visibility or permissions touched; the foreman was NOT woken (read-only lane). Ephemeral: `/tmp/df23/`
+(clones + probe outputs + `perf.txt`) and the bunker agent above.
