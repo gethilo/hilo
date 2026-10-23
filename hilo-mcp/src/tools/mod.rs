@@ -688,9 +688,8 @@ fn graph_module(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
 ///   historical contract;
 /// - `review_set`: the full CLI answer as `ImpactFile` rows, each carrying
 ///   a `scope` field (`self`/`file`/`crate`/`dependency`/`link`);
-/// - `total`: `dependents.len() + review_set.len()` — the count of ALL
-///   returned rows across both arrays (the same file can legitimately
-///   appear in both).
+/// - `total`: the number of unique paths across both arrays. The compatibility
+///   arrays may overlap, so their lengths must not be added directly.
 fn graph_impact(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
     let path_str = arguments["path"]
         .as_str()
@@ -716,11 +715,17 @@ fn graph_impact(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
     // second traversal is cache-only.
     let review_set = db.review_or_parse(path_str, max_depth)?;
     let dependents = db.impact_or_parse(path_str, max_depth)?;
+    let total = dependents
+        .iter()
+        .map(|row| row.path.as_str())
+        .chain(review_set.iter().map(|row| row.path.as_str()))
+        .collect::<std::collections::HashSet<_>>()
+        .len();
 
     Ok(serde_json::json!({
         "dependents": dependents,
         "review_set": review_set,
-        "total": dependents.len() + review_set.len(),
+        "total": total,
         "max_depth_reached": false
     }))
 }

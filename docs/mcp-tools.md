@@ -64,7 +64,7 @@ Transitive impact analysis — what depends on this file?
 }
 ```
 
-Returns: `{ "dependents": [{"path": "...", "depth": 1}, ...], "total": 175 }`
+Returns the historical reverse-only `dependents` array plus `review_set`, the full CLI impact answer (including the subject and its bounded neighbourhood). Both arrays can contain the same path; `total` counts unique paths across their union, not the sum of their lengths. For example: `{ "dependents": [{"path": "...", "depth": 1}], "review_set": [{"path": "...", "scope": "self"}, ...], "total": 175 }`.
 
 ### `vfs_rule_list`
 

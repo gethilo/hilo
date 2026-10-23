@@ -1153,26 +1153,34 @@ fn mcp_graph_impact_matches_cli_review_set_on_mixed_corpus() {
     // Two reverse hops off the forward walk → the CLI's link scope.
     assert_eq!(find("src/handler.rs")["scope"], SCOPE_LINK, "{payload}");
 
-    // The dependents-only half: src/api.rs is a real dependent, the test's
-    // pkg-only edge is NOT visible at max_depth 1.
+    // The dependents array must match the CLI's reverse-only dependent set,
+    // including direct file dependents at max_depth 1.
     let dependents = payload["dependents"]
         .as_array()
-        .expect("response must carry a dependents array (historical shape)");
-    assert!(
-        dependents.iter().any(|r| r["path"] == "src/api.rs"),
-        "dependents must keep the reverse-only dependent src/api.rs: {payload}"
+        .expect("response must carry a dependents array");
+    let dependent_paths: std::collections::BTreeSet<_> = dependents
+        .iter()
+        .map(|r| r["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        dependent_paths,
+        ["src/api.rs"].into_iter().collect(),
+        "dependents must contain the CLI's reverse dependent set at max_depth 1: {payload}"
     );
     assert!(
         !review.iter().any(|r| r["path"] == "tests/core_test.rs"),
         "max_depth 1 must not surface the pkg-only test edge: {payload}"
     );
 
-    // total = dependents + review_set (both arrays are returned, so the
-    // declared total counts every row across them).
+    let unique_paths: std::collections::BTreeSet<_> = dependents
+        .iter()
+        .chain(review.iter())
+        .map(|r| r["path"].as_str().unwrap())
+        .collect();
     assert_eq!(
         payload["total"].as_u64().unwrap(),
-        (dependents.len() + review.len()) as u64,
-        "total must equal dependents.len() + review_set.len(): {payload}"
+        unique_paths.len() as u64,
+        "total must count unique returned rows, not overlapping array entries: {payload}"
     );
 
     // max_depth 2: the pkg-only crate row appears, exactly as the CLI
@@ -1187,6 +1195,40 @@ fn mcp_graph_impact_matches_cli_review_set_on_mixed_corpus() {
         .unwrap_or_else(|| panic!("max-depth 2 must surface the pkg-only test row: {payload2}"));
     assert_eq!(crate_row["scope"], SCOPE_CRATE, "{payload2}");
     assert_eq!(crate_row["depth"], 2, "{payload2}");
+    let dependents2 = payload2["dependents"].as_array().unwrap();
+    let dependent_paths2: std::collections::BTreeSet<_> = dependents2
+        .iter()
+        .map(|r| r["path"].as_str().unwrap())
+        .collect();
+    let review_paths2: std::collections::BTreeSet<_> = review2
+        .iter()
+        .map(|r| r["path"].as_str().unwrap())
+        .collect();
+    assert!(
+        dependent_paths2
+            .iter()
+            .any(|path| review_paths2.contains(path)),
+        "max_depth 2 fixture must exercise overlap between dependents and review_set: {payload2}"
+    );
+    let unique_paths2: std::collections::BTreeSet<_> = dependents2
+        .iter()
+        .chain(review2.iter())
+        .map(|r| r["path"].as_str().unwrap())
+        .collect();
+    assert!(
+        unique_paths2.len() < dependents2.len() + review2.len(),
+        "max_depth 2 fixture must prove the union deduplicates overlapping rows: {payload2}"
+    );
+    assert_eq!(
+        payload2["total"].as_u64().unwrap(),
+        unique_paths2.len() as u64,
+        "max_depth 2 total must count unique returned paths: {payload2}"
+    );
+    assert_eq!(
+        payload2["total"].as_u64().unwrap(),
+        review2.len() as u64,
+        "max_depth 2 total must match the CLI review-set cardinality: {payload2}"
+    );
 
     // CLI arm — the same review rows the CLI's JSON view prints for the
     // same file and depth. `GraphDB::open` against the fixture's db is the
@@ -1194,6 +1236,13 @@ fn mcp_graph_impact_matches_cli_review_set_on_mixed_corpus() {
     // (main.rs: GraphDB::open_read_only → review_or_parse → ImpactResult
     // {total: files.len(), files}), so parity here IS CLI parity.
     let db = hilo_graph::GraphDB::open(".vfs/graph/graph.db").unwrap();
+    let cli_dependents = db.impact_or_parse("src/core.rs", 1).unwrap();
+    let cli_dependent_paths: std::collections::BTreeSet<_> =
+        cli_dependents.iter().map(|row| row.path.as_str()).collect();
+    assert_eq!(
+        dependent_paths, cli_dependent_paths,
+        "MCP dependents must match the CLI reverse dependent set"
+    );
     let cli_rows = db.review_or_parse("src/core.rs", 1).unwrap();
     let cli_json = serde_json::to_value(&hilo_graph::ImpactResult {
         subject: "src/core.rs".into(),
