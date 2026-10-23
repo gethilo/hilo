@@ -2036,13 +2036,18 @@ dependents" with 16 importers on disk), DF-WARPFS-163 (`Total files: 890` vs 786
 (`--budget 1000` ≡ `--budget 4000` ≡ `--budget 6000` = 34 238 B; MCP `budget: 4000` → `tokens_estimate: 8559`),
 and DF-WARPFS-162 (verified fixed, real use). Events 938–942.
 
-**Install leg (Step 5):** RUN — `bunker-qa.sh launch /home/kara/warpfs --keep` → `repo-head OK
-(cb65cc8a, pull=ff-only ok)`, agent `e3e553ad` on bunker-mvp, ttl 4h, evidence
-`/tmp/bunker-qa-evidence-20261023T152200Z-3626074.jsonl`. Cells harvested: repo-head OK, launch OK,
-toolchain-bootstrap OK ×2 + INFO (`bare agent missing system deps: openssl(libssl-dev)`); the `fresh-install`
-cell was still compiling the dependency graph at tick close (duckdb-sys `cc1plus`, `target/` 1.8 GB, 33+ min in —
-the same >38 min envelope prior runs measured). Verdict for this cell: **PARTIAL, not a pass** — no BUILD_RC and no
-smoke yet; the collect that owns it is `bunker-qa.sh collect --evidence <path above>`.
+**Install leg (Step 5): RUN, and the fresh-install cell PASSED — 50 minutes.** `bunker-qa.sh launch
+/home/kara/warpfs --keep` → `repo-head OK (cb65cc8a, pull=ff-only ok)`, agent `e3e553ad` on bunker-mvp, ttl 4h,
+evidence `/tmp/bunker-qa-evidence-20261023T152200Z-3626074.jsonl`. Cells graded by tick close: `repo-head` **OK**,
+`toolchain-bootstrap` **OK ×9 + INFO ×1** (`bare agent missing system deps: openssl(libssl-dev)`; HARNESS-COMPOSE=ok,
+HARNESS_NODE=ok — node v22.15.0 / npm 10.9.2), and `fresh-install` **OK — "Finished `dev` profile [unoptimized +
+debuginfo] target(s) in 50m 01s"**. So the last four ticks' `SKIPPED-install` class does NOT reproduce today: a fresh
+box CAN install this HEAD from source. What it costs is the finding — **50 m 01 s for one dev-profile build on an
+8-core / 15 GB agent**, which is PERF-012's measured envelope (the repo pins `[build] jobs = 1`, and one crate
+compiles at a time). The remaining cells (ci-pass, upgrade, chaos-*) were still running at tick close, so the
+battery is **PARTIAL — collect owed**, not a whole-battery pass: `bunker-qa.sh collect --evidence
+/tmp/bunker-qa-evidence-20261023T152200Z-3626074.jsonl` (agent `e3e553ad`, kept on purpose so the later cells stay
+gradeable; destroy after collecting with `bunker destroy e3e553ad --server bunker-mvp`).
 
 **Left behind:** `docs/dogfood/2026-10-23-run47-mcp-consumer.md`, the run-47 section of
 `docs/dogfood/diagnostics.md`, the three corrections + new run-47 rules in `skills/hilo-usage/SKILL.md`, rows
@@ -2123,3 +2128,17 @@ pre-fix binary (init appended its block to the **foreign** `post-commit`, 160 B,
 (carried, attributed above) the first delivery's doc/diagnostics/skill edits and rows. No code changed; no board row
 closed; no visibility or permissions touched; the foreman was NOT woken (read-only lane). Ephemeral: `/tmp/df23/`
 (clones + probe outputs + `perf.txt`) and the bunker agent above.
+
+**Addendum (same delivery, after the HEAD build landed at 11:18 local).** The `cargo build -p hilo-cli --release` started at the top of this tick finished
+(`/var/tmp/hermes-cargo-target/release/hilo`, stamp `v0.3.0-569-gcb65cc8a-dirty`), so the freshness matrix and the
+init/hook leg were re-run on the HEAD binary before close. **Nothing changed**: ADD-with-no-warm still invisible
+(`impact` rc=0, 0 dependents, 2837 B — byte-identical to the older-binary run), `warm` still heals only additions,
+a REMOVED import still reports as a dependent and survives a full `graph warm`, `clean`+`warm` still reconciles, a
+deleted file still answers rc=0 `No outgoing edges` while `graph stats` counts it, and commit-with-hook measured
+11.19 s. `DF-WARPFS-170` is therefore HEAD-graded (event 946; report §10; `/tmp/df23/head-v2.log`).
+
+`DF-WARPFS-162` (hooks isolation) is also now **live-graded**, not source-only: with the HEAD binary, `hilo init` over
+a repo whose `core.hooksPath` points outside refuses with `warning: git hooks path … is outside this repository —
+skipping hook installation` and leaves the foreign `post-commit` at 0 bytes, where the pre-fix binary appended 160 B and
+created `post-merge` there. The fix holds; the residual (`init` exits **0** when it skips, so automated setup cannot
+detect the skip) is recorded as event 945 rather than a new row.

@@ -149,7 +149,24 @@ scores 0.031…0.024 and does **not** surface `internal/context/compiler.go` at 
 already-known lexical-search limitation (usage skill + REV-WARPFS-12), not a new defect; the honest fix
 is a ranking row, not another search row.
 
-## 5. Build identity (why the numbers are dev-profile)
+## 5. Install leg (fresh box) — RUN, fresh-install cell PASSED in 50 m 01 s
+
+`bunker-qa.sh launch /home/kara/warpfs --keep` → `repo-head OK (cb65cc8a, pull=ff-only ok)`, agent `e3e553ad`
+on bunker-mvp (8 cores / 15 GB), ttl 4h, evidence `/tmp/bunker-qa-evidence-20261023T152200Z-3626074.jsonl`.
+Graded cells: `repo-head` OK; `toolchain-bootstrap` OK ×9 + INFO ×1 (`bare agent missing system deps:
+openssl(libssl-dev)`; HARNESS-COMPOSE=ok, HARNESS_NODE=ok — node v22.15.0 / npm 10.9.2); **`fresh-install` OK —
+"Finished `dev` profile [unoptimized + debuginfo] target(s) in 50m 01s"**.
+
+So the `SKIPPED-install` class that owned the last several ticks does **not** reproduce today: a bare agent installs
+this HEAD from source. The cost is the finding — **50 minutes of compile for one dev-profile build on 8 cores**,
+which is PERF-012's envelope: the repo pins `[build] jobs = 1`, and the dependency graph compiles one crate at a time
+(observed: target/ growing 1.9 → 2.0 GB between two 5-minute samples while a single `cc1plus` ran at ~98%).
+The battery's remaining cells (ci-pass, upgrade, chaos-*) were still running at tick close, so the leg is
+**PARTIAL — collect owed**, never a whole-battery pass:
+`bunker-qa.sh collect --evidence /tmp/bunker-qa-evidence-20261023T152200Z-3626074.jsonl`, then
+`bunker destroy e3e553ad --server bunker-mvp` (the agent was kept so the later cells stay gradeable).
+
+## 6. Build identity (why the numbers are dev-profile)
 
 `cargo build -p hilo-cli --release` at HEAD was occupied by two sibling lanes for the whole tick
 (`/var/tmp/hermes-cargo-target` is shared), so the correctness legs ran on the HEAD **dev** binary
