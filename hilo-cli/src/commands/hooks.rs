@@ -16,6 +16,7 @@
 //! appended to existing hooks without overwriting content.
 
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 
@@ -93,10 +94,76 @@ fn resolve_hooks_dir(project_dir: &Path, git_dir: &Path) -> Result<PathBuf> {
     }
 }
 
+/// Resolve the repository's git COMMON directory (the shared `.git` that
+/// linked worktrees borrow from), so a legitimate hooks path inside the
+/// repository is not mistaken for a host-wide one.
+fn resolve_git_common_dir(project_dir: &Path, git_dir: &Path) -> PathBuf {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(project_dir)
+        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .output();
+
+    match output {
+        Ok(output) if output.status.success() => {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if path.is_empty() {
+                git_dir.to_path_buf()
+            } else {
+                let path = PathBuf::from(path);
+                if path.is_absolute() {
+                    path
+                } else {
+                    project_dir.join(path)
+                }
+            }
+        }
+        _ => git_dir.to_path_buf(),
+    }
+}
+
+/// True when `candidate` is `root` or lies beneath it.
+///
+/// Both sides are canonicalized when possible so symlinked temp roots
+/// (`/tmp` vs `/private/tmp`, `/var/tmp` bind mounts) cannot fake a match.
+fn is_within(candidate: &Path, root: &Path) -> bool {
+    let candidate = candidate
+        .canonicalize()
+        .unwrap_or_else(|_| candidate.to_path_buf());
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    candidate.starts_with(&root)
+}
+
+/// Copy an existing hook beside itself as `<name>.bak-<epoch-seconds>`.
+///
+/// A hook frequently carries hand-written logic the user (or another tool)
+/// put there; rewriting it without keeping the pre-image makes the change
+/// unrecoverable. The backup keeps the exact bytes.
+fn backup_hook(hook_path: &Path) -> Result<PathBuf> {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let name = hook_path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "hook".to_string());
+    let backup = hook_path.with_file_name(format!("{name}.bak-{stamp}"));
+    std::fs::copy(hook_path, &backup)
+        .with_context(|| format!("failed to back up {}", hook_path.display()))?;
+    Ok(backup)
+}
+
 /// Install both post-commit and post-merge hooks into Git's resolved hooks directory.
 ///
 /// If `.git/` does not exist (not a git repo), prints a warning and returns
 /// `Ok(())` — `hilo init` should not fail when run outside a git repo.
+///
+/// DF-WARPFS-162: a `core.hooksPath` that resolves OUTSIDE the repository is
+/// refused. It is a host-wide/shared hook directory (every repository on the
+/// machine runs those hooks), so initialising one throwaway checkout must not
+/// mutate it. In-repo hooks paths — including `.githooks/` and linked-worktree
+/// common dirs — are still honoured.
 pub fn install_hooks(project_dir: &Path) -> Result<()> {
     let git_dir = project_dir.join(".git");
     if !git_dir.exists() {
@@ -106,6 +173,24 @@ pub fn install_hooks(project_dir: &Path) -> Result<()> {
     }
 
     let hooks_dir = resolve_hooks_dir(project_dir, &git_dir)?;
+    let common_dir = resolve_git_common_dir(project_dir, &git_dir);
+    if !is_within(&hooks_dir, project_dir) && !is_within(&hooks_dir, &common_dir) {
+        eprintln!(
+            "warning: git hooks path {} is outside this repository — skipping hook installation",
+            hooks_dir.display()
+        );
+        eprintln!(
+            "  core.hooksPath points at a shared hook directory: writing there would change \
+             every repository on this machine."
+        );
+        eprintln!(
+            "  Point core.hooksPath inside this repository, unset it, or add the HILO block \
+             to {} yourself.",
+            hooks_dir.join("post-commit").display()
+        );
+        return Ok(());
+    }
+
     if !hooks_dir.exists() {
         std::fs::create_dir_all(&hooks_dir)
             .with_context(|| format!("failed to create {}", hooks_dir.display()))?;
@@ -121,13 +206,19 @@ pub fn install_hooks(project_dir: &Path) -> Result<()> {
 /// Install or update a single hook file.
 ///
 /// - If the file does not exist, write the hook content and make it executable.
-/// - If the file exists but has no Hilo block, append the hook content.
-/// - If the file exists and already has a Hilo block, replace the block with
-///   fresh content (idempotent — re-running `hilo init` updates stale hooks).
+/// - If the file exists it is first copied to `<name>.bak-<stamp>`, then the
+///   Hilo block is appended (no existing Hilo block) or replaced in place
+///   (idempotent — re-running `hilo init` updates stale hooks).
 fn install_hook(hook_path: &Path, hook_content: &str) -> Result<()> {
     if hook_path.exists() {
         let existing = std::fs::read_to_string(hook_path)
             .with_context(|| format!("failed to read {}", hook_path.display()))?;
+
+        let backup = backup_hook(hook_path)?;
+        println!(
+            "  Saved previous hook to {}",
+            backup.file_name().unwrap_or_default().to_string_lossy()
+        );
 
         if has_hilo_block(&existing) {
             // Replace the existing Hilo block with fresh content.
@@ -224,6 +315,10 @@ mod tests {
     use std::io::Write;
 
     /// Create a temp project dir with a `.git/hooks/` subdirectory.
+    ///
+    /// DF-WARPFS-162: pin `core.hooksPath` to this fixture's own `.git/hooks`
+    /// (absolute) so a host-global `core.hooksPath` cannot leak into the test
+    /// and redirect hook installation to a shared directory.
     fn make_temp_git_project() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         let output = std::process::Command::new("git")
@@ -235,6 +330,19 @@ mod tests {
             output.status.success(),
             "git init failed: {}",
             String::from_utf8_lossy(&output.stderr)
+        );
+        let hooks = dir.path().join(".git").join("hooks");
+        let pin = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir.path())
+            .args(["config", "core.hooksPath"])
+            .arg(&hooks)
+            .output()
+            .unwrap();
+        assert!(
+            pin.status.success(),
+            "git config core.hooksPath failed: {}",
+            String::from_utf8_lossy(&pin.stderr)
         );
         dir
     }
@@ -346,6 +454,152 @@ mod tests {
 
         assert!(repo.path().join(".hilo-hooks/post-commit").is_file());
         assert!(!repo.path().join(".git/hooks/post-commit").exists());
+    }
+
+    // ─────────── DF-WARPFS-162: never mutate a shared hooks directory ───────────
+
+    #[test]
+    fn test_install_hooks_refuses_hooks_path_outside_repository() {
+        let repo = make_temp_git_project();
+        let foreign = tempfile::tempdir().unwrap();
+        let shared_hooks = foreign.path().join("shared-hooks");
+        std::fs::create_dir_all(&shared_hooks).unwrap();
+        let original = "#!/bin/sh\necho 'shared fleet hook'\n";
+        std::fs::write(shared_hooks.join("post-commit"), original).unwrap();
+
+        let config = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo.path())
+            .args(["config", "core.hooksPath"])
+            .arg(&shared_hooks)
+            .output()
+            .unwrap();
+        assert!(
+            config.status.success(),
+            "git config failed: {}",
+            String::from_utf8_lossy(&config.stderr)
+        );
+
+        install_hooks(repo.path()).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(shared_hooks.join("post-commit")).unwrap(),
+            original,
+            "a hook outside the repository must stay byte-identical"
+        );
+        assert!(
+            !shared_hooks.join("post-merge").exists(),
+            "no post-merge hook may be created outside the repository"
+        );
+        assert_eq!(
+            std::fs::read_dir(&shared_hooks).unwrap().count(),
+            1,
+            "the shared hooks directory must gain no files (no hook, no .bak)"
+        );
+        assert!(
+            !repo.path().join(".git/hooks/post-commit").exists(),
+            "refusing must not silently fall back to .git/hooks"
+        );
+    }
+
+    #[test]
+    fn test_install_hooks_allows_absolute_hooks_path_inside_repository() {
+        let repo = make_temp_git_project();
+        let in_repo = repo.path().join("githooks");
+        std::fs::create_dir_all(&in_repo).unwrap();
+
+        let config = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo.path())
+            .args(["config", "core.hooksPath"])
+            .arg(&in_repo)
+            .output()
+            .unwrap();
+        assert!(
+            config.status.success(),
+            "git config failed: {}",
+            String::from_utf8_lossy(&config.stderr)
+        );
+
+        install_hooks(repo.path()).unwrap();
+
+        assert!(
+            in_repo.join("post-commit").is_file(),
+            "an absolute hooks path inside the repository stays supported"
+        );
+        assert!(in_repo.join("post-merge").is_file());
+        assert!(!repo.path().join(".git/hooks/post-commit").exists());
+    }
+
+    #[test]
+    fn test_install_hooks_backs_up_existing_hook_bytes() {
+        let repo = make_temp_git_project();
+        let hooks = repo.path().join(".git").join("hooks");
+        let hook_path = hooks.join("post-commit");
+        let original = "#!/bin/sh\necho 'my hook'\n### local tweak\n";
+        std::fs::write(&hook_path, original).unwrap();
+
+        install_hooks(repo.path()).unwrap();
+
+        let backups: Vec<std::path::PathBuf> = std::fs::read_dir(&hooks)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .map(|name| name.to_string_lossy().starts_with("post-commit.bak-"))
+                    .unwrap_or(false)
+            })
+            .collect();
+        assert_eq!(backups.len(), 1, "exactly one pre-image backup expected");
+        assert_eq!(
+            std::fs::read_to_string(&backups[0]).unwrap(),
+            original,
+            "backup must be the byte-identical pre-image"
+        );
+
+        let current = std::fs::read_to_string(&hook_path).unwrap();
+        assert!(current.contains("my hook"), "existing content preserved");
+        assert!(current.contains("### HILO"), "Hilo block installed");
+    }
+
+    #[test]
+    fn test_install_hooks_backs_up_before_replacing_hilo_block() {
+        let repo = make_temp_git_project();
+        let hooks = repo.path().join(".git").join("hooks");
+        let hook_path = hooks.join("post-commit");
+
+        install_hooks(repo.path()).unwrap();
+        let first = std::fs::read_to_string(&hook_path).unwrap();
+
+        install_hooks(repo.path()).unwrap();
+
+        let backups: Vec<std::path::PathBuf> = std::fs::read_dir(&hooks)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .map(|name| name.to_string_lossy().starts_with("post-commit.bak-"))
+                    .unwrap_or(false)
+            })
+            .collect();
+        assert_eq!(
+            backups.len(),
+            1,
+            "the rewritten hook must have a pre-image backup"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&backups[0]).unwrap(),
+            first,
+            "the backup holds the pre-rewrite content"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&hook_path)
+                .unwrap()
+                .matches("### HILO")
+                .count(),
+            1,
+            "rewrite stays idempotent"
+        );
     }
 
     #[test]

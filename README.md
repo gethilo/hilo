@@ -515,10 +515,21 @@ the project's hook files:
 
 Both blocks exit `0` when the `hilo` executable is not on `PATH` — they never
 fail a commit, and neither creates a `.vfs/.dirty` file merely because Hilo is
-missing. Content outside the markers is never touched. Hooks are only installed
-while a fresh manifest is being created, so re-running `hilo init` on an
-existing project leaves `.git/hooks/` alone, and `hilo init --no-hooks` creates
-and modifies nothing there at all.
+missing. Content outside the markers is never touched. Re-running `hilo init`
+retries hook installation (so a previously failed install is recoverable) and
+rewrites only the marked block; `hilo init --no-hooks` creates and modifies
+nothing in the hooks directory at all.
+
+Before Hilo rewrites an existing hook file it copies the pre-image next to it as
+`<hook>.bak-<unix-timestamp>`, so hand-written logic stays recoverable.
+
+`core.hooksPath` is honoured **only when it resolves inside the repository**
+(a linked worktree's shared `.git/hooks`, or an in-repo directory such as
+`.githooks/`). When it points outside — a host-wide hook directory that every
+repository on the machine runs — `hilo init` refuses: it prints a warning naming
+the skipped path and writes nothing, because initialising one checkout must
+never change hook behaviour for unrelated repositories. Point
+`core.hooksPath` inside the repo, unset it, or add the `### HILO` block by hand.
 
 To remove them:
 

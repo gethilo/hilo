@@ -253,6 +253,20 @@ mod tests {
             .output()
             .unwrap();
         assert!(init_git.status.success());
+        // DF-WARPFS-162: pin core.hooksPath at this fixture's own hooks dir so a
+        // host-global core.hooksPath cannot redirect (or suppress) installation.
+        let pin_hooks = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(["config", "core.hooksPath"])
+            .arg(repo.join(".git").join("hooks"))
+            .output()
+            .unwrap();
+        assert!(
+            pin_hooks.status.success(),
+            "git config core.hooksPath failed: {}",
+            String::from_utf8_lossy(&pin_hooks.stderr)
+        );
         let commit = std::process::Command::new("git")
             .arg("-C")
             .arg(&repo)

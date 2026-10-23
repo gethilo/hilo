@@ -2313,3 +2313,21 @@ tasks:
   status: complete
   created_at: '2026-10-22T17:44:50.398587+00:00'
   completed_at: '2026-10-22T17:46:37.557745+00:00'
+- id: INT-CI-011
+  title: Close stale CI-red tracking row after exact-head green run
+  criteria:
+  - 'CI acceptance is satisfied: gh run view 39832207611 --repo gethilo/hilo shows
+    headSha 0c46f71ba6d046f47e27c0e503c320dcc8a12899, conclusion success, and Build
+    & Test (stable) success; preserve a trace marker bound to the verified head and
+    evidence run.'
+  status: in_progress
+  created_at: '2026-10-22T22:57:08.925397+00:00'
+- id: DF-WARPFS-162
+  title: hilo init hooks safety
+  criteria:
+  - AC1 outside core.hooksPath refuses without mutation and names path; AC2 inside
+    path installs; AC3 existing hooks get byte-identical backup; AC4 hooks tests and
+    clippy pass
+  status: complete
+  created_at: '2026-10-23T08:07:07.066367+00:00'
+  completed_at: '2026-10-23T08:51:38.954715+00:00'
