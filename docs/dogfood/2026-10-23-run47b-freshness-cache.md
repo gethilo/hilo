@@ -211,3 +211,43 @@ witness=run 47b delivery (second delivery of tick warpfs-dogfood-2026-10-23-15-0
 verdict=PROMISING-BUT-ROUGH — stale map both directions, one permanent
 commit=this report's commit (see .coding-hermes/dogfood-log.md entry)
 ```
+
+## 10. HEAD certification (added after the build landed)
+
+The `cargo build -p hilo-cli --release` started at the top of this tick finished at **11:18 local**
+(`/var/tmp/hermes-cargo-target/release/hilo`, stamp `v0.3.0-569-gcb65cc8a-dirty`, i.e. HEAD `cb65cc8a`), so the
+matrix in §3 and the hook leg in §5 were **re-run on the HEAD binary** before this report closed. Nothing changed —
+the defect is live at HEAD, not an artefact of the older binary — and two things got stronger:
+
+* **Freshness matrix, HEAD build** (`/tmp/df23/head-v2.log`, same corpus, same isolated `HOME`): ADD with no warm →
+  `graph related` shows no new edge, `graph impact hilo-core/src/df23new.rs --max-depth 2 --format json` = `rc=0` with
+  **0** dependents and a **2837 B** payload (byte-identical to the `d1f88c75` run); after `graph warm` the edge appears
+  and the payload is **7464 B** with the importer; REMOVE with no warm → phantom edge and phantom dependent; a second
+  full `graph warm` → phantom survives; `graph clean` + `warm` → reconciled; deleted file → `rc=0`
+  `No outgoing edges for '…df23new.rs'.` with `graph stats` still at `Total files: 301`; commit with the installed hook
+  → `11.19 s`, `Discovered 0 edges across 0 files` on the already-warmed tree. **Identical in every arm.**
+* **`DF-WARPFS-162` (hooks isolation) — now LIVE-graded, not source-only.** Same probe as §5 with the HEAD binary
+  (`/tmp/df23/hooks-probe.sh` over a repo whose `core.hooksPath` is `/tmp/df23/foreign-hooks2`): `hilo init` prints
+  `warning: git hooks path /tmp/df23/foreign-hooks2 is outside this repository — skipping hook installation` plus
+  `core.hooksPath points at a shared hook directory: writing there would change every repository on this machine.`
+  and leaves the foreign `post-commit` at **0 bytes** (the pre-fix binary in §5 had appended 160 B and created
+  `post-merge` there). The fix holds. **Residual, recorded as event 945 rather than a new row:** `init` exits **0** when
+  it skips installation, so a setup script or CI step cannot tell "hooks installed" from "hooks deliberately skipped".
+
+### 10.1 Install leg at close — my agent vs the first delivery's cell
+
+Two install legs ran in this tick and they must not be conflated:
+
+* **First delivery's leg (its own agent `e3e553ad`, launched via `bunker-qa.sh`): PASS on the `fresh-install` cell.**
+  Its own follow-up commit `011902f2` records the captured line *"Finished `dev` profile [unoptimized + debuginfo]
+  target(s) in 50m 01s"* on the 8-core agent. That is the tick's installability evidence for the documented source
+  build, and it supersedes the tick-level PARTIAL that the first report carried.
+* **This delivery's leg (agent `df23-warpfs-install`, spawned directly at 15:21Z): PARTIAL, still open at close.**
+  Verified: rustup bootstrap rc=0 in 12 s (`cargo 1.99.1`), `git clone` rc=0 at `cb65cc8`, then `make release`
+  (`CARGO_BUILD_JOBS=4`) was **still compiling `libduckdb-sys`** with `target/` at 4.2 GB after ~45 min of the agent's
+  8 cores — the same envelope the first delivery measured at 50m01s, so the two legs agree on the cost and disagree only
+  on where the clock stopped. At close the bunker daemon itself answered `get agent: deadline_exceeded` for a census
+  (host saturated by the sibling battery plus two local `libduckdb-sys` builds), so the artifact could not be graded
+  from this side. Finish/teardown as recorded in §6 (`bash $HOME/leg.sh` → `LEG_DONE` + smoke; `bunker destroy … --force`).
+* No skip row was minted for either leg: `QA-WARPFS-027` / `DF-WARPFS-155` already own that class, and the tick's
+  install verdict is a PASS, not a skip.

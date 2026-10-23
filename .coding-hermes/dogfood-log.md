@@ -2142,3 +2142,9 @@ a repo whose `core.hooksPath` points outside refuses with `warning: git hooks pa
 skipping hook installation` and leaves the foreign `post-commit` at 0 bytes, where the pre-fix binary appended 160 B and
 created `post-merge` there. The fix holds; the residual (`init` exits **0** when it skips, so automated setup cannot
 detect the skip) is recorded as event 945 rather than a new row.
+**Install verdict reconciled:** the tick-level install verdict is **PASS** — the first delivery's `fresh-install`
+cell finished at 50m01s (`011902f2`, agent `e3e553ad`, captured line "Finished `dev` profile … in 50m 01s"), which
+supersedes the PARTIAL this entry reported at its own close. This delivery's *own* agent (`df23-warpfs-install`) was
+still inside `libduckdb-sys` at close with `target/` at 4.2 GB and its census was unreadable (`bunker info` →
+`deadline_exceeded` while the sibling battery ran), so it stays PARTIAL as an individual leg, not as the tick's verdict.
+See report §10.1 for the split and the finish/teardown commands.
