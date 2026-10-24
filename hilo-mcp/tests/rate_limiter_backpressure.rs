@@ -51,6 +51,38 @@ fn stats_call(id: usize) -> String {
     )
 }
 
+fn initialize_call(id: &str) -> String {
+    format!(r#"{{"jsonrpc":"2.0","id":"{id}","method":"initialize","params":{{}}}}"#)
+}
+
+/// A rejected request must retain a string JSON-RPC id. This is the focused
+/// regression for clients that correlate responses by id.
+#[test]
+fn rejected_request_echoes_string_id() {
+    let _guard = lock();
+    let requests = vec![initialize_call("admitted"), initialize_call("rejected")];
+    let responses = drive(&requests, 1);
+
+    assert_eq!(responses.len(), 2);
+    assert_eq!(responses[0]["id"], "admitted");
+    assert_eq!(responses[1]["id"], "rejected");
+    assert_eq!(responses[1]["error"]["code"], -32000);
+}
+
+/// An unparseable line still receives one safe rejection frame when the
+/// bucket is empty; malformed input cannot provide a usable request id.
+#[test]
+fn rejected_unparseable_request_uses_null_id() {
+    let _guard = lock();
+    let requests = vec![initialize_call("admitted"), "not-json".to_owned()];
+    let responses = drive(&requests, 1);
+
+    assert_eq!(responses.len(), 2);
+    assert_eq!(responses[0]["id"], "admitted");
+    assert_eq!(responses[1]["id"], serde_json::Value::Null);
+    assert_eq!(responses[1]["error"]["code"], -32000);
+}
+
 /// AC (REV-WARPFS-5): send 100 requests with rate_limit_rps=10 — the burst
 /// capacity is 10, so requests beyond the burst are rejected `-32000` and
 /// the survivors are served while the bucket sits above the 80% backpressure
@@ -61,8 +93,8 @@ fn rate_limiter_backpressure_one_hundred_requests_at_10rps() {
     let requests: Vec<String> = (0..100).map(stats_call).collect();
     let responses = drive(&requests, 10);
 
-    // Every request gets exactly one response frame (rejected ones answer
-    // with "id": null, so the id map is smaller than the frame list).
+    // Every request gets exactly one response frame, including rejected
+    // requests whose ids must be echoed in the rejection frame.
     assert_eq!(
         responses.len(),
         100,
@@ -103,16 +135,28 @@ fn rate_limiter_backpressure_one_hundred_requests_at_10rps() {
         "requests beyond the 10-token burst must be rejected -32000"
     );
     for r in &rejected {
-        assert_eq!(
-            r["id"],
-            serde_json::Value::Null,
-            "rejections predate parsing"
+        assert!(
+            r["id"].is_number(),
+            "rejections must preserve the request id: {r}"
         );
         assert!(
             r["error"]["data"]["retry_after_seconds"].is_u64(),
             "rejection must carry retry_after_seconds"
         );
     }
+    let rejected_ids: std::collections::HashSet<u64> = rejected
+        .iter()
+        .map(|r| r["id"].as_u64().expect("burst request ids are numeric"))
+        .collect();
+    assert_eq!(
+        rejected_ids.len(),
+        rejected.len(),
+        "each rejected request must retain its distinct id"
+    );
+    assert!(
+        rejected_ids.iter().all(|id| *id >= 10),
+        "only requests beyond the initial burst should be rejected"
+    );
     // The first request always finds a full bucket: it can never warn.
     assert_eq!(responses[0]["id"], 0, "first request is admitted");
     assert!(

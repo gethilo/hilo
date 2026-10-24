@@ -107,6 +107,20 @@ pub fn run(rate_limit_rps: u32) -> McpResult<()> {
     run_with(rate_limit_rps, stdin.lock(), stdout.lock())
 }
 
+/// Extract a JSON-RPC request id for a rate-limit rejection.
+///
+/// This deliberately accepts only the request-id types permitted by JSON-RPC:
+/// strings and numbers. Missing, null, boolean, object, and array ids use the
+/// protocol-safe `null` fallback. Parsing failures also use `null` because
+/// there is no usable id to echo.
+fn request_id_for_rejection(line: &str) -> serde_json::Value {
+    serde_json::from_str::<serde_json::Value>(line)
+        .ok()
+        .and_then(|request| request.get("id").cloned())
+        .filter(|id| id.is_string() || id.is_number())
+        .unwrap_or(serde_json::Value::Null)
+}
+
 /// Injectable core of [`run`]: the transport is parameters, so the FULL loop
 /// (rate-limit admission, backpressure warnings, NDJSON framing) is
 /// integration-testable in-process — `hilo-mcp` cannot reference the
@@ -140,6 +154,12 @@ pub fn run_with<R: BufRead, W: Write>(
             continue;
         }
 
+        // Parse just enough of the request before admission so a rejected
+        // JSON-RPC error can echo its request id. The admitted path still
+        // goes through `handle_request`, which owns normal request parsing
+        // and routing.
+        let request_id = request_id_for_rejection(&line);
+
         // Rate-limit check before processing.
         let mut admission = Admission::Allowed;
         {
@@ -155,7 +175,7 @@ pub fn run_with<R: BufRead, W: Write>(
             warn!("rate limit exceeded, retry after {retry_secs}s");
             let response = serde_json::json!({
                 "jsonrpc": "2.0",
-                "id": null,
+                "id": request_id,
                 "error": {
                     "code": -32000,
                     "message": format!(
