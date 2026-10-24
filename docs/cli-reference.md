@@ -932,6 +932,15 @@ through and the child's exit status becomes the CLI's exit status. With
 `--unshare-net`); with `read_only_root: true` the host root is mounted
 read-only and only the workspace plus `writable_paths` stay writable.
 
+**Every `writable_paths` entry must be an absolute path (REV-WARPFS-11).**
+bwrap resolves each `--bind` source against the mount namespace's root, not the
+project directory, so a relative entry such as `data/logs` or `.` can only fail
+with a misleading chdir/mount error. The executor now rejects a relative entry
+before building any bwrap arguments, with an error naming `writable_paths` and
+echoing the offending value — use `/data/logs`, not `data/logs`. (A disabled
+`enabled: false` block is not validated; it keeps mounting unsandboxed as
+before.)
+
 ## `hilo serve`
 
 Start the MCP server for agent integration.

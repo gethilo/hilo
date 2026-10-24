@@ -9,7 +9,7 @@
 //! unsandboxed execution.
 
 use crate::manifest::Sandbox;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 // ── Error ──────────────────────────────────────────────────────────
@@ -20,6 +20,13 @@ pub enum SandboxError {
     BubblewrapNotFound,
     #[error("sandbox is not enabled in manifest")]
     NotEnabled,
+    /// REV-WARPFS-11: a manifest `sandbox.writable_paths` entry such as
+    /// `.` or `data/logs` was bound verbatim into the bwrap argv, and
+    /// bubblewrap resolved it against the wrong root — the user saw a
+    /// misleading chdir failure instead of "your writable path is
+    /// relative". Reject it by name before any bwrap args are built.
+    #[error("invalid sandbox writable_paths entry {path:?}: every writable_paths entry must be an absolute path (e.g. \"/data/logs\", not \"data/logs\")")]
+    RelativeWritablePath { path: String },
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -57,6 +64,30 @@ impl BubblewrapConfig {
             read_only_root: false,
             writable_paths: Vec::new(),
         }
+    }
+
+    /// REV-WARPFS-11: reject a relative `sandbox.writable_paths` entry.
+    ///
+    /// bwrap resolves a `--bind` source against the mount namespace's
+    /// root, not the project directory, so a manifest value like `.` or
+    /// `data/logs` produced a confusing chdir/mount failure that never
+    /// mentioned the offending field. Catch it here — before any bwrap
+    /// argv is built — with an error that names `writable_paths`.
+    ///
+    /// A DISABLED config is never validated: an inactive block must keep
+    /// behaving exactly as before (the mount path and `run()` own the
+    /// `NotEnabled` result), so relative entries in a disabled manifest
+    /// stay harmless until someone enables the sandbox.
+    pub fn validate(&self) -> Result<(), SandboxError> {
+        if !self.enabled {
+            return Ok(());
+        }
+        for wp in &self.writable_paths {
+            if !Path::new(wp).is_absolute() {
+                return Err(SandboxError::RelativeWritablePath { path: wp.clone() });
+            }
+        }
+        Ok(())
     }
 }
 
@@ -186,11 +217,16 @@ impl BubblewrapExecutor {
     ///
     /// Returns `Err(SandboxError::NotEnabled)` when the config has
     /// `enabled=false`, and `Err(SandboxError::BubblewrapNotFound)`
-    /// when `bwrap` is not installed.
+    /// when `bwrap` is not installed. A relative `writable_paths`
+    /// entry is rejected with `SandboxError::RelativeWritablePath`
+    /// before any bwrap args are built (REV-WARPFS-11).
     pub fn run(&self, command: &[String]) -> Result<std::process::Output, SandboxError> {
         if !self.config.enabled {
             return Err(SandboxError::NotEnabled);
         }
+
+        // REV-WARPFS-11: fail with the field name, not bwrap's chdir error.
+        self.config.validate()?;
 
         if !Self::is_available() {
             return Err(SandboxError::BubblewrapNotFound);
@@ -210,6 +246,10 @@ impl BubblewrapExecutor {
     /// DF-WARPFS-77 rework: production surface for `hilo sandbox exec` — the
     /// spec §14.1 model where the agent's shell runs bwrap-wrapped and its
     /// output streams through to the caller instead of being captured.
+    ///
+    /// Like [`Self::run`], rejects a relative `writable_paths` entry with
+    /// `SandboxError::RelativeWritablePath` before building bwrap args
+    /// (REV-WARPFS-11).
     pub fn run_inherit(
         &self,
         command: &[String],
@@ -217,6 +257,9 @@ impl BubblewrapExecutor {
         if !self.config.enabled {
             return Err(SandboxError::NotEnabled);
         }
+
+        // REV-WARPFS-11: fail with the field name, not bwrap's chdir error.
+        self.config.validate()?;
 
         if !Self::is_available() {
             return Err(SandboxError::BubblewrapNotFound);
@@ -349,6 +392,114 @@ mod tests {
         // Each writable path generates a --bind pair
         let bind_count = args.iter().filter(|a| *a == "--bind").count();
         assert_eq!(bind_count, 4); // workspace + 3 writable paths
+    }
+
+    // ── REV-WARPFS-11: writable_paths must be absolute ──────────
+    //
+    // A relative entry (`.`, `data/logs`) used to reach bwrap verbatim
+    // and surface as a misleading chdir/mount failure that never named
+    // the field. The executor must reject it with an error that names
+    // `writable_paths` BEFORE building any bwrap argv.
+
+    #[test]
+    fn test_validate_rejects_relative_writable_path() {
+        let mut sandbox = sandbox_enabled();
+        sandbox.writable_paths = vec!["/tmp".into(), "data/logs".into()];
+        let cfg = BubblewrapConfig::from_manifest(&sandbox);
+
+        let err = cfg
+            .validate()
+            .expect_err("relative writable_paths entry must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("writable_paths"),
+            "error must name writable_paths: {msg}"
+        );
+        assert!(
+            msg.contains("absolute"),
+            "error must demand absolute: {msg}"
+        );
+        assert!(
+            msg.contains("data/logs"),
+            "error must echo the offending value: {msg}"
+        );
+        assert!(
+            matches!(err, SandboxError::RelativeWritablePath { .. }),
+            "expected RelativeWritablePath, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_validate_rejects_dot_writable_path() {
+        let mut sandbox = sandbox_enabled();
+        sandbox.writable_paths = vec![".".into()];
+        let cfg = BubblewrapConfig::from_manifest(&sandbox);
+        let err = cfg.validate().expect_err("`\".\"` is not an absolute path");
+        assert!(err.to_string().contains("writable_paths"));
+    }
+
+    #[test]
+    fn test_validate_accepts_absolute_writable_paths() {
+        // Positive arm: valid absolute entries keep passing, so the
+        // existing bind behavior is preserved.
+        let cfg = BubblewrapConfig::from_manifest(&sandbox_enabled());
+        cfg.validate()
+            .expect("absolute writable_paths must stay valid");
+    }
+
+    #[test]
+    fn test_validate_disabled_config_with_relative_path_is_ok() {
+        // Preserve disabled-sandbox behavior: an inactive block with a
+        // relative entry must not gain a new failure mode at validation;
+        // run() still answers NotEnabled as before.
+        let mut sandbox = sandbox_disabled();
+        sandbox.writable_paths = vec!["data/logs".into()];
+        let cfg = BubblewrapConfig::from_manifest(&sandbox);
+        cfg.validate().expect("disabled config is never validated");
+        let exec = BubblewrapExecutor::new(cfg, "/tmp/ws");
+        let result = exec.run(&["echo".into(), "hi".into()]);
+        assert!(
+            matches!(result, Err(SandboxError::NotEnabled)),
+            "disabled sandbox must keep returning NotEnabled"
+        );
+    }
+
+    #[test]
+    fn test_run_rejects_relative_writable_path_before_bwrap() {
+        // The live-defect regression: with an ENABLED sandbox and a
+        // relative entry, run() must fail with the named validation
+        // error. Pre-fix this built bwrap args anyway and returned an
+        // Ok(...) whose bwrap chdir/mount failure never mentioned
+        // writable_paths (or BubblewrapNotFound on hosts without bwrap).
+        let mut sandbox = sandbox_enabled();
+        sandbox.writable_paths = vec!["data/logs".into()];
+        let cfg = BubblewrapConfig::from_manifest(&sandbox);
+        let exec = BubblewrapExecutor::new(cfg, "/tmp/ws");
+
+        let err = exec
+            .run(&["echo".into(), "hi".into()])
+            .expect_err("relative writable_paths must be rejected");
+        match err {
+            SandboxError::RelativeWritablePath { path } => {
+                assert_eq!(path, "data/logs");
+            }
+            other => panic!("expected RelativeWritablePath, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_run_inherit_rejects_relative_writable_path() {
+        // `hilo sandbox exec` uses run_inherit — same guard on the
+        // inherited-stdio surface (REV-WARPFS-11).
+        let mut sandbox = sandbox_enabled();
+        sandbox.writable_paths = vec![".".into()];
+        let cfg = BubblewrapConfig::from_manifest(&sandbox);
+        let exec = BubblewrapExecutor::new(cfg, "/tmp/ws");
+
+        let err = exec
+            .run_inherit(&["echo".into(), "hi".into()])
+            .expect_err("relative writable_paths must be rejected");
+        assert!(err.to_string().contains("writable_paths"));
     }
 
     // ── DF-WARPFS-150: chdir + mount order ─────────────────────
