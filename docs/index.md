@@ -10,6 +10,7 @@ without reading files.
 - **[Getting Started](getting-started.md)** — install, init, first warm
 - **[Architecture](architecture.md)** — FUSE, metadata engine, backends
 - **[CLI Reference](cli-reference.md)** — every command and flag
+- **[Workspace Mounts](workspace.md)** — the two accepted manifest schemas and how repos mount
 - **[MCP Tools](mcp-tools.md)** — agent integration via JSON-RPC
 - **[Graph Engine](graph-engine.md)** — AST parsing, DuckDB, impact analysis
 

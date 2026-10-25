@@ -390,6 +390,25 @@ performance:
     max_concurrent: 8
 ```
 
+### 4.2 Consuming the manifest: `hilo workspace mount`
+
+This schema is accepted **unchanged** by `hilo workspace mount` (DF-WARPFS-50):
+
+- every `repos[]` entry mounts at its own `at` path (default `/<name>`); the
+  last path component is the directory name in the mount,
+- the mount point defaults to `interfaces.fuse.mount_point` when the command
+  line omits one,
+- `repos[].auto_pull` is a boolean here, and
+- `backends:` is **inventory, never a mount source** (§13; `.vfs/backends/mounts.yaml`
+  is the mount registry).
+
+A mount-only tree with no project identity can instead use the workspace schema
+(`repos[]` / `backends[]` / `mounts[]`), where `auto_pull` is an interval in
+seconds and `backends[]` is a list. Both spellings of `at` and `auto_pull` are
+accepted in either schema, so this example also validates as a workspace
+manifest. The full reference, including how a rejection names the schema and
+field, is [docs/workspace.md](../docs/workspace.md).
+
 ---
 
 ## 5. Permission Model — FUSE-Enforced

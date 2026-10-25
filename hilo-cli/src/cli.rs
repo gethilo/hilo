@@ -515,11 +515,14 @@ enum WorkspaceCommand {
 
 #[derive(clap::Args)]
 struct WorkspaceMountArgs {
-    /// Path to the workspace manifest YAML (e.g., .vfs/manifest.yaml).
+    /// Path to the manifest YAML. Accepts BOTH accepted schemas: the project
+    /// manifest `hilo init` writes (.vfs/manifest.yaml — repos mount at their
+    /// `at` path) and the workspace manifest (repos/backends/mounts).
     #[arg(long, default_value = ".vfs/manifest.yaml")]
     manifest: String,
-    /// Directory to mount the workspace at.
-    mount_point: String,
+    /// Directory to mount the workspace at. Omit it to use the project
+    /// schema's interfaces.fuse.mount_point.
+    mount_point: Option<String>,
     /// Run in the background: detach from the terminal and return immediately.
     #[arg(long)]
     daemon: bool,
@@ -692,7 +695,7 @@ pub fn run() -> anyhow::Result<()> {
         }
         Commands::Sandbox(sandbox::SandboxCommand::Exec(args)) => sandbox::run_sandbox_exec(&args),
         Commands::Workspace(WorkspaceCommand::Mount(args)) => {
-            workspace::run_workspace_mount(&args.manifest, &args.mount_point, args.daemon)
+            workspace::run_workspace_mount(&args.manifest, args.mount_point.as_deref(), args.daemon)
         }
         Commands::Workspace(WorkspaceCommand::Unmount(args)) => {
             workspace::run_workspace_unmount(&args.mount_point)
