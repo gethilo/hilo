@@ -833,12 +833,59 @@ impl Filesystem for WorkspaceMount {
 ///
 /// This call blocks until the filesystem is unmounted (or an error occurs).
 /// On success returns `Ok(())`.
+///
+/// A failure caused by a refused `allow_other` is reported with the exact
+/// `/etc/fuse.conf` change needed (DF-WARPFS-52): the operator asked for
+/// multi-user access, so the fix is theirs to make and it must be named.
 pub fn mount(fs: WorkspaceMount, config: &crate::FuseConfig) -> anyhow::Result<()> {
     let opts = mount_options(config);
-    fuser::mount2(fs, &config.mount_point, &opts)?;
+    fuser::mount2(fs, &config.mount_point, &opts).map_err(|e| mount_error(e, config))?;
     Ok(())
 }
 
+/// Turn a mount failure into an actionable error (DF-WARPFS-52).
+///
+/// `fusermount3` refuses `allow_other` for non-root users unless
+/// `/etc/fuse.conf` carries `user_allow_other`; fuser surfaces that refusal as
+/// `ErrorKind::PermissionDenied` and the raw fusermount3 stderr. Mounting
+/// without `allow_other` must never hit this — when it does, the operator
+/// opted in and needs to know the exact config change.
+fn mount_error(e: std::io::Error, config: &crate::FuseConfig) -> anyhow::Error {
+    if config.allow_other && e.kind() == std::io::ErrorKind::PermissionDenied {
+        anyhow::anyhow!(
+            "{e}\n\
+             allow_other was requested but this host does not allow it for non-root users.\n\
+             Enable it by adding this line to /etc/fuse.conf (requires root):\n\
+             \x20   user_allow_other\n\
+             e.g.  sudo sh -c 'echo user_allow_other >> /etc/fuse.conf'\n\
+             Or drop --allow-other: a single-user workspace mount never needs it."
+        )
+    } else {
+        anyhow::Error::from(e)
+    }
+}
+
+/// Build the kernel mount options (DF-WARPFS-52).
+///
+/// `AutoUnmount` and `AllowOther` are NOT independent: fuser's session
+/// (`fuser::Session::new`) silently appends `AllowOther` whenever
+/// `AutoUnmount` is requested without `AllowRoot`/`AllowOther` — "adding
+/// allow_other, with userspace permission handling" — because fusermount
+/// needs one of them to implement auto-unmount. `fusermount3` then REFUSES the
+/// mount unless `/etc/fuse.conf` has `user_allow_other`, which stock
+/// Debian/Ubuntu images ship commented out:
+///
+/// ```text
+/// fusermount3: option allow_other only allowed if 'user_allow_other' is set
+/// error: workspace FUSE mount failed: Operation not permitted (os error 1)
+/// ```
+///
+/// `run_workspace_mount` sets `allow_other: false`, so this was a privileged
+/// option nobody asked for and every workspace mount died on a fresh box.
+/// Auto-unmount is a convenience; allow-other is an access decision. Honouring
+/// the access decision wins: emit `AutoUnmount` only when the operator
+/// explicitly asked for `AllowOther` (and is therefore already responsible for
+/// `user_allow_other`).
 fn mount_options(config: &crate::FuseConfig) -> Vec<MountOption> {
     let mut opts = vec![MountOption::FSName("hilo-workspace".into())];
     // The kernel enforces RO/RW for the whole mount. The CLI derives this
@@ -849,11 +896,20 @@ fn mount_options(config: &crate::FuseConfig) -> Vec<MountOption> {
     }
     if config.allow_other {
         opts.push(MountOption::AllowOther);
-    }
-    if config.auto_unmount {
-        opts.push(MountOption::AutoUnmount);
+        // Only safe to request alongside the explicit allow-other decision:
+        // fuser would otherwise add AllowOther on its own (see above).
+        if config.auto_unmount {
+            opts.push(MountOption::AutoUnmount);
+        }
     }
     opts
+}
+
+/// Whether `AutoUnmount` was dropped because `allow_other` was not requested.
+/// Same predicate as the single-repo mount (`daemon::auto_unmount_suppressed`);
+/// exposed separately so it is provably the workspace path's own decision.
+pub fn auto_unmount_suppressed(config: &crate::FuseConfig) -> bool {
+    config.auto_unmount && !config.allow_other
 }
 
 // ============================================================
@@ -863,6 +919,22 @@ fn mount_options(config: &crate::FuseConfig) -> Vec<MountOption> {
 #[doc(hidden)]
 pub fn ws_populate_dir_for_test(fs: &WorkspaceMount, dir_ino: u64) -> bool {
     fs.populate_dir_children(dir_ino)
+}
+
+/// The exact option vector `mount` hands to fuser (DF-WARPFS-52). The
+/// regression that broke stock boxes lived in this vector, not in the mount
+/// point, so tests assert on it directly.
+#[doc(hidden)]
+pub fn ws_mount_options_for_test(config: &crate::FuseConfig) -> Vec<MountOption> {
+    mount_options(config)
+}
+
+/// The rendered error `mount` produces for an underlying failure
+/// (DF-WARPFS-52). Acceptance criterion: a refused `allow_other` must name the
+/// exact `/etc/fuse.conf` change, and no other failure may claim that fix.
+#[doc(hidden)]
+pub fn ws_mount_error_for_test(e: std::io::Error, config: &crate::FuseConfig) -> String {
+    mount_error(e, config).to_string()
 }
 
 #[doc(hidden)]

@@ -23,11 +23,22 @@ use crate::SyncDirectionArg;
 /// the child, redirects its stdio to `/dev/null`, and returns immediately.
 /// The child performs the actual `workspace_mount::mount` and keeps serving
 /// until `hilo workspace unmount` tears it down.
-pub fn run_workspace_mount(manifest_path: &str, mount_point: &str, daemon: bool) -> Result<()> {
+///
+/// `allow_other` is opt-in (DF-WARPFS-52). The workspace mount used to carry
+/// `auto_unmount`, which fuser silently pairs with `allow_other`, so every
+/// workspace mount on a stock box died on
+/// `fusermount3: option allow_other only allowed if 'user_allow_other' is set`
+/// even though the config said `allow_other: false`.
+pub fn run_workspace_mount(
+    manifest_path: &str,
+    mount_point: &str,
+    allow_other: bool,
+    daemon: bool,
+) -> Result<()> {
     // Foreground parent of a `--daemon` mount: spawn the detached child and
     // return. The child (see DAEMON_CHILD_ENV) skips this branch.
     if daemon && std::env::var_os(DAEMON_CHILD_ENV).is_none() {
-        let mut cmd = build_workspace_daemon_command(manifest_path, mount_point)?;
+        let mut cmd = build_workspace_daemon_command(manifest_path, mount_point, allow_other)?;
         let child = cmd
             .spawn()
             .context("failed to spawn background workspace mount")?;
@@ -69,7 +80,7 @@ pub fn run_workspace_mount(manifest_path: &str, mount_point: &str, daemon: bool)
 
     let config = FuseConfig {
         mount_point: PathBuf::from(mount_point),
-        allow_other: false,
+        allow_other,
         direct_io: false,
         auto_unmount: true,
         read_only: !plan.iter().any(|entry| entry.writable),
@@ -91,16 +102,25 @@ pub fn run_workspace_mount(manifest_path: &str, mount_point: &str, daemon: bool)
 /// Build the detached child command for `hilo workspace mount --daemon`.
 ///
 /// Re-executes the current binary as `hilo workspace mount --manifest
-/// <manifest> <mount_point> --daemon` with `HILO_MOUNT_DAEMONIZED=1`, makes
-/// the child a session leader (`setsid`) and detaches its stdio so the parent
-/// can return immediately. Mirrors `mount::build_daemon_command`
-/// (DF-WARPFS-130).
-pub fn build_workspace_daemon_command(manifest_path: &str, mount_point: &str) -> Result<Command> {
+/// <manifest> <mount_point> [--allow-other] --daemon` with
+/// `HILO_MOUNT_DAEMONIZED=1`, makes the child a session leader (`setsid`) and
+/// detaches its stdio so the parent can return immediately. Mirrors
+/// `mount::build_daemon_command` (DF-WARPFS-130); the access decision travels
+/// through the re-exec so the child mounts what the parent was asked for
+/// (DF-WARPFS-52).
+pub fn build_workspace_daemon_command(
+    manifest_path: &str,
+    mount_point: &str,
+    allow_other: bool,
+) -> Result<Command> {
     let exe = std::env::current_exe().context("failed to locate the hilo binary")?;
     let mut cmd = Command::new(exe);
     cmd.arg("workspace").arg("mount");
     cmd.arg("--manifest").arg(manifest_path);
     cmd.arg(mount_point);
+    if allow_other {
+        cmd.arg("--allow-other");
+    }
     cmd.arg("--daemon");
     cmd.env(DAEMON_CHILD_ENV, "1");
     cmd.stdin(Stdio::null())
@@ -332,7 +352,7 @@ mod tests {
 
     #[test]
     fn test_build_workspace_daemon_command_args() {
-        let cmd = build_workspace_daemon_command(".vfs/manifest.yaml", "/mnt/hilo").unwrap();
+        let cmd = build_workspace_daemon_command(".vfs/manifest.yaml", "/mnt/hilo", false).unwrap();
         let args: Vec<OsString> = cmd.get_args().map(OsString::from).collect();
         assert_eq!(
             args,
@@ -343,13 +363,36 @@ mod tests {
                 OsString::from(".vfs/manifest.yaml"),
                 OsString::from("/mnt/hilo"),
                 OsString::from("--daemon"),
-            ]
+            ],
+            "a default (single-user) workspace mount must not carry --allow-other"
+        );
+    }
+
+    // ───────── DF-WARPFS-52: the access decision survives the re-exec ───────
+
+    #[test]
+    fn test_build_workspace_daemon_command_passes_allow_other() {
+        let cmd = build_workspace_daemon_command(".vfs/manifest.yaml", "/mnt/hilo", true).unwrap();
+        let args: Vec<OsString> = cmd.get_args().map(OsString::from).collect();
+        assert_eq!(
+            args,
+            vec![
+                OsString::from("workspace"),
+                OsString::from("mount"),
+                OsString::from("--manifest"),
+                OsString::from(".vfs/manifest.yaml"),
+                OsString::from("/mnt/hilo"),
+                OsString::from("--allow-other"),
+                OsString::from("--daemon"),
+            ],
+            "an explicit --allow-other must reach the daemon child, otherwise the \
+             child mounts with different access than the parent was asked for"
         );
     }
 
     #[test]
     fn test_build_workspace_daemon_command_sets_marker_env() {
-        let cmd = build_workspace_daemon_command(".vfs/manifest.yaml", "/mnt/hilo").unwrap();
+        let cmd = build_workspace_daemon_command(".vfs/manifest.yaml", "/mnt/hilo", false).unwrap();
         let envs: Vec<(OsString, Option<OsString>)> = cmd
             .get_envs()
             .map(|(k, v)| (k.to_os_string(), v.map(OsString::from)))
@@ -365,7 +408,7 @@ mod tests {
 
     #[test]
     fn test_build_workspace_daemon_command_program_is_current_exe() {
-        let cmd = build_workspace_daemon_command(".vfs/manifest.yaml", "/mnt/hilo").unwrap();
+        let cmd = build_workspace_daemon_command(".vfs/manifest.yaml", "/mnt/hilo", false).unwrap();
         assert_eq!(
             cmd.get_program(),
             std::env::current_exe().expect("current exe resolves")
