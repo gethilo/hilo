@@ -1,0 +1,21 @@
+{
+  "tick_id": "warpfs-foreman-2026-10-25-01-38-53",
+  "tasks": [
+    "DF-WARPFS-162",
+    "DF-WARPFS-83",
+    "DF-WARPFS-88"
+  ],
+  "worktrees": {
+    "DF-WARPFS-162": "warpfs-wt-162",
+    "DF-WARPFS-83": "warpfs-wt-83",
+    "DF-WARPFS-88": "warpfs-wt-88"
+  },
+  "branches": {
+    "DF-WARPFS-162": "fix/df-warpfs-162-init-hookspath",
+    "DF-WARPFS-83": "fix/df-warpfs-83-post-merge-hook",
+    "DF-WARPFS-88": "fix/df-warpfs-88-erlang-license-headers"
+  },
+  "finished_at": "2026-10-25T02:38:09.327970Z",
+  "status": "recovered_empty",
+  "recovery_note": "All 3 branches had zero commits; dispatch mechanism failed. Worktrees removed."
+}
