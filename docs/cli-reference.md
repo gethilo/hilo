@@ -119,6 +119,12 @@ hilo graph warm --language rust
 # Only parse files changed since the last warm (used by the post-commit hook)
 hilo graph warm --changed
 
+# Every completed warm stamps .vfs/graph/state.json with the git HEAD it saw;
+# a later warm that finds HEAD moved (e.g. after a pull) warns:
+#   warning: graph is out of date — git HEAD is <new> but the last graph warm
+#   ran at <old> — pull? run a full `hilo graph warm`
+# ...and the same warm rebuilds and re-stamps, clearing the warning.
+
 # Allow HOME (or its canonical equivalent) as the project root — without
 # this flag `graph warm` refuses to walk the home directory
 hilo graph warm --allow-home

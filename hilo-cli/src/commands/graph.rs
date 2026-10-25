@@ -714,6 +714,24 @@ pub fn run_warm_in(
         Err(_) => Vec::new(),
     };
 
+    // DF-WARPFS-83: detect git-aware staleness BEFORE the parse cache can
+    // short-circuit a rebuild. When HEAD moved since the last completed warm
+    // (the classic pull case), the parse cache is valid-by-mtime and wrong
+    // in content: pull preserves file mtimes, so an incremental `--changed`
+    // warm after a pull would skip exactly the files the pull rewrote. A
+    // full warm heals and re-stamps the ledger. Not-a-git-repo, git
+    // absence, unborn HEAD, and a missing/corrupt ledger all resolve to
+    // "not stale" — the check never wedges a warm, and files touched after
+    // the pull keep the normal `--changed` behavior via their fresh mtimes.
+    let head_moved = if changed {
+        None
+    } else {
+        hilo_graph::freshness::check_staleness(cwd)
+    };
+    if let Some(reason) = head_moved.as_ref() {
+        eprintln!("warning: graph is out of date — {reason}");
+    }
+
     // Collect every source file under the current directory.
     let mut source_files = Vec::new();
     let mut exclusions = ExclusionReport::default();
@@ -1131,6 +1149,11 @@ pub fn run_warm_in(
         coverage.print();
         // DF-WARPFS-43: refresh the ledger on the fast path too — stats
         // reconciles against it and must never read a stale accounting.
+        // DF-WARPFS-83: stamp the freshness ledger on the fast path too, so
+        // "all cached, graph unchanged" still answers for the current HEAD.
+        if let Err(e) = hilo_graph::freshness::stamp_after_warm(cwd) {
+            eprintln!("warning: failed to write graph freshness state: {e}");
+        }
         write_coverage_ledger(cwd, &coverage, total_files, unique_sources.len());
         let _ = t_jsonl; // timing span unused on this path
         return Ok(());
@@ -1197,10 +1220,15 @@ pub fn run_warm_in(
     // DF-WARPFS-43: persist the accounting stats reconciles against.
     write_coverage_ledger(cwd, &coverage, total_files, unique_sources.len());
 
+    // DF-WARPFS-83: stamp the freshness ledger — what this completed warm
+    // observed — so staleness checks answer against the graph as it is NOW.
     // Update the last-warm marker so --changed knows the cutoff.
     let warm_marker = cwd.join(".vfs").join("graph").join(".last_warm");
     if let Err(e) = write_last_warm_marker(&warm_marker) {
         eprintln!("warning: failed to write warm marker: {e}");
+    }
+    if let Err(e) = hilo_graph::freshness::stamp_after_warm(cwd) {
+        eprintln!("warning: failed to write graph freshness state: {e}");
     }
 
     // Persist source-defined symbols alongside the graph. This is deliberately

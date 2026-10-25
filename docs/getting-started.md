@@ -203,10 +203,13 @@ post-commit hook's `--changed` incremental mode has a cutoff to work from.
 target's* `.git/hooks/` — never into the repo you cloned from, and git does
 not transport hooks. The post-commit hook only runs `hilo graph warm
 --changed` (incremental since the last warm marker), and the post-merge hook
-runs a full warm only when a `.vfs/.dirty` marker exists — which nothing in
-a fresh clone creates. So on a brand-new clone neither hook fires a full
-warm: run `hilo graph warm` manually once, exactly as above. (Hook
-mechanics: [README → Git hooks](../README.md#git-hooks-installed-by-hilo-init).)
+runs a full warm only when a pull actually changed graph-relevant files —
+which a brand-new clone's first pull after `hilo init` does not. So on a
+brand-new clone neither hook fires a full warm: run `hilo graph warm`
+manually once, exactly as above — the warm also stamps
+`.vfs/graph/state.json`, which switches on HEAD-based staleness detection
+for every later pull ([README → Staleness detection](../README.md#staleness-detection)).
+(Hook mechanics: [README → Git hooks](../README.md#git-hooks-installed-by-hilo-init).)
 
 ### Fresh clone of a project you initialize yourself
 

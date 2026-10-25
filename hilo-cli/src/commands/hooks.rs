@@ -12,6 +12,13 @@
 //! because Hilo is missing: a hook must never fail a commit, and must not
 //! leave behind state that only a Hilo which is not installed could clear.
 //!
+//! DF-WARPFS-83: the `.vfs/.dirty` marker protocol is retired. The old
+//! post-merge body waited for a marker that nothing ever wrote (dead code —
+//! the README promised a recovery path that could never fire). Staleness is
+//! now carried by the `.vfs/graph/state.json` freshness ledger, written by
+//! every completed `graph warm`, and post-merge heals a pulled graph by
+//! running a full warm itself whenever the pull changed graph-relevant files.
+//!
 //! Both hooks use `### HILO` / `### /HILO` block markers so they can be safely
 //! appended to existing hooks without overwriting content.
 
@@ -29,6 +36,12 @@ const HILO_MARKER_END: &str = "### /HILO";
 /// GAP-087: with no `hilo` on `PATH` this is a pure no-op that exits 0. It must
 /// not create a `.vfs/.dirty` marker: nothing installed could clear it, and a
 /// failed write would make the hook fail the commit.
+///
+/// DF-WARPFS-83: the `.vfs/graph/state.json` freshness ledger replaces the
+/// dead `.vfs/.dirty` marker protocol. A completed warm stamps state.json
+/// with the git HEAD it saw, so `graph warm` (and post-merge, via warm) can
+/// detect "HEAD moved since the graph was built" without any pre-merge
+/// marker writer. This hook never writes the ledger itself — only warm does.
 const POST_COMMIT_HOOK: &str = r#"#!/bin/sh
 ### HILO — auto-update metadata on commit
 if command -v hilo >/dev/null 2>&1; then
@@ -39,15 +52,29 @@ fi
 
 /// post-merge hook content — sync metadata on pull.
 ///
-/// GAP-087: with no `hilo` on `PATH` this exits 0 and leaves `.vfs/.dirty`
-/// untouched — only an installed Hilo clears the staleness marker.
+/// DF-WARPFS-83: a pull that changed graph-relevant state must heal the
+/// graph. The old protocol waited for a `.vfs/.dirty` marker that nothing
+/// ever wrote (dead code — the consumer could never fire). The freshness
+/// ledger `.vfs/graph/state.json` now carries the last-warmed git HEAD, and
+/// `graph warm` detects HEAD drift itself, so this hook simply runs a full
+/// warm whenever a pull brought in commits that could change the graph
+/// (new/changed/deleted source or inventory files). Warm's own staleness
+/// pass then rebuilds past the mtime-preserving pull and re-stamps the
+/// ledger; an empty pull skips the work via the normal all-cached path.
+///
+/// GAP-087 still holds: with no `hilo` on `PATH` this exits 0 and touches
+/// nothing. The listed paths are the graph's inputs (per the inventory
+/// policy, `.vfs/manifest.yaml` and `.vfs/graph/edges.jsonl` are tracked);
+/// `--diff-filter` covers added/copied/deleted/modified/renamed/type
+/// changes and exits 0 (no output) on an empty diff.
 const POST_MERGE_HOOK: &str = r#"#!/bin/sh
 ### HILO — sync metadata on pull
-if [ -f .vfs/.dirty ] && command -v hilo >/dev/null 2>&1; then
-    echo "Hilo: dirty marker found — updating metadata"
-    hilo graph warm 2>/dev/null || true
-    rm -f .vfs/.dirty
-    echo "Hilo: metadata updated, dirty marker removed"
+if command -v hilo >/dev/null 2>&1; then
+    if [ -n "$(git diff --diff-filter=ACDMRT --name-only HEAD@{1} HEAD -- '*.rs' '*.go' '*.py' '*.ts' '*.tsx' '*.js' '*.jsx' '*.java' '*.c' '*.h' '*.cpp' '*.hpp' '*.rb' '*.cs' '*.kt' '*.php' '*.swift' '*.ex' '*.exs' '*.hs' '*.erl' '*.scala' '*.zig' '*.lua' '*.dart' '*.clj' '*.ml' '*.r' '*.jl' '*.elm' '*.nim' '*.tf' '.vfs/manifest.yaml' '.vfs/graph/edges.jsonl' 2>/dev/null)" ]; then
+        echo "Hilo: graph-relevant changes pulled — updating metadata"
+        hilo graph warm 2>/dev/null || true
+        echo "Hilo: metadata updated"
+    fi
 fi
 ### /HILO
 "#;
@@ -378,8 +405,12 @@ mod tests {
         let content = std::fs::read_to_string(&hook).unwrap();
         assert!(content.contains("### HILO"), "should contain HILO marker");
         assert!(
-            content.contains(".vfs/.dirty"),
-            "should reference dirty file"
+            content.contains("HEAD@{1}"),
+            "post-merge must diff the pull range (HEAD@{{1}}..HEAD), got: {content}"
+        );
+        assert!(
+            content.contains("graph warm"),
+            "post-merge must run a full warm on graph-relevant pulls"
         );
     }
 
@@ -706,15 +737,23 @@ mod tests {
     }
 
     #[test]
-    fn test_post_merge_hook_deletes_dirty_after_warm() {
+    fn test_post_merge_hook_warms_on_graph_relevant_pull() {
         let dir = make_temp_git_project();
         install_hooks(dir.path()).unwrap();
         let content =
             std::fs::read_to_string(dir.path().join(".git").join("hooks").join("post-merge"))
                 .unwrap();
+        // DF-WARPFS-83: the dead `.vfs/.dirty` consumer is gone — the hook
+        // heals the graph itself by running a full warm over the pulled
+        // range. Warm's own freshness pass (state.json ledger) does the
+        // staleness detection.
         assert!(
-            content.contains("rm -f .vfs/.dirty"),
-            "should remove dirty marker after successful warm"
+            !content.contains(".vfs/.dirty"),
+            "the dead dirty-marker protocol must be gone"
+        );
+        assert!(
+            content.contains("--diff-filter=ACDMRT"),
+            "must detect added/changed/deleted/renamed graph inputs"
         );
     }
 
@@ -875,11 +914,57 @@ mod tests {
         );
     }
 
+    /// Create a commit in the temp project touching one file.
+    #[cfg(unix)]
+    fn commit_file(project: &Path, rel: &str, content: &str, msg: &str) {
+        let path = project.join(rel);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&path, content).unwrap();
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(project)
+            .args([
+                "-c",
+                "user.name=Hilo Test",
+                "-c",
+                "user.email=hilo-test@example.invalid",
+            ])
+            .args(["add", rel])
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git add failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(project)
+            .args([
+                "-c",
+                "user.name=Hilo Test",
+                "-c",
+                "user.email=hilo-test@example.invalid",
+            ])
+            .args(["commit", "--quiet", "-m", msg])
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git commit failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn test_post_merge_noop_without_hilo() {
         let dir = make_temp_git_project();
         install_hooks(dir.path()).unwrap();
+        // `.vfs/` exists and is writable, so a marker would land here if the
+        // hook still wrote one.
         std::fs::create_dir_all(dir.path().join(".vfs")).unwrap();
         let path_dir = make_path_dir(None);
 
@@ -946,29 +1031,92 @@ mod tests {
         assert_eq!(calls.trim(), "graph warm --changed");
     }
 
+    /// DF-WARPFS-83: a pull that adds a source file must heal the graph —
+    /// the hook runs a full `hilo graph warm` (simulated here with a stub
+    /// that records its argv). The two-commit repo makes `HEAD@{1}` real:
+    /// the hook diffs commit1..commit2 and sees the added `lib.rs`.
     #[cfg(unix)]
     #[test]
-    fn test_post_merge_warms_and_clears_marker_when_hilo_present() {
+    fn test_post_merge_warms_when_source_file_pulled() {
         let dir = make_temp_git_project();
+        commit_file(dir.path(), "seed.txt", "seed\n", "c1");
+        commit_file(
+            dir.path(),
+            "src/lib.rs",
+            "pub fn f() {}\n",
+            "c2 adds source",
+        );
         install_hooks(dir.path()).unwrap();
-        let marker = dir.path().join(".vfs").join(".dirty");
-        std::fs::create_dir_all(dir.path().join(".vfs")).unwrap();
-        std::fs::write(&marker, "stale\n").unwrap();
+        let log = dir.path().join("hilo-calls.log");
+        let path_dir = make_path_dir(Some(&stub_hilo_recording(&log)));
+
+        let out = run_installed_hook(dir.path(), "post-merge", &hook_path(path_dir.path(), true));
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "post-merge must not fail the pull: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let calls = std::fs::read_to_string(&log).expect("a source pull must invoke hilo warm");
+        assert_eq!(calls.trim(), "graph warm");
+        assert!(
+            !dir.path().join(".vfs").join(".dirty").exists(),
+            "the dead marker protocol stays dead — no .dirty may be written"
+        );
+    }
+
+    /// DF-WARPFS-83 negative arm: a pull that touches only docs must NOT
+    /// warm — the graph's inputs did not change, so the hook stays silent.
+    #[cfg(unix)]
+    #[test]
+    fn test_post_merge_skips_docs_only_pull() {
+        let dir = make_temp_git_project();
+        commit_file(dir.path(), "seed.txt", "seed\n", "c1");
+        commit_file(dir.path(), "docs/note.md", "docs\n", "c2 docs only");
+        install_hooks(dir.path()).unwrap();
         let log = dir.path().join("hilo-calls.log");
         let path_dir = make_path_dir(Some(&stub_hilo_recording(&log)));
 
         let out = run_installed_hook(dir.path(), "post-merge", &hook_path(path_dir.path(), true));
         assert_eq!(out.status.code(), Some(0));
         assert!(
-            !marker.exists(),
-            "installed hilo must clear the marker after a full warm"
+            !log.exists(),
+            "a docs-only pull must not invoke hilo (no graph inputs changed)"
         );
-        assert_eq!(std::fs::read_to_string(&log).unwrap().trim(), "graph warm");
     }
 
+    /// A pull that updates the tracked graph inventory itself must warm:
+    /// `.vfs/graph/edges.jsonl` is graph-relevant by definition.
     #[cfg(unix)]
     #[test]
-    fn test_post_merge_without_marker_does_not_invoke_hilo() {
+    fn test_post_merge_warms_when_edges_inventory_pulled() {
+        let dir = make_temp_git_project();
+        commit_file(dir.path(), "seed.txt", "seed\n", "c1");
+        commit_file(
+            dir.path(),
+            ".vfs/graph/edges.jsonl",
+            "{\"from\":\"local:a.rs\",\"to\":\"local:b.rs\",\"relation\":\"imports\"}\n",
+            "c2 inventory refresh",
+        );
+        install_hooks(dir.path()).unwrap();
+        let log = dir.path().join("hilo-calls.log");
+        let path_dir = make_path_dir(Some(&stub_hilo_recording(&log)));
+
+        let out = run_installed_hook(dir.path(), "post-merge", &hook_path(path_dir.path(), true));
+        assert_eq!(out.status.code(), Some(0));
+        assert_eq!(
+            std::fs::read_to_string(&log)
+                .expect("inventory pull must invoke hilo warm")
+                .trim(),
+            "graph warm"
+        );
+    }
+
+    /// A repo with no reflog entry for `HEAD@{1}` (fresh clone-style state)
+    /// must exit 0 and stay silent — the diff gate fails closed to no-op.
+    #[cfg(unix)]
+    #[test]
+    fn test_post_merge_exits_zero_without_reflog_history() {
         let dir = make_temp_git_project();
         install_hooks(dir.path()).unwrap();
         let log = dir.path().join("hilo-calls.log");
@@ -978,7 +1126,7 @@ mod tests {
         assert_eq!(out.status.code(), Some(0));
         assert!(
             !log.exists(),
-            "post-merge must not warm unless a dirty marker exists"
+            "no pull range resolvable — the hook must not guess"
         );
     }
 }
