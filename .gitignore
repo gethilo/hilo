@@ -16,6 +16,9 @@ target/
 .vfs/graph/.symbols_cache.json
 .vfs/graph/.last_reconcile
 .vfs/graph/coverage.json
+# DF-WARPFS-83: freshness ledger (last-warmed git HEAD) — rebuildable, the
+# next completed warm re-stamps it.
+.vfs/graph/state.json
 
 # GitReins local state
 .gitreins/tasks.yaml
@@ -69,3 +72,4 @@ target-local/
 .vfs/graph/.parse_cache.json
 .vfs/graph/.symbols_cache.json
 .vfs/graph/.last_reconcile
+.vfs/graph/state.json

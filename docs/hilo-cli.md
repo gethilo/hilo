@@ -9,6 +9,7 @@ The `hilo` binary — entrypoint for all Hilo operations. Built with clap.
 
 | Command | Description |
 |---------|-------------|
+| `hilo graph warm <flags>` | Walk the tree, parse sources, build the graph. Every completed warm stamps `.vfs/graph/state.json` with the git HEAD it saw; when a later warm finds HEAD moved (typically after a pull), it warns the graph is out of date and the same warm rebuilds and re-stamps |
 | `hilo init [--no-hooks]` | Initialize a Hilo project — creates `.vfs/` and appends a `### HILO` block to `.git/hooks/post-commit` + `post-merge` (existing hook content preserved); `--no-hooks` skips hook installation entirely |
 | `hilo meta <path> [--set <attr> --value <value>]` | Read (all) or set xattr metadata on a file — no per-key read/list flags |
 | `hilo graph related <path> [--direction reverse] [--relation imports]` | Query forward/reverse dependency edges |

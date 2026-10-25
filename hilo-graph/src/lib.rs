@@ -14,6 +14,7 @@ pub mod coverage_links;
 pub mod duckdb;
 pub mod edges;
 pub mod error;
+pub mod freshness;
 pub mod graph;
 pub mod impact;
 pub mod parser;

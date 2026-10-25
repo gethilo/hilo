@@ -6,6 +6,23 @@ All notable changes to Hilo are documented in this file.
 
 ### Added
 
+- **Git-aware graph staleness detection** (DF-WARPFS-83). The post-merge
+  hook used to wait for a `.vfs/.dirty` marker that nothing ever wrote, so a
+  second machine that pulled never refreshed its graph. The marker protocol
+  is replaced by a freshness ledger: every completed `hilo graph warm`
+  stamps `.vfs/graph/state.json` with the git HEAD it observed, and a later
+  warm that finds HEAD moved (typically after a pull, whose preserved file
+  mtimes an incremental `--changed` warm cannot see through) warns
+  `graph is out of date — ...` and heals by rebuilding and re-stamping in
+  the same run. The post-merge hook now warms whenever a pull changed
+  graph-relevant files (any supported source language, or the tracked
+  `.vfs/manifest.yaml` / `.vfs/graph/edges.jsonl`); docs-only pulls skip
+  the work. Undecidable states (no git repo, no git binary, unborn HEAD,
+  corrupt ledger) stay silent and never block a warm. Hooks must be
+  reinstalled (`hilo init`) to pick up the new post-merge body.
+
+### Added
+
 - **Search index vocabulary persisted, so a query stops re-reading the
   corpus** (DF-WARPFS-76). `hilo graph warm` now records each file's
   definition names (`symbols`) and comment/docstring tokens (`doc`) in its

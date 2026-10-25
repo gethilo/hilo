@@ -511,10 +511,17 @@ the project's hook files:
 | Hook | What the Hilo block does |
 |------|--------------------------|
 | `.git/hooks/post-commit` | runs `hilo graph warm --changed` so the graph tracks the commit. If the warm discovers new edges, it **appends** them to the tracked `.vfs/graph/edges.jsonl` — that diff is intentional inventory refresh, commit it with your change (see the [inventory policy](docs/inventory-policy.md)) |
-| `.git/hooks/post-merge` | after a pull: if `.vfs/.dirty` exists, runs a full `hilo graph warm` and deletes the marker |
+| `.git/hooks/post-merge` | after a pull: if the pull changed graph-relevant files (any supported source language, or the tracked `.vfs/manifest.yaml` / `.vfs/graph/edges.jsonl`), runs a full `hilo graph warm` so the graph matches the pulled tree. Docs-only pulls skip the warm. |
+
+Every completed `hilo graph warm` also stamps `.vfs/graph/state.json` with the
+git HEAD it saw. `graph warm` compares that record against the current HEAD and
+warns (`graph is out of date — ...`) when the graph was built from older source
+— the usual cause being a pull, whose file mtimes an incremental `--changed`
+warm cannot see through. Full details:
+[Staleness detection](#staleness-detection).
 
 Both blocks exit `0` when the `hilo` executable is not on `PATH` — they never
-fail a commit, and neither creates a `.vfs/.dirty` file merely because Hilo is
+fail a commit, and neither writes anything into `.vfs/` merely because Hilo is
 missing. Content outside the markers is never touched. Re-running `hilo init`
 retries hook installation (so a previously failed install is recoverable) and
 rewrites only the marked block; `hilo init --no-hooks` creates and modifies
@@ -542,6 +549,29 @@ To remove them:
 Removing the hooks does not remove `.vfs/`: the manifest and graph keep working
 through the CLI and the MCP server (you just lose automatic refreshes on commit
 and pull).
+
+### Staleness detection
+
+Every completed `hilo graph warm` records the git HEAD it observed in
+`.vfs/graph/state.json` (rebuildable runtime state; a missing or corrupt file
+heals on the next warm). On every non-`--changed` warm, Hilo compares that
+record against the current HEAD:
+
+- **Same HEAD** — the graph is fresh; nothing is printed.
+- **HEAD moved** — the graph was built from older source, and warm prints
+  `warning: graph is out of date — ...` naming both HEADs, then heals: a full
+  warm rebuilds and re-stamps the ledger, so the warning clears on the next
+  run.
+- **No git repository / git unavailable / no recorded HEAD yet** — freshness
+  is undecidable and the check stays silent; it never blocks a warm.
+
+This closes the two-machine gap: machine A commits and pushes, machine B pulls
+(git preserves file mtimes, so a mtime-based `--changed` warm would skip every
+pulled file), and B's next full warm both detects and repairs the drift — with
+or without the hooks installed. The post-merge hook uses the same machinery:
+it runs a full warm whenever a pull touched graph-relevant files, and the
+warm's own staleness pass does the rebuild.
+
 
 ## More commands
 
