@@ -1,0 +1,32 @@
+{
+  "tick_id": "warpfs-foreman-2026-10-25-03-35-47",
+  "tasks": [
+    {
+      "id": "DF-WARPFS-50",
+      "title": "[P1] Workspace manifest is an undocumented second YAML dialect",
+      "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-50",
+      "branch": "wt/DF-WARPFS-50"
+    },
+    {
+      "id": "DF-WARPFS-51",
+      "title": "[P2] hilo graph warm --workspace silently no-ops from the workspace root",
+      "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-51",
+      "branch": "wt/DF-WARPFS-51"
+    },
+    {
+      "id": "DF-WARPFS-52",
+      "title": "[P1] hilo workspace mount requests fusermount3 allow_other UNCONDITIONALLY",
+      "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-52",
+      "branch": "wt/DF-WARPFS-52"
+    }
+  ],
+  "dispatched_at": "2026-10-25T03:35:47Z",
+  "status": "recovered_partial",
+  "finished_at": "2026-10-25T06:17:24.011192+00:00",
+  "recovery_note": "Recovered DF-WARPFS-50 and DF-WARPFS-52 serially with stale-base checks and pushed merge parity. DF-WARPFS-51 had no worker commit; its uncommitted partial work was preserved in /home/kara/worktrees/warpfs-DF-WARPFS-51 and the board row was failed with reason.",
+  "recovery_commits": {
+    "DF-WARPFS-50": "3782efdb74b827d1f708b3ee511cdb8d38c5c9f8",
+    "DF-WARPFS-52": "a41c7431a2b4677fc49cf6e59042f5cf08b0f491",
+    "DF-WARPFS-51": null
+  }
+}
