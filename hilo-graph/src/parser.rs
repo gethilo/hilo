@@ -1173,17 +1173,33 @@ fn extract_haskell_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
 
 fn extract_erlang_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
     // `-include_lib("eunit/include/eunit.hrl").` and `-include("records.hrl").`
-    let text = node.utf8_text(source).unwrap_or("");
-    if text.contains("-include_lib(") || text.contains("-include(") {
-        // Extract the string argument
-        if let Some(start) = text.find('"') {
-            if let Some(end) = text[start + 1..].find('"') {
-                let path = &text[start + 1..start + 1 + end];
-                if !path.is_empty() {
-                    paths.push(format!("local:{path}"));
-                }
+    //
+    // DF-WARPFS-88: this must match ONLY the precise `pp_include` /
+    // `pp_include_lib` directive nodes. The old implementation substring-
+    // probed every AST span (`text.contains("-include(")`) and then grabbed
+    // the first quoted run inside the matched span — but an include
+    // directive is visible in the text of every ANCESTOR span up to the
+    // whole-file root, so on cowboy the first quote in the matched span was
+    // `"AS IS"` inside the ISC/BSD license comment, minting a
+    // `local:AS IS` node with 16 phantom edges (8 of them bogus
+    // `tested_by`). The directive node's span is exactly the
+    // `-include...("path")` form, so comment text can never leak into a
+    // path; the quoted `string` field child carries the path itself.
+    if matches!(node.kind(), "pp_include" | "pp_include_lib") {
+        let mut cursor = node.walk();
+        for child in node.children_by_field_name("file", &mut cursor) {
+            // Only quoted string literals name a file; macro names
+            // (`?INCLUDE(...)`-style vars) are not paths.
+            if child.kind() != "string" {
+                continue;
+            }
+            let raw = child.utf8_text(source).unwrap_or("");
+            let path = raw.trim_matches('"').trim();
+            if !path.is_empty() {
+                paths.push(format!("local:{path}"));
             }
         }
+        return;
     }
     let children: Vec<Node> = {
         let mut c = node.walk();
