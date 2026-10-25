@@ -523,6 +523,13 @@ struct WorkspaceMountArgs {
     /// Directory to mount the workspace at. Omit it to use the project
     /// schema's interfaces.fuse.mount_point.
     mount_point: Option<String>,
+    /// Allow other users to access the mount (multi-user setups only).
+    ///
+    /// Off by default: requesting it needs `user_allow_other` in
+    /// /etc/fuse.conf, which stock Debian/Ubuntu images ship commented out.
+    /// A single-user workspace mount never needs it (DF-WARPFS-52).
+    #[arg(long)]
+    allow_other: bool,
     /// Run in the background: detach from the terminal and return immediately.
     #[arg(long)]
     daemon: bool,
@@ -694,9 +701,12 @@ pub fn run() -> anyhow::Result<()> {
             sandbox::run_sandbox_check(args.source.as_deref())
         }
         Commands::Sandbox(sandbox::SandboxCommand::Exec(args)) => sandbox::run_sandbox_exec(&args),
-        Commands::Workspace(WorkspaceCommand::Mount(args)) => {
-            workspace::run_workspace_mount(&args.manifest, args.mount_point.as_deref(), args.daemon)
-        }
+        Commands::Workspace(WorkspaceCommand::Mount(args)) => workspace::run_workspace_mount(
+            &args.manifest,
+            args.mount_point.as_deref(),
+            args.allow_other,
+            args.daemon,
+        ),
         Commands::Workspace(WorkspaceCommand::Unmount(args)) => {
             workspace::run_workspace_unmount(&args.mount_point)
         }

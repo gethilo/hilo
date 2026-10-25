@@ -567,16 +567,25 @@ the backing files' `user.vfs.*` extended attributes or a workspace-level
 commands when you need Hilo metadata; do not expect those annotations through
 the workspace mount.
 
+`hilo workspace mount` does not need `user_allow_other` in `/etc/fuse.conf`:
+a single-user mount never asks for `allow_other`, so it works on a stock
+Debian/Ubuntu box with no root edit (DF-WARPFS-52, same rule as `hilo mount`
+after DF-WARPFS-6). Add `--allow-other` only for a multi-user setup — that
+requires `user_allow_other` in `/etc/fuse.conf` (root), and the mount refuses
+with the exact line to add if it is missing.
+
 - `hilo backend mount --type <TYPE> --at <AT>` — mount a virtual backend
   (types: `s3`, `gdrive`, `onedrive`, `dropbox`, `external`; the
   `git`/`local` types are not supported and fail with
   `unknown backend type`)
 - `hilo backend list` — list registered backends (from
   `.vfs/backends/mounts.yaml`)
-- `hilo workspace mount [MOUNT_POINT] [--manifest <PATH>] [--daemon]` — mount
-  every repo declared in the manifest (project schema: `repos[].at`; workspace
-  schema: `repos[].at` or `mounts:`); a manifest that declares nothing to mount
-  exits 0 with an explanation (see `docs/workspace.md`)
+- `hilo workspace mount [MOUNT_POINT] [--manifest <PATH>] [--allow-other]
+  [--daemon]` — mount every repo declared in the manifest (project schema:
+  `repos[].at`; workspace schema: `repos[].at` or `mounts:`); a manifest that
+  declares nothing to mount exits 0 with an explanation (see
+  `docs/workspace.md`). `--allow-other` is opt-in for multi-user access; a
+  default mount needs no `user_allow_other` in `/etc/fuse.conf`
 - `hilo workspace unmount` — unmount a workspace
 - `hilo workspace ephemeral [PATH...]` — list ephemeral (rebuildable /
   redownloadable) files as TSV: `path`, size, and the reason each was

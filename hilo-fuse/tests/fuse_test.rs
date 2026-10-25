@@ -361,6 +361,161 @@ fn test_auto_unmount_off_is_not_reported_as_suppressed() {
     assert!(!auto_unmount_suppressed(&cfg(true, false)));
 }
 
+// ─── DF-WARPFS-52: the WORKSPACE mount must not request allow_other either ──
+//
+// Same defect, second surface. `run_workspace_mount` defaults allow_other to
+// false, but workspace_mount::mount_options pushed AutoUnmount unconditionally;
+// fuser 0.15.1 (src/session.rs:93) then logs "adding allow_other, with userspace
+// permission handling" and appends AllowOther itself, so fusermount3 saw
+// `ro,nosuid,nodev,allow_other,fsname=hilo-workspace,auto_unmount` and refused
+// the whole mount on any stock Debian/Ubuntu box. The fix is the same
+// invariant as DF-WARPFS-6, asserted on the workspace path's own vector.
+
+use fuser::MountOption;
+use hilo_fuse::workspace_mount::{
+    auto_unmount_suppressed as ws_auto_unmount_suppressed, fuse_conf_enables_user_allow_other,
+    ws_mount_error_for_test, ws_mount_options_for_test,
+};
+
+#[test]
+fn test_workspace_default_mount_requests_neither_auto_unmount_nor_allow_other() {
+    let opts = ws_mount_options_for_test(&cfg(false, true));
+    // THE REGRESSION: emitting either of these makes fuser add AllowOther.
+    assert!(
+        !opts.contains(&MountOption::AllowOther),
+        "a default workspace mount must not request allow_other: {opts:?}"
+    );
+    assert!(
+        !opts.contains(&MountOption::AutoUnmount),
+        "auto_unmount without allow_other makes fuser inject allow_other, which \
+         fusermount3 rejects on a stock box: {opts:?}"
+    );
+    assert_eq!(
+        opts,
+        vec![
+            MountOption::FSName("hilo-workspace".into()),
+            MountOption::RO
+        ],
+        "a default read-only workspace mount is exactly fsname+ro"
+    );
+}
+
+#[test]
+fn test_workspace_read_only_keeps_ro_without_allow_other() {
+    // A read-only workspace mount is the common case (all sources ro); RO must
+    // survive the option change.
+    let opts = ws_mount_options_for_test(&cfg(false, true));
+    assert_eq!(opts[0], MountOption::FSName("hilo-workspace".into()));
+    let mut ro_cfg = cfg(false, true);
+    ro_cfg.read_only = true;
+    assert!(ws_mount_options_for_test(&ro_cfg).contains(&MountOption::RO));
+}
+
+#[test]
+fn test_workspace_explicit_allow_other_keeps_auto_unmount() {
+    let opts = ws_mount_options_for_test(&cfg(true, true));
+    assert!(opts.contains(&MountOption::AllowOther), "{opts:?}");
+    assert!(
+        opts.contains(&MountOption::AutoUnmount),
+        "explicit allow_other means the operator owns user_allow_other: {opts:?}"
+    );
+}
+
+#[test]
+fn test_workspace_allow_other_without_auto_unmount() {
+    let opts = ws_mount_options_for_test(&cfg(true, false));
+    assert!(opts.contains(&MountOption::AllowOther), "{opts:?}");
+    assert!(!opts.contains(&MountOption::AutoUnmount), "{opts:?}");
+}
+
+#[test]
+fn test_workspace_auto_unmount_suppressed_matches_single_repo() {
+    for (allow_other, auto_unmount) in [(false, true), (true, true), (false, false), (true, false)]
+    {
+        assert_eq!(
+            ws_auto_unmount_suppressed(&cfg(allow_other, auto_unmount)),
+            auto_unmount_suppressed(&cfg(allow_other, auto_unmount)),
+            "workspace and single-repo mounts must agree on ({allow_other}, {auto_unmount})"
+        );
+    }
+}
+
+#[test]
+fn test_workspace_refused_allow_other_names_the_fuse_conf_change() {
+    // fusermount3's refusal: fuser maps that stderr to PermissionDenied, and the
+    // host's /etc/fuse.conf does not carry user_allow_other.
+    let e = std::io::Error::new(
+        std::io::ErrorKind::PermissionDenied,
+        "fusermount3: option allow_other only allowed if 'user_allow_other' is set in /etc/fuse.conf",
+    );
+    let msg = ws_mount_error_for_test(e, &cfg(true, true), false);
+    assert!(
+        msg.contains("user_allow_other"),
+        "the error must name the exact directive: {msg}"
+    );
+    assert!(
+        msg.contains("/etc/fuse.conf"),
+        "the error must name the file to edit: {msg}"
+    );
+    assert!(
+        msg.contains("echo user_allow_other >> /etc/fuse.conf"),
+        "the error must name the exact command: {msg}"
+    );
+}
+
+#[test]
+fn test_workspace_other_failures_do_not_blame_fuse_conf() {
+    // Only a refused allow_other earns the /etc/fuse.conf hint. An ENOENT, a
+    // failure while mounting WITHOUT allow_other, and a refusal on a host whose
+    // fuse.conf ALREADY enables user_allow_other (so the refusal was something
+    // else, e.g. an unwritable mount point) must all stay plain — otherwise the
+    // message sends people to edit a file that has nothing to do with it.
+    let denied = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "some other refusal");
+    let msg = ws_mount_error_for_test(denied, &cfg(false, true), false);
+    assert!(!msg.contains("user_allow_other"), "{msg}");
+
+    let not_found = std::io::Error::new(std::io::ErrorKind::NotFound, "mount point vanished");
+    let msg = ws_mount_error_for_test(not_found, &cfg(true, true), false);
+    assert!(!msg.contains("user_allow_other"), "{msg}");
+
+    let denied_but_enabled = std::io::Error::new(
+        std::io::ErrorKind::PermissionDenied,
+        "fusermount3: user has no write access to mountpoint /mnt/x",
+    );
+    let msg = ws_mount_error_for_test(denied_but_enabled, &cfg(true, true), true);
+    assert!(
+        !msg.contains("user_allow_other"),
+        "a refusal on a host that already allows user_allow_other must not \
+         prescribe that same edit: {msg}"
+    );
+}
+
+#[test]
+fn test_fuse_conf_user_allow_other_parsing() {
+    // Stock Debian/Ubuntu: the directive exists but is commented out.
+    let stock = "\
+# /etc/fuse.conf - Configuration file for Filesystem in Userspace (FUSE)
+#mount_max = 1000
+#user_allow_other
+";
+    assert!(
+        !fuse_conf_enables_user_allow_other(stock),
+        "a commented-out user_allow_other is the stock box this fix targets"
+    );
+    assert!(
+        !fuse_conf_enables_user_allow_other(""),
+        "absent file, empty body"
+    );
+    assert!(fuse_conf_enables_user_allow_other("user_allow_other\n"));
+    assert!(fuse_conf_enables_user_allow_other(
+        "#mount_max = 1000\n  user_allow_other  \n"
+    ));
+    assert!(
+        !fuse_conf_enables_user_allow_other("user_allow_other_disabled\n"),
+        "a longer, differently-named directive is not user_allow_other"
+    );
+}
+
 // ─── DF-WARPFS-7: the mount must honour the ignore stack ────────────────────
 //
 // Measured contradiction before the fix: `hilo ignore check target/` ->

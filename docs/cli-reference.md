@@ -1065,7 +1065,17 @@ hilo workspace mount /mnt/hilo --manifest workspace.yaml
 
 # Background: detach into a daemon process and return immediately
 hilo workspace mount --daemon /mnt/hilo
+
+# Multi-user: let other users read the mount (needs user_allow_other in
+# /etc/fuse.conf; a single-user mount never asks for it — DF-WARPFS-52)
+hilo workspace mount /mnt/hilo --allow-other
 ```
+
+`--allow-other` is opt-in and off by default. Without it the mount requests
+nothing privileged, so it works on a stock Debian/Ubuntu box where
+`/etc/fuse.conf` leaves `user_allow_other` commented out (DF-WARPFS-52, the
+workspace twin of DF-WARPFS-6). With it, a host that does not allow the
+option fails with the exact `/etc/fuse.conf` line and command to add.
 
 Two manifest schemas are accepted (DF-WARPFS-50), so the file `hilo init`
 writes works unchanged:
