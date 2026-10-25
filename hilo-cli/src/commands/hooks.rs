@@ -134,15 +134,21 @@ fn is_within(candidate: &Path, root: &Path) -> bool {
     candidate.starts_with(&root)
 }
 
-/// Copy an existing hook beside itself as `<name>.bak-<epoch-seconds>`.
+/// Copy an existing hook beside itself as `<name>.bak-<epoch-milliseconds>`.
 ///
 /// A hook frequently carries hand-written logic the user (or another tool)
 /// put there; rewriting it without keeping the pre-image makes the change
 /// unrecoverable. The backup keeps the exact bytes.
+///
+/// DF-WARPFS-162: the stamp is millisecond precision so two installs in the
+/// same second (the norm for back-to-back `hilo init` runs in scripts or
+/// tests) cannot overwrite the first generation's pre-image — seconds
+/// precision silently clobbered the earlier backup and re-opened exactly the
+/// unrecoverable-rewrite defect this backup exists to prevent.
 fn backup_hook(hook_path: &Path) -> Result<PathBuf> {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
+        .map(|d| d.as_millis())
         .unwrap_or(0);
     let name = hook_path
         .file_name()
