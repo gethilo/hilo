@@ -1,0 +1,27 @@
+{
+  "tick_id": "warpfs-foreman-2026-10-25-18-44-28",
+  "budget": 2,
+  "mode": "wave",
+  "base": "bb6f62c0dec7c70f8d449f527ed4924aef130bfd",
+  "finished_at": "2026-10-25T19:20:28-05:00",
+  "status": "failed_no_landing",
+  "tasks": {
+    "DF-WARPFS-170": {
+      "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-170",
+      "branch": "wt/DF-WARPFS-170",
+      "model": "glm-5.3-flash",
+      "provider": "zai-glm",
+      "status": "failed",
+      "result": "stalled; zero source diff; no commit",
+      "gitreins": "phantom unchanged-tree PASS 4feeb8e7; not implementation evidence"
+    },
+    "DF-WARPFS-82": {
+      "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-82",
+      "branch": "wt/DF-WARPFS-82",
+      "model": "qwen3.8-flash then gpt-5.6-luna recovery",
+      "provider": "opencode-go then openai-codex",
+      "status": "failed",
+      "result": "incomplete parser probe diff; no commit; salvage discarded"
+    }
+  }
+}
