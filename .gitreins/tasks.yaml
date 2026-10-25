@@ -2144,7 +2144,7 @@ tasks:
     server.h query includes a .c file that reaches server.h only via another header
   status: complete
   created_at: '2026-10-14T04:50:09.921854+00:00'
-  completed_at: '2026-10-14T05:41:16.880931+00:00'
+  completed_at: '2026-10-25T18:17:51.593542+00:00'
 - id: DF-WARPFS-95-rejudge
   title: Re-judge landed DF-WARPFS-95 sidecar commit
   criteria:
