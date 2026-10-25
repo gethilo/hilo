@@ -549,13 +549,17 @@ Backends and sync: `hilo backend mount|list|sync|setup` is the canonical,
 §9-registered surface — `mount` registers the backend in
 `.vfs/backends/mounts.yaml`, `list` reads that same file, and `sync` runs
 against every registered mount. `hilo workspace mount` mounts the sources
-declared in `.vfs/manifest.yaml`, and `hilo workspace sync` syncs one
+declared in the manifest — the project manifest `hilo init` writes (repos mount
+at their `at` path) or a workspace manifest with explicit
+`repos`/`backends`/`mounts` — and `hilo workspace sync` syncs one
 explicit bucket/prefix directory without requiring a registered mount (both
 directions are supported with the same `--push`/`--pull`/`--both` flags as
 `hilo backend sync`). Every sync run prints the resolved endpoint and
 bucket in its plan header; prefer an explicit `--endpoint` on a mount (or a
 sync run) over the `AWS_ENDPOINT_URL` environment variable, which is only
-disclosed, never silently consumed.
+disclosed, never silently consumed. Both accepted manifest schemas — and the
+key-by-key mapping between them — are documented in
+[docs/workspace.md](docs/workspace.md).
 
 `hilo workspace mount` is a plain union of backing files: it does not expose
 the backing files' `user.vfs.*` extended attributes or a workspace-level
@@ -569,7 +573,10 @@ the workspace mount.
   `unknown backend type`)
 - `hilo backend list` — list registered backends (from
   `.vfs/backends/mounts.yaml`)
-- `hilo workspace mount` — mount all repos and backends from the manifest
+- `hilo workspace mount [MOUNT_POINT] [--manifest <PATH>] [--daemon]` — mount
+  every repo declared in the manifest (project schema: `repos[].at`; workspace
+  schema: `repos[].at` or `mounts:`); a manifest that declares nothing to mount
+  exits 0 with an explanation (see `docs/workspace.md`)
 - `hilo workspace unmount` — unmount a workspace
 - `hilo workspace ephemeral [PATH...]` — list ephemeral (rebuildable /
   redownloadable) files as TSV: `path`, size, and the reason each was

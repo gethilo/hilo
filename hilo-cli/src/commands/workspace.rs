@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use hilo_backends::{
     EphemeralMatcher, IgnoreMatcher, S3Client, S3Endpoint, SyncDirection, SyncEngine,
 };
-use hilo_core::workspace::WorkspaceManifest;
+use hilo_core::workspace::{LoadedWorkspace, MountEntry, WorkspaceManifest};
 use hilo_fuse::permissions::PermissionEngine;
 use hilo_fuse::{daemon, workspace_mount, workspace_mount::WorkspaceMount, FuseConfig};
 
@@ -17,17 +17,36 @@ use crate::SyncDirectionArg;
 
 /// Mount all repos and backends declared in the manifest.
 ///
+/// The manifest is loaded from EITHER accepted schema (DF-WARPFS-50): the
+/// project schema `hilo init` writes (`.vfs/manifest.yaml` — repos mount at
+/// their `at` path) and the workspace schema (`repos[]`/`backends[]`/
+/// `mounts[]`). A valid manifest that declares no mountable source is not an
+/// error: it prints what to add and exits 0.
+///
 /// When `--daemon` is set, the workspace mount runs in a detached background
 /// process (mirroring `hilo mount --daemon`, DF-WARPFS-130): the current
 /// process re-executes itself with `HILO_MOUNT_DAEMONIZED=1`, `setsid()`s
 /// the child, redirects its stdio to `/dev/null`, and returns immediately.
 /// The child performs the actual `workspace_mount::mount` and keeps serving
 /// until `hilo workspace unmount` tears it down.
-pub fn run_workspace_mount(manifest_path: &str, mount_point: &str, daemon: bool) -> Result<()> {
+pub fn run_workspace_mount(
+    manifest_path: &str,
+    mount_point: Option<&str>,
+    daemon: bool,
+) -> Result<()> {
+    let (plan, resolved_mount_point) = match preflight(manifest_path, mount_point)? {
+        MountPreflight::NothingToMount(loaded) => {
+            println!("{}", nothing_to_mount_message(manifest_path, &loaded));
+            return Ok(());
+        }
+        MountPreflight::Plan { plan, mount_point } => (plan, mount_point),
+    };
+    let mount_point = resolved_mount_point.display().to_string();
+
     // Foreground parent of a `--daemon` mount: spawn the detached child and
     // return. The child (see DAEMON_CHILD_ENV) skips this branch.
     if daemon && std::env::var_os(DAEMON_CHILD_ENV).is_none() {
-        let mut cmd = build_workspace_daemon_command(manifest_path, mount_point)?;
+        let mut cmd = build_workspace_daemon_command(manifest_path, &mount_point)?;
         let child = cmd
             .spawn()
             .context("failed to spawn background workspace mount")?;
@@ -38,37 +57,8 @@ pub fn run_workspace_mount(manifest_path: &str, mount_point: &str, daemon: bool)
         return Ok(());
     }
 
-    let manifest =
-        WorkspaceManifest::load(manifest_path).context("failed to load workspace manifest")?;
-    let errors = manifest.validate();
-    if !errors.is_empty() {
-        eprintln!("manifest validation errors:");
-        for e in &errors {
-            eprintln!("  {}: {}", e.field, e.message);
-        }
-        anyhow::bail!("manifest validation failed with {} error(s)", errors.len());
-    }
-
-    let plan = manifest
-        .build_mount_plan()
-        .context("failed to build mount plan")?;
-
-    if plan.is_empty() {
-        anyhow::bail!("manifest has no mounts defined");
-    }
-
-    println!("Mounting {} source(s)...", plan.len());
-    for entry in &plan {
-        println!(
-            "  {} -> {} ({})",
-            entry.name,
-            entry.at,
-            if entry.writable { "rw" } else { "ro" }
-        );
-    }
-
     let config = FuseConfig {
-        mount_point: PathBuf::from(mount_point),
+        mount_point: PathBuf::from(&mount_point),
         allow_other: false,
         direct_io: false,
         auto_unmount: true,
@@ -83,9 +73,138 @@ pub fn run_workspace_mount(manifest_path: &str, mount_point: &str, daemon: bool)
     let permissions = PermissionEngine::from_rules(hilo_fuse::permissions::default_protections());
     let fs = WorkspaceMount::new(plan, config.clone(), permissions);
 
-    println!("Hilo workspace mounted at {}", mount_point);
+    println!("Hilo workspace mounted at {mount_point}");
     workspace_mount::mount(fs, &config).context("workspace FUSE mount failed")?;
     Ok(())
+}
+
+/// What [`run_workspace_mount`] learned from the manifest before touching
+/// FUSE.
+enum MountPreflight {
+    /// Valid manifest, nothing declared to mount — exit 0.
+    NothingToMount(LoadedWorkspace),
+    /// Valid manifest with a mount plan and a resolved mount point.
+    Plan {
+        plan: Vec<MountEntry>,
+        mount_point: PathBuf,
+    },
+}
+
+/// Load + validate a manifest and build its mount plan.
+///
+/// The manifest may be in either accepted schema. Errors name the schema, the
+/// field and what was expected (DF-WARPFS-50).
+fn preflight(manifest_path: &str, explicit_mount_point: Option<&str>) -> Result<MountPreflight> {
+    let loaded = WorkspaceManifest::load_with_dialect(manifest_path)
+        .with_context(|| format!("failed to load manifest {manifest_path}"))?;
+
+    println!(
+        "manifest {manifest_path}: {} schema",
+        loaded.dialect.schema_name()
+    );
+    if !loaded.inventory_backends.is_empty() {
+        println!(
+            "  note: `backends:` entries are inventory, not mount sources: {}",
+            loaded.inventory_backends.join(", ")
+        );
+    }
+
+    // `hilo init` writes a project manifest with no repos: mounting it is a
+    // no-op, not a failure (DF-WARPFS-50 AC1).
+    if loaded.declared_sources() == 0 {
+        return Ok(MountPreflight::NothingToMount(loaded));
+    }
+
+    let errors = loaded.manifest.validate();
+    if !errors.is_empty() {
+        eprintln!(
+            "manifest validation errors ({} schema):",
+            loaded.dialect.schema_name()
+        );
+        for e in &errors {
+            eprintln!("  {}: {}", e.field, e.message);
+        }
+        anyhow::bail!(
+            "manifest validation failed with {} error(s) in the {} schema ({})",
+            errors.len(),
+            loaded.dialect.schema_name(),
+            loaded.dialect.describe()
+        );
+    }
+
+    let plan = loaded
+        .manifest
+        .build_mount_plan()
+        .with_context(|| format!("failed to build mount plan for {manifest_path}"))?;
+
+    if plan.is_empty() {
+        anyhow::bail!("{}", empty_plan_message(manifest_path, &loaded));
+    }
+
+    println!("Mounting {} source(s)...", plan.len());
+    for entry in &plan {
+        println!(
+            "  {} -> {} ({})",
+            entry.name,
+            entry.at,
+            if entry.writable { "rw" } else { "ro" }
+        );
+    }
+
+    let mount_point = resolve_mount_point(explicit_mount_point, &loaded)?;
+    Ok(MountPreflight::Plan { plan, mount_point })
+}
+
+/// Resolve the mount point: the positional argument wins, else the project
+/// schema's `interfaces.fuse.mount_point`, else a named error.
+fn resolve_mount_point(explicit: Option<&str>, loaded: &LoadedWorkspace) -> Result<PathBuf> {
+    if let Some(mount_point) = explicit.map(str::trim).filter(|mp| !mp.is_empty()) {
+        return Ok(PathBuf::from(mount_point));
+    }
+    if let Some(declared) = &loaded.fuse_mount_point {
+        println!("mount point: {declared} (manifest interfaces.fuse.mount_point)");
+        return Ok(PathBuf::from(declared));
+    }
+    anyhow::bail!(
+        "no mount point: pass it as the positional argument \
+         (`hilo workspace mount <MOUNT_POINT>`) or declare \
+         `interfaces.fuse.mount_point` in the project schema"
+    )
+}
+
+/// Explain why a valid manifest mounts nothing, naming the schema and the
+/// missing field.
+fn empty_plan_message(manifest_path: &str, loaded: &LoadedWorkspace) -> String {
+    format!(
+        "manifest {manifest_path} ({} schema) declares {} source(s) but no `mounts:` — \
+         repos and backends alone mount nothing; expected a `mounts:` entry per source \
+         (`- source: <repo or backend name>` + `at: /<path>`), or `repos[].at` in the \
+         project schema. See docs/workspace.md",
+        loaded.dialect.schema_name(),
+        loaded.declared_sources()
+    )
+}
+
+/// Explain that an initialized-but-empty project manifest has nothing to
+/// mount, and show the smallest working addition.
+fn nothing_to_mount_message(manifest_path: &str, loaded: &LoadedWorkspace) -> String {
+    let schema = loaded.dialect.schema_name();
+    let inventory = if loaded.inventory_backends.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n  `backends:` inventory is declared ({}), but backend inventory is not a \
+             mount source — register it with `hilo backend mount` or add a repo.",
+            loaded.inventory_backends.join(", ")
+        )
+    };
+    format!(
+        "nothing to mount: manifest {manifest_path} ({schema} schema) declares no repos.\n  \
+         Add a repo with a mount path:\n    \
+         repos:\n      - name: shared-lib\n        url: git@github.com:org/shared-lib.git\n        ref: main\n        at: /shared-lib\n  \
+         then re-run: hilo workspace mount --manifest {manifest_path} <MOUNT_POINT>{inventory}\n  \
+         see docs/workspace.md"
+    )
 }
 
 /// Build the detached child command for `hilo workspace mount --daemon`.

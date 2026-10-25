@@ -1053,15 +1053,38 @@ Manage multi-repo workspace mounts.
 
 ### `mount`
 
-Mount all repos and backends from the manifest.
+Mount every repo declared in the manifest as a peer in one FUSE tree.
 
 ```bash
-# Foreground: blocks the terminal until unmounted
+# Mount point from the project manifest (interfaces.fuse.mount_point)
+hilo workspace mount
+
+# Explicit mount point; --manifest defaults to .vfs/manifest.yaml
 hilo workspace mount /mnt/hilo
+hilo workspace mount /mnt/hilo --manifest workspace.yaml
 
 # Background: detach into a daemon process and return immediately
 hilo workspace mount --daemon /mnt/hilo
 ```
+
+Two manifest schemas are accepted (DF-WARPFS-50), so the file `hilo init`
+writes works unchanged:
+
+| Schema | Top-level keys | Repo mount path |
+|---|---|---|
+| project (written by `hilo init`) | `version`, `project`, `interfaces`, `repos[]`, `backends:`, … | `repos[].at` (default `/<name>`) |
+| workspace | `repos[]`, `backends[]`, `mounts[]`, `auto_dependency_order` | `repos[].at` or an explicit `mounts:` entry |
+
+The run header always names the schema it read (`manifest <path>: project
+schema`). A manifest that declares no `repos` and no `backends` mounts nothing:
+the command prints the smallest addition that would mount something and exits
+0. Declaring sources without mounting them is an error that names the schema
+and the missing `mounts:` field. A manifest that fits neither schema is
+rejected with both schema shapes, the rejected field, what it expected, and a
+hint. See [workspace.md](workspace.md) for the full reference.
+
+The mount point is the positional argument when given, otherwise the project
+schema's `interfaces.fuse.mount_point`.
 
 `hilo workspace mount` runs in the foreground and blocks the terminal until
 unmounted (DF-WARPFS-130). Run it in a separate terminal, background it with
