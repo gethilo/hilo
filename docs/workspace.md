@@ -5,8 +5,14 @@ one FUSE tree. It accepts **two manifest schemas**, and this document is the
 reference for both — including which key in one schema means what in the other.
 
 ```bash
-hilo workspace mount <MOUNT_POINT> [--manifest <PATH>] [--daemon]
+hilo workspace mount <MOUNT_POINT> [--manifest <PATH>] [--allow-other] [--daemon]
 ```
+
+`--allow-other` is opt-in and off by default (DF-WARPFS-52): without it the
+mount requests nothing privileged, so it works where `/etc/fuse.conf` leaves
+`user_allow_other` commented out (stock Debian/Ubuntu). Use it only for a
+multi-user mount, where that host must also have `user_allow_other` set; a
+refused mount names the exact line to add.
 
 | Schema | Written by | Top-level keys | How a repo is mounted |
 |---|---|---|---|

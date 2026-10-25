@@ -225,13 +225,16 @@ error flag — same trap as the CLI.
 The mount is the surface the README leads with, and the one most likely to
 waste your time. Three hard rules:
 
-1. **`hilo mount` fails with `allow_other ... user_allow_other` on a stock
-   box** (DF-WARPFS-6). Hilo always sets `auto_unmount`, and `fuser` requires
-   `user_allow_other` in `/etc/fuse.conf` for that — commented out by default
-   on Debian/Ubuntu — regardless of `--allow-other` being off. There is no
-   CLI flag to disable `auto_unmount`. If you must mount, check
-   `grep -v '^#' /etc/fuse.conf | grep user_allow_other` first (needs root to
-   set). Do NOT "fix" this by editing the repo — it is a product finding.
+1. **Do not pre-emptively edit `/etc/fuse.conf`** (DF-WARPFS-6 / DF-WARPFS-52).
+   Neither `hilo mount` nor `hilo workspace mount` requests `allow_other` by
+   default — auto-unmount is only emitted alongside an explicit
+   `--allow-other`, because fuser otherwise pairs `auto_unmount` with
+   `allow_other` and `fusermount3` then refuses the mount on a stock box
+   (`option allow_other only allowed if 'user_allow_other' is set`). If you
+   *do* pass `--allow-other` (multi-user only), the failure names the exact
+   `/etc/fuse.conf` line to add. Verify with
+   `grep -v '^#' /etc/fuse.conf | grep user_allow_other` before blaming the
+   mount.
 2. **Do not walk the mount with `find` / recursive glob / `git status`**
    (DF-WARPFS-5). `readdir` on an **empty** directory never returns a reply,
    so `find <mount> -type f` returns 0 rows and hangs forever on any repo

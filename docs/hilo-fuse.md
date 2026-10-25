@@ -61,3 +61,11 @@ hilo mount /mnt/hilo --triggers
 # With workspace
 hilo workspace mount
 ```
+
+Neither default mount requests `allow_other`, so both work on a stock
+Debian/Ubuntu box where `/etc/fuse.conf` leaves `user_allow_other` commented
+out (DF-WARPFS-6, DF-WARPFS-52). Auto-unmount is only emitted alongside an
+explicit `--allow-other`, because fuser pairs `auto_unmount` with
+`allow_other` on its own and `fusermount3` then refuses the mount. For a
+multi-user mount, add `user_allow_other` to `/etc/fuse.conf` (root) and pass
+`--allow-other`; a refused mount prints that exact instruction.
