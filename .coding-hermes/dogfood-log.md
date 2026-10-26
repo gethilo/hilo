@@ -2148,3 +2148,8 @@ supersedes the PARTIAL this entry reported at its own close. This delivery's *ow
 still inside `libduckdb-sys` at close with `target/` at 4.2 GB and its census was unreadable (`bunker info` →
 `deadline_exceeded` while the sibling battery ran), so it stays PARTIAL as an individual leg, not as the tick's verdict.
 See report §10.1 for the split and the finish/teardown commands.
+
+## 2026-10-26 — warpfs (Hilo) — UNKNOWN-VALUE (run 48)
+
+Tick `warpfs-dogfood-2026-10-26-16-45-28`; target HEAD `763f94bb16f29ecb579fa5f8f4188c3bc6717bb7`. Real four-file Rust consumer and MCP NDJSON session drove init, metadata, warm, stats, impact, related, search, understand and MCP tools. Available release artifact `d1f88c75` was stale; current-head build was stopped during dependency compilation after 164s, so no new product defect row was filed. Timings: init 0.01s, cold warm 0.30s, cached warm 0.06s, stats 47.5ms ±3.1ms and impact 56.0ms ±6.2ms (hyperfine, 5 runs); no PERF row. Runtime artifact returned zero warm edges and empty stats, but this is stale-artifact evidence only. Install leg explicitly SKIPPED-install-bunker: `bunker-qa.sh status` showed bunkerd active, but bunker-mvp was at 96% disk (143.7/149.9 GB), with four existing agents and 20 orphan keys; existing rows `QA-WARPFS-027` and `DF-WARPFS-155` own the class. Foreman not woken (read-only lane).
+

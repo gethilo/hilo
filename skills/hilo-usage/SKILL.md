@@ -1133,3 +1133,8 @@ quote either to a user.
    `graph.map_exclude_paths` demotes trees out of the **MAP tier only** — SIGNATURES/DETAIL still carry
    every file (on this repo 170 of 278 SIGNATURES rows were `tests/fixtures`, which is the documented
    scope, not a bug). To re-include a pruned tree use `graph.include_paths`.
+
+
+## Run 48 boundary (2026-10-26)
+
+A four-file Rust consumer using the available release artifact completed init and metadata, but `graph warm` discovered 0 edges and subsequent stats reported an empty graph. Treat this as stale-artifact evidence only: the artifact stamp was `v0.3.0-542-gd1f88c75-dirty`, while the target tree was `763f94b`; re-prove Rust import behavior with a binary built from the current target before filing a recurrence.

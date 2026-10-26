@@ -1548,3 +1548,10 @@ directory specifically to test DF-162; the fix refused to write there, so the ar
 the scratch tree. The scratch clone lives at `/var/tmp/df1023-warpfs/canopy2` — note it was moved from
 `/tmp` on purpose: a stray `/tmp/.vfs` (DF-WARPFS-161) hijacks the workspace root for any command run
 beneath `/tmp`, which is how this run's first `graph impact` answered for the wrong root.
+
+
+# 2026-10-26 Update — Run 48 current-head boundary
+
+Run 48 drove a real four-file Rust consumer and an MCP NDJSON client using the available release artifact (`v0.3.0-542-gd1f88c75-dirty`). Init and metadata worked; warm completed in 0.30s but discovered zero edges and the following stats/impact surfaces returned success-shaped zero/self-only answers. This evidence is explicitly stale relative to target HEAD `763f94bb`; the attempted current-head debug build was stopped during dependency compilation after 164s, so no new product row was filed from the stale runtime.
+
+The install leg was explicitly skipped, not passed: `bunker-qa.sh status` showed bunkerd active but `bunker status --server bunker-mvp` showed 96% disk usage (143.7/149.9 GB), four existing agents and 20 orphan keys. Existing agents were not owned by this run. Open install rows `QA-WARPFS-027` and `DF-WARPFS-155` already cover the class.
