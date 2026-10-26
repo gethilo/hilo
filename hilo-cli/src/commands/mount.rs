@@ -110,8 +110,9 @@ pub fn run_mount(
     if daemon && std::env::var_os(DAEMON_CHILD_ENV).is_none() {
         // DF-WARPFS-134: the child's only logging channel is stderr. Always
         // hand it a real file: an explicit --log-file when given, otherwise
-        // a default log under the mount point, so `--triggers --daemon`
-        // output (trigger engine eprintln!s + tracing) is never discarded.
+        // a default log OUTSIDE the mounted tree ($HOME/.vfs/logs —
+        // DF-WARPFS-63), so `--triggers --daemon` output (trigger engine
+        // eprintln!s + tracing) is never discarded.
         let resolved_log = resolve_daemon_log_path(log_file, Path::new(mount_point))?;
         if let Some(parent) = resolved_log.parent() {
             std::fs::create_dir_all(parent)
@@ -346,14 +347,27 @@ fn build_stream_state(root: &Path) -> Result<Option<Arc<StreamState>>> {
 }
 
 /// DF-WARPFS-134: resolve the daemon stderr log path. An explicit
-/// `--log-file` wins; otherwise the default is
-/// `<mount_point>/.vfs/logs/mount-daemon.log` (created on demand by the
-/// caller). Resolved in the PARENT so the resolved path can be printed in
-/// the daemonized banner before the child even starts.
-fn resolve_daemon_log_path(explicit: Option<&str>, mount_point: &Path) -> Result<PathBuf> {
+/// `--log-file` wins; otherwise the default is OUTSIDE the mounted tree:
+/// `$HOME/.vfs/logs/mount-daemon.log`, falling back to `/tmp` when `HOME`
+/// is unset (created on demand by the caller).
+///
+/// DF-WARPFS-63: the previous default,
+/// `<mount_point>/.vfs/logs/mount-daemon.log`, placed the log INSIDE the
+/// served filesystem. On a fresh Debian 13 box the FUSE daemon then
+/// encountered its own log path during read resolution and blocked every
+/// read (ls/getfattr/cat all hang); post-mortem the same in-mount path is
+/// unreadable through the dead mount (DF-WARPFS-156). Resolved in the
+/// PARENT so the resolved path can be printed in the daemonized banner
+/// before the child even starts.
+fn resolve_daemon_log_path(explicit: Option<&str>, _mount_point: &Path) -> Result<PathBuf> {
     match explicit {
         Some(p) => Ok(PathBuf::from(p)),
-        None => Ok(mount_point.join(".vfs/logs/mount-daemon.log")),
+        None => {
+            let base = std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("/tmp"));
+            Ok(base.join(".vfs/logs/mount-daemon.log"))
+        }
     }
 }
 
@@ -1075,11 +1089,36 @@ triggers:
     fn test_resolve_daemon_log_path_default() {
         let resolved =
             resolve_daemon_log_path(None, Path::new("/tmp/some-mount")).expect("default resolves");
+        // DF-WARPFS-63: the default is the user's home directory (the
+        // /tmp fallback is unreachable on any box with HOME set), never
+        // under the mount point — the old in-mount default put the log
+        // INSIDE the served filesystem.
+        let expected = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/tmp"))
+            .join(".vfs/logs/mount-daemon.log");
         assert_eq!(
-            resolved,
-            PathBuf::from("/tmp/some-mount/.vfs/logs/mount-daemon.log"),
-            "default log must live under the mount point"
+            resolved, expected,
+            "default log must live outside the mounted tree"
         );
+    }
+
+    #[test]
+    fn test_resolve_daemon_log_path_never_under_mount_point() {
+        // DF-WARPFS-63 regression arm: a mount point anywhere in the tree
+        // must never appear in the default log path.
+        for mp in [
+            "/tmp/some-mount",
+            "/tmp/some-mount/nested/deeper",
+            "/home/user/project",
+        ] {
+            let resolved = resolve_daemon_log_path(None, Path::new(mp)).expect("default resolves");
+            assert!(
+                !resolved.starts_with(mp),
+                "default log must not live under the mount point {mp}: got {}",
+                resolved.display()
+            );
+        }
     }
 
     #[test]
