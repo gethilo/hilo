@@ -1674,14 +1674,27 @@ fn normalize_lexically(path: &Path) -> PathBuf {
 /// Returns the DB path to open, or None when there is truly no data.
 fn require_completed_warm(cwd: &std::path::Path) -> Result<()> {
     let graph_dir = cwd.join(".vfs").join("graph");
-    let state = hilo_graph::freshness::FreshnessState::load(&graph_dir);
-    if !graph_dir
-        .join(hilo_graph::freshness::FRESHNESS_STATE_FILE)
-        .is_file()
-        || state.last_warm_head.is_none()
-    {
-        anyhow::bail!("No complete graph warm found. Run `hilo graph warm` first.");
+    let state_path = graph_dir.join(hilo_graph::freshness::FRESHNESS_STATE_FILE);
+
+    // Preserve the useful empty/uninitialized query behavior: commands such as
+    // `graph stats` can explain an empty cache, and path-error commands can
+    // report the offending subject, when there is no Hilo project at all.
+    // Once `hilo init` has established a project manifest, however, graph
+    // answers must come from a completed warm.
+    if !state_path.is_file() {
+        let has_project_manifest = cwd.join(".vfs").join("manifest.yaml").is_file()
+            || cwd.join("hilo.yaml").is_file()
+            || cwd.join("hilo.yml").is_file();
+        if has_project_manifest {
+            anyhow::bail!("No complete graph warm found. Run `hilo graph warm` first.");
+        }
+        return Ok(());
     }
+
+    // A warm in a temporary/non-Git project legitimately has no HEAD to
+    // record, so the state file is the completion marker; do not reject it
+    // merely because last_warm_head is None. Git-backed projects are still
+    // checked for staleness below.
     if let Some(reason) = hilo_graph::freshness::check_staleness(cwd) {
         anyhow::bail!("Graph is stale: {reason}");
     }

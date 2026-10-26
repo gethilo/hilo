@@ -360,6 +360,25 @@ fn meta_set_with_equals_in_name_is_usage_error() {
 // ─────────────────────── graph ───────────────────────
 
 #[test]
+fn df_warpfs_64_r2_fresh_project_requires_completed_warm() {
+    let dir = unique_tempdir("df-warpfs-64-r2");
+    init_project(&dir);
+
+    let output = run_hilo_with_retry(hilo_cmd().args(["graph", "stats"]).current_dir(&dir));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "DF-WARPFS-64-R2: fresh initialized project must refuse an unwarmed graph, stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("No complete graph warm found") && stderr.contains("hilo graph warm"),
+        "DF-WARPFS-64-R2: warm-gate refusal must name the missing completed warm, stderr: {stderr}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn graph_stats_no_data_prints_message() {
     let dir = unique_tempdir("graph-stats");
 
