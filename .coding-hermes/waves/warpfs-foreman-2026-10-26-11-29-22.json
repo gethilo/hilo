@@ -9,7 +9,24 @@
       "task_id": "DF-WARPFS-64-R2",
       "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-64-R2",
       "branch": "wt/DF-WARPFS-64-R2",
-      "depends_on": []
+      "depends_on": [],
+      "disposition": "already_merged_verification_only",
+      "branch_tip": "8fae5dd90a84350fb3cc303f4925dc221f68c46c",
+      "canonical_merge": "179308e90ca221b0a47a244864f33a6368c6c097",
+      "evidence": {
+        "base_check": "branch tip is ancestor of current master; master advanced by 3 commits",
+        "changed_paths": [
+          "hilo-cli/src/commands/graph.rs"
+        ],
+        "board_mix": false,
+        "fmt": "PASS",
+        "cargo_check": "UNAVAILABLE: timed out after 420s on shared cold build",
+        "acceptance": "PENDING: no regression test and no complete cargo gate in prior tick",
+        "worktree_cleanup": "preserved: task remains pending and evidence worktree retained"
+      }
     }
-  ]
+  ],
+  "finished_at": "2026-10-26T14:20:00Z",
+  "recovery_tick": "warpfs-foreman-2026-10-26-13-57-54",
+  "recovery_result": "verification-only: recorded worker branch was already merged into canonical master as 179308e9; no merge or rebase performed"
 }
