@@ -26,7 +26,10 @@ use crate::SyncDirectionArg;
 /// When `--daemon` is set, the workspace mount runs in a detached background
 /// process (mirroring `hilo mount --daemon`, DF-WARPFS-130): the current
 /// process re-executes itself with `HILO_MOUNT_DAEMONIZED=1`, `setsid()`s
-/// the child, redirects its stdio to `/dev/null`, and returns immediately.
+/// the child, redirects stdin/stdout to `/dev/null` and stderr to a
+/// persistent log file OUTSIDE the served tree (default
+/// `$HOME/.vfs/logs/workspace-daemon.log`, DF-WARPFS-63), and returns
+/// immediately.
 /// The child performs the actual `workspace_mount::mount` and keeps serving
 /// until `hilo workspace unmount` tears it down.
 ///
@@ -53,13 +56,32 @@ pub fn run_workspace_mount(
     // Foreground parent of a `--daemon` mount: spawn the detached child and
     // return. The child (see DAEMON_CHILD_ENV) skips this branch.
     if daemon && std::env::var_os(DAEMON_CHILD_ENV).is_none() {
+        // DF-WARPFS-63: the child's only logging channel is stderr; do not
+        // discard it (the old `.stderr(Stdio::null())` made every workspace
+        // daemon un-diagnosable). Mirror `hilo mount --daemon`
+        // (DF-WARPFS-134): resolve a log path OUTSIDE the served tree
+        // (`$HOME/.vfs/logs/workspace-daemon.log`), create its dirs, open it
+        // in the PARENT and attach the descriptor as the child's stderr so
+        // the file exists even if the child dies before its first write.
+        let resolved_log = resolve_workspace_daemon_log_path();
+        if let Some(parent) = resolved_log.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create log dir {}", parent.display()))?;
+        }
+        let log = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&resolved_log)
+            .with_context(|| format!("failed to open daemon log {}", resolved_log.display()))?;
         let mut cmd = build_workspace_daemon_command(manifest_path, &mount_point, allow_other)?;
+        cmd.stderr(Stdio::from(log));
         let child = cmd
             .spawn()
             .context("failed to spawn background workspace mount")?;
         println!(
-            "Hilo workspace mount daemonized (pid {}) — filesystem available at {mount_point}",
-            child.id()
+            "Hilo workspace mount daemonized (pid {}) — filesystem available at {mount_point} (log: {})",
+            child.id(),
+            resolved_log.display()
         );
         return Ok(());
     }
@@ -214,15 +236,31 @@ fn nothing_to_mount_message(manifest_path: &str, loaded: &LoadedWorkspace) -> St
     )
 }
 
+/// DF-WARPFS-63: resolve the `hilo workspace mount --daemon` log path —
+/// OUTSIDE the served tree, mirroring the `hilo mount --daemon` default
+/// (`mount::resolve_daemon_log_path`). The workspace child's stderr is its
+/// only logging channel (trigger-engine eprintln!s + tracing), so the parent
+/// opens this file and attaches it as the child's stderr instead of the old
+/// `Stdio::null()`. Falls back to `/tmp` when `HOME` is unset.
+fn resolve_workspace_daemon_log_path() -> PathBuf {
+    let base = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/tmp"));
+    base.join(".vfs/logs/workspace-daemon.log")
+}
+
 /// Build the detached child command for `hilo workspace mount --daemon`.
 ///
 /// Re-executes the current binary as `hilo workspace mount --manifest
 /// <manifest> <mount_point> [--allow-other] --daemon` with
 /// `HILO_MOUNT_DAEMONIZED=1`, makes the child a session leader (`setsid`) and
-/// detaches its stdio so the parent can return immediately. Mirrors
+/// detaches stdin/stdout so the parent can return immediately. Mirrors
 /// `mount::build_daemon_command` (DF-WARPFS-130); the access decision travels
 /// through the re-exec so the child mounts what the parent was asked for
-/// (DF-WARPFS-52).
+/// (DF-WARPFS-52). stderr is the child's only logging channel — this function
+/// cannot set it; the caller opens the log file (DF-WARPFS-63:
+/// `$HOME/.vfs/logs/workspace-daemon.log`) and attaches it via
+/// `cmd.stderr(Stdio::from(file))` (see run_workspace_mount).
 pub fn build_workspace_daemon_command(
     manifest_path: &str,
     mount_point: &str,
@@ -528,5 +566,40 @@ mod tests {
             cmd.get_program(),
             std::env::current_exe().expect("current exe resolves")
         );
+    }
+
+    // ───────── DF-WARPFS-63: workspace daemon stderr keeps a real log file ─────────
+
+    #[test]
+    fn test_resolve_workspace_daemon_log_path_default() {
+        let resolved = resolve_workspace_daemon_log_path();
+        let expected = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/tmp"))
+            .join(".vfs/logs/workspace-daemon.log");
+        assert_eq!(
+            resolved, expected,
+            "workspace daemon log must default to the home directory, outside any served tree"
+        );
+    }
+
+    #[test]
+    fn test_resolve_workspace_daemon_log_path_never_under_mount_point() {
+        // DF-WARPFS-63 regression arm: a workspace mount point anywhere in
+        // the tree must never appear in the daemon log path (the in-mount
+        // log hung every read on a fresh Debian 13 box; Stdio::null() made
+        // the daemon un-diagnosable everywhere else).
+        for mp in [
+            "/tmp/some-workspace",
+            "/tmp/some-workspace/nested/deeper",
+            "/home/user/project",
+        ] {
+            let resolved = resolve_workspace_daemon_log_path();
+            assert!(
+                !resolved.starts_with(mp),
+                "workspace daemon log must not live under the mount point {mp}: got {}",
+                resolved.display()
+            );
+        }
     }
 }

@@ -86,8 +86,10 @@ below quote the live binary's own output.
   wraps the agent's SHELL") will not know that from the mount alone. This is
   a docs/contract gap (DF-WARPFS-153, P3), not a regression: the wiring is
   real, the isolation surface is `sandbox exec`.
-- Daemon log file created at <mount_point>/.vfs/logs/mount-daemon.log as
-  documented (empty without --triggers, fine).
+- Daemon log file created at the then-documented in-mount default
+  (DF-WARPFS-134 era; DF-WARPFS-63 later moved the default outside the
+  mount to `$HOME/.vfs/logs/mount-daemon.log`) as documented (empty
+  without --triggers, fine).
 - Unmount: docs name `fusermount -u` (§866 region) — plain `hilo mount` has
   no unmount verb (workspace does); fusermount3 -u failed "Device or
   resource busy" from inside the tree, succeeded from / after killing the

@@ -351,8 +351,8 @@ fn build_stream_state(root: &Path) -> Result<Option<Arc<StreamState>>> {
 /// `$HOME/.vfs/logs/mount-daemon.log`, falling back to `/tmp` when `HOME`
 /// is unset (created on demand by the caller).
 ///
-/// DF-WARPFS-63: the previous default,
-/// `<mount_point>/.vfs/logs/mount-daemon.log`, placed the log INSIDE the
+/// DF-WARPFS-63: the previous (DF-WARPFS-134) default placed the log
+/// INSIDE the
 /// served filesystem. On a fresh Debian 13 box the FUSE daemon then
 /// encountered its own log path during read resolution and blocked every
 /// read (ls/getfattr/cat all hang); post-mortem the same in-mount path is

@@ -15,8 +15,9 @@ Read-only lane contract honoured: no code changes, foreman not woken, repo visib
 
 ## Promise vs reality
 
-Promise (README/`hilo mount --help`): "`--daemon` runs the mount in the background; the daemonized mount's stderr
-(trigger engine + tracing) is appended to a log file, default `<mount_point>/.vfs/logs/mount-daemon.log`; the
+Promise (README/`hilo mount --help`, as of 2026-10-13 — the default path was
+later moved outside the mount by DF-WARPFS-63): "`--daemon` runs the mount in the background; the daemonized mount's stderr
+(trigger engine + tracing) is appended to a log file, default `<mount>/`.vfs/logs/mount-daemon.log`; the
 resolved path is printed in the banner."
 Reality: true, verified twice (sibling run 42, this run). What the promise does not cover is its own failure mode —
 the log is served **by the mount**, so when the daemon exits the log and the whole tree become unreachable

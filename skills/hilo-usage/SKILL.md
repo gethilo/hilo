@@ -1028,10 +1028,14 @@ For a local-dir sync stand-in, use `rclone serve s3` as shown, or the
 
 ## Run 45 field notes — `mount --daemon` logging (2026-10-13, HEAD 5deb8880)
 
-- `--daemon` now always gets a log file: `--log-file <PATH>` or `<mount_point>/.vfs/logs/mount-daemon.log`.
+- `--daemon` now always gets a log file: `--log-file <PATH>` or `$HOME/.vfs/logs/mount-daemon.log` —
+  OUTSIDE the mounted tree (DF-WARPFS-63; the old in-mount default hung every read on a fresh Debian 13 box).
+  `hilo workspace mount --daemon` appends its stderr to `$HOME/.vfs/logs/workspace-daemon.log` the same way.
   The banner prints the resolved path and the child pid — capture that line, it is the only handle on the daemon.
-- The log is served BY the mount. After the daemon exits, reading it gives
-  `Os { code: 107, kind: NotConnected, "Transport endpoint is not connected" }`, and the mountpoint still shows in
+- The default log now lives OUTSIDE the mount, so the old failure mode (the log served BY the mount) is gone for
+  defaults; an explicit `--log-file <PATH>` INSIDE the served tree can still reproduce it: after the daemon exits,
+  reading such a log gives `Os { code: 107, kind: NotConnected, "Transport endpoint is not connected" }`, and the
+  mountpoint still shows in
   `/proc/mounts`; `fusermount3 -u <dir>` may refuse and `umount -l <dir>` clears it. Read the log via a path
   outside the mount, or copy it before tearing the mount down.
 - Harness, not product: run the daemon as a tracked background process, never under a tool `timeout` — a killed

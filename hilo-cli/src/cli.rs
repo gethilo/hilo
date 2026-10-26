@@ -92,7 +92,8 @@ struct MountArgs {
     daemon: bool,
     /// Daemon log file: the daemonized mount's stderr (trigger engine
     /// eprintln!s + tracing) is appended here. Defaults to
-    /// `<mount_point>/.vfs/logs/mount-daemon.log` (DF-WARPFS-134).
+    /// `$HOME/.vfs/logs/mount-daemon.log` — outside the mounted tree
+    /// (DF-WARPFS-134, DF-WARPFS-63).
     #[arg(long, value_name = "PATH")]
     log_file: Option<String>,
 }

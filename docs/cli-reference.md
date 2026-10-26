@@ -900,7 +900,9 @@ mount alive until `fusermount -u /mnt/vfs` unmounts it.
 
 **Daemon logging (DF-WARPFS-134):** a `--daemon` mount no longer discards
 its stderr. By default the daemon appends to
-`<mount_point>/.vfs/logs/mount-daemon.log` (created on demand); pass
+`$HOME/.vfs/logs/mount-daemon.log` (created on demand; DF-WARPFS-63 moved
+the default OUT of the mount point — an in-mount log hung every read on a
+fresh Debian 13 box and was unreadable through the dead mount); pass
 `--log-file <PATH>` to choose the location. The resolved path is printed
 in the "Hilo mount daemonized" banner. This is where trigger engine
 output (`--triggers` — "loaded N triggers", fire/failure messages) and
@@ -1071,6 +1073,10 @@ hilo workspace mount /mnt/hilo --manifest workspace.yaml
 
 # Background: detach into a daemon process and return immediately
 hilo workspace mount --daemon /mnt/hilo
+
+# The daemon's stderr (trigger engine + tracing) is appended OUTSIDE the
+# served tree, by default $HOME/.vfs/logs/workspace-daemon.log (created on
+# demand); the "daemonized" banner prints the resolved path (DF-WARPFS-63)
 
 # Multi-user: let other users read the mount (needs user_allow_other in
 # /etc/fuse.conf; a single-user mount never asks for it — DF-WARPFS-52)

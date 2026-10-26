@@ -80,13 +80,25 @@ All notable changes to Hilo are documented in this file.
 
 ### Fixed
 
+- **Daemon logs moved OUT of the served filesystem; workspace daemon keeps
+  its stderr** (DF-WARPFS-63): the DF-WARPFS-134 default placed the mount
+  log INSIDE the mounted tree — on a fresh Debian 13 box the FUSE
+  filesystem met its own log during read resolution and every read
+  (ls/getfattr/cat) hung.
+  `hilo mount --daemon` now defaults to
+  `$HOME/.vfs/logs/mount-daemon.log` (`--log-file` still wins). The
+  sibling `hilo workspace mount --daemon` no longer discards its stderr
+  via `Stdio::null()`: it appends to
+  `$HOME/.vfs/logs/workspace-daemon.log` (created on demand, append mode)
+  and the banner prints the resolved path.
 - **`hilo mount --daemon` keeps the child's stderr — persistent log file**
   (DF-WARPFS-134): the daemonized child's only logging channel (trigger
   engine eprintln!s + the `--triggers` tracing subscriber) was discarded
   via `Stdio::null()`, making `--triggers --daemon` observably dead. The
   parent now always hands the child a real log file: the new
   `--log-file <PATH>` flag when given, else
-  `<mount_point>/.vfs/logs/mount-daemon.log` (dirs created on demand,
+  `$HOME/.vfs/logs/mount-daemon.log` (DF-WARPFS-63 moved the default out
+  of the mount point; dirs created on demand,
   append mode). The resolved path is printed in the "Hilo mount
   daemonized" banner; stdout stays detached.
 - **`graph impact` reaches flat (top-level) Python modules in file form**
