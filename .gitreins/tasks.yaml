@@ -2346,5 +2346,5 @@ tasks:
     must either fail naming graph warm or explicitly identify incomplete corpus; after
     warm, full corpus answers; add regression tests.'
   status: complete
-  created_at: '2026-10-26T11:09:31.996987+00:00'
-  completed_at: '2026-10-26T11:23:29.847290+00:00'
+  created_at: '2026-10-26T11:38:26.105527+00:00'
+  completed_at: '2026-10-26T13:48:52.847785+00:00'

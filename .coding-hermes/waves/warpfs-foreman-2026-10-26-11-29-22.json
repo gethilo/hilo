@@ -1,0 +1,15 @@
+{
+  "tick_id": "warpfs-foreman-2026-10-26-11-29-22",
+  "project": "warpfs",
+  "base": "7982f6537998a7d6bb9cf34709477b4ac9f3d1b7",
+  "mode": "serial-fallback",
+  "wave_budget": 12,
+  "tasks": [
+    {
+      "task_id": "DF-WARPFS-64-R2",
+      "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-64-R2",
+      "branch": "wt/DF-WARPFS-64-R2",
+      "depends_on": []
+    }
+  ]
+}
