@@ -1371,10 +1371,11 @@ pub fn run_related(path: &str, relation: Option<&str>, direction: Option<&str>) 
 ///
 /// When `external` is `true`, also follows `external:repo:path` cross-repo edges.
 ///
-/// JIT: on first access the start file is parsed on-the-fly and cached —
-/// no `hilo graph warm` pre-requisite needed.
+/// Queries require a completed `hilo graph warm` so an answer never represents
+/// only the first file parsed on demand.
 pub fn run_impact(path: &str, max_depth: u32, format: Option<&str>, external: bool) -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
+    require_completed_warm(&cwd)?;
 
     // DF-WARPFS-55: `graph impact` answers for a REPO-RELATIVE subject, so
     // running from a subdirectory must find the project root the graph lives
@@ -1671,6 +1672,22 @@ fn normalize_lexically(path: &Path) -> PathBuf {
 /// into a fresh DB (cheap since PERF-001: single prepared-statement
 /// transaction) and stamps it, so the next command opens instantly.
 /// Returns the DB path to open, or None when there is truly no data.
+fn require_completed_warm(cwd: &std::path::Path) -> Result<()> {
+    let graph_dir = cwd.join(".vfs").join("graph");
+    let state = hilo_graph::freshness::FreshnessState::load(&graph_dir);
+    if !graph_dir
+        .join(hilo_graph::freshness::FRESHNESS_STATE_FILE)
+        .is_file()
+        || state.last_warm_head.is_none()
+    {
+        anyhow::bail!("No complete graph warm found. Run `hilo graph warm` first.");
+    }
+    if let Some(reason) = hilo_graph::freshness::check_staleness(cwd) {
+        anyhow::bail!("Graph is stale: {reason}");
+    }
+    Ok(())
+}
+
 fn resolve_graph_db_path(cwd: &std::path::Path) -> Option<std::path::PathBuf> {
     let graph_db = cwd.join(".vfs").join("graph").join("graph.db");
     if graph_db.exists() {
@@ -1690,6 +1707,7 @@ fn resolve_graph_db_path(cwd: &std::path::Path) -> Option<std::path::PathBuf> {
 /// or eagerly via `hilo graph warm`.
 pub fn run_stats(limit: usize) -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
+    require_completed_warm(&cwd)?;
     let Some(graph_db) = resolve_graph_db_path(&cwd) else {
         println!("Graph cache is empty. Query a file or run `hilo graph warm` to populate.");
         return Ok(());
@@ -3215,6 +3233,7 @@ pub fn run_search(query: &str, limit: Option<usize>, no_symbols: bool) -> Result
 /// never a bare `Files: 0` report.
 pub fn run_module(module_name: &str) -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
+    require_completed_warm(&cwd)?;
 
     // GAP-085: classify the prefix against the filesystem first — this must
     // not sit behind the graph-db resolution, or an unwarmed directory answers
@@ -3304,6 +3323,7 @@ fn unknown_module_error(module_name: &str) -> anyhow::Error {
 /// See `GraphDB::untested_files_at`.
 pub fn run_untested() -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
+    require_completed_warm(&cwd)?;
     let Some(graph_db) = resolve_graph_db_path(&cwd) else {
         anyhow::bail!("No graph data. Run `hilo graph warm` first.");
     };
