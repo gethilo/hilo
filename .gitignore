@@ -63,6 +63,9 @@ dagger.db-shm
 dagger.db-wal
 target-local/
 
+# --- GitReins: local logs and runtime state (CLN-1) ---
+.gitreins/logs/
+
 # --- hilo managed: rebuildable .vfs cache state (installed by `hilo init`) ---
 .vfs/graph/graph.db
 .vfs/graph/graph.db.wal
