@@ -1,0 +1,85 @@
+{
+  "tick_id": "warpfs-foreman-2026-10-27-17-21-05",
+  "project": "warpfs",
+  "repo": "/home/kara/warpfs",
+  "base_sha": "68c36b36204c3b2212c6e3d1021ae3e91139b399",
+  "mode": "wave",
+  "wave_budget": 4,
+  "selection": [
+    {
+      "task_id": "DF-WARPFS-82",
+      "priority": "P1",
+      "depends_on": [],
+      "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-82-20261027-1721",
+      "branch": "wt/DF-WARPFS-82-20261027-1721",
+      "model": "qwen3.8-flash",
+      "provider": "opencode-go"
+    },
+    {
+      "task_id": "GAP-104-R2",
+      "priority": "P1",
+      "depends_on": [],
+      "worktree": "/home/kara/worktrees/warpfs-GAP-104-R2-20261027-1721",
+      "branch": "wt/GAP-104-R2-20261027-1721",
+      "model": "qwen3.8-flash",
+      "provider": "opencode-go"
+    },
+    {
+      "task_id": "README-5",
+      "priority": "P4",
+      "depends_on": [],
+      "worktree": "/home/kara/worktrees/warpfs-README-5-20261027-1721",
+      "branch": "wt/README-5-20261027-1721",
+      "model": "qwen3.8-flash",
+      "provider": "opencode-go"
+    },
+    {
+      "task_id": "DF-WARPFS-148",
+      "priority": "P2",
+      "depends_on": [],
+      "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-148-20261027-1721",
+      "branch": "wt/DF-WARPFS-148-20261027-1721",
+      "model": "qwen3.8-flash",
+      "provider": "opencode-go"
+    }
+  ],
+  "workers": [
+    {
+      "task_id": "DF-WARPFS-82",
+      "status": "failed-zero-write",
+      "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-82-20261027-1721",
+      "branch": "wt/DF-WARPFS-82-20261027-1721",
+      "commit": null,
+      "liveness": "API call #1 observed; zero source diff/commit; preserved"
+    },
+    {
+      "task_id": "GAP-104-R2",
+      "status": "failed-zero-write",
+      "worktree": "/home/kara/worktrees/warpfs-GAP-104-R2-20261027-1721",
+      "branch": "wt/GAP-104-R2-20261027-1721",
+      "commit": null,
+      "liveness": "API call #1 observed; zero source diff/commit; preserved"
+    },
+    {
+      "task_id": "README-5",
+      "status": "failed-zero-write",
+      "worktree": "/home/kara/worktrees/warpfs-README-5-20261027-1721",
+      "branch": "wt/README-5-20261027-1721",
+      "commit": null,
+      "liveness": "API call #1 observed; zero source diff/commit; preserved"
+    },
+    {
+      "task_id": "DF-WARPFS-148",
+      "status": "partial-implementation-unverified",
+      "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-148-20261027-1721",
+      "branch": "wt/DF-WARPFS-148-20261027-1721",
+      "commit": "e361ccc68e48776bd035296c363c1419e6895a92",
+      "merged_commit": "6b3e8a9e",
+      "liveness": "usable diff/commit; direct test and GitReins completion still running at closeout"
+    }
+  ],
+  "status": "failed-partial",
+  "trace": "wave=warpfs-foreman-2026-10-27-17-21-05",
+  "finished_at": "2026-10-27T18:03:00Z",
+  "outcome": "FAILED-PARTIAL: three zero-write workers; one implementation merged but not closed because merged-tree gates and GitReins verdict were still running."
+}
