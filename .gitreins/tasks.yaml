@@ -2370,11 +2370,3 @@ tasks:
   status: complete
   created_at: '2026-10-27T09:37:37.791247+00:00'
   completed_at: '2026-10-27T11:38:13.275862+00:00'
-- id: DF-WARPFS-148
-  title: Document FFI rule schema and honest missing-rule error
-  criteria:
-  - 'PASS: rule schema is documented and missing rule names the manifest rules location
-    actually consulted'
-  status: complete
-  created_at: '2026-10-27T17:32:19.165884+00:00'
-  completed_at: '2026-10-27T17:47:39.099742+00:00'
