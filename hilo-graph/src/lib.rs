@@ -19,6 +19,7 @@ pub mod graph;
 pub mod impact;
 pub mod parser;
 pub mod provenance;
+pub mod prune;
 pub mod resolution;
 pub mod rollup;
 pub mod rules;

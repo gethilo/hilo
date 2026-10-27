@@ -174,6 +174,13 @@ enum GraphCommand {
     /// `.vfs/manifest.yaml` or `manifest.yaml`. `.hiloignore` controls backend
     /// sync and does not override graph discovery.
     ///
+    /// Every warm also RECONCILES removals (DF-WARPFS-170): a row whose file
+    /// no longer exists — or which its source file no longer emits — is pruned
+    /// from `edges.jsonl` and from the DuckDB cache, so a dependency you
+    /// removed stops being reported as a live dependent. `--changed` and
+    /// `--language` warms still prune deleted files, but not rows for removed
+    /// imports (those passes derive only the files they re-parse).
+    ///
     /// Requires a Hilo project root: run `hilo init` first if this directory
     /// has no manifest. Without one, warm exits non-zero naming that command
     /// instead of leaving a partial `.vfs/graph/` behind.

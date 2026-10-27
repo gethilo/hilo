@@ -262,6 +262,13 @@ const READ_BLOCK_BYTES: usize = 64 * 1024;
 const INSERT_EDGE_SQL: &str =
     "INSERT OR IGNORE INTO edges (\"from\", \"to\", rel, provenance, confidence) VALUES (?, ?, ?, ?, ?)";
 
+/// Delete one edge by its `(from, to, rel, provenance)` identity — the same
+/// key the unique index and the append dedupe use (DF-WARPFS-170). The cache
+/// is otherwise insert-only (`INSERT OR IGNORE`), so a row that leaves
+/// `edges.jsonl` has to be deleted explicitly or it answers queries forever.
+const DELETE_EDGE_SQL: &str =
+    "DELETE FROM edges WHERE \"from\" = ? AND \"to\" = ? AND rel = ? AND provenance = ?";
+
 /// Insert owned edges in bounded transactions, returning the number of rows
 /// executed (including duplicates ignored by `INSERT OR IGNORE`).
 fn insert_edges_in_chunks<I>(conn: &Connection, edges: I, chunk_size: usize) -> GraphResult<usize>
@@ -1756,6 +1763,87 @@ impl GraphDB {
     /// SQL is defined in exactly one place.
     pub fn insert_edges(&self, edges: &[Edge]) -> GraphResult<()> {
         insert_edges_into(&self.conn, edges)
+    }
+
+    /// Delete exactly these edge identities from the DuckDB cache
+    /// (DF-WARPFS-170).
+    ///
+    /// `INSERT OR IGNORE` semantics everywhere else mean the cache can only
+    /// ever GROW: a row removed from `edges.jsonl` (a deleted file, an import
+    /// deleted from a file that still exists) keeps answering `impact`,
+    /// `related`, `stats`, and `untested` until the db is destroyed. warm's
+    /// prune pass owns the jsonl rewrite; this is its mirror in the query
+    /// layer — the same `(from, to, rel, provenance)` identity the unique
+    /// index and the append dedupe use, so at most one row matches per edge.
+    ///
+    /// Returns the number of rows actually removed (a cache that never saw
+    /// the edge reports 0 — that is the reconcile path being a no-op, not a
+    /// failure). Runs in a single transaction; a read-only handle refuses
+    /// loudly rather than reporting a silent 0.
+    pub fn delete_edges(&self, edges: &[Edge]) -> GraphResult<usize> {
+        if self.read_only {
+            return Err(GraphError::Other(
+                "cannot delete graph edges through a read-only handle".to_string(),
+            ));
+        }
+        if edges.is_empty() {
+            return Ok(0);
+        }
+        self.conn.execute_batch("BEGIN TRANSACTION")?;
+        let outcome = (|| -> GraphResult<usize> {
+            let mut stmt = self.conn.prepare(DELETE_EDGE_SQL)?;
+            let mut count = 0usize;
+            for edge in edges {
+                count += stmt.execute(params![edge.from, edge.to, edge.rel, edge.provenance])?;
+            }
+            Ok(count)
+        })();
+        match outcome {
+            Ok(count) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(count)
+            }
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
+    }
+
+    /// Re-record the reconcile checkpoint from the inventory and cache as they
+    /// are NOW (DF-WARPFS-170).
+    ///
+    /// A caller that rewrote `edges.jsonl` (warm's prune pass) leaves the
+    /// checkpoint's fingerprint and row claim describing the OLD file. Left
+    /// alone, the next open would see a mismatched prefix digest, full-replay
+    /// the (already correct) file, and record a row claim that counts the rows
+    /// the prune just deleted — never returning to the fast path. Restamping
+    /// makes the checkpoint describe the post-prune pair exactly: consumed =
+    /// file length, digest of the whole file, the db's actual row count.
+    ///
+    /// Best-effort by construction (a missing jsonl or a degraded handle is a
+    /// no-op) — the checkpoint is an optimisation, and a stale one only costs
+    /// a replay, never correctness.
+    pub fn restamp_checkpoint(&self) -> GraphResult<()> {
+        if self.read_only || self.degraded {
+            return Ok(());
+        }
+        let Some(jsonl) = self.edges_jsonl.as_deref() else {
+            return Ok(());
+        };
+        if !jsonl.exists() {
+            return Ok(());
+        }
+        let len = std::fs::metadata(jsonl)?.len();
+        let (prefix_hash, consumed) = hash_prefix(jsonl, len)?;
+        write_stamp(
+            jsonl,
+            consumed,
+            prefix_hash,
+            db_edge_row_count(&self.conn),
+            true,
+        );
+        Ok(())
     }
 
     /// Return the total number of unique graph edges.

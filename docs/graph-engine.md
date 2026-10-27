@@ -142,6 +142,39 @@ Suppression points, all sharing that identity:
 The acceptance probe mirrors what CI asserts: after repeated warm runs on
 the same corpus, `sort .vfs/graph/edges.jsonl | uniq -d` finds nothing.
 
+## Stale-edge pruning (DF-WARPFS-170)
+
+Dedup keeps the inventory from growing *sideways*; it never lets it shrink.
+That is the gap this pass closes: a dependency the agent REMOVED — a deleted
+file, or an import deleted from a file that still exists — used to keep its
+row and keep answering `impact`/`related`/`stats`/`untested` forever. The
+DuckDB cache is insert-only on top of that, so the stale row was doubly
+durable.
+
+Every `hilo graph warm` now runs `hilo_graph::prune::prune_inventory` before
+deciding whether the graph changed:
+
+1. **Missing file** — either endpoint that names a FILE (no `<scheme>:`
+   prefix) must exist under the corpus root. Absolute endpoints are checked
+   as written. This rule runs on every warm.
+2. **Superseded row** — a row whose `from` is a source file this pass
+   re-derived, whose identity the derivation no longer emits, and whose
+   provenance is one warm writes (`ast_exact`, `ast_inferred`,
+   `ast_heuristic`, `heuristic`, `lexical`, `latent`, `unresolved`,
+   `grpc_ast`, `grpc_proto`). Hand-maintained rows (`manual`, unknown tags)
+   are never judged. Applied only on a complete derivation — `--changed` and
+   `--language` derive a subset and pass no source scope.
+
+The rewrite is atomic (temp file + rename) under the same advisory flock as
+`append_edges_deduped` and `graph gc`, and preserves malformed lines verbatim.
+`prune_cache` then deletes the same identities from the `edges` table and
+re-records the reconcile checkpoint, so the query layer agrees with the
+inventory immediately and the next open still takes the fast path.
+
+Idempotence is structural: when the predicate drops nothing, `prune_edges`
+does not rewrite the file at all, so a re-warm of a reconciled corpus leaves
+the bytes (and the checkpoint fingerprint) untouched.
+
 ## Impact Analysis
 
 `compute_impact` walks the reverse edges from a starting node — every file that

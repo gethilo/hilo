@@ -7,7 +7,7 @@ pub mod xattr;
 
 pub use inventory::{
     append_edge, append_edges, append_edges_deduped, create_vfs_structure, edge_key, edge_to_jsonl,
-    gc_edges, read_mounts, write_mounts, BackendMount, Edge, EdgeKey,
+    gc_edges, prune_edges, read_mounts, write_mounts, BackendMount, Edge, EdgeKey, PruneOutcome,
 };
 pub use sidecar::{
     find_workspace_root, read_annotations, record_annotation, remove_annotation, sidecar_path,

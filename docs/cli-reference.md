@@ -128,11 +128,51 @@ hilo graph warm --changed
 # Allow HOME (or its canonical equivalent) as the project root — without
 # this flag `graph warm` refuses to walk the home directory
 hilo graph warm --allow-home
+
+# Removed dependencies are pruned (DF-WARPFS-170). A file endpoint that no
+# longer exists, or an import the re-parse no longer emits, is dropped from
+# edges.jsonl and from the DuckDB cache — so a dependency you REMOVED stops
+# being reported as a live dependent. One line is printed when rows go:
+#   Pruned 3 stale edge(s) from edges.jsonl: 2 missing path, 1 superseded (412 rows -> 409)
+# The pass is idempotent: a reconciled corpus is not rewritten, so a re-warm
+# of an untouched tree still prints [all cached, graph unchanged].
 ```
 
 Supported languages (26): Go, Python, TypeScript, Rust, JavaScript,
 Java, C, C++, Ruby, C#, Kotlin, PHP, Swift, Elixir, Haskell, Erlang,
 Scala, Zig, Lua, Dart, Clojure, OCaml, R, Julia, Elm, Nim.
+
+### Removed dependencies are pruned (DF-WARPFS-170)
+
+`edges.jsonl` only ever gained rows, and the DuckDB cache only ever inserted
+them, so a dependency that was **removed** kept answering `impact`, `related`,
+`stats`, and `untested` as if it were still there — a deleted file stayed a
+dependent forever. Every warm now reconciles the graph against the tree before
+it decides whether anything changed:
+
+- **A file endpoint that no longer exists under the project root** is pruned —
+  whichever side of the row it sits on (`from` or `to`). This rule runs on
+  every warm, including `--changed` and `--language`.
+- **A row the source file no longer emits** (the import line was deleted, the
+  file is still there) is pruned on a *complete* derivation only — `--changed`
+  and `--language` derive just the files they re-parse, where "absent" cannot
+  be told apart from "not looked at".
+- Graph **node** endpoints are never treated as paths: `pkg:`, `std:`, `sys:`,
+  `local:`, `iface:`, `type:`, and cross-repo `external:` rows are untouched by
+  the filesystem rule, and `external:` rows survive a non-`--workspace` warm.
+
+The removal is mirrored into the DuckDB cache (exact identities deleted, the
+reconcile checkpoint re-recorded), so the very next query reflects it — no
+`graph clean` or manual `graph.db` deletion required. The pass is idempotent:
+a reconciled inventory is rewritten not at all, so a re-warm of an untouched
+tree still takes the `[all cached, graph unchanged]` path.
+
+```
+$ hilo graph warm
+Pruned 3 stale edge(s) from edges.jsonl: 2 missing path, 1 superseded (412 rows -> 409)
+  cache prune: 3 stale row(s) removed from graph.db
+Discovered 1287 edges across 74 files (4 languages)
+```
 
 ### Excluded directories
 
@@ -194,7 +234,7 @@ hilo graph stats
 # Output:
 # Total edges: 202 distinct / 292 raw (edges.jsonl)
 # Total files: 81
-# File census: 81 files with edges (distinct edge sources) — warm last counted 90 discovered files = 82 contribute + 8 zero-edge (7 no imports + 1 package facades); some sources may be stale entries no longer on disk (edges.jsonl is append-only)
+# File census: 81 files with edges (distinct edge sources) — warm last counted 90 discovered files = 82 contribute + 8 zero-edge (7 no imports + 1 package facades); some sources may be stale entries no longer on disk — `hilo graph warm` prunes those, so a residual delta means the cache predates the last warm
 # Components (6 total):
 #   src: 61 files, 180 edges
 #   docs: 12 files, 8 edges
@@ -223,12 +263,14 @@ The `File census` line reconciles `Total files` with the coverage
 accounting `hilo graph warm` prints at the end of every run (persisted in
 `.vfs/graph/coverage.json`). `Total files` is a census of distinct edge
 sources in the graph; warm's Coverage line counts every discovered file —
-zero-edge files (no imports, package facades) never carry an edge source,
-and `edges.jsonl` is append-only, so sources of files deleted after an
-earlier warm can linger in the census. When the two definitions disagree,
-the line states both numbers and names the difference instead of leaving
-two headline numbers that look contradictory. A missing or unreadable
-ledger degrades gracefully: the census line is simply omitted.
+zero-edge files (no imports, package facades) never carry an edge source.
+Warm prunes sources whose file no longer exists (see *Removed dependencies are
+pruned* above), so a census still ahead of the ledger means the graph predates
+the last warm (`hilo graph warm` fixes it, and a DB that was never warmed at
+all is the usual cause). When the two definitions disagree, the line states
+both numbers and names the difference instead of leaving two headline numbers
+that look contradictory. A missing or unreadable ledger degrades gracefully:
+the census line is simply omitted.
 
 ### `wiring`
 

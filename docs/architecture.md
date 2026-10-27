@@ -42,7 +42,7 @@ How agents connect to Hilo:
 Metadata lives *outside* file content:
 
 - **xattrs** (`user.vfs.*`) — per-file metadata: role, status, backend, hash
-- **JSONL inventory** (`.vfs/graph/edges.jsonl`) — dependency graph edges, append-only, git-friendly
+- **JSONL inventory** (`.vfs/graph/edges.jsonl`) — dependency graph edges, git-friendly, append-only on discovery and reconciled (stale rows pruned) by every `graph warm`
 - **DuckDB** (`.vfs/graph/graph.db`) — queryable graph, rebuilt from JSONL on mount
 - **Manifest** (`.vfs/manifest.yaml`) — master config: backends, permissions, rules, sandbox
 
@@ -77,8 +77,14 @@ file bytes. v2 stores everything in xattrs and inventory files.
 
 ### JSONL as source of truth
 
-Edges are append-only JSONL. Git-friendly (diffs are readable), streamable,
-splittable. DuckDB is a rebuildable query cache — the JSONL is authoritative.
+Edges are JSONL. Git-friendly (diffs are readable), streamable, splittable.
+DuckDB is a rebuildable query cache — the JSONL is authoritative.
+
+Discovery only ever *appends* (dedup by `(from, to, rel, provenance)`), but
+`hilo graph warm` also **reconciles removals**: a row whose file no longer
+exists, or which its source file no longer emits, is pruned from the JSONL and
+the cache (DF-WARPFS-170). An append-only graph could never report that a
+dependency was *removed* — the row answered queries forever.
 
 ### MCP as universal fallback
 

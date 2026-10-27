@@ -9,7 +9,7 @@ The `hilo` binary — entrypoint for all Hilo operations. Built with clap.
 
 | Command | Description |
 |---------|-------------|
-| `hilo graph warm <flags>` | Walk the tree, parse sources, build the graph. Every completed warm stamps `.vfs/graph/state.json` with the git HEAD it saw; when a later warm finds HEAD moved (typically after a pull), it warns the graph is out of date and the same warm rebuilds and re-stamps |
+| `hilo graph warm <flags>` | Walk the tree, parse sources, build the graph. Every warm also prunes stale rows — deleted files and imports the re-parse no longer emits (DF-WARPFS-170) — from `edges.jsonl` and the DuckDB cache, so a removed dependency stops being reported as a dependent. Every completed warm stamps `.vfs/graph/state.json` with the git HEAD it saw; when a later warm finds HEAD moved (typically after a pull), it warns the graph is out of date and the same warm rebuilds and re-stamps |
 | `hilo init [--no-hooks]` | Initialize a Hilo project — creates `.vfs/` and appends a `### HILO` block to `.git/hooks/post-commit` + `post-merge` (existing hook content preserved); `--no-hooks` skips hook installation entirely |
 | `hilo meta <path> [--set <attr> --value <value>]` | Read (all) or set xattr metadata on a file — no per-key read/list flags |
 | `hilo graph related <path> [--direction reverse] [--relation imports]` | Query forward/reverse dependency edges |
@@ -87,3 +87,25 @@ hilo mount /mnt/hilo --triggers
 hilo plugin load ./my-plugin.wasm
 hilo plugin list
 ```
+
+## `graph warm` reconciles removals too
+
+`graph warm` is not append-only any more. Before it decides whether the graph
+changed it prunes rows the tree no longer supports: a file endpoint that no
+longer exists (deleted or moved) and — on a complete derivation — a row its
+source file no longer emits (the import was deleted from a file that is still
+there). Removals are mirrored into the DuckDB cache, so `graph impact`,
+`graph related`, `graph stats`, and `graph untested` stop reporting a
+dependency you removed. One line reports what went:
+
+```
+$ hilo graph warm
+Pruned 2 stale edge(s) from edges.jsonl: 1 missing path, 1 superseded (388 rows -> 386)
+  cache prune: 2 stale row(s) removed from graph.db
+```
+
+`--changed` and `--language` warms still prune deleted files, but do not apply
+the "superseded row" rule: they derive only the files they re-parse, where a
+row missing from the derived set cannot be told apart from a file that was not
+looked at. The pass is idempotent — see
+[inventory-policy.md](inventory-policy.md) for the full contract.

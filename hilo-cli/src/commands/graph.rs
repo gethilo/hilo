@@ -1097,6 +1097,44 @@ pub fn run_warm_in(
     let t_jsonl = std::time::Instant::now();
     // Persist edges to the JSONL inventory file.
     let edges_jsonl = cwd.join(".vfs").join("graph").join("edges.jsonl");
+
+    // DF-WARPFS-170: reconcile the append-only inventory with the tree BEFORE
+    // deciding whether the graph changed. `edges.jsonl` never forgets a row on
+    // its own, so a DELETED file — or an import deleted from a file that is
+    // still there — keeps answering `impact`, `related`, `stats`, and
+    // `untested` as a live dependent, forever. Two rules, both idempotent
+    // (see [`hilo_graph::prune`]):
+    //   * a FILE endpoint that no longer exists under the root is stale;
+    //   * a row whose source file this pass re-derived, but whose edge the
+    //     re-derivation no longer emits, is stale — only when this pass
+    //     covered the corpus COMPLETELY (`--changed` and `--language` derive a
+    //     subset, where "absent from the derived set" cannot be told apart
+    //     from "not looked at").
+    let derived_sources: Option<std::collections::HashSet<String>> =
+        if changed || language.is_some() {
+            None
+        } else {
+            Some(
+                source_files
+                    .iter()
+                    .filter_map(|f| f.strip_prefix(cwd).ok())
+                    .map(|rel| rel.to_string_lossy().into_owned())
+                    .collect(),
+            )
+        };
+    let prune =
+        hilo_graph::prune::prune_inventory(cwd, &edges_jsonl, &all_edges, derived_sources.as_ref())
+            .context("failed to reconcile edges.jsonl with the tree")?;
+    if !prune.is_empty() {
+        println!(
+            "Pruned {} stale edge(s) from edges.jsonl: {} missing path, {} superseded ({} rows -> {})",
+            prune.removed_count(),
+            prune.missing_path,
+            prune.superseded,
+            prune.rows_before,
+            prune.rows_after
+        );
+    }
     // PERF-002 fast path: full cache hit => edges identical => skip the
     // jsonl rewrite AND the DuckDB insert entirely (row-point INSERTs are
     // DuckDB's anti-pattern; the only zero-cost insert is no insert).
@@ -1128,7 +1166,11 @@ pub fn run_warm_in(
     if full_cache_hit && !db_verified {
         eprintln!("  cache verification failed (graph.db missing or emptied) — rebuilding the DuckDB cache");
     }
-    if full_cache_hit && db_verified && count_new_service_edges(&edges_jsonl, &derived_edges) == 0 {
+    if full_cache_hit
+        && db_verified
+        && prune.is_empty()
+        && count_new_service_edges(&edges_jsonl, &derived_edges) == 0
+    {
         if std::env::var("HILO_WARM_TIMING").is_ok() {
             eprintln!("  [timing] full cache hit — skipping jsonl+db write");
         }
@@ -1208,6 +1250,21 @@ pub fn run_warm_in(
     };
     if std::env::var("HILO_WARM_TIMING").is_ok() {
         eprintln!("  [timing] insert_edges: {:?}", t_ins.elapsed());
+    }
+
+    // DF-WARPFS-170: the pruned rows must leave the DuckDB cache too. The
+    // cache is insert-only (`INSERT OR IGNORE` — a replay never deletes), so
+    // pruning `edges.jsonl` alone would leave `impact`, `related`, `stats`,
+    // and `untested` answering from the stale rows until the db was destroyed
+    // by hand. `prune_cache` deletes the exact pruned identities and then
+    // re-records the reconcile checkpoint from the post-write state, so the
+    // next open still trusts the cache instead of replaying the corpus.
+    // Deliberately AFTER the insert above: the checkpoint's row claim must
+    // describe the db as this warm leaves it.
+    if !prune.is_empty() {
+        let deleted = hilo_graph::prune::prune_cache(&graph, &prune)
+            .context("failed to apply the edge prune to the DuckDB cache")?;
+        eprintln!("  cache prune: {deleted} stale row(s) removed from graph.db");
     }
 
     let n = all_edges.len();
@@ -1752,10 +1809,12 @@ pub fn run_stats(limit: usize) -> Result<()> {
     // DF-WARPFS-43: reconcile the edge-derived census against warm's own
     // end-of-warm accounting. The census (and Total files above) counts
     // DISTINCT edge sources in the graph; warm's Coverage line counts every
-    // discovered file. Zero-edge files never enter the census and an
-    // append-only edges.jsonl keeps superseded sources in it, so the two
+    // discovered file. Zero-edge files never enter the census, so the two
     // numbers disagree by design on most trees — surface both definitions
     // and the delta instead of two headline numbers that look contradictory.
+    // DF-WARPFS-170: warm prunes sources whose file is gone, so a census that
+    // is still ahead of the ledger now means the graph predates the last warm
+    // (or was never warmed), not that the inventory is permanently stale.
     if let Ok(ledger_body) =
         std::fs::read_to_string(cwd.join(".vfs").join("graph").join(COVERAGE_LEDGER))
     {
@@ -1770,13 +1829,14 @@ pub fn run_stats(limit: usize) -> Result<()> {
                 let census = stats.total_files.max(0) as u64;
                 let zero_edge = no_imports + facades;
                 if census > contributes {
-                    // Stale inventory: the census still counts edge sources
-                    // the latest warm no longer saw (deleted/renamed files —
-                    // edges.jsonl is append-only, the DuckDB delta insert
-                    // never purges their rows). This is the DF-WARPFS-43
-                    // run-12 signature (666 census vs 659 contributors).
+                    // Census ahead of warm's accounting: the graph still holds
+                    // edge sources the latest warm no longer saw as
+                    // contributors — the graph predates the last warm (or was
+                    // never warmed). DF-WARPFS-170 prunes sources whose file is
+                    // gone, so after a full warm a residual delta is a
+                    // cache-age problem, not a permanently stale inventory.
                     println!(
-                        "File census: {census} files with edges (distinct edge sources) — warm last counted {discovered} discovered files = {contributes} contribute + {zero_edge} zero-edge ({no_imports} no imports + {facades} package facades); some sources may be stale entries no longer on disk (edges.jsonl is append-only)"
+                        "File census: {census} files with edges (distinct edge sources) — warm last counted {discovered} discovered files = {contributes} contribute + {zero_edge} zero-edge ({no_imports} no imports + {facades} package facades); {census} > {contributes} means the graph predates the last warm — `hilo graph warm` prunes sources whose file is gone (DF-WARPFS-170)"
                     );
                 } else if census < contributes {
                     // Ledger ahead of the graph db (e.g. a warm whose db
@@ -5021,7 +5081,13 @@ mod tests {
             .join("graph")
             .join("edges.jsonl");
         let sentinel = serde_json::to_string(&Edge {
-            from: "main.rs".to_string(),
+            // DF-WARPFS-170: the sentinel's `from` is a real file and its
+            // provenance is `manual`, i.e. a tag warm never writes — the
+            // reconcile pass judges only rows it could have authored and
+            // leaves this one alone. (A row naming a file that does not exist
+            // is pruned whatever its provenance: that is the deleted-file
+            // rule, pinned by `warm_prunes_edges_for_deleted_files`.)
+            from: "src/main.rs".to_string(),
             to: "sys:manual".to_string(),
             rel: "imports".to_string(),
             provenance: "manual".to_string(),
@@ -5091,6 +5157,221 @@ mod tests {
 
     // ======================================================================
     // GAP-065: warm coverage accounting
+    // ======================================================================
+
+    /// A minimal Cargo package with a real dependency edge:
+    /// `src/main.rs` imports `crate::lib`, and `src/lib.rs` imports `std`, so
+    /// both files are edge SOURCES (which is what `graph stats` counts) and
+    /// main.rs has a blast radius into lib.rs.
+    fn write_importing_fixture(root: &Path) {
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("src").join("lib.rs"),
+            "use std::fmt;\npub fn lib() { let _ = std::mem::size_of::<fmt::Error>(); }\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src").join("main.rs"),
+            "mod lib;\nuse crate::lib::lib;\nfn main() { lib(); }\n",
+        )
+        .unwrap();
+    }
+
+    /// Open the warmed DuckDB cache read-only, the way the query commands do.
+    fn read_only_graph(root: &Path) -> GraphDB {
+        let db = root.join(".vfs").join("graph").join("graph.db");
+        GraphDB::open_read_only(db.to_str().unwrap()).expect("warmed graph.db must open read-only")
+    }
+
+    fn edge_mentions(edges: &[Edge], needle: &str) -> Vec<Edge> {
+        edges
+            .iter()
+            .filter(|e| e.from.contains(needle) || e.to.contains(needle))
+            .cloned()
+            .collect()
+    }
+
+    /// DF-WARPFS-170 acceptance: a file DELETED from a warmed corpus stops
+    /// being reported — the rows naming it leave `edges.jsonl`, the DuckDB
+    /// cache answers from the pruned graph (`stats`, `related`, `impact`), and
+    /// re-warming an already-reconciled corpus changes nothing.
+    #[test]
+    fn warm_prunes_edges_for_deleted_files() {
+        let home = TempDir::new().unwrap();
+        let project = TempDir::new().unwrap();
+        write_importing_fixture(project.path());
+
+        warm_project_fixture(project.path(), home.path(), &no_manifest).unwrap();
+        let before = warmed_edges(project.path());
+        assert!(
+            before
+                .iter()
+                .any(|e| e.from == "src/main.rs" && e.to == "src/lib.rs"),
+            "the fixture must warm an import edge to the file about to be deleted: {before:?}"
+        );
+        let files_before = {
+            let graph = read_only_graph(project.path());
+            graph.stats().unwrap().total_files
+        };
+        assert!(
+            files_before >= 2,
+            "both fixture files must be edge sources before the delete, got {files_before}"
+        );
+
+        // Delete the file that has a dependent, then warm.
+        std::fs::remove_file(project.path().join("src").join("lib.rs")).unwrap();
+        warm_project_fixture(project.path(), home.path(), &no_manifest).unwrap();
+
+        let after = warmed_edges(project.path());
+        assert!(
+            edge_mentions(&after, "src/lib.rs").is_empty(),
+            "no row may mention the deleted file after a warm: {:?}",
+            edge_mentions(&after, "src/lib.rs")
+        );
+
+        let graph = read_only_graph(project.path());
+        let files_after = graph.stats().unwrap().total_files;
+        assert_eq!(
+            files_after,
+            files_before - 1,
+            "Total files must drop by exactly the deleted file (was {files_before})"
+        );
+
+        // `related` on the parent no longer lists the deleted file.
+        let forward = graph
+            .related_or_parse("src/main.rs", None, hilo_graph::Direction::Forward)
+            .expect("the parent still exists and is indexable");
+        assert!(
+            forward.iter().all(|e| e.to != "src/lib.rs"),
+            "related must not report the deleted dependency: {forward:?}"
+        );
+
+        // `impact` from the parent must not list it either — the deleted file
+        // is neither a dependent nor silently back in the blast radius.
+        let impact = graph
+            .impact_or_parse("src/main.rs", 2)
+            .expect("impact on an existing file must answer");
+        assert!(
+            impact.iter().all(|f| !f.path.contains("src/lib.rs")),
+            "impact must not list the deleted file: {:?}",
+            impact.iter().map(|f| &f.path).collect::<Vec<_>>()
+        );
+
+        // `related` on the deleted file itself refuses loudly instead of
+        // answering "no edges" (GAP-059 contract, now reachable because the
+        // prune removed the stale node as well as the stale rows).
+        let err = graph
+            .related_or_parse("src/lib.rs", None, hilo_graph::Direction::Forward)
+            .expect_err("a deleted, un-graphed file must not answer silently");
+        assert!(
+            err.to_string().contains("not in the graph"),
+            "the refusal must name the reason, got: {err}"
+        );
+        drop(graph);
+
+        // Idempotence: a second warm over the reconciled corpus rewrites
+        // nothing — same bytes, same mtime, same row set.
+        let bytes = std::fs::read(
+            project
+                .path()
+                .join(".vfs")
+                .join("graph")
+                .join("edges.jsonl"),
+        )
+        .unwrap();
+        let mtime = std::fs::metadata(
+            project
+                .path()
+                .join(".vfs")
+                .join("graph")
+                .join("edges.jsonl"),
+        )
+        .unwrap()
+        .modified()
+        .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        warm_project_fixture(project.path(), home.path(), &no_manifest).unwrap();
+        assert_eq!(
+            std::fs::read(
+                project
+                    .path()
+                    .join(".vfs")
+                    .join("graph")
+                    .join("edges.jsonl")
+            )
+            .unwrap(),
+            bytes,
+            "a second warm must not change the reconciled inventory"
+        );
+        assert_eq!(
+            std::fs::metadata(
+                project
+                    .path()
+                    .join(".vfs")
+                    .join("graph")
+                    .join("edges.jsonl")
+            )
+            .unwrap()
+            .modified()
+            .unwrap(),
+            mtime,
+            "an idempotent prune must not touch edges.jsonl at all"
+        );
+    }
+
+    /// DF-WARPFS-170, the half an append-only inventory can never fix: the
+    /// file still exists, the IMPORT was deleted. Re-warming must drop the
+    /// phantom edge instead of reporting a removed dependency forever.
+    #[test]
+    fn warm_prunes_removed_imports_on_rederive() {
+        let home = TempDir::new().unwrap();
+        let project = TempDir::new().unwrap();
+        write_importing_fixture(project.path());
+
+        warm_project_fixture(project.path(), home.path(), &no_manifest).unwrap();
+        let before = warmed_edges(project.path());
+        assert!(
+            before
+                .iter()
+                .any(|e| e.from == "src/main.rs" && e.to == "src/lib.rs"),
+            "fixture must warm the edge that is about to be removed: {before:?}"
+        );
+
+        // Delete the import (and the mod declaration) — the FILE stays.
+        std::fs::write(project.path().join("src").join("main.rs"), "fn main() {}\n").unwrap();
+        warm_project_fixture(project.path(), home.path(), &no_manifest).unwrap();
+
+        let after = warmed_edges(project.path());
+        assert!(
+            after.iter().all(|e| e.from != "src/main.rs"),
+            "rows the re-parse no longer emits must be pruned: {:?}",
+            after
+                .iter()
+                .filter(|e| e.from == "src/main.rs")
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            after.iter().any(|e| e.from == "src/lib.rs"),
+            "an unrelated file's rows must survive the prune: {after:?}"
+        );
+
+        let graph = read_only_graph(project.path());
+        let forward = graph
+            .related_or_parse("src/main.rs", None, hilo_graph::Direction::Forward)
+            .expect("the edited file still exists");
+        assert!(
+            forward.is_empty(),
+            "the removed import must not survive as a phantom row: {forward:?}"
+        );
+    }
+
+    // ======================================================================
+    // GAP-065: warm coverage accounting (continued)
     // ======================================================================
 
     fn edge_of(from: &str) -> Edge {

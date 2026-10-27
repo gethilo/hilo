@@ -362,6 +362,112 @@ pub fn gc_edges(edges_jsonl: &Path) -> Result<(usize, usize, usize), MetadataErr
     })
 }
 
+// ──────────────────────── Prune (stale edge removal) ────────────────────────
+
+/// Outcome of [`prune_edges`].
+///
+/// `removed` is the load-bearing part for callers that must mirror the
+/// removal into a derived cache (warm's DuckDB prune): it carries the exact
+/// edge identities that left the inventory, so the cache can drop the same
+/// rows instead of guessing.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PruneOutcome {
+    /// Non-blank rows the file held before the prune.
+    pub rows_before: usize,
+    /// Non-blank rows the file holds after the prune.
+    pub rows_after: usize,
+    /// The edges whose rows were removed, in file order.
+    pub removed: Vec<Edge>,
+}
+
+impl PruneOutcome {
+    /// How many rows the prune removed.
+    pub fn removed_count(&self) -> usize {
+        self.removed.len()
+    }
+
+    /// True when the prune changed nothing (the file was already reconciled).
+    pub fn is_empty(&self) -> bool {
+        self.removed.is_empty()
+    }
+}
+
+/// Remove every row for which `drop_edge` returns `true` (DF-WARPFS-170).
+///
+/// This is the reconciliation seam for `hilo graph warm`: the inventory is
+/// append-only by design (AGENTS.md design rule 3), so a dependency that was
+/// *removed* — a deleted file, or an import deleted from a file that is still
+/// there — otherwise keeps its row forever and keeps answering queries as a
+/// live dependent. Row identity is the edge itself; the caller owns the
+/// policy of what is stale, this function owns the read-filter-rewrite.
+///
+/// Mechanics match [`gc_edges`]: read → filter under the `<edges>.jsonl.lock`
+/// advisory flock → write a sibling temp file → rename over the original, so
+/// a reader never sees a torn file and a crash leaves the original intact.
+/// Malformed lines (unparseable JSON) are PRESERVED verbatim — dropping them
+/// here would be a lossy rewrite hiding a different problem (use
+/// [`gc_edges`]'s sibling diagnostics or the recovery path for those).
+///
+/// Idempotent: when the predicate drops nothing the file is not rewritten at
+/// all, so a second pass over a reconciled corpus leaves the bytes — and the
+/// reconcile checkpoint that fingerprints them — untouched.
+pub fn prune_edges(
+    edges_jsonl: &Path,
+    mut drop_edge: impl FnMut(&Edge) -> bool,
+) -> Result<PruneOutcome, MetadataError> {
+    with_edges_lock(edges_jsonl, || {
+        if !edges_jsonl.exists() {
+            return Ok(PruneOutcome::default());
+        }
+        let contents = fs::read_to_string(edges_jsonl)?;
+        let mut kept: Vec<&str> = Vec::new();
+        let mut removed: Vec<Edge> = Vec::new();
+        let mut rows_before: usize = 0;
+        for line in contents.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            rows_before += 1;
+            match serde_json::from_str::<Edge>(line) {
+                Ok(edge) => {
+                    if drop_edge(&edge) {
+                        removed.push(edge);
+                    } else {
+                        kept.push(line);
+                    }
+                }
+                // Preserve unparseable rows verbatim, in file order.
+                Err(_) => kept.push(line),
+            }
+        }
+        let rows_after = kept.len();
+        if removed.is_empty() {
+            return Ok(PruneOutcome {
+                rows_before,
+                rows_after,
+                removed,
+            });
+        }
+        // Atomic swap: write the pruned file next to the original, then
+        // rename over it. Same filesystem => atomic rename.
+        let tmp_path = edges_jsonl.with_extension("jsonl.prune-tmp");
+        {
+            let mut tmp = fs::File::create(&tmp_path)?;
+            for line in kept.iter() {
+                writeln!(tmp, "{line}")?;
+            }
+            tmp.flush()?;
+            tmp.sync_all()?;
+        }
+        fs::rename(&tmp_path, edges_jsonl)?;
+        Ok(PruneOutcome {
+            rows_before,
+            rows_after,
+            removed,
+        })
+    })
+}
+
 // ──────────────────────── Mounts YAML I/O ────────────────────────
 
 /// Read `backends/mounts.yaml` and deserialize as a list of [`BackendMount`].

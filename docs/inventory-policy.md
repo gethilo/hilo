@@ -12,19 +12,42 @@ git (see `.gitignore`, which explicitly keeps `.vfs/manifest.yaml` and
 every graph query is answered from it (or from the DuckDB cache reconciled
 against it).
 
-A `hilo graph warm` may change it in exactly one way:
+A `hilo graph warm` may change it in exactly two ways:
 
-- **Append, never rewrite.** Warm parses the tree and appends only edges that
-  are not already present. Deduplication is by the tuple
+- **Append, never rewrite (discovery).** Warm parses the tree and appends only
+  edges that are not already present. Deduplication is by the tuple
   `(from, to, rel, provenance)` (`hilo-metadata/src/inventory.rs`,
   `append_edges_deduped`), so pre-existing lines survive verbatim and no line
   is ever written twice.
+- **Prune rows the tree no longer supports (reconciliation, DF-WARPFS-170).**
+  An append-only file never forgets, so before this pass a dependency the
+  agent *removed* kept answering `impact`, `related`, `stats`, and `untested`
+  as a live dependent — forever. Warm now drops two classes of stale row and
+  atomically rewrites the file (temp file + rename, under the same advisory
+  lock every writer takes; malformed lines are preserved verbatim):
+  1. **a file endpoint that no longer exists** under the project root — the
+     `from` or `to` of a row names a path, and that path is gone (deleted or
+     moved). Applies to every warm, including `--changed` and `--language`.
+  2. **a row its source file no longer emits** — the file is still on disk but
+     the import was deleted from it. Applied only on a *complete* derivation
+     (no `--changed`, no `--language`), because a partial pass cannot tell
+     "removed" from "not looked at". Graph node endpoints (`pkg:`, `std:`,
+     `sys:`, `local:`, `iface:`, `type:`, `external:`) are never treated as
+     paths, and cross-repo `external:` rows are never pruned by rule 2 (they
+     are only derivable with `--workspace`).
+
+  The pass is idempotent: a reconciled inventory is not rewritten at all, so a
+  re-warm of an untouched tree still leaves `git status` clean for it. Warm
+  prints `Pruned N stale edge(s) from edges.jsonl: …` when it removes rows, and
+  mirrors the removal into the DuckDB cache (delete + re-stamp), so queries see
+  the pruned graph immediately rather than waiting for someone to delete
+  `graph.db`.
 - **Intentional unchanged case.** When every discovered file hits the parse
-  cache and all derived `service_call` / `service_contract` edges are already
-  present, warm takes its fast path and does not write edges.jsonl, graph.db,
-  or `.last_warm` at all. The output line `[all cached, graph unchanged]`
-  marks this; a re-warm of an untouched tree is expected to produce a clean
-  `git status` for `.vfs/graph/edges.jsonl`.
+  cache, all derived `service_call` / `service_contract` edges are already
+  present, and the prune pass removes nothing, warm takes its fast path and
+  does not write edges.jsonl, graph.db, or `.last_warm` at all. The output line
+  `[all cached, graph unchanged]` marks this; a re-warm of an untouched tree is
+  expected to produce a clean `git status` for `.vfs/graph/edges.jsonl`.
 - **Refresh on cache miss is intentional.** When the parse cache misses
   (new files, changed files, or a missing/removed cache), warm re-parses and
   appends newly discovered edges to the tracked inventory. The refresh may be
@@ -79,16 +102,20 @@ git add .vfs/graph/edges.jsonl
 git commit
 ```
 
-`graph clean` is the only command that deletes the tracked inventory: it
-removes `edges.jsonl` together with the cache artifacts above so the next
-warm re-parses from scratch (the reset path for stale edges after renames or
-moves — e.g. the historical `warpfs-*` entries). That deletion is
-intentional; only run it when you intend to recommit a full refresh of the
-inventory. There is no merge step: the next warm appends, and the dedup tuple
-`(from, to, rel, provenance)` guarantees no duplicate lines — so an
-operator-level "detect stale inventory" check is a plain git diff after a
-warm: additions are legitimate refresh, modifications/deletions of existing
-lines cannot come from warm at all (append-only) and mean the file was edited
+`graph clean` is no longer the only command that removes rows: `graph warm`
+prunes stale ones (above). `graph clean` is still the only command that
+deletes the tracked inventory *wholesale*: it removes `edges.jsonl` together
+with the cache artifacts above so the next warm re-parses from scratch (the
+reset path for a corrupted inventory or a parser/edge-model change you want
+re-derived from nothing). That deletion is intentional; only run it when you
+intend to recommit a full refresh of the inventory. There is no merge step:
+the next warm appends, and the dedup tuple `(from, to, rel, provenance)`
+guarantees no duplicate lines — so an operator-level "detect stale inventory"
+check is a plain git diff after a warm: **additions** are legitimate refresh,
+**deletions** are the prune pass reconciling removed files/imports (review them
+against the change you made — a deletion with no corresponding removal in your
+diff is worth a second look), and **modifications** of surviving lines cannot
+come from warm at all (rows are kept verbatim) and mean the file was edited
 outside the tool.
 
 ## Coverage
@@ -100,3 +127,17 @@ leaves it untouched; a cache-miss warm re-appends next to a surviving
 hand-written sentinel line exactly once; and a repeated cache-miss warm adds
 no duplicates. It runs through the real `run_warm_in` path (the production
 entry `run_warm` is a thin wrapper over it).
+
+The prune half is pinned in three places:
+
+- `warm_prunes_edges_for_deleted_files` (hilo-cli) — delete a file from a warmed
+  fixture, re-warm, and assert no row mentioning it survives in
+  `edges.jsonl`, that the DuckDB cache answers `stats`/`related` from the
+  pruned graph, and that a second warm is a no-op.
+- `warm_prunes_removed_imports_on_rederive` (hilo-cli) — delete the `use` line
+  from a parsed file, re-warm, and assert the phantom `imports` row is gone
+  (the case an append-only inventory could never reconcile).
+- `hilo_graph::prune::tests` (hilo-graph, run by the guard) — the two rules,
+  the node-endpoint exemption, `--changed`/`--language` scoping, idempotence
+  (a reconciled file is never rewritten), malformed-row preservation, and the
+  cache mirror + checkpoint re-stamp.

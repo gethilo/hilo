@@ -120,21 +120,32 @@ present, commands rebuild the cache automatically (previously
 
 ### Which files a warm may change (INV-001)
 
-`edges.jsonl` is the single source of truth, but it is **append-only from
-warm's side**: a warm with any parse-cache miss appends the newly discovered,
-deduplicated edges to the *tracked* `.vfs/graph/edges.jsonl`, and that diff
-is intentional inventory refresh — commit it with the change that produced
-it. A warm that fully hits the parse cache (and finds no missing derived
-edges) takes its fast path and writes nothing at all; a fully-cached re-warm
-of an untouched tree therefore leaves `git status` clean. Rebuildable cache
-artifacts warm also touches on the slow path — `graph.db`, the
+`edges.jsonl` is the single source of truth. A warm with any parse-cache miss
+appends the newly discovered, deduplicated edges to the *tracked*
+`.vfs/graph/edges.jsonl`, and that diff is intentional inventory refresh —
+commit it with the change that produced it.
+
+Since DF-WARPFS-170 a warm also **prunes** rows the tree no longer supports: a
+file endpoint that no longer exists (deleted or moved), and — on a complete
+derivation only — a row its source file no longer emits (the import was removed
+from a file that still exists). Pruning rewrites the file atomically under the
+shared edges lock, is mirrored into the DuckDB cache (exact identities deleted,
+checkpoint re-stamped), and is idempotent: when nothing is stale the file is not
+touched at all, so the pruning never costs a diff on an unchanged tree.
+
+A warm that fully hits the parse cache, finds no missing derived edges, and
+prunes nothing takes its fast path and writes nothing at all; a fully-cached
+re-warm of an untouched tree therefore leaves `git status` clean. Rebuildable
+cache artifacts warm also touches on the slow path — `graph.db`, the
 `.parse_cache.json` parse cache, and the `.last_warm` marker — are gitignored
 and never committed. The full contract, the cache-artifact table, and the
 operator recipe for a deliberate full refresh (`graph clean` + `warm` +
 recommit) live in [inventory-policy.md](inventory-policy.md); the contract is
 pinned by
 `warm_refreshes_tracked_edges_jsonl_append_only_and_rewarm_adds_no_duplicates`
-in `hilo-cli/src/commands/graph.rs`.
+(append/dedup half) and `warm_prunes_edges_for_deleted_files` /
+`warm_prunes_removed_imports_on_rederive` (reconcile half) in
+`hilo-cli/src/commands/graph.rs`.
 
 ## Memory & binary size
 
