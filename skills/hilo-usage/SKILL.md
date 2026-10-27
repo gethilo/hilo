@@ -1102,11 +1102,13 @@ quote either to a user.
    reports `Total files: 2` and a `.: 1 files` component. Cross-check before quoting:
    `jq -r 'select(.from|test("^(pkg|sys|std|external|iface|type|module):")|not)|.from' .vfs/graph/edges.jsonl | sort -u | wc -l`
    — that number, not `Total files`, is the file count. (`DF-WARPFS-163`)
-2. **The census line's "some sources may be stale entries no longer on disk" is not a staleness signal.**
+2. **The census line's delta clause (`{census} > {contributes} means the graph predates the last
+   warm` — DF-WARPFS-170) is not, by itself, a staleness signal.**
    It fires whenever `Total files` exceeds warm's contributor count, which the symbol-node over-count
-   guarantees on every repo with trait implementations — including immediately after `graph clean` +
-   a full `warm`. Never conclude "deleted files are still in the graph" from that sentence alone; diff the
-   edge sources against disk first.
+   (item 1) can force on every repo with trait implementations — including immediately after
+   `graph clean` + a full `warm` (the prune removes only sources whose FILE endpoint is gone; symbol
+   nodes are nodes, not files). Never conclude "deleted files are still in the graph" from that
+   sentence alone; diff the edge sources against disk first.
 3. **`graph understand` can hand an agent rows that are not files.** Its MAP tier printed 54 entries for a
    task on this repo, of which **21** were `type:`/`iface:` pseudo-nodes rendered as files
    (`type:CacheConfig → (no symbols extracted)`). When feeding output to another agent, filter rows

@@ -1072,11 +1072,9 @@ fn graph_stats_reconciles_census_against_warm_ledger() {
     assert_eq!(ledger["no_imports"], 1);
     assert_eq!(ledger["unique_edge_sources"], 2);
 
-    // Stale-inventory branch: delete a source file whose edges persist in
-    // the append-only inventory, then re-warm. The fresh ledger drops it
-    // from the contributor count while the census keeps counting its
-    // lingering rows (delta insert never purges) — the reconcile line must
-    // name the drift instead of letting the two numbers look contradictory.
+    // Healed state (DF-WARPFS-170): delete a source file, re-warm, and the
+    // prune must actually REMOVE the dead rows — from edges.jsonl AND the
+    // DuckDB cache — so the census reconciles with NO delta clause at all.
     fs::remove_file(dir.join("helper.py")).expect("failed to remove helper.py");
     let rewarm2 = hilo_cmd()
         .args(["graph", "warm"])
@@ -1087,6 +1085,24 @@ fn graph_stats_reconciles_census_against_warm_ledger() {
         rewarm2.status.success(),
         "warm after deletion failed: {}",
         String::from_utf8_lossy(&rewarm2.stderr)
+    );
+    let rewarm2_out = format!(
+        "{}{}",
+        String::from_utf8_lossy(&rewarm2.stdout),
+        String::from_utf8_lossy(&rewarm2.stderr)
+    );
+    // The prune pass proves it dropped the dead rows, not just recounted.
+    assert!(
+        rewarm2_out.contains(
+            "Pruned 1 stale edge(s) from edges.jsonl: 1 missing path, 0 superseded (2 rows -> 1)"
+        ) && rewarm2_out.contains("cache prune: 1 stale row(s) removed from graph.db"),
+        "warm after deletion must prune the dead rows from inventory and cache:\n{rewarm2_out}"
+    );
+    let inventory = fs::read_to_string(dir.join(".vfs/graph/edges.jsonl"))
+        .expect("edges.jsonl must exist after warm");
+    assert!(
+        !inventory.contains("helper.py"),
+        "prune must remove the deleted source's rows from edges.jsonl:\n{inventory}"
     );
     let stats2 = hilo_cmd()
         .args(["graph", "stats"])
@@ -1100,8 +1116,79 @@ fn graph_stats_reconciles_census_against_warm_ledger() {
         .find(|l| l.starts_with("File census: "))
         .expect("stats must keep the reconcile block after a source deletion:\n{stdout2}");
     assert!(
-        census_line2.contains("stale entries no longer on disk"),
-        "deleted-source census must surface stale inventory entries:\n  {census_line2}\nfull stdout:\n{stdout2}"
+        census_line2.contains(
+            "1 files with edges (distinct edge sources) — warm last counted 2 discovered files = 1 contribute + 1 zero-edge (1 no imports + 0 package facades)"
+        ) && !census_line2.contains("predates the last warm")
+            && !census_line2.contains("stale"),
+        "warm must HEAL a deleted source (census == contributes, no delta clause):\n  {census_line2}\nfull stdout:\n{stdout2}"
+    );
+    // The deleted source's rows left the DuckDB cache too: `related` can no
+    // longer resolve the removed path as a graph id.
+    let related2 = hilo_cmd()
+        .args(["graph", "related", "helper.py"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn graph related after deletion");
+    let related2_err = String::from_utf8_lossy(&related2.stderr);
+    assert!(
+        !related2.status.success() && related2_err.contains("'helper.py' is not in the graph"),
+        "the deleted source must no longer resolve in the graph (stderr: {related2_err})"
+    );
+
+    // Drift that SURVIVES a full warm — the census>contributes clause's only
+    // remaining live trigger. A hand-maintained row whose source is a file
+    // warm never re-derives (constants.py carries no imports) is exempt from
+    // BOTH prune rules: its endpoints exist on disk (no missing-path), and
+    // `stale_reason` (hilo-graph/src/prune.rs) returns early for a `from`
+    // outside the derived set, before the provenance check. The row rides
+    // every full warm into the DuckDB census, which then sits ahead of the
+    // ledger's contributor count — without it, the clause is reachable only
+    // when the graph predates the last warm.
+    let drift_row = r#"{"from":"constants.py","to":"app.py","rel":"imports","provenance":"manual","confidence":1.0}"#;
+    {
+        use std::io::Write as _;
+        let mut inventory = fs::OpenOptions::new()
+            .append(true)
+            .open(dir.join(".vfs/graph/edges.jsonl"))
+            .expect("edges.jsonl must exist after warm");
+        writeln!(inventory, "{drift_row}").expect("failed to append the drift row");
+    }
+    let rewarm3 = hilo_cmd()
+        .args(["graph", "warm"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn graph warm after drift append");
+    assert!(
+        rewarm3.status.success(),
+        "warm after drift append failed: {}",
+        String::from_utf8_lossy(&rewarm3.stderr)
+    );
+    let inventory3 = fs::read_to_string(dir.join(".vfs/graph/edges.jsonl"))
+        .expect("edges.jsonl must exist after the drift warm");
+    assert!(
+        inventory3
+            .lines()
+            .any(|l| l.contains(r#""from":"constants.py""#)
+                && l.contains(r#""provenance":"manual""#)),
+        "a full warm must NOT drop a hand-maintained row (live endpoints, manual \
+         provenance) — that survival is what makes the drift reachable:\n{inventory3}"
+    );
+    let stats3 = hilo_cmd()
+        .args(["graph", "stats"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn graph stats after drift warm");
+    assert!(stats3.status.success(), "stats after drift warm failed");
+    let stdout3 = String::from_utf8_lossy(&stats3.stdout);
+    let census_line3 = stdout3
+        .lines()
+        .find(|l| l.starts_with("File census: "))
+        .expect("stats must keep the reconcile block after a drift append:\n{stdout3}");
+    assert!(
+        census_line3.contains(
+            "2 files with edges (distinct edge sources) — warm last counted 2 discovered files = 1 contribute + 1 zero-edge (1 no imports + 0 package facades); 2 > 1 means the graph predates the last warm — `hilo graph warm` prunes sources whose file is gone (DF-WARPFS-170)"
+        ),
+        "surviving drift must surface the census>contributes clause verbatim:\n  {census_line3}\nfull stdout:\n{stdout3}"
     );
 
     let _ = fs::remove_dir_all(&dir);

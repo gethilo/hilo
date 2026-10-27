@@ -239,7 +239,7 @@ hilo graph stats
 # Output:
 # Total edges: 202 distinct / 292 raw (edges.jsonl)
 # Total files: 81
-# File census: 81 files with edges (distinct edge sources) — warm last counted 90 discovered files = 82 contribute + 8 zero-edge (7 no imports + 1 package facades); some sources may be stale entries no longer on disk — `hilo graph warm` prunes those, so a residual delta means the cache predates the last warm
+# File census: 81 files with edges (distinct edge sources) — warm last counted 90 discovered files = 82 contribute + 8 zero-edge (7 no imports + 1 package facades); the census is missing contributors (stale or truncated graph cache — run `hilo graph warm`)
 # Components (6 total):
 #   src: 61 files, 180 edges
 #   docs: 12 files, 8 edges
