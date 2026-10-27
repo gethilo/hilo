@@ -51,6 +51,11 @@
 /// itself. Absolute paths resolve to `None` — the no-leak rule shared with
 /// the Go resolver. See [`resolve_ruby_file_to_pkg`].
 ///
+/// PHP sources resolve from their declared namespace and first class-like
+/// declaration (DF-WARPFS-82): the PHP parser emits `pkg:<FQCN>` nodes for
+/// inheritance and interface references, so a PHP file must resolve to the
+/// same fully-qualified class node rather than falling back to Cargo.
+///
 /// Resolution is query-time only: the canonical `edges.jsonl` and the
 /// DuckDB cache are untouched. Files that belong to no package (or are not
 /// files at all — `pkg:`/`sys:`/`std:`/`external:` symbol nodes) resolve to
@@ -171,6 +176,9 @@ pub struct PkgResolver {
     /// other language caches: an `.rb` path resolves syntactically, and
     /// repeat queries must not re-derive the module path.
     ruby_cache: HashMap<PathBuf, Option<String>>,
+    /// PHP fully-qualified class nodes (`pkg:<namespace\\class>`), cached
+    /// separately because resolution reads the declaration from the source.
+    php_cache: HashMap<PathBuf, Option<String>>,
 }
 
 impl PkgResolver {
@@ -227,6 +235,9 @@ impl PkgResolver {
         }
         if path.ends_with(".rb") {
             return self.ruby_pkg_node(path);
+        }
+        if path.ends_with(".php") || path.ends_with(".phtml") {
+            return self.php_pkg_node(path);
         }
         self.crate_name(path).map(|name| format!("pkg:{name}"))
     }
@@ -296,6 +307,18 @@ impl PkgResolver {
             // resolve to `None` (the no-leak rule): a tempdir or home
             // directory prefix would otherwise leak into module names.
             let node = ruby_pkg_node_cached(path, &mut self.ruby_cache);
+            return node;
+        }
+        if path.ends_with(".php") || path.ends_with(".phtml") {
+            if is_symbol_node(&abs) {
+                return None;
+            }
+            let p = PathBuf::from(&abs);
+            if let Some(hit) = self.php_cache.get(&p) {
+                return hit.clone();
+            }
+            let node = php_class_for_file(&p);
+            self.php_cache.insert(p, node.clone());
             return node;
         }
         // Rust crate walk (the default branch of `pkg_node`). The cache is
@@ -379,6 +402,20 @@ impl PkgResolver {
             return None;
         }
         ruby_pkg_node_cached(path, &mut self.ruby_cache)
+    }
+
+    /// Resolve a PHP source to its declared `pkg:<namespace\\class>` node.
+    fn php_pkg_node(&mut self, path: &str) -> Option<String> {
+        if is_symbol_node(path) || !(path.ends_with(".php") || path.ends_with(".phtml")) {
+            return None;
+        }
+        let p = PathBuf::from(path);
+        if let Some(hit) = self.php_cache.get(&p) {
+            return hit.clone();
+        }
+        let node = php_class_for_file(&p);
+        self.php_cache.insert(p, node.clone());
+        node
     }
 
     /// Resolve `path` to its Cargo package name, if any.
@@ -646,11 +683,20 @@ pub fn python_module_for_file(file: &Path) -> Option<String> {
     Some(parts.join("."))
 }
 
+// ── PHP file → fully-qualified class resolution (DF-WARPFS-82) ─────
+
+/// Resolve a PHP source file to the class-like declaration the parser uses
+/// as its fully-qualified `pkg:` node.
+fn php_class_for_file(file: &Path) -> Option<String> {
+    let source = std::fs::read_to_string(file).ok()?;
+    crate::parser::php_declared_class(&source).map(|class| format!("pkg:{class}"))
+}
+
 // ── Java file → fully-qualified class resolution (DF-WARPFS-34) ─────
 
 /// Derive the fully-qualified class name for `file` (DF-WARPFS-34).
 ///
-/// The Java parser emits `pkg:<FQCN>` edges for `import` statements, so a
+/// The Java parser emits `pkg:<FQCN>` node for `import` statements, so a
 /// `.java` file must resolve to the `pkg:<FQCN>` node of the class it
 /// declares — `gson/src/main/java/com/google/gson/Gson.java` is
 /// `pkg:com.google.gson.Gson`. Resolution tries, in order:

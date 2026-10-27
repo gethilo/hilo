@@ -1052,6 +1052,42 @@ fn extract_kotlin_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
 // ── PHP ────────────────────────────────────────────────────────────
 
 fn extract_php_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+    // Unbracketed `namespace Foo;` is a sibling of the declarations it
+    // governs, while bracketed namespaces own their declarations as a body.
+    // Walk program siblings in source order so both forms carry the namespace
+    // into the following class/interface nodes.
+    let mut namespace = String::new();
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if child.kind() == "namespace_definition" {
+            namespace = child
+                .child_by_field_name("name")
+                .and_then(|name| name.utf8_text(source).ok())
+                .map(|name| name.trim().trim_matches('\\').to_string())
+                .unwrap_or_default();
+        }
+        extract_php_imports_in_namespace(child, source, paths, &namespace);
+    }
+}
+
+fn extract_php_imports_in_namespace(
+    node: Node,
+    source: &[u8],
+    paths: &mut Vec<String>,
+    current_namespace: &str,
+) {
+    // A PHP file can contain multiple bracketed namespaces. Keep the namespace
+    // attached to the subtree where it is declared instead of deriving it from
+    // the file path (which is not authoritative for PHP).
+    let namespace = if node.kind() == "namespace_definition" {
+        node.child_by_field_name("name")
+            .and_then(|name| name.utf8_text(source).ok())
+            .map(|name| name.trim().trim_matches('\\').to_string())
+            .unwrap_or_default()
+    } else {
+        current_namespace.to_string()
+    };
+
     // PHP uses `use` and `use ... as ...` for class imports.
     // The grammar exposes these as `namespace_use_declaration` or `use_declaration`.
     if node.kind() == "namespace_use_declaration" || node.kind() == "use_declaration" {
@@ -1063,11 +1099,11 @@ fn extract_php_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
             .trim()
             .trim_end_matches(';')
             .trim();
-        // Handle function/const prefixes: `use function foo\bar;` or `use const FOO;`
+        // Handle function/const prefixes: `use function foo\\bar;` or `use const FOO;`
         let path_part = if trimmed.starts_with("function ") || trimmed.starts_with("const ") {
             trimmed.split_whitespace().nth(1).unwrap_or(trimmed)
         } else {
-            // Handle grouped imports: `use Foo\{Bar, Baz};` — take the outer namespace
+            // Handle grouped imports: `use Foo\\{Bar, Baz};` — take the outer namespace
             trimmed
                 .split('{')
                 .next()
@@ -1080,13 +1116,119 @@ fn extract_php_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
         }
         return;
     }
+
+    // `base_clause` is an extends reference and `class_interface_clause` is
+    // an implements reference. Their named children are only PHP class names,
+    // so handling these nodes avoids accidentally treating method calls,
+    // declarations, or keywords as dependencies.
+    if node.kind() == "base_clause" || node.kind() == "class_interface_clause" {
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            let reference = child.utf8_text(source).unwrap_or("");
+            if let Some(reference) = qualify_php_class_reference(reference, &namespace) {
+                paths.push(format!("pkg:{reference}"));
+            }
+        }
+        return;
+    }
+
     let children: Vec<Node> = {
         let mut c = node.walk();
         node.children(&mut c).collect()
     };
     for child in children {
-        extract_php_imports(child, source, paths);
+        extract_php_imports_in_namespace(child, source, paths, &namespace);
     }
+}
+
+/// Qualify a PHP inheritance/interface name without rewriting already
+/// qualified names. `self`, `parent`, and `static` are language references,
+/// not dependency class nodes, so they are intentionally omitted.
+fn qualify_php_class_reference(reference: &str, namespace: &str) -> Option<String> {
+    let reference = reference.trim();
+    if reference.is_empty()
+        || reference.eq_ignore_ascii_case("self")
+        || reference.eq_ignore_ascii_case("parent")
+        || reference.eq_ignore_ascii_case("static")
+    {
+        return None;
+    }
+    if reference.starts_with('\\') || reference.contains('\\') {
+        if let Some(relative) = reference.strip_prefix("namespace\\") {
+            return Some(if namespace.is_empty() {
+                relative.to_string()
+            } else {
+                format!("{namespace}\\{relative}")
+            });
+        }
+        return Some(reference.to_string());
+    }
+    if namespace.is_empty() {
+        Some(reference.to_string())
+    } else {
+        Some(format!("{namespace}\\{reference}"))
+    }
+}
+
+/// Return the first named PHP declaration's fully-qualified class node.
+///
+/// PHP's namespace declaration is the authoritative source of this identity;
+/// Composer/PSR-4 path conventions are not required for query-time resolution.
+pub(crate) fn php_declared_class(source: &str) -> Option<String> {
+    let mut parser = Parser::for_language(Language::Php).ok()?;
+    let tree = parser.parser.as_mut()?.parse(source.as_bytes(), None)?;
+    let root = tree.root_node();
+    if root.kind() == "program" {
+        let mut namespace = String::new();
+        let mut cursor = root.walk();
+        for child in root.named_children(&mut cursor) {
+            if child.kind() == "namespace_definition" {
+                namespace = child
+                    .child_by_field_name("name")
+                    .and_then(|name| name.utf8_text(source.as_bytes()).ok())
+                    .map(|name| name.trim().trim_matches('\\').to_string())
+                    .unwrap_or_default();
+            }
+            if let Some(class_name) = find_php_declared_class(child, source.as_bytes(), &namespace)
+            {
+                return Some(class_name);
+            }
+        }
+        None
+    } else {
+        find_php_declared_class(root, source.as_bytes(), "")
+    }
+}
+
+fn find_php_declared_class(node: Node, source: &[u8], current_namespace: &str) -> Option<String> {
+    let namespace = if node.kind() == "namespace_definition" {
+        node.child_by_field_name("name")
+            .and_then(|name| name.utf8_text(source).ok())
+            .map(|name| name.trim().trim_matches('\\').to_string())
+            .unwrap_or_default()
+    } else {
+        current_namespace.to_string()
+    };
+
+    if matches!(
+        node.kind(),
+        "class_declaration" | "interface_declaration" | "trait_declaration" | "enum_declaration"
+    ) {
+        if let Some(name) = node
+            .child_by_field_name("name")
+            .and_then(|name| name.utf8_text(source).ok())
+        {
+            return qualify_php_class_reference(name, &namespace);
+        }
+    }
+
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if let Some(class_name) = find_php_declared_class(child, source, &namespace) {
+            return Some(class_name);
+        }
+    }
+    None
 }
 
 // ── Swift ──────────────────────────────────────────────────────────
@@ -2241,6 +2383,17 @@ use anyhow::{bail, Context as _};
             "<?php\nuse App\\Models\\User;\nuse function array_map;\nuse const PHP_INT_MAX;\n",
         );
         assert!(imports.contains(&"pkg:App\\Models\\User".into()));
+    }
+
+    #[test]
+    fn php_same_namespace_class_references() {
+        let imports = parse(
+            Language::Php,
+            "<?php\nnamespace Example\\Command;\nclass Child extends BaseCommand implements Runnable {}\n",
+        );
+        assert!(imports.contains(&"pkg:Example\\Command\\BaseCommand".into()));
+        assert!(imports.contains(&"pkg:Example\\Command\\Runnable".into()));
+        assert!(!imports.contains(&"pkg:BaseCommand".into()));
     }
 
     #[test]

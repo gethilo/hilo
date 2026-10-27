@@ -2616,9 +2616,13 @@ impl GraphDB {
             }
         }
         let mut resolver = PkgResolver::new();
+        let anchored_root = self.root.as_ref().map(crate::resolution::AnchoredRoot::new);
         let mut orphans = Vec::new();
         for from in raw_orphans {
-            let resolved = resolver.pkg_node(&from);
+            let resolved = match anchored_root.as_ref() {
+                Some(root) => resolver.pkg_node_at(root, &from),
+                None => resolver.pkg_node(&from),
+            };
             let covered = resolved.is_some_and(|pkg| to_targets.contains(&pkg));
             if !covered {
                 orphans.push(from);
