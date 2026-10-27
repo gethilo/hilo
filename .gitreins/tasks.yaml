@@ -2379,3 +2379,11 @@ tasks:
   status: complete
   created_at: '2026-10-27T20:54:40.700997+00:00'
   completed_at: '2026-10-27T20:54:52.156018+00:00'
+- id: DF-WARPFS-64-R2
+  title: Verify warm gate recurrence fix
+  criteria:
+  - Fresh initialized project graph consumers refuse before warm and work after warm;
+    focused regression test passes
+  status: complete
+  created_at: '2026-10-27T21:47:05.984786+00:00'
+  completed_at: '2026-10-27T21:57:47.351162+00:00'

@@ -1,0 +1,41 @@
+{
+  "tick_id": "warpfs-foreman-2026-10-27-21-44-08",
+  "project": "warpfs",
+  "repo": "/home/kara/warpfs",
+  "mode": "serial-fallback",
+  "wave_budget": 6,
+  "wave_composed": false,
+  "reason_no_wave": "Only one row was dispatchable for implementation (DF-WARPFS-84) and the two highest-value P1 rows selected this tick (INT-CI-014, DF-WARPFS-64-R2) were both verification-only, so a >=2-worker independent wave could not be composed. Doctrine: one ready row => serial fallback; workers in this repo share the foreman's workdir, so extra workers would also collide on the single checkout.",
+  "census_at_start": {
+    "head": "c77d5daf37cb99b7af4f9e8b1f4e037e6e3832c7",
+    "origin_master": "c77d5daf37cb99b7af4f9e8b1f4e037e6e3832c7",
+    "unpushed": 0,
+    "worktree": "clean",
+    "board_rows": 444,
+    "unique_ids": 436,
+    "status_counts": {"complete": 362, "done": 1, "failed": 1, "pending": 80},
+    "board_events_lines": 997,
+    "board_events_numeric_max_id": 998
+  },
+  "worktrees_read": [
+    "/home/kara/worktrees/warpfs-DF-WARPFS-64-R2 (wt/DF-WARPFS-64-R2, 8fae5dd9) - zero commits ahead of master; implementation already merged as 179308e9",
+    "/home/kara/worktrees/warpfs-GAP-104-R2-20261027-1721 (wt/GAP-104-R2-20261027-1721, 68c36b36) - preserved zero-write dispatch evidence from the prior wave"
+  ],
+  "workers": [],
+  "selected_rows": [
+    {"id": "INT-CI-014", "class": "verification-only", "evidence": "run:40584029035", "closed": true},
+    {"id": "DF-WARPFS-64-R2", "class": "verification-only (implementation already landed)", "evidence": "run:40584029035 + live dual-arm probe", "closed": true}
+  ],
+  "not_dispatched": [
+    {"id": "DF-WARPFS-84", "why": "premise re-verified LIVE at HEAD (PHP + Kotlin file-form impact silently empty) and recorded in .coding-hermes/tick-notes/df-warpfs-84-premise-reverified.md; left pending for a fresh dispatch - no worker spawned this tick", "class": "implementation-ready"}
+  ],
+  "gates": {
+    "local_build": "cargo build -p hilo-cli did NOT complete in 420s - libduckdb-sys cold from-source compile into the shared /var/tmp/hermes-cargo-target, contended by sibling agents",
+    "local_focused_test": "cargo test -p hilo-cli --test cli df_warpfs_64_r2 did NOT complete in 180s (same cold compile)",
+    "acceptance_witness": "repo-built target/debug/hilo v0.3.0-647-g1bdb99e1 (contains 179308e9) fresh-init dual-arm probe PASS",
+    "gitreins": "DF-WARPFS-64-R2 task created+started+completed in the control root; tier-2 evaluator (pid 2337875) still 'Evaluating...' at closeout - NO verdict claimed",
+    "ci": "run 40584029035 at c77d5daf: Build & Test (stable) success, all steps success (Test step = cargo test --workspace under RUSTFLAGS=-D warnings)"
+  },
+  "started_at": "2026-10-27T21:44:08Z",
+  "finished_at": "2026-10-27T22:28:00Z"
+}
