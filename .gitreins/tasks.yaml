@@ -2370,3 +2370,12 @@ tasks:
   status: complete
   created_at: '2026-10-27T09:37:37.791247+00:00'
   completed_at: '2026-10-27T11:38:13.275862+00:00'
+- id: INT-CI-014
+  title: Fix hilo_ffi rule-check result path contract regression
+  criteria:
+  - Exact-head CI passes after the vfs_rule_check test and implementation agree on
+    the documented manifest rules result path; targeted rule_check_follows_the_documented_manifest_rules_schema
+    passes and workspace tests with RUSTFLAGS=-D warnings are green.
+  status: complete
+  created_at: '2026-10-27T19:08:45.355093+00:00'
+  completed_at: '2026-10-27T19:28:09.246156+00:00'

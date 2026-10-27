@@ -988,3 +988,5 @@
 {"id":990,"event_type":"task_created","task_id":"DOC-9","actor":"foreman","tick_id":null,"timestamp":"2026-10-27T19:18:45+00:00","detail":"{\"id\":\"DOC-9\",\"status\":\"pending\"}"}
 {"id":991,"event_type":"task_created","task_id":"DOC-10","actor":"foreman","tick_id":null,"timestamp":"2026-10-27T19:18:46+00:00","detail":"{\"id\":\"DOC-10\",\"status\":\"pending\"}"}
 {"id":992,"event_type":"task_created","task_id":"DOC-11","actor":"foreman","tick_id":null,"timestamp":"2026-10-27T19:18:46+00:00","detail":"{\"id\":\"DOC-11\",\"status\":\"pending\"}"}
+{"id":993,"event_type":"task_created","task_id":"DOC-12","actor":"foreman","tick_id":null,"timestamp":"2026-10-27T19:25:09+00:00","detail":"{\"id\":\"DOC-12\",\"status\":\"pending\"}"}
+{"id":994,"event_type":"task_created","task_id":"DOC-13","actor":"foreman","tick_id":null,"timestamp":"2026-10-27T19:25:09+00:00","detail":"{\"id\":\"DOC-13\",\"status\":\"pending\"}"}
