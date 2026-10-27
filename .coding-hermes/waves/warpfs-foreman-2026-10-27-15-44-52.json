@@ -35,5 +35,9 @@
   ],
   "workers": [],
   "merged": [],
-  "closed": false
+  "closed": false,
+  "finished_at": "2026-10-27T11:21:26-05:00",
+  "status": "recovered_empty",
+  "recovery_note": "Recovered by tick warpfs-foreman-2026-10-27-16-17-03. Manifest declared zero workers. The named DF-WARPFS-82 branch/worktree was reconciled: tip e44de8d9 is behind current master c2591375, has zero commits ahead, and is a board-only QA commit rather than an implementation commit. No gates or merges were required; branch/worktree preserved as evidence; row remains pending.",
+  "recovered_by_tick": "warpfs-foreman-2026-10-27-16-17-03"
 }
