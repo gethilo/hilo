@@ -160,6 +160,11 @@ it decides whether anything changed:
 - Graph **node** endpoints are never treated as paths: `pkg:`, `std:`, `sys:`,
   `local:`, `iface:`, `type:`, and cross-repo `external:` rows are untouched by
   the filesystem rule, and `external:` rows survive a non-`--workspace` warm.
+- **A derived edge whose file endpoint is gone is not written at all.** Import
+  resolvers are structural — a Rust `mod lib;` still resolves `use
+  crate::lib::…` to a deleted `src/lib.rs` — so warm filters the derivation
+  before appending and prints `Dropped N edge(s) whose file endpoint no longer
+  exists`. Without that, the prune pass and the append would fight each run.
 
 The removal is mirrored into the DuckDB cache (exact identities deleted, the
 reconcile checkpoint re-recorded), so the very next query reflects it — no

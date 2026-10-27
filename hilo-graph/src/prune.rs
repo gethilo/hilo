@@ -197,6 +197,46 @@ fn stale_reason(
     }
 }
 
+/// Drop derived edges whose FILE endpoint does not exist under `root`
+/// (DF-WARPFS-170).
+///
+/// The prune pass removes rows that are already in the inventory, but warm can
+/// RECREATE one in the same run: resolvers are structural, not filesystem
+/// checks. A Rust `mod lib;` whose `src/lib.rs` was deleted still resolves
+/// `use crate::lib::…` to `src/lib.rs`, and the parse cache re-emits that edge
+/// on every warm — so pruning alone would oscillate (drop, re-append, drop)
+/// and `edges.jsonl` would flip on every run.
+///
+/// Filtering the derivation is the other half of the same rule: warm never
+/// PERSISTS a dangling edge in the first place. It is the same predicate as
+/// [`PruneReason::MissingPath`], so the inventory converges on exactly the
+/// edges whose endpoints exist.
+///
+/// Returns the surviving edges and how many were dropped.
+pub fn drop_dangling_edges(root: &Path, edges: Vec<Edge>) -> (Vec<Edge>, usize) {
+    let mut exists_cache: HashMap<String, bool> = HashMap::new();
+    let before = edges.len();
+    let kept: Vec<Edge> = edges
+        .into_iter()
+        .filter(|edge| {
+            for endpoint in [&edge.from, &edge.to] {
+                if !is_file_endpoint(endpoint) {
+                    continue;
+                }
+                let exists = *exists_cache
+                    .entry(endpoint.clone())
+                    .or_insert_with(|| endpoint_exists(root, endpoint));
+                if !exists {
+                    return false;
+                }
+            }
+            true
+        })
+        .collect();
+    let dropped = before - kept.len();
+    (kept, dropped)
+}
+
 /// Reconcile `edges_jsonl` against the corpus at `root` (DF-WARPFS-170).
 ///
 /// * `derived` — every edge this warm derived (the authoritative set for the
@@ -465,6 +505,27 @@ mod tests {
 
         assert!(report.is_empty(), "external rows are not locally derivable");
         assert_eq!(read_rows(&jsonl), vec![external]);
+    }
+
+    #[test]
+    fn dangling_derived_edges_are_dropped_before_they_are_persisted() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        write(&root.join("src/main.rs"), "mod lib;\n");
+        let live = edge("src/main.rs", "pkg:std", "imports");
+        let edges = vec![
+            // A resolver that resolves structurally, not against the tree:
+            // src/lib.rs is gone but `mod lib;` still names it.
+            edge("src/main.rs", "src/lib.rs", "imports"),
+            live.clone(),
+            // A source that no longer exists cannot own an edge either.
+            edge("src/gone.rs", "pkg:std", "imports"),
+        ];
+
+        let (kept, dropped) = drop_dangling_edges(root, edges);
+
+        assert_eq!(dropped, 2);
+        assert_eq!(kept, vec![live]);
     }
 
     #[test]

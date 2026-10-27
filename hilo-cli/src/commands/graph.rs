@@ -1098,10 +1098,21 @@ pub fn run_warm_in(
     // Persist edges to the JSONL inventory file.
     let edges_jsonl = cwd.join(".vfs").join("graph").join("edges.jsonl");
 
-    // DF-WARPFS-170: reconcile the append-only inventory with the tree BEFORE
-    // deciding whether the graph changed. `edges.jsonl` never forgets a row on
-    // its own, so a DELETED file — or an import deleted from a file that is
-    // still there — keeps answering `impact`, `related`, `stats`, and
+    // DF-WARPFS-170, half 1: never PERSIST a dangling edge. Import resolvers
+    // are structural — a Rust `mod lib;` whose `src/lib.rs` was deleted still
+    // resolves `use crate::lib::…` to `src/lib.rs`, and the parse cache
+    // re-emits that edge on every warm. Without this filter the prune below
+    // would delete the row and this pass would append it back, flipping
+    // edges.jsonl on every run.
+    let (all_edges, dangling_dropped) = hilo_graph::prune::drop_dangling_edges(cwd, all_edges);
+    if dangling_dropped > 0 {
+        println!("Dropped {dangling_dropped} edge(s) whose file endpoint no longer exists");
+    }
+
+    // DF-WARPFS-170, half 2: reconcile the append-only inventory with the tree
+    // BEFORE deciding whether the graph changed. `edges.jsonl` never forgets a
+    // row on its own, so a DELETED file — or an import deleted from a file that
+    // is still there — keeps answering `impact`, `related`, `stats`, and
     // `untested` as a live dependent, forever. Two rules, both idempotent
     // (see [`hilo_graph::prune`]):
     //   * a FILE endpoint that no longer exists under the root is stale;
@@ -5177,7 +5188,12 @@ mod tests {
         .unwrap();
         std::fs::write(
             root.join("src").join("main.rs"),
-            "mod lib;\nuse crate::lib::lib;\nfn main() { lib(); }\n",
+            // The `std` import is load-bearing for the acceptance test: it
+            // keeps main.rs an edge SOURCE after the file it imports is
+            // deleted, so `Total files` drops by exactly the deleted file
+            // instead of by two.
+            "mod lib;\nuse crate::lib::lib;\nuse std::collections::HashMap;\n\
+             fn main() { lib(); let _: Option<HashMap<u8, u8>> = None; }\n",
         )
         .unwrap();
     }
@@ -5264,9 +5280,14 @@ mod tests {
 
         // `related` on the deleted file itself refuses loudly instead of
         // answering "no edges" (GAP-059 contract, now reachable because the
-        // prune removed the stale node as well as the stale rows).
+        // prune removed the stale node as well as the stale rows). The path is
+        // ABSOLUTE on purpose: the GAP-059 check also stats the path, and a
+        // repo-relative "src/lib.rs" would resolve against the test process's
+        // own working directory (the crate dir) instead of the fixture.
+        let deleted_path = project.path().join("src").join("lib.rs");
+        let deleted_abs = deleted_path.to_str().unwrap();
         let err = graph
-            .related_or_parse("src/lib.rs", None, hilo_graph::Direction::Forward)
+            .related_or_parse(deleted_abs, None, hilo_graph::Direction::Forward)
             .expect_err("a deleted, un-graphed file must not answer silently");
         assert!(
             err.to_string().contains("not in the graph"),

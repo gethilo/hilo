@@ -154,6 +154,11 @@ durable.
 Every `hilo graph warm` now runs `hilo_graph::prune::prune_inventory` before
 deciding whether the graph changed:
 
+0. **Derivation filter** — `drop_dangling_edges` drops any derived edge whose
+   file endpoint does not exist BEFORE it is appended. Import resolvers are
+   structural (a Rust `mod lib;` still resolves to a deleted `src/lib.rs`), so
+   without this the prune below would delete the row and the same warm would
+   append it straight back.
 1. **Missing file** — either endpoint that names a FILE (no `<scheme>:`
    prefix) must exist under the corpus root. Absolute endpoints are checked
    as written. This rule runs on every warm.
