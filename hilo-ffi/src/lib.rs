@@ -857,7 +857,11 @@ mod tests {
             .expect("documented rule schema must load and run");
         assert_eq!(result.rule_name, "entrypoints");
         assert_eq!(result.total, 1);
-        assert_eq!(result.matches[0].path, "src/lib.rs");
+        // The edge is src/app.rs -> src/lib.rs: the from-side (src/app.rs) is
+        // the file nothing imports, so the documented query — `SELECT "from"`
+        // WHERE "to" NOT IN from-set — returns src/app.rs as column 0. The
+        // imported target (src/lib.rs) must NOT be matched (total stays 1).
+        assert_eq!(result.matches[0].path, "src/app.rs");
     }
 
     #[test]
