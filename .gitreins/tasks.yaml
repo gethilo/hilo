@@ -2339,15 +2339,6 @@ tasks:
   status: complete
   created_at: '2026-10-24T23:43:59.840491+00:00'
   completed_at: '2026-10-24T23:44:00.756417+00:00'
-- id: DF-WARPFS-64-R2
-  title: Require warm before graph queries
-  criteria:
-  - 'Fresh initialized tree without graph warm: impact, untested, stats, and module
-    must either fail naming graph warm or explicitly identify incomplete corpus; after
-    warm, full corpus answers; add regression tests.'
-  status: complete
-  created_at: '2026-10-26T11:38:26.105527+00:00'
-  completed_at: '2026-10-26T13:48:52.847785+00:00'
 - id: INT-CI-012-verify
   title: Verify INT-CI-012 warm-gate fix
   criteria:

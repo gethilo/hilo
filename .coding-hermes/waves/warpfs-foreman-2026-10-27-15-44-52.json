@@ -1,0 +1,39 @@
+{
+  "tick_id": "warpfs-foreman-2026-10-27-15-44-52",
+  "project": "warpfs",
+  "base": "e44de8d914e52bd794334d2878a542778a47f826",
+  "wave_budget": 12,
+  "mode": "serial-fallback",
+  "census": {
+    "tasks_file": ".coding-hermes/board/tasks.jsonl",
+    "physical_rows": 433,
+    "unique_task_ids": 433,
+    "highest_value_ready": "DF-WARPFS-82",
+    "independent_ready_count": 1,
+    "reason": "Only one eligible P1 implementation row was selected; owner-gated and records-only rows were not included."
+  },
+  "selected": [
+    {
+      "task_id": "DF-WARPFS-82",
+      "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-82-20261027-1406",
+      "branch": "wt/DF-WARPFS-82-20261027-1406",
+      "base": "e44de8d914e52bd794334d2878a542778a47f826",
+      "worker_model": "glm-5.3-flash",
+      "worker_provider": "zai-glm-default",
+      "brief": "/home/kara/.hermes/cache/warpfs-foreman-2026-10-27-15-44-52-DF-WARPFS-82-brief.txt",
+      "dispatch": "failed-zero-write",
+      "evidence": {
+        "launch_log": "/tmp/warpfs-foreman-2026-10-27-15-44-52-DF-WARPFS-82-worker.log",
+        "log_bytes": 43,
+        "log_tail": "Warning: Unknown toolsets: chrome_profiles",
+        "source_diff": false,
+        "implementation_commit": null,
+        "gitreins": "task create/start completed; task complete timed out without a verdict artifact; task deleted after no implementation"
+      },
+      "disposition": "row remains pending for a future fresh dispatch"
+    }
+  ],
+  "workers": [],
+  "merged": [],
+  "closed": false
+}
