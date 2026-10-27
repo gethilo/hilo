@@ -1,0 +1,34 @@
+{
+  "tick_id": "warpfs-foreman-2026-10-27-16-40-50",
+  "project": "warpfs",
+  "repo": "/home/kara/warpfs",
+  "base_sha": "c8e501d928485bcebebb358feb43280b8f54e412",
+  "wave_type": "serial",
+  "wave_budget": 5,
+  "serial_reason": "Project foreman contract caps this tick at one worker; DF-WARPFS-82 is the highest-value dispatchable P1 implementation row after dependency and stale-worktree reconciliation.",
+  "selection": {
+    "task_id": "DF-WARPFS-82",
+    "priority": "P1",
+    "depends_on": [],
+    "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-82",
+    "branch": "wt/DF-WARPFS-82",
+    "brief": "/tmp/warpfs-foreman-2026-10-27-16-40-50-DF-WARPFS-82-brief.txt",
+    "worker_model": "glm-5.3-flash",
+    "worker_provider": "zai-glm-default",
+    "base_sha": "c8e501d928485bcebebb358feb43280b8f54e412"
+  },
+  "workers": [
+    {
+      "task_id": "DF-WARPFS-82",
+      "status": "failed-zero-write",
+      "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-82",
+      "branch": "wt/DF-WARPFS-82",
+      "base_sha": "c8e501d928485bcebebb358feb43280b8f54e412",
+      "brief": "/tmp/warpfs-foreman-2026-10-27-16-40-50-DF-WARPFS-82-brief.txt",
+      "pid": 2271280,
+      "process_session": "proc_57f607a06771"
+    }
+  ],
+  "finished_at": "2026-10-27T17:07:18Z",
+  "outcome": "FAILED: worker reached API call #1 but produced no source diff or commit; subtree terminated after 6m28s; row remains pending."
+}
