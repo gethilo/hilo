@@ -645,6 +645,23 @@ Execute a named rule query against the dependency graph. Rules are defined
 in the project manifest; this repo currently defines none (see
 `hilo graph rule-list`).
 
+Each `rules:` entry in `.vfs/manifest.yaml` is a `QueryRule` with exactly
+these keys (unknown keys are rejected):
+
+```yaml
+rules:
+  - name: entrypoints                # required — the id rule-check takes
+    description: Files nothing imports  # optional — defaults to ""
+    query: 'SELECT "from" FROM edges WHERE "to" NOT IN (SELECT "from" FROM edges)'  # required — one DuckDB SQL statement
+```
+
+The query runs against `.vfs/graph/graph.db`, which exposes the `edges`
+table only (`"from"`, `"to"`, `rel`, `provenance`, `confidence` — `from`/`to`
+are reserved words and need double quotes; the quoting rules and the full
+error behavior are documented in `docs/hilo-ffi.md`, "Manifest `rules`
+schema"). There is no `files` table. Malformed SQL fails with
+`rule <name> failed: SQL parse error ...`, never a panic.
+
 ```bash
 # List rules defined in the manifest
 hilo graph rule-list

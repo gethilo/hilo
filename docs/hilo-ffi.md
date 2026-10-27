@@ -22,7 +22,7 @@ is an `InvalidInput` error).
 | `handle.vfs_graph_impact(path, max_depth)` | Transitive dependents via BFS |
 | `handle.vfs_graph_stats()` | Graph summary statistics |
 | `handle.vfs_resolve_backend(path)` | Backend info for a virtual path |
-| `handle.vfs_rule_check(rule_name)` | Run a DuckDB rule query |
+| `handle.vfs_rule_check(rule_name)` | Run a DuckDB rule query (see [Manifest `rules` schema](#manifest-rules-schema)) |
 | `handle.vfs_list_directory(path)` | List virtual directory entries |
 
 Supporting dictionaries (`MetadataResult`, `SetMetadataResult`,
@@ -41,6 +41,87 @@ Supporting dictionaries (`MetadataResult`, `SetMetadataResult`,
 | `total_edges` | Raw edges in the graph |
 | `unique_relations` | Distinct edge relation types |
 | `tested_pct` | Share of graphed files **not** listed by `hilo graph untested` — files that emit a `tested_by` edge (test-shaped) or are covered by one under the pkg:/local: resolution rules. This is an import/emit-derived proxy measured without running any tests, NOT a test-suite coverage percentage; `hilo graph module <dir>` reports the same rule-set scoped to a directory. |
+
+## Manifest `rules` schema
+
+`vfs_rule_check(rule_name)` looks `rule_name` up in the `rules` collection of
+the workspace manifest — `.vfs/manifest.yaml` at the handle root (or the
+fallback locations `manifest.yaml`, `.vfs/manifest.yml`, `manifest.yml`), the
+file actually resolved being named in every error. Each entry is a
+`QueryRule` (`hilo-core/src/manifest.rs`) with **exactly** these keys —
+unknown keys are rejected (`deny_unknown_fields`):
+
+```yaml
+rules:
+  - name: entrypoints                # required — the id vfs_rule_check takes
+    description: Files nothing imports  # optional — defaults to ""
+    query: 'SELECT "from" FROM edges WHERE "to" NOT IN (SELECT "from" FROM edges)'  # required — one SQL statement
+```
+
+### The graph query boundary
+
+The `query` is a single DuckDB SQL statement executed against
+`.vfs/graph/graph.db` (see `docs/graph-engine.md`). The database exposes the
+`edges` table **only** — there is no `files` table. Columns:
+
+| Column | Type | Notes |
+|---|---|---|
+| `"from"` | TEXT NOT NULL | source path (or `pkg:`/`sys:` pseudo-node) |
+| `"to"` | TEXT NOT NULL | destination path (or pseudo-node) |
+| `rel` | TEXT NOT NULL | relation, e.g. `imports`, `tested_by`, `calls` |
+| `provenance` | TEXT NOT NULL | defaults to `ast_exact` |
+| `confidence` | REAL NOT NULL | defaults to `1.0` |
+
+`from` and `to` are reserved SQL words: reference them with double quotes
+(`SELECT "from" FROM edges`). Inside a YAML **single-quoted** scalar the
+double quotes are literal, which is why the example above is single-quoted —
+do not single-quote `"from"` itself (in SQL, that would make it a string
+constant). Rows come back positionally: the FFI `RuleResultEntry` maps column
+0 → `path`, column 1 → `severity`, column 2 → `detail`, so a useful rule
+selects its primary subject first. Column names are not returned — the rule
+definition is the schema contract.
+
+### Error behavior
+
+- **Unknown rule name** — `HiloError::NotFound` whose text names the manifest
+  rules location actually consulted:
+  `not found: rule '<name>' not found in manifest rules at <abs path to manifest>`.
+  (DF-WARPFS-148: it used to synthesize `<manifest>#rule:<name>`, a path that
+  matches nothing on disk and hides that the *rule*, not the manifest, is
+  missing.)
+- **Missing manifest** — `HiloError::NotFound` on `<root>/.vfs/manifest.yaml`.
+- **Missing graph DB** — `HiloError::NotFound` on `<root>/.vfs/graph/graph.db`
+  (run `hilo graph warm` first; unlike the MCP `vfs_rule_check`, which answers
+  empty results when the graph is unpopulated, the FFI path is strict).
+- **Malformed SQL / invalid column reference** — `HiloError::InternalError`:
+  `internal error: rule <name> failed: RuleError { rule: ..., error: "SQL
+  parse error: ..." }`. The engine never panics on bad SQL (see
+  `hilo-graph/src/rules.rs`).
+
+### Runnable usage example
+
+With the manifest above and a populated graph:
+
+```python
+import hilo
+
+handle = hilo.HiloHandle("/path/to/repo")
+result = handle.vfs_rule_check("entrypoints")
+for entry in result.matches:
+    print(entry.path)          # column 0 of the rule query
+print(result.total)
+
+try:
+    handle.vfs_rule_check("no-such-rule")
+except hilo.HiloError.NotFound as e:
+    print(e.path)
+    # "rule 'no-such-rule' not found in manifest rules at
+    #  /path/to/repo/.vfs/manifest.yaml"
+```
+
+The same rules are exposed to the CLI (`hilo graph rule-list` /
+`hilo graph rule-check <name>`, see `docs/cli-reference.md`) and to MCP
+(`vfs_rule_list` / `vfs_rule_check`, see `docs/mcp-tools.md`).
 
 ## Generating Bindings
 

@@ -432,6 +432,32 @@ impl HiloHandle {
         }
     }
 
+    /// Run a named rule from the manifest's `rules` collection against the
+    /// DuckDB graph database.
+    ///
+    /// Each `manifest.rules` entry is a `QueryRule` with exactly these keys
+    /// (unknown keys are rejected — `deny_unknown_fields`):
+    ///
+    /// ```yaml
+    /// rules:
+    ///   - name: entrypoints          # required — the id vfs_rule_check takes
+    ///     description: Files no other file imports   # optional, default ""
+    ///     query: >-                  # required — one SQL statement
+    ///       SELECT "from" FROM edges WHERE "to" NOT IN (SELECT "from" FROM edges)
+    /// ```
+    ///
+    /// The query runs against the graph DB at `.vfs/graph/graph.db`, which
+    /// exposes the `edges` table only: columns `"from"`, `"to"`, `rel`,
+    /// `provenance`, `confidence`. `from`/`to` are reserved words — reference
+    /// them with double quotes inside the query (in a YAML single-quoted
+    /// scalar the double quotes are literal). There is no `files` table.
+    /// Malformed SQL is never a panic: it surfaces as
+    /// `InternalError("rule <name> failed: SQL parse error: ...")`.
+    ///
+    /// Errors: `NotFound` names the manifest rules location actually
+    /// consulted (`rule '<name>' not found in manifest rules at
+    /// <manifest_path>` — DF-WARPFS-148); a missing graph DB is `NotFound`
+    /// on `.vfs/graph/graph.db`.
     fn vfs_rule_check(&self, rule_name: &str) -> Result<RuleCheckResult, HiloError> {
         let manifest_path = self.manifest_path()?;
         let manifest =
@@ -440,12 +466,21 @@ impl HiloHandle {
                     message: format!("failed to load manifest {}: {e}", manifest_path.display()),
                 })?;
 
+        // DF-WARPFS-148: the rule lookup consults the `rules` collection of
+        // the manifest at `manifest_path` — the old synthetic
+        // `<manifest>#rule:<name>` pseudo-path named nothing on disk and
+        // read like a missing file. The NotFound contract is unchanged; the
+        // `path` field now states which manifest rules location was consulted
+        // (docs/hilo-ffi.md, "Manifest `rules` schema").
         let query_rule = manifest
             .rules
             .iter()
             .find(|rule| rule.name == rule_name)
             .ok_or_else(|| HiloError::NotFound {
-                path: format!("{}#rule:{rule_name}", manifest_path.display()),
+                path: format!(
+                    "rule '{rule_name}' not found in manifest rules at {}",
+                    manifest_path.display()
+                ),
             })?;
 
         let rule = hilo_graph::Rule {
@@ -788,5 +823,77 @@ mod tests {
             .vfs_graph_impact("src/ghost.py", 4)
             .expect_err("phantom subject must stay NotFound");
         assert!(error.to_string().contains("ghost.py"), "{error}");
+    }
+
+    #[test]
+    fn rule_check_follows_the_documented_manifest_rules_schema() {
+        // DF-WARPFS-148: the schema in docs/hilo-ffi.md ("Manifest `rules`
+        // schema") must be the schema the loader actually accepts — name +
+        // query required, description optional, and a query over the `edges`
+        // table with the reserved `from`/`to` columns double-quoted.
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(repo.path().join(".vfs/graph")).unwrap();
+        std::fs::write(
+            repo.path().join(".vfs/manifest.yaml"),
+            "project:\n  name: schema-probe\nrules:\n  - name: entrypoints\n    description: Files nothing imports\n    query: 'SELECT \"from\" FROM edges WHERE \"to\" NOT IN (SELECT \"from\" FROM edges)'\n",
+        )
+        .unwrap();
+        let db =
+            hilo_graph::GraphDB::open(repo.path().join(".vfs/graph/graph.db").to_str().unwrap())
+                .unwrap();
+        db.insert_edges(&[hilo_graph::Edge {
+            from: "src/app.rs".into(),
+            to: "src/lib.rs".into(),
+            rel: "imports".into(),
+            provenance: "test".into(),
+            confidence: 1.0,
+        }])
+        .unwrap();
+        drop(db);
+
+        let handle = HiloHandle::new(repo.path().to_string_lossy().into_owned()).unwrap();
+        let result = handle
+            .vfs_rule_check("entrypoints")
+            .expect("documented rule schema must load and run");
+        assert_eq!(result.rule_name, "entrypoints");
+        assert_eq!(result.total, 1);
+        assert_eq!(result.matches[0].path, "src/lib.rs");
+    }
+
+    #[test]
+    fn missing_rule_error_names_the_manifest_rules_location() {
+        // DF-WARPFS-148: the old NotFound path was a synthetic
+        // `<manifest>#rule:<name>` pseudo-path that matches nothing on disk
+        // and hides that the RULE (not the manifest) is missing. The error
+        // must stay HiloError::NotFound and name the real manifest path plus
+        // the rules collection that was consulted.
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(repo.path().join(".vfs")).unwrap();
+        std::fs::write(
+            repo.path().join(".vfs/manifest.yaml"),
+            "project:\n  name: rule-probe\nrules:\n  - name: entrypoints\n    query: 'SELECT \"from\" FROM edges'\n",
+        )
+        .unwrap();
+        let manifest = repo.path().join(".vfs/manifest.yaml");
+
+        let handle = HiloHandle::new(repo.path().to_string_lossy().into_owned()).unwrap();
+        let error = match handle.vfs_rule_check("ghost") {
+            Err(e) => e,
+            Ok(_) => panic!("unknown rule must not resolve"),
+        };
+        let HiloError::NotFound { path } = &error else {
+            panic!("missing rule must stay NotFound, got: {error}");
+        };
+        assert_eq!(
+            path,
+            &format!(
+                "rule 'ghost' not found in manifest rules at {}",
+                manifest.display()
+            )
+        );
+        assert!(
+            !path.contains("#rule:"),
+            "synthetic pseudo-path is gone: {path}"
+        );
     }
 }
