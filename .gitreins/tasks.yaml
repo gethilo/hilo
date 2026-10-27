@@ -2370,3 +2370,12 @@ tasks:
   status: complete
   created_at: '2026-10-27T09:37:37.791247+00:00'
   completed_at: '2026-10-27T11:38:13.275862+00:00'
+- id: DF-WARPFS-82
+  title: Verify PHP same-namespace inheritance fix
+  criteria:
+  - 'PASS: commit 875072167c754e6e18555ede0a47ca57149eb317 is published and the PHP
+    same-namespace regression tests pass; impact resolution and orphan handling are
+    covered by the committed implementation and test.'
+  status: complete
+  created_at: '2026-10-27T20:54:40.700997+00:00'
+  completed_at: '2026-10-27T20:54:52.156018+00:00'
