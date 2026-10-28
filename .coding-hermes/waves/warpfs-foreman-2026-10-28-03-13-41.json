@@ -19,8 +19,14 @@
       "GAP-104-R2 depends_on=null; DF-WARPFS-89 depends_on=null"
     ],
     "file_surfaces": {
-      "GAP-104-R2": ["hilo-graph/src/resolution.rs", "hilo-graph/src/impact.rs (join only if needed)", "hilo-graph/src/graph.rs (untested consumer only if needed)"],
-      "DF-WARPFS-89": ["hilo-graph/src/parser.rs"]
+      "GAP-104-R2": [
+        "hilo-graph/src/resolution.rs",
+        "hilo-graph/src/impact.rs (join only if needed)",
+        "hilo-graph/src/graph.rs (untested consumer only if needed)"
+      ],
+      "DF-WARPFS-89": [
+        "hilo-graph/src/parser.rs"
+      ]
     },
     "collision_risk": "low - same crate, disjoint files (resolution.rs vs parser.rs); merges are serial and each merge is gated"
   },
@@ -70,5 +76,7 @@
       "reason": "premise looks already-fixed (hilo-ffi/src/lib.rs:471/870 drop the '<manifest>#rule:<name>' pseudo-path and a test asserts !path.contains(\"#rule:\")); not picked this tick - needs a build-level probe before closeout."
     }
   ],
-  "merge_plan": "serial merge GAP-104-R2 -> DF-WARPFS-89, each gate-verified on bunker3 (scripts/rust-lint.sh), push after each green gate; stale-base check before each merge"
+  "merge_plan": "serial merge GAP-104-R2 -> DF-WARPFS-89, each gate-verified on bunker3 (scripts/rust-lint.sh), push after each green gate; stale-base check before each merge",
+  "finished_at": "2026-10-28T07:35:00-05:00",
+  "finished_note": "closed by recovery tick 2026-10-28-07-16-26: all workers merged+closed (DF-WARPFS-84/154/152 by 03-13-41; DF-WARPFS-89 by fd7df870; DF-WARPFS-95 verification-only; GAP-104-R2 carried to a fresh dispatch in manifest warpfs-foreman-2026-10-28-07-16-26)"
 }

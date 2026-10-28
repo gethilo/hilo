@@ -1,0 +1,54 @@
+{
+  "tick_id": "warpfs-foreman-2026-10-28-07-16-26",
+  "project": "warpfs",
+  "repo": "/home/kara/warpfs",
+  "remote": "github.com/gethilo/hilo",
+  "branch": "master",
+  "wave_budget": 5,
+  "workers_dispatched": 1,
+  "base": "origin/master",
+  "base_sha": "ef8b20fb",
+  "composed_at": "2026-10-28T07:35:00-05:00",
+  "recovery_of": {
+    "ticks": [
+      "warpfs-foreman-2026-10-28-02-05-39",
+      "warpfs-foreman-2026-10-28-03-13-41"
+    ],
+    "result": "Both manifests' code work was ALREADY recovered by tick 03-13-41 and later ticks (DF-WARPFS-84/154/152/95/89 merged+closed, master==origin/master at ef8b20fb). No unfinished branches; ahead=1 branches belong to complete rows preserved as evidence (HYG-003 closeout). Only GAP-104-R2 (dispatch failed last tick) remained open. finished_at set on both old manifests this tick; old manifests' tasks[] are historical (that work is merged) - this manifest carries the live re-dispatch.",
+    "manifests_closed": [
+      ".coding-hermes/waves/warpfs-foreman-2026-10-28-02-05-39.json",
+      ".coding-hermes/waves/warpfs-foreman-2026-10-28-03-13-41.json"
+    ]
+  },
+  "independence_check": {
+    "method": "single-task wave: only one pending P1 code task (GAP-104-R2); no pairs to check",
+    "rows_checked": [
+      "GAP-104-R2 depends_on=null; NEVER-DONE is a perpetual audit meta-row, not dispatchable code work"
+    ]
+  },
+  "worker_lane": {
+    "model": "glm-5.3-flash",
+    "provider": "zai-glm",
+    "doctrine": "workers on SUBS, never PAYG deepseek (coding-hermes-worker-model Step 0); same lane that landed the previous two waves"
+  },
+  "tasks": [
+    {
+      "id": "GAP-104-R2",
+      "priority": "P1",
+      "title": "Python subdirectory module imported by basename has no file node (file-form impact + untested lie)",
+      "worktree": "/home/kara/worktrees/warpfs-GAP-104-R2",
+      "branch": "wt/GAP-104-R2",
+      "base_sha": "ef8b20fb",
+      "brief": "/tmp/gap104r2-brief-v3.txt",
+      "model": "glm-5.3-flash",
+      "provider": "zai-glm",
+      "prior_attempts": 2,
+      "prior_attempt_note": "attempt 2 (03-13-41): glm-5.3-flash 58min zero-write slow-thinker stall; attempt 1: stale-binary brief. v3 brief carries the foreman-derived root cause (python_module_for_file namespace-under-regular-package shape), preserved RED repro (/var/tmp/gap104r2/repro + tick-notes/gap104r2-red-20261028), and a REPORT CONTRACT block.",
+      "premise_check": "Root cause re-verified at ef8b20fb by foreman reading hilo-graph/src/resolution.rs:674-735 (python_module_for_file climbs to nearest regular package; scripts/drivers/base.py with regular scripts/ above resolves pkg:scripts.drivers.base while co-located importers emit pkg:base). RED state re-confirmed from preserved transcripts.",
+      "acceptance": "A: cargo test -p hilo_graph --lib green incl. new namespace-shape tests; B: file-form impact scripts/drivers/base.py lists top.py in /var/tmp/gap104r2/repro; C: untested no longer lists the 3 test-imported subdirectory driver modules in /var/tmp/gap104r2/tr; D: flat + regular-package shapes unchanged"
+    }
+  ],
+  "merge_plan": "serial: fetch branch, stale-base check (merge-base == ef8b20fb vs master), gate on bunker3 (git fetch origin wt/GAP-104-R2 && git checkout -f -q FETCH_HEAD && bash scripts/rust-lint.sh, expect RC=0), merge --no-ff to master, push, re-gate merged master on bunker3; board close + gitreins complete after",
+  "finished_at": "2026-10-28T04:20:00-05:00",
+  "result": "GAP-104-R2 landed: worker commit c0b26384 merged --no-ff as bf995a2c, pushed ef8b20fb..bf995a2c; gate GREEN on bunker3 pre-merge AND on merged master (551 passed); foreman-verified repro impact + corpus untested; gitreins verdict 18ae56c3 PASS; board closed with evidence-run 20261028_023752_7b368e; worktree reaped; branch preserved (surface blocks branch delete; merged branches are evidence per HYG-003)"
+}

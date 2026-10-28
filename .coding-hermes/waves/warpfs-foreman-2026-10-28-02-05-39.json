@@ -15,8 +15,14 @@
       "DF-WARPFS-84 depends_on=null; DF-WARPFS-154 depends_on=null"
     ],
     "file_surfaces": {
-      "DF-WARPFS-84": ["hilo-graph/src/resolution.rs", "hilo-graph/src/parser.rs"],
-      "DF-WARPFS-154": ["hilo-mcp/src/http.rs", "hilo-cli/src/commands/serve.rs (help text)"]
+      "DF-WARPFS-84": [
+        "hilo-graph/src/resolution.rs",
+        "hilo-graph/src/parser.rs"
+      ],
+      "DF-WARPFS-154": [
+        "hilo-mcp/src/http.rs",
+        "hilo-cli/src/commands/serve.rs (help text)"
+      ]
     },
     "collision_risk": "none - different crates (hilo-graph vs hilo-mcp/hilo-cli)"
   },
@@ -60,5 +66,7 @@
       "reason": "premise stale: DF-WARPFS-150 (same root cause) landed 704f3a9a and wires bwrap --chdir <workspace_path> unconditionally; --source IS the workspace. Verify live at HEAD then close verification-only."
     }
   ],
-  "merge_plan": "serial merge in order 84 -> 154; guard each merge on bunker3 (scripts/rust-lint.sh); push after each green gate"
+  "merge_plan": "serial merge in order 84 -> 154; guard each merge on bunker3 (scripts/rust-lint.sh); push after each green gate",
+  "finished_at": "2026-10-28T07:35:00-05:00",
+  "finished_note": "closed by recovery tick 2026-10-28-07-16-26: all workers merged+closed (DF-WARPFS-84/154/152 by 03-13-41; DF-WARPFS-89 by fd7df870; DF-WARPFS-95 verification-only; GAP-104-R2 carried to a fresh dispatch in manifest warpfs-foreman-2026-10-28-07-16-26)"
 }
