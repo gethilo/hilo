@@ -21,8 +21,9 @@ hilo --help
   binaries are published yet)
 - **Memory: 8GB RAM recommended for the build; 4GB agents may fail during
   `libduckdb-sys` compilation** (the bundled DuckDB C++ build) with
-  `cc-rs ... status code signal: 6 (SIGABRT)`. The repo pins
-  `.cargo/config.toml` to `jobs = 1` and `scripts/build-hilo.sh` (used by
+  `cc-rs ... status code signal: 6 (SIGABRT)`. Cargo uses every available
+  core by default, which is what you want on an 8GB+ machine; on a ≤4GB host
+  cap it with `CARGO_BUILD_JOBS=1`. `scripts/build-hilo.sh` (used by
   `make release`) prints an OOM hint if the build still dies of a signal. See
   the README's *Low-memory builders* section for the full recipe.
 - `libfuse3-dev` and `pkg-config` — needed to **build** (the FUSE bindings);

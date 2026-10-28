@@ -156,6 +156,18 @@ All notable changes to Hilo are documented in this file.
   5/8) improves instead of regressing. The full-corpus re-measurement is
   GAP-118.
 
+### Changed
+
+- **Builds are no longer pinned to a single compile job** (PERF-012).
+  `.cargo/config.toml` shipped `[build] jobs = 1` for every checkout, so a
+  cold `cargo build --release -p hilo-cli` — the documented install path —
+  compiled the whole dependency graph (`duckdb-sys`, `arrow`, `aws-sdk`) one
+  crate at a time on machines that have 8–16 cores. The pin is gone, so cargo
+  uses its default (one job per available core). The low-memory guidance it
+  carried is unchanged in substance but is now an explicit opt-in for the
+  hosts that need it: `CARGO_BUILD_JOBS=1 cargo build --release` on a ≤4GB
+  box, documented in README → *Low-memory builders (≤4GB RAM)*.
+
 ## [0.4.0] — 2026-10-04
 
 ### Fixed
