@@ -202,6 +202,7 @@ fn symbol_source_paths(graph: &GraphDB, cache_keys: &[String]) -> Result<Vec<Str
     // absent from the endpoint set) join the corpus.
     for key in cache_keys {
         if !paths.contains(key)
+            && !hilo_graph::is_pruned_corpus_path(key)
             && Language::from_path(std::path::Path::new(key)).is_some()
             && std::path::Path::new(key).exists()
         {
@@ -226,7 +227,13 @@ fn symbol_edge_endpoint_paths(graph: &GraphDB) -> Result<Vec<String>> {
         {
             return false;
         }
-        Language::from_path(Path::new(path)).is_some()
+        // PERF-014: persisted build output (`target/`, `target-local/`,
+        // `node_modules/`) is not a source document. `graph.db` keeps every
+        // edge endpoint it ever saw, so a repo that compiled even once
+        // carries thousands of generated paths; scanning them for symbols
+        // read each one off disk on every cold build and made `graph search`
+        // ~18x slower than the same search over real sources.
+        !hilo_graph::is_pruned_corpus_path(path) && Language::from_path(Path::new(path)).is_some()
     });
     Ok(paths.into_iter().collect())
 }
@@ -3911,6 +3918,102 @@ mod tests {
             .insert_edges(&[Edge::new("src/plain.rs", "src/dep.rs", "imports")])
             .unwrap();
         (root, graph)
+    }
+
+    /// PERF-014: persisted build-dir endpoints never join the symbol corpus.
+    ///
+    /// `graph.db` keeps every edge endpoint it ever saw, so a repo that
+    /// compiled even once carries thousands of `target/` / `target-local/`
+    /// paths. Building the symbol cache used to read every one of them off
+    /// disk, which is most of why `graph search` was ~18x slower than the
+    /// same search over real sources. The prune must be component-wise: a
+    /// source whose NAME contains `target` (`src/targeting.rs`) stays.
+    #[test]
+    fn perf014_symbol_corpus_excludes_build_dir_paths() {
+        let root = TempDir::new().unwrap();
+        let graph_dir = root.path().join(".vfs").join("graph");
+        fs::create_dir_all(&graph_dir).unwrap();
+        let corpus = [
+            "src/real.rs",
+            "src/targeting.rs",
+            "target-local/debug/build/x/out/generated.rs",
+            "crates/a/target/debug/generated.rs",
+            "web/node_modules/pkg/index.js",
+        ];
+        for rel in corpus {
+            let full = root.path().join(rel);
+            fs::create_dir_all(full.parent().unwrap()).unwrap();
+            fs::write(&full, "pub fn Generated() {}\n").unwrap();
+        }
+        // A zero-edge file the parse cache knows about, inside and outside a
+        // build tree.
+        for rel in ["src/zero_edge.rs", "target-local/zero_edge.rs"] {
+            let full = root.path().join(rel);
+            fs::create_dir_all(full.parent().unwrap()).unwrap();
+            fs::write(&full, "pub fn ZeroEdge() {}\n").unwrap();
+        }
+        let graph = GraphDB::open(graph_dir.join("graph.db").to_str().unwrap()).unwrap();
+        graph
+            .insert_edges(&[
+                Edge::new("src/real.rs", "src/targeting.rs", "imports"),
+                Edge::new(
+                    "target-local/debug/build/x/out/generated.rs",
+                    "pkg:serde",
+                    "imports",
+                ),
+                Edge::new("crates/a/target/debug/generated.rs", "pkg:serde", "imports"),
+                Edge::new("web/node_modules/pkg/index.js", "pkg:react", "imports"),
+            ])
+            .unwrap();
+
+        let cache_keys = vec![
+            "src/zero_edge.rs".to_string(),
+            "target-local/zero_edge.rs".to_string(),
+        ];
+        let paths = {
+            // `symbol_source_paths` judges cache-key existence against the
+            // process CWD (warm writes repo-relative keys and the CLI runs at
+            // the repo root). This fixture lives in a TempDir, so switch into
+            // it for the call and restore on every exit path — the same
+            // restore-on-every-path pattern the INV-001 suite uses above.
+            let prev_cwd = std::env::current_dir().unwrap();
+            std::env::set_current_dir(root.path()).unwrap();
+            let res = symbol_source_paths(&graph, &cache_keys);
+            std::env::set_current_dir(prev_cwd).unwrap();
+            res.unwrap()
+        };
+
+        assert!(
+            paths.contains(&"src/real.rs".to_string())
+                && paths.contains(&"src/targeting.rs".to_string()),
+            "real sources must stay in the symbol corpus: {paths:?}"
+        );
+        assert!(
+            paths.contains(&"src/zero_edge.rs".to_string()),
+            "a zero-edge source outside a build tree must stay: {paths:?}"
+        );
+        for pruned in [
+            "target-local/debug/build/x/out/generated.rs",
+            "crates/a/target/debug/generated.rs",
+            "web/node_modules/pkg/index.js",
+            "target-local/zero_edge.rs",
+        ] {
+            assert!(
+                !paths.contains(&pruned.to_string()),
+                "{pruned} must not be scanned for symbols: {paths:?}"
+            );
+        }
+
+        // The proven effect, end to end: the persisted cache never records a
+        // build-dir key either.
+        let load = load_or_build_symbol_cache(root.path(), &graph).unwrap();
+        assert!(
+            load.symbols
+                .keys()
+                .all(|p| !p.contains("target-local/") && !p.contains("node_modules/")),
+            "persisted symbol cache must hold no build-dir key: {:?}",
+            load.symbols.keys().collect::<Vec<_>>()
+        );
     }
 
     /// DF-WARPFS-76: an unchanged corpus is validated by `stat` alone. The
