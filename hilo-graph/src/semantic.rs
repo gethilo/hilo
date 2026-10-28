@@ -411,6 +411,39 @@ pub fn parse_cache_keys(root: &std::path::Path) -> Vec<String> {
     cache.into_keys().collect()
 }
 
+/// Directory names whose subtree is never part of the search corpus
+/// (PERF-014).
+///
+/// A warmed graph persists every edge endpoint it has EVER seen, so a repo
+/// that ever compiled with `cargo` carries thousands of generated sources
+/// under `target/` / `target-local/` inside `graph.db`. Those rows are not a
+/// searchable surface — no user or agent can act on
+/// `target-local/debug/build/…/out/bindings.rs` — but the lexical index had
+/// to tokenize every one of them on every query, and the CLI's symbol cache
+/// read every one of them off disk. On the reference repo 6600+ build-dir
+/// paths dominated the corpus and made `graph search` ~18x slower than the
+/// same search over the real sources.
+///
+/// The names are the build/dependency trees `graph warm` and the audit
+/// already prune (`guard::DEFAULT_PRUNE_DIRS`, `hilo_graph::audit`), kept in
+/// this crate so the CLI and the MCP search surface filter one
+/// implementation — the DF-WARPFS-141 parity lesson.
+pub const CORPUS_PRUNE_DIRS: [&str; 3] = ["target", "target-local", "node_modules"];
+
+/// True when `path` has a build/dependency directory as one of its path
+/// COMPONENTS (PERF-014).
+///
+/// Component-wise, never a substring test: `src/targeting.rs` and
+/// `docs/attacker.md` are real sources and must stay in the corpus, while
+/// `target/debug/x.rs`, `hilo-cli/target-local/y.rs` and
+/// `pkg/node_modules/z.js` are build output at any depth. Both `/` and `\`
+/// separate components — graph paths are repo-relative and POSIX-shaped, but
+/// an externally supplied inventory may carry Windows separators.
+pub fn is_pruned_corpus_path(path: &str) -> bool {
+    path.split(['/', '\\'])
+        .any(|component| CORPUS_PRUNE_DIRS.contains(&component))
+}
+
 /// Parse-cache keys that are real, in-language source files on disk — the
 /// zero-edge corpus loader shared by both search surfaces.
 ///
@@ -444,6 +477,10 @@ pub fn zero_edge_documents_for(graph_root: &std::path::Path, keys: &[String]) ->
                 && !key.starts_with("sys:")
                 && !key.starts_with("std:")
                 && !key.starts_with("external:")
+                // PERF-014: a discovered file inside a build/dependency tree
+                // is not a corpus document either — warm's prune list and the
+                // search corpus agree on what a source tree is.
+                && !is_pruned_corpus_path(key)
                 && crate::parser::Language::from_path(std::path::Path::new(key.as_str())).is_some()
                 // Warm writes repo-RELATIVE keys, so existence is judged
                 // against `graph_root` — the same directory the CLI's CWD
@@ -943,6 +980,10 @@ impl TfIdfIndex {
         // its own name (bake-off wave 6: `pkg:..config` 0.0313 vs
         // `src/flask/config.py` 0.0308).
         all_files.retain(|p| !is_relative_specifier_node(p));
+        // PERF-014: build output is not a searchable source surface. The
+        // corpus is filtered here — before a single document is tokenized —
+        // so persisted `target/`/`target-local/` rows cost nothing per query.
+        all_files.retain(|p| !is_pruned_corpus_path(p));
 
         // DF-WARPFS-116: discovered-but-zero-edge files join the corpus.
         // The caller (CLI search via warm's parse cache) enumerates them;
@@ -956,6 +997,7 @@ impl TfIdfIndex {
                 && !extra.starts_with("sys:")
                 && !extra.starts_with("std:")
                 && !extra.starts_with("external:")
+                && !is_pruned_corpus_path(extra)
                 && !all_files.contains(extra)
             {
                 all_files.insert(extra.clone());
@@ -1332,14 +1374,19 @@ fn edge_hits(db: &GraphDB, query_tokens: &[String]) -> GraphResult<Vec<EdgeHit>>
             continue;
         }
         let marker = format!("edge:{rel}");
-        hits.push(EdgeHit {
-            file: from,
-            marker: marker.clone(),
-            matched: matched.clone(),
-        });
+        // PERF-014: no endpoint inside a build/dependency tree is a search
+        // result document (the lexical corpus no longer holds one either), so
+        // it never becomes an edge hit.
+        if !is_pruned_corpus_path(&from) {
+            hits.push(EdgeHit {
+                file: from,
+                marker: marker.clone(),
+                matched: matched.clone(),
+            });
+        }
         // A `pkg:`/`local:` target is a pseudo-node, not an openable file —
         // the same result-shape contract as the lexical pass.
-        if !to.starts_with("pkg:") && !to.starts_with("local:") {
+        if !to.starts_with("pkg:") && !to.starts_with("local:") && !is_pruned_corpus_path(&to) {
             hits.push(EdgeHit {
                 file: to,
                 marker,
@@ -1490,6 +1537,13 @@ pub fn search_with_symbols_and_docs(
             // they never consume result budget.
             continue;
         }
+        if is_pruned_corpus_path(&path) {
+            // PERF-014: same reasoning for build output. The index no longer
+            // holds these documents, but a stale on-disk artifact or a future
+            // index source must never put one in a result set — and running
+            // before truncation keeps them from consuming result budget.
+            continue;
+        }
         if path.starts_with("local:") {
             // A raw specifier string is not an openable file. Resolve it to
             // its target file(s): one target → the file replaces the node;
@@ -1499,6 +1553,11 @@ pub fn search_with_symbols_and_docs(
             // zero targets (dangling import) → the hit is dropped.
             if let Some(resolver) = local_resolver.as_ref() {
                 for target in resolver.targets_for_node(&path) {
+                    // PERF-014: a specifier may resolve into a build tree;
+                    // the resolved file is a result document all the same.
+                    if is_pruned_corpus_path(&target) {
+                        continue;
+                    }
                     if emitted.insert(target.clone()) {
                         results.push(lexical_result(target, &query_tokens, score));
                     }
@@ -3795,5 +3854,108 @@ mod tests {
             live_hit.iter().any(|r| r.file_path == "src/hidden.py"),
             "a stale entry must fall back to a real parse, got: {live_hit:?}"
         );
+    }
+
+    // ── PERF-014: build-dir paths are not corpus documents ──
+
+    #[test]
+    fn perf014_prune_predicate_matches_components_not_substrings() {
+        // Every build/dependency tree, at any depth.
+        for pruned in [
+            "target/debug/build/x/out/bindings.rs",
+            "target-local/release/foo.rs",
+            "hilo-cli/target-local/debug/y.rs",
+            "crates/a/target/z.rs",
+            "node_modules/vendor-lib/dep.js",
+            "web/node_modules/pkg/index.ts",
+        ] {
+            assert!(is_pruned_corpus_path(pruned), "{pruned} must be pruned");
+        }
+
+        // A real source whose NAME merely contains a pruned string stays.
+        for kept in [
+            "src/targeting.rs",
+            "docs/attacker.md",
+            "src/my_target/mod.rs",
+            "src/targets.py",
+            "hilo-cli/src/commands/graph.rs",
+        ] {
+            assert!(
+                !is_pruned_corpus_path(kept),
+                "{kept} must stay in the corpus"
+            );
+        }
+
+        // Windows separators are components too.
+        assert!(is_pruned_corpus_path(r"crates\a\target\debug\z.rs"));
+    }
+
+    #[test]
+    fn perf014_search_never_returns_a_build_dir_path() {
+        // `graph.db` keeps every edge endpoint it ever saw, so a repo that
+        // compiled once carries thousands of generated paths. The corpus
+        // must exclude them (that is the 18x latency fix) AND no result may
+        // name one of them.
+        let dir = tempfile::tempdir().unwrap();
+        for rel in [
+            "src/helpers.py",
+            "target-local/debug/build/x/out/helpers.py",
+            "target/debug/helpers.py",
+            "node_modules/pkg/helpers.py",
+        ] {
+            let full = dir.path().join(rel);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(&full, "def url_for(endpoint):\n    return endpoint\n").unwrap();
+        }
+        let db_path = dir.path().join("graph.db");
+        let db = GraphDB::open(db_path.to_str().unwrap()).unwrap();
+        db.insert_edges(&[
+            crate::Edge::new("src/helpers.py", "pkg:jinja2", "imports"),
+            crate::Edge::new(
+                "target-local/debug/build/x/out/helpers.py",
+                "pkg:jinja2",
+                "imports",
+            ),
+            crate::Edge::new("target/debug/helpers.py", "pkg:jinja2", "imports"),
+            crate::Edge::new("node_modules/pkg/helpers.py", "pkg:jinja2", "imports"),
+        ])
+        .unwrap();
+
+        let opts = SearchOpts {
+            limit: 20,
+            ..Default::default()
+        };
+        let results = search(&db, "url_for helpers", &opts).unwrap();
+
+        assert!(
+            results.iter().any(|r| r.file_path == "src/helpers.py"),
+            "the real source must still be found, got: {results:?}"
+        );
+        for r in &results {
+            assert!(
+                !is_pruned_corpus_path(&r.file_path),
+                "build-dir path leaked into search results: {r:?}"
+            );
+        }
+
+        // The index itself must not carry them — the filter has to run
+        // before tokenization, or the corpus still pays for 6600+ documents
+        // and only the result list is cosmetic. `pkg:jinja2` stays: a bare
+        // `pkg:` dependency node is a legitimate corpus document on master
+        // (GAP-091 drops only raw RELATIVE-specifier nodes, `pkg:.config`
+        // style), so the contract here is "no build-dir path", not "only the
+        // real source".
+        let index = TfIdfIndex::build(&db).unwrap();
+        assert!(
+            index.documents().contains(&"src/helpers.py".to_string()),
+            "the real source must be in the corpus: {:?}",
+            index.documents()
+        );
+        for d in index.documents() {
+            assert!(
+                !is_pruned_corpus_path(d),
+                "build-dir path leaked into the corpus: {d}"
+            );
+        }
     }
 }
