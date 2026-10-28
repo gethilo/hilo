@@ -2415,3 +2415,49 @@ tasks:
   status: complete
   created_at: '2026-10-28T03:23:19.112576+00:00'
   completed_at: '2026-10-28T04:04:29.041103+00:00'
+- id: GAP-104-R2
+  title: Python subdirectory module imported by basename has no file node (file-form
+    impact + untested lie)
+  criteria:
+  - cargo test -p hilo_graph --lib green including new resolution tests for the namespace-dir-under-regular-package
+    shape; file-form impact of scripts/drivers/base.py lists top.py in /var/tmp/gap104r2/repro;
+    graph untested no longer lists the three test-imported subdirectory driver modules
+    in the /var/tmp/gap104r2/tr corpus; flat-module (GAP-104) and fully-regular-package
+    resolutions unchanged
+  status: complete
+  created_at: '2026-10-28T07:35:34.993419+00:00'
+  completed_at: '2026-10-28T09:08:33.716720+00:00'
+- id: PERF-012
+  title: Remove single-threaded build constraint
+  criteria:
+  - cargo build --release uses all available cores; .cargo/config.toml no longer contains
+    [build] jobs = 1
+  status: in_progress
+  created_at: '2026-10-28T09:47:55.116404+00:00'
+- id: PERF-013
+  title: Fix graph audit to skip target-local/
+  criteria:
+  - hilo graph audit does not walk target-local/ or other build output dirs; PRUNE_DIRS
+    includes target-local
+  status: in_progress
+  created_at: '2026-10-28T09:47:55.723340+00:00'
+- id: PERF-014
+  title: Filter build-dir paths from graph search
+  criteria:
+  - hilo graph search does not return paths under target-local/ or other build dirs
+  status: in_progress
+  created_at: '2026-10-28T09:47:56.172978+00:00'
+- id: DF-WARPFS-163
+  title: Fix graph stats symbol node counting
+  criteria:
+  - hilo graph stats Total files excludes symbol/type/pkg nodes; only counts real
+    source files
+  status: in_progress
+  created_at: '2026-10-28T09:47:56.642451+00:00'
+- id: QA-WARPFS-QA-2
+  title: Fix flaky symbol_cache volatile test
+  criteria:
+  - symbol_cache_records_volatile_files_as_never_current passes reliably under repeated
+    runs
+  status: in_progress
+  created_at: '2026-10-28T09:47:57.282013+00:00'
