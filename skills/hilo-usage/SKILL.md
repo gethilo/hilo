@@ -1102,6 +1102,11 @@ quote either to a user.
    reports `Total files: 2` and a `.: 1 files` component. Cross-check before quoting:
    `jq -r 'select(.from|test("^(pkg|sys|std|external|iface|type|module):")|not)|.from' .vfs/graph/edges.jsonl | sort -u | wc -l`
    — that number, not `Total files`, is the file count. (`DF-WARPFS-163`)
+   **FIXED** (commit `47d181c4` on `wt/DF-WARPFS-163`): `Total files` and the component roster are now
+   both built from edge sources filtered through `hilo_graph::prune::is_file_endpoint`, so a current
+   binary reports the file count above (2-file crate: `Total files: 1`, no `.` component; a
+   symbol-node-only graph: `Total files: 0`, no components). Still cross-check against a graph built by
+   an older binary, or one whose `edges.jsonl` was hand-edited with non-file source rows.
 2. **The census line's delta clause (`{census} > {contributes} means the graph predates the last
    warm` — DF-WARPFS-170) is not, by itself, a staleness signal.**
    It fires whenever `Total files` exceeds warm's contributor count, which the symbol-node over-count

@@ -257,18 +257,23 @@ hilo graph stats
 The `Components` section enumerates the repository's top-level subsystems:
 one entry per top-level directory, counted by distinct files and by the
 edges whose source file lives inside it. Root-level files (no directory)
-aggregate under `.`. Graph pseudo-nodes (`pkg:`, `sys:`, `std:`,
-`external:` — resolved dependencies rather than files) never appear in the
-roster. The header always shows the full component count; the list is
+aggregate under `.`. Graph nodes that are not files (`pkg:`, `sys:`, `std:`,
+`external:` resolved dependencies, `local:` import specifiers, `type:` /
+`iface:` symbol nodes) never appear in the roster, and `Total files` counts
+that same file set — a `.` component therefore means root-level *files*
+exist, never that symbol nodes were bucketed at the repo root
+(DF-WARPFS-163). The header always shows the full component count; the list is
 capped like the orphans list by `--limit` (default 25), with a
 `... N more components (use --limit 0 to show all)` trailer — pass
 `--limit 0` to print every component.
 
 The `File census` line reconciles `Total files` with the coverage
 accounting `hilo graph warm` prints at the end of every run (persisted in
-`.vfs/graph/coverage.json`). `Total files` is a census of distinct edge
-sources in the graph; warm's Coverage line counts every discovered file —
-zero-edge files (no imports, package facades) never carry an edge source.
+`.vfs/graph/coverage.json`). `Total files` is a census of distinct file
+sources in the graph — symbol and dependency nodes are edge sources too, but
+they are not files and are not counted (DF-WARPFS-163); warm's Coverage line
+counts every discovered file — zero-edge files (no imports, package facades)
+never carry an edge source.
 Warm prunes sources whose file no longer exists (see *Removed dependencies are
 pruned* above), so a census still ahead of the ledger means the graph predates
 the last warm (`hilo graph warm` fixes it, and a DB that was never warmed at
