@@ -8,6 +8,7 @@
 //! - `error` — error types for graph operations
 
 pub mod audit;
+pub mod basename_import;
 pub mod classify;
 pub mod conformance;
 pub mod coverage_links;

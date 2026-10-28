@@ -477,6 +477,17 @@ pub(crate) fn compute_impact_streaming(
         let mut pkg_exact = Vec::new();
         let mut pkg_family = Vec::new();
         let mut local = Vec::new();
+        // GAP-104-R2: when the structural node is the dotted module of a
+        // basename-imported file, the same scan pass also counts whether the
+        // bare `pkg:<stem>` node is targeted (and the dotted node is not) —
+        // the evidence decision, for free, in the single streaming pass.
+        let seed = anchored
+            .filter(|_| !path.starts_with("pkg:"))
+            .and_then(|root| {
+                crate::basename_import::basename_seed_candidates(root.as_root(), &path)
+            });
+        let mut bare_targeted = false;
+        let mut dotted_targeted = false;
         scan(&mut |edge| {
             if edge.to == path {
                 exact.push(edge);
@@ -492,6 +503,14 @@ pub(crate) fn compute_impact_streaming(
                 {
                     pkg_family.push(edge);
                     return true;
+                }
+            }
+            if let Some((bare, dotted)) = seed.as_ref() {
+                if &edge.to == bare && Some(edge.to.as_str()) != pkg_target.as_deref() {
+                    bare_targeted = true;
+                }
+                if &edge.to == dotted {
+                    dotted_targeted = true;
                 }
             }
             if local_families
@@ -522,6 +541,29 @@ pub(crate) fn compute_impact_streaming(
             };
             collect_streamed(pkg_exact, &mut cx, depth, crate_kind);
             collect_streamed(pkg_family, &mut cx, depth, crate_kind);
+        }
+        // GAP-104-R2: basename-imported Python modules — the same evidence
+        // rule as the cached BFS, computed from the same streaming scan: the
+        // bare node is targeted and the dotted node is not. The bare node's
+        // importers enter as file-scoped rows, exactly like the pkg_exact arm.
+        if let Some(bare) = seed
+            .as_ref()
+            .and_then(|(bare, _dotted)| (bare_targeted && !dotted_targeted).then(|| bare.clone()))
+        {
+            let mut bare_exact = Vec::new();
+            scan(&mut |edge| {
+                if edge.to == bare {
+                    bare_exact.push(edge);
+                    return true;
+                }
+                true
+            })?;
+            let bare_kind = MatchKind {
+                scope: SCOPE_CRATE,
+                extra: u32::from(file_query),
+                via: Some(bare.as_str()),
+            };
+            collect_streamed(bare_exact, &mut cx, depth, bare_kind);
         }
         collect_streamed(
             local,
@@ -631,6 +673,12 @@ pub fn compute_impact_at(
     // claim `depth: 1`. Symbol-node targets (`pkg:`/`sys:`) keep the historical
     // accounting: there the crate node IS the queried node.
     let file_query = !start_path.starts_with("pkg:") && !start_path.starts_with("sys:");
+    // GAP-104-R2: a Python module basename-imported from its own sys.path
+    // subdirectory is targeted at its bare `pkg:<stem>` node while its dotted
+    // structural node is orphaned. When the graph's evidence says so, the
+    // bare node is seeded BELOW (after the structural block) as an additional
+    // file-scoped target, so `impact <file>` reaches importers the resolver
+    // alone cannot name.
 
     let mut cx = Collector {
         results: &mut results,
@@ -723,6 +771,45 @@ pub fn compute_impact_at(
                 depth,
                 crate_kind,
             )?;
+        }
+
+        // GAP-104-R2: basename-imported Python modules. When the structural
+        // pkg target is orphaned but the bare `pkg:<stem>` node is targeted
+        // (importers sit in the module's own sys.path-entry subdirectory and
+        // import by basename), seed the bare node with the same file-scoped
+        // accounting (GAP-083 extra hop). The evidence rule keeps every
+        // packaged layout untouched: a targeted dotted node means the seed
+        // never fires.
+        if !path.starts_with("pkg:") {
+            if let Some(root) = anchored {
+                if let Some(bare) = crate::basename_import::basename_seed_node(
+                    crate::basename_import::EdgeEvidence::Db(conn),
+                    root.as_root(),
+                    &path,
+                ) {
+                    let bare_kind = MatchKind {
+                        scope: SCOPE_CRATE,
+                        extra: u32::from(file_query),
+                        via: Some(bare.as_str()),
+                    };
+                    collect(
+                        stmt.query_map(params![bare.clone()], |row| {
+                            Ok((
+                                row.get::<_, String>(0)?,
+                                row.get::<_, String>(1)?,
+                                row.get::<_, Option<String>>(2)?,
+                                row.get::<_, Option<f64>>(3)?,
+                            ))
+                        })?,
+                        &mut cx,
+                        depth,
+                        bare_kind,
+                    )?;
+                    // The bare node's family (`pkg:<stem>_...` companions,
+                    // `pkg:<stem>::<member>`) stays out of scope: the
+                    // evidence is the exact node the importers wrote.
+                }
+            }
         }
 
         // GAP-069: a file path may also be named by TS/JS `local:` nodes —
