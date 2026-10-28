@@ -312,8 +312,14 @@ impl AuditReport {
 ///
 /// The same pruning `hilo graph warm` applies to discovery (PERF-005 +
 /// `guard::DEFAULT_PRUNE_DIRS`), so an audit and a warm see the same tree.
-const PRUNE_DIRS: [&str; 10] = [
+/// `hilo-graph` cannot depend on `hilo-cli`, so the names are mirrored here;
+/// `tests` below pins the ones the audit must never walk (PERF-013 added
+/// `target-local`, which had drifted out of this list and made an audit parse
+/// thousands of build artifacts). Hidden names (`.git`, `.venv`, …) are pruned
+/// by the leading-dot rule in [`collect_into`], not by this list.
+const PRUNE_DIRS: [&str; 11] = [
     "target",
+    "target-local",
     "node_modules",
     "vendor",
     "__pycache__",
@@ -1256,6 +1262,8 @@ pub unsafe fn unsafe_exported() {}
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("src")).unwrap();
         std::fs::create_dir_all(dir.path().join("node_modules")).unwrap();
+        std::fs::create_dir_all(dir.path().join("target-local/debug")).unwrap();
+        std::fs::create_dir_all(dir.path().join("target/debug")).unwrap();
         std::fs::create_dir_all(dir.path().join(".hidden")).unwrap();
         std::fs::write(dir.path().join("src/b.rs"), "pub fn b() {}\n").unwrap();
         std::fs::write(dir.path().join("src/a.rs"), "pub fn a() {}\n").unwrap();
@@ -1264,10 +1272,56 @@ pub unsafe fn unsafe_exported() {}
             "export function x() {}\n",
         )
         .unwrap();
+        std::fs::write(
+            dir.path().join("target-local/debug/build.rs"),
+            "pub fn built() {}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("target/debug/build.rs"),
+            "pub fn built() {}\n",
+        )
+        .unwrap();
         std::fs::write(dir.path().join(".hidden/h.rs"), "pub fn h() {}\n").unwrap();
 
         let corpus = collect_corpus(dir.path());
         let paths: Vec<&str> = corpus.iter().map(|(_, p, _)| p.as_str()).collect();
         assert_eq!(paths, vec!["src/a.rs", "src/b.rs"]);
+    }
+
+    /// PERF-013: build output must never reach the audit corpus.
+    ///
+    /// `target-local` had drifted out of [`PRUNE_DIRS`] while the guard's
+    /// `DEFAULT_PRUNE_DIRS` already skipped it, so `hilo graph audit` walked
+    /// into this repo's own local build tree and reported thousands of build
+    /// artifacts as public functions (50+ seconds of garbage). Pin the whole
+    /// build/dependency vocabulary here; hidden names (`.git`) are pruned by
+    /// the leading-dot rule, so they carry a separate expectation.
+    #[test]
+    fn prune_dirs_cover_build_and_dependency_trees() {
+        for name in [
+            "target",
+            "target-local",
+            "node_modules",
+            "vendor",
+            "__pycache__",
+            "venv",
+            ".venv",
+            "site-packages",
+            ".cache",
+            ".rustup",
+            ".npm",
+        ] {
+            assert!(
+                PRUNE_DIRS.contains(&name),
+                "{name} must be pruned by the audit walk, got {PRUNE_DIRS:?}"
+            );
+        }
+        // `.git` is not in the list on purpose: the walk never descends into
+        // dot-prefixed directories at all, which covers it unconditionally.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".git/objects")).unwrap();
+        std::fs::write(dir.path().join(".git/objects/x.rs"), "pub fn g() {}\n").unwrap();
+        assert!(collect_corpus(dir.path()).is_empty());
     }
 }
