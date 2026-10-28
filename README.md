@@ -100,23 +100,24 @@ bunker fleet (≤4GB) and any CI runner with limited RAM. The failure is
 **non-deterministic**: on identical 4GB hosts one fresh build passed in
 ~60 minutes while a sibling aborted mid-compile, because the abort depends on
 what else the host is doing at that moment (sibling builds pushed the failing
-host to loadavg 64 with 3.8/4.0 GB memory in use). `jobs = 1` lowers the
-pressure sharply but cannot make a 4GB host safe under external contention —
-if the abort persists even with `CARGO_BUILD_JOBS=1`, build on a machine with
-more RAM.
+host to loadavg 64 with 3.8/4.0 GB memory in use). `CARGO_BUILD_JOBS=1` lowers
+the pressure sharply but cannot make a 4GB host safe under external
+contention — if the abort persists even with `CARGO_BUILD_JOBS=1`, build on a
+machine with more RAM.
 
-**Fix applied:** `.cargo/config.toml` sets `jobs = 1` to limit compilation
-parallelism automatically. You can also set `CARGO_BUILD_JOBS=1` explicitly
-before building — it is honoured even without the committed config:
+**Opt in on a ≤4GB host.** Cargo parallelizes across all available cores by
+default, which is what you want on the 8–16 core machines where most builds
+run, so the cap is **not** committed in `.cargo/config.toml`. Set it yourself
+for the one build that needs it:
 
 ```bash
-# Explicit: one compile job (works everywhere, ~4GB-safe)
-CARGO_BUILD_JOBS=1 cargo build --release
-
-# Automatic: the committed .cargo/config.toml already sets jobs = 1
+# Default: one compile job per core (fastest on 8GB+ machines)
 cargo build --release
 
-# Override: allow more parallelism on bigger machines
+# ≤4GB host: clamp to a single compile job, ~4GB-safe
+CARGO_BUILD_JOBS=1 cargo build --release
+
+# Between the two: cap at N compile jobs
 CARGO_BUILD_JOBS=2 cargo build --release
 ```
 
@@ -194,8 +195,8 @@ Notes:
 - On a ≤4GB host this build can abort mid-compile with `libduckdb-sys C++
   SIGABRT (cc-rs, core dumped)` — see [Low-memory
   builders](#low-memory-builders-4gb-ram) for the memory requirement and the
-  `CARGO_BUILD_JOBS=1` recipe (the committed `.cargo/config.toml` already
-  caps `jobs = 1`).
+  `CARGO_BUILD_JOBS=1` recipe. It is an explicit opt-in: cargo otherwise
+  builds with every core you have.
 - If you *do* have `apt`/`apt-get` plus network access and specifically want
   the `libfuse3`-linked binary without root, [Source build without
   sudo](#source-build-without-sudo) below unpacks the FUSE `.deb`s into

@@ -1,10 +1,13 @@
 # .cargo/config.toml — Build configuration for Hilo
-
-# Limit parallel compilation jobs to prevent OOM on low-memory agents.
-# duckdb-sys compiles the full DuckDB C++ codebase; on ≤4GB RAM runners,
-# parallel compilation triggers SIGABRT from the C++ linker.
 #
-# Agents with ≥8GB can override with: CARGO_BUILD_JOBS=4 cargo build --release
-
-[build]
-jobs = 1
+# No [build] section on purpose: cargo defaults to one compile job per
+# available core, which is the fastest path on any normal machine. Do not
+# commit a `jobs` pin here — it would serialize the cold dependency graph
+# (duckdb-sys, arrow, aws-sdk) for every user, including those on 8-16 cores.
+#
+# On a ≤4GB host the bundled DuckDB C++ build can abort with a SIGABRT; cap
+# parallelism for that build only, with the environment variable:
+#
+#     CARGO_BUILD_JOBS=1 cargo build --release
+#
+# See README.md → "Low-memory builders (≤4GB RAM)" for the full recipe.
