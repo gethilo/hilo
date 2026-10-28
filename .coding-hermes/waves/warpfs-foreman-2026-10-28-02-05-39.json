@@ -1,0 +1,64 @@
+{
+  "tick_id": "warpfs-foreman-2026-10-28-02-05-39",
+  "project": "warpfs",
+  "repo": "/home/kara/warpfs",
+  "remote": "github.com/gethilo/hilo",
+  "branch": "master",
+  "wave_budget": 3,
+  "workers_dispatched": 2,
+  "base": "origin/master",
+  "base_sha": "e7588fbb",
+  "composed_at": "2026-10-28T02:10:00-05:00",
+  "independence_check": {
+    "method": "no depends_on edges between rows (verified in tasks.jsonl); file surfaces disjoint",
+    "pairs_checked": [
+      "DF-WARPFS-84 depends_on=null; DF-WARPFS-154 depends_on=null"
+    ],
+    "file_surfaces": {
+      "DF-WARPFS-84": ["hilo-graph/src/resolution.rs", "hilo-graph/src/parser.rs"],
+      "DF-WARPFS-154": ["hilo-mcp/src/http.rs", "hilo-cli/src/commands/serve.rs (help text)"]
+    },
+    "collision_risk": "none - different crates (hilo-graph vs hilo-mcp/hilo-cli)"
+  },
+  "worker_lane": {
+    "model": "glm-5.3-flash",
+    "provider": "zai-glm",
+    "lane_probe": "hermes chat -q 'Reply with exactly: LANE_OK' -m glm-5.3-flash --provider zai-glm -Q -> session 20261027_211312_c3f7aa, agent.log API call #1 model=glm-5.3-flash provider=custom, NO 'Fallback activated' line = real lane",
+    "doctrine": "workers on SUBS, never PAYG deepseek (coding-hermes-worker-model Step 0)"
+  },
+  "tasks": [
+    {
+      "id": "DF-WARPFS-84",
+      "priority": "P1",
+      "title": "file->pkg id resolution missing on PHP and Kotlin (file-form impact silently empty)",
+      "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-84",
+      "branch": "wt/DF-WARPFS-84",
+      "base_sha": "e7588fbb",
+      "brief": "/tmp/warpfs-84-brief.txt",
+      "model": "glm-5.3-flash",
+      "provider": "zai-glm",
+      "prior_attempts": 2,
+      "prior_attempt_note": "glm-5.3-flash 13min + deepseek-v4-flash 7min, both zero file writes (tick-343 ref). Brief rewritten with design reference + two-commit mandate so partial progress survives.",
+      "acceptance": "file-form impact resolves to its package on PHP and Kotlin; file-form dependent-id set == pkg-form set"
+    },
+    {
+      "id": "DF-WARPFS-154",
+      "priority": "P2",
+      "title": "serve --http returns bare 404 for POST / and /mcp with no pointer to the real surfaces",
+      "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-154",
+      "branch": "wt/DF-WARPFS-154",
+      "base_sha": "e7588fbb",
+      "brief": "/tmp/warpfs-154-brief.txt",
+      "model": "glm-5.3-flash",
+      "provider": "zai-glm",
+      "acceptance": "unknown route returns a body naming the stdio transport and the two HTTP endpoints; --http help mentions what the HTTP surface serves"
+    }
+  ],
+  "foreman_direct": [
+    {
+      "id": "DF-WARPFS-152",
+      "reason": "premise stale: DF-WARPFS-150 (same root cause) landed 704f3a9a and wires bwrap --chdir <workspace_path> unconditionally; --source IS the workspace. Verify live at HEAD then close verification-only."
+    }
+  ],
+  "merge_plan": "serial merge in order 84 -> 154; guard each merge on bunker3 (scripts/rust-lint.sh); push after each green gate"
+}
