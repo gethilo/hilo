@@ -56,6 +56,18 @@
 /// inheritance and interface references, so a PHP file must resolve to the
 /// same fully-qualified class node rather than falling back to Cargo.
 ///
+/// Kotlin sources resolve to their declared package plus the file stem
+/// (DF-WARPFS-84): the Kotlin parser emits `pkg:<dotted path>` edges for
+/// `import` statements (`import kotlin.collections.List` →
+/// `pkg:kotlin.collections.List`), so a `.kt`/`.kts` file must resolve to the
+/// same node family — `exposed-core/src/main/kotlin/org/jetbrains/exposed/v1/core/Table.kt`
+/// declaring `package org.jetbrains.exposed.v1.core` is
+/// `pkg:org.jetbrains.exposed.v1.core.Table`. The package declaration in the
+/// file itself is authoritative and is joined with the file stem; a file with
+/// no package header (the default package) resolves to its stem alone. An
+/// unreadable file resolves to `None` — never a path-shaped guess. See
+/// [`kotlin_fqcn_for_file`].
+///
 /// Resolution is query-time only: the canonical `edges.jsonl` and the
 /// DuckDB cache are untouched. Files that belong to no package (or are not
 /// files at all — `pkg:`/`sys:`/`std:`/`external:` symbol nodes) resolve to
@@ -179,6 +191,10 @@ pub struct PkgResolver {
     /// PHP fully-qualified class nodes (`pkg:<namespace\\class>`), cached
     /// separately because resolution reads the declaration from the source.
     php_cache: HashMap<PathBuf, Option<String>>,
+    /// Kotlin fully-qualified declaration nodes (`pkg:<package>.<stem>`),
+    /// cached separately because resolution reads the `package` header from
+    /// the source (DF-WARPFS-84) — the same reason PHP carries its own cache.
+    kotlin_cache: HashMap<PathBuf, Option<String>>,
 }
 
 impl PkgResolver {
@@ -238,6 +254,9 @@ impl PkgResolver {
         }
         if path.ends_with(".php") || path.ends_with(".phtml") {
             return self.php_pkg_node(path);
+        }
+        if path.ends_with(".kt") || path.ends_with(".kts") {
+            return self.kotlin_pkg_node(path);
         }
         self.crate_name(path).map(|name| format!("pkg:{name}"))
     }
@@ -319,6 +338,18 @@ impl PkgResolver {
             }
             let node = php_class_for_file(&p);
             self.php_cache.insert(p, node.clone());
+            return node;
+        }
+        if path.ends_with(".kt") || path.ends_with(".kts") {
+            if is_symbol_node(&abs) {
+                return None;
+            }
+            let p = PathBuf::from(&abs);
+            if let Some(hit) = self.kotlin_cache.get(&p) {
+                return hit.clone();
+            }
+            let node = kotlin_fqcn_for_file(&p).map(|fqcn| format!("pkg:{fqcn}"));
+            self.kotlin_cache.insert(p, node.clone());
             return node;
         }
         // Rust crate walk (the default branch of `pkg_node`). The cache is
@@ -415,6 +446,23 @@ impl PkgResolver {
         }
         let node = php_class_for_file(&p);
         self.php_cache.insert(p, node.clone());
+        node
+    }
+
+    /// Resolve a `.kt`/`.kts` source to its `pkg:<package>.<stem>` node
+    /// (DF-WARPFS-84): the Kotlin parser emits `pkg:<dotted path>` edges for
+    /// `import` statements, so a Kotlin file must resolve to the declaration
+    /// its importers target, never fall back to the enclosing Cargo crate.
+    fn kotlin_pkg_node(&mut self, path: &str) -> Option<String> {
+        if is_symbol_node(path) || !(path.ends_with(".kt") || path.ends_with(".kts")) {
+            return None;
+        }
+        let p = PathBuf::from(path);
+        if let Some(hit) = self.kotlin_cache.get(&p) {
+            return hit.clone();
+        }
+        let node = kotlin_fqcn_for_file(&p).map(|fqcn| format!("pkg:{fqcn}"));
+        self.kotlin_cache.insert(p, node.clone());
         node
     }
 
@@ -690,6 +738,106 @@ pub fn python_module_for_file(file: &Path) -> Option<String> {
 fn php_class_for_file(file: &Path) -> Option<String> {
     let source = std::fs::read_to_string(file).ok()?;
     crate::parser::php_declared_class(&source).map(|class| format!("pkg:{class}"))
+}
+
+// ── Kotlin file → fully-qualified declaration resolution (DF-WARPFS-84) ──
+
+/// Derive the fully-qualified declaration name for `file` (DF-WARPFS-84).
+///
+/// The Kotlin parser emits `pkg:<dotted path>` nodes for `import` statements,
+/// so a `.kt`/`.kts` file must resolve to the `pkg:` node of the declaration
+/// its importers target — `Table.kt` declaring `package
+/// org.jetbrains.exposed.v1.core` is `pkg:org.jetbrains.exposed.v1.core.Table`.
+/// The `package` header in the file itself is authoritative (works under any
+/// source-root layout, like Java's `package` declaration); it is joined with
+/// the file stem, which is the declaration name for the one-type-per-file
+/// convention Kotlin's own style guide mandates. A file with no package
+/// header is in the default package and resolves to its stem alone. An
+/// unreadable or missing file resolves to `None` — never a path-shaped guess,
+/// mirroring the PHP deriver's unreadable-file rule.
+pub fn kotlin_fqcn_for_file(file: &Path) -> Option<String> {
+    let stem = file.file_stem()?.to_str()?;
+    if stem.is_empty() {
+        return None;
+    }
+    let source = std::fs::read_to_string(file).ok()?;
+    match kotlin_package_decl(&source) {
+        Some(package) => Some(format!("{package}.{stem}")),
+        None => Some(stem.to_string()),
+    }
+}
+
+/// Extract the dotted package name from a Kotlin source's `package` header.
+///
+/// Skips leading blank lines, `//` line comments, and `/* ... */` block
+/// comment regions (license headers) before the header. Returns `None` when
+/// the file declares no package (the default package). Only the header region
+/// is searched: the first non-comment, non-blank line that is not a `package`
+/// declaration ends the scan, because Kotlin requires the `package` header —
+/// when present — to precede every other statement (annotations, import or
+/// otherwise). A `package` keyword buried behind real code is not a header.
+fn kotlin_package_decl(source: &str) -> Option<String> {
+    let mut in_block_comment = false;
+    for line in source.lines() {
+        let mut rest = line.trim();
+        // Peel block-comment state line by line (no nesting in Kotlin).
+        while in_block_comment {
+            match rest.find("*/") {
+                Some(end) => {
+                    rest = rest[end + 2..].trim();
+                    in_block_comment = false;
+                }
+                None => {
+                    rest = "";
+                    break;
+                }
+            }
+        }
+        if rest.is_empty() {
+            continue;
+        }
+        // A line may OPEN a block comment; content before `/*` still counts.
+        let before_comment = match rest.find("/*") {
+            Some(start) => {
+                // Unterminated opener swallows the rest of the line.
+                let head = &rest[..start];
+                in_block_comment = !rest[start + 2..].contains("*/");
+                head
+            }
+            None => rest,
+        };
+        // Line comments cut the remainder.
+        let code = before_comment.split("//").next().unwrap_or("").trim();
+        if code.is_empty() {
+            continue;
+        }
+        let Some(mut after) = code.strip_prefix("package") else {
+            // First real code line is not a package header: the header, when
+            // present, precedes every declaration, so stop scanning.
+            return None;
+        };
+        // `packagefoo` is not a package line: the keyword must be followed
+        // by whitespace before the name.
+        if !after.starts_with(|c: char| c.is_whitespace()) {
+            return None;
+        }
+        after = after.trim();
+        // Strip a trailing `;` and anything after it (rare malformed).
+        after = after.split(';').next().unwrap_or("").trim();
+        // `package` with no name is the default-package declaration; the
+        // caller treats that exactly like a missing header (stem alone).
+        if after.is_empty() {
+            return None;
+        }
+        // Dots and identifier characters only — anything else is malformed.
+        if !after.split('.').all(|segment| {
+            !segment.is_empty() && segment.chars().all(|c| c.is_alphanumeric() || c == '_')
+        }) {
+            return None;
+        }
+        return Some(after.to_string());
+    }
+    None
 }
 
 // ── Java file → fully-qualified class resolution (DF-WARPFS-34) ─────
@@ -2783,6 +2931,199 @@ mod tests {
                 .unwrap()
                 .is_empty(),
             "a schema this build does not know must not be interpreted"
+        );
+    }
+
+    // ── Kotlin file → fully-qualified declaration (DF-WARPFS-84) ────────
+
+    /// A `.kt` file with a `package` header resolves to `pkg:<package>.<stem>`
+    /// — the node family the Kotlin parser emits for `import` statements.
+    #[test]
+    fn kotlin_file_with_package_header_resolves_to_declared_fqcn() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = write(
+            dir.path(),
+            "exposed-core/src/main/kotlin/org/jetbrains/exposed/v1/core/Table.kt",
+            "package org.jetbrains.exposed.v1.core\n\nclass Table\n",
+        );
+        let mut resolver = PkgResolver::new();
+        assert_eq!(
+            resolver.pkg_node(&file).as_deref(),
+            Some("pkg:org.jetbrains.exposed.v1.core.Table"),
+            "the package header joined with the stem IS the declared node"
+        );
+    }
+
+    /// A `.kt` file with no package header is in the default package and
+    /// resolves to its stem alone.
+    #[test]
+    fn kotlin_file_without_package_header_resolves_to_stem() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = write(dir.path(), "scripts/Mine.kt", "class Mine\n");
+        let mut resolver = PkgResolver::new();
+        assert_eq!(
+            resolver.pkg_node(&file).as_deref(),
+            Some("pkg:Mine"),
+            "default-package declarations resolve to the bare stem"
+        );
+    }
+
+    /// An unreadable or missing path resolves to `None` — never a
+    /// path-shaped guess (the no-leak rule, as in PHP/Go/Java).
+    #[test]
+    fn kotlin_missing_or_unreadable_file_resolves_to_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut resolver = PkgResolver::new();
+        let missing = dir.path().join("nope/Missing.kt");
+        assert_eq!(
+            resolver.pkg_node(&missing.to_string_lossy()).as_deref(),
+            None,
+            "a missing file must not resolve from its path shape"
+        );
+        let unreadable = write(dir.path(), "stub/Table.kt", "placeholder");
+        std::fs::remove_file(&unreadable).unwrap();
+        std::fs::create_dir_all(&unreadable).unwrap(); // read_to_string fails
+        assert_eq!(
+            resolver
+                .pkg_node(unreadable.to_string().as_str())
+                .as_deref(),
+            None,
+            "a path that cannot be read as source must not resolve"
+        );
+    }
+
+    /// Symbol nodes (`pkg:x` etc.) are never files and never probed on disk.
+    #[test]
+    fn kotlin_symbol_nodes_resolve_to_none() {
+        let mut resolver = PkgResolver::new();
+        assert_eq!(resolver.pkg_node("pkg:kotlin.collections.List"), None);
+        assert_eq!(resolver.pkg_node_at(&anchored_temp_root(), "pkg:x"), None);
+    }
+
+    /// Shared helper for the symbol-node assertions: a root that exists but
+    /// must never be touched by a symbol-node query.
+    fn anchored_temp_root() -> crate::resolution::AnchoredRoot {
+        AnchoredRoot::new(std::env::temp_dir())
+    }
+
+    /// `.kts` (script) files ride the same deriver as `.kt`.
+    #[test]
+    fn kotlin_script_files_resolve_through_the_same_deriver() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = write(
+            dir.path(),
+            "gradle/build.latest.kts",
+            "// build logic\npackage buildlogic\n\nfun hello() {}\n",
+        );
+        let mut resolver = PkgResolver::new();
+        assert_eq!(
+            resolver.pkg_node(&file).as_deref(),
+            Some("pkg:buildlogic.build.latest"),
+            "`.kts` files resolve like `.kt` files"
+        );
+    }
+
+    /// The package header may follow a license block-comment header; a
+    /// `package` keyword appearing after real code is NOT a header.
+    #[test]
+    fn kotlin_package_header_scan_skips_comments_and_stops_at_code() {
+        let dir = tempfile::tempdir().unwrap();
+        let licensed = write(
+            dir.path(),
+            "src/main/kotlin/licensed/Thing.kt",
+            "/*\n * Copyright someone.\n */\npackage licensed\n\nclass Thing\n",
+        );
+        let mut resolver = PkgResolver::new();
+        assert_eq!(
+            resolver.pkg_node(&licensed).as_deref(),
+            Some("pkg:licensed.Thing"),
+            "a license block comment before the header must not hide it"
+        );
+        let buried = write(
+            dir.path(),
+            "src/main/kotlin/buried/Thing.kt",
+            "class Thing // package buried\n",
+        );
+        assert_eq!(
+            resolver.pkg_node(&buried).as_deref(),
+            Some("pkg:Thing"),
+            "a `package` keyword after real code is not the header"
+        );
+    }
+
+    // ── PHP file → declared-class resolution (DF-WARPFS-84) ────────────
+
+    /// The PHP deriver resolves a `namespace A\\B; class C {}` source to
+    /// `pkg:A\\B\\C` — the unit link between the impact file-form and the
+    /// `pkg:` edges the parser emits. Guards the whole swallowed-Result
+    /// chain (`read_to_string` → `php_declared_class` → namespace
+    /// qualification): any link degrading to `None` fails here first.
+    #[test]
+    fn php_class_for_file_resolves_namespace_plus_class() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = write(
+            dir.path(),
+            "src/A/B/C.php",
+            "<?php\nnamespace A\\B;\nclass C {}\n",
+        );
+        let mut resolver = PkgResolver::new();
+        assert_eq!(
+            resolver.pkg_node(&file).as_deref(),
+            Some("pkg:A\\B\\C"),
+            "the declared namespace+class IS the node importers target"
+        );
+    }
+
+    /// An unreadable or missing PHP path resolves to `None` — never a
+    /// path-shaped guess.
+    #[test]
+    fn php_missing_file_resolves_to_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut resolver = PkgResolver::new();
+        let missing = dir.path().join("nope/Missing.php");
+        assert_eq!(
+            resolver
+                .pkg_node(missing.display().to_string().as_str())
+                .as_deref(),
+            None,
+            "a missing file must not resolve from its path shape"
+        );
+    }
+
+    /// A PHP file with NO class-like declaration has no derivable node:
+    /// namespace alone is not an identity.
+    #[test]
+    fn php_file_without_class_declaration_resolves_to_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = write(
+            dir.path(),
+            "src/helpers.php",
+            "<?php\nnamespace A\\B;\nfunction helper() {}\n",
+        );
+        let mut resolver = PkgResolver::new();
+        assert_eq!(
+            resolver.pkg_node(&file).as_deref(),
+            None,
+            "no class-like declaration means no node to resolve to"
+        );
+    }
+
+    // ── Ruby regression (DF-WARPFS-78 must stay green, DF-WARPFS-84 AC) ─
+
+    /// AC: the Ruby case from DF-WARPFS-78 stays green in the same run —
+    /// the `.rb` file form still resolves to its module node.
+    #[test]
+    fn ruby_file_form_still_resolves_module_path() {
+        let mut resolver = PkgResolver::new();
+        assert_eq!(
+            resolver.pkg_node("lib/sidekiq/api.rb").as_deref(),
+            Some("pkg:sidekiq/api"),
+            "the DF-WARPFS-78 derivation must not regress"
+        );
+        assert_eq!(
+            resolver.pkg_node("pkg:sidekiq/api"),
+            None,
+            "symbol nodes still resolve to None"
         );
     }
 }
