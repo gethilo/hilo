@@ -2387,3 +2387,20 @@ tasks:
   status: complete
   created_at: '2026-10-27T21:47:05.984786+00:00'
   completed_at: '2026-10-27T21:57:47.351162+00:00'
+- id: DF-WARPFS-84
+  title: file->pkg id resolution on PHP and Kotlin (file-form impact silently empty)
+  criteria:
+  - 'file-form impact resolves to its package on PHP and Kotlin: file-form dependent-id
+    set == pkg-form set on a warmed fixture; Ruby DF-WARPFS-78 case green in the same
+    run'
+  status: in_progress
+  created_at: '2026-10-28T02:17:07.610755+00:00'
+- id: DF-WARPFS-154
+  title: serve --http returns bare 404 for POST / and /mcp with no pointer to the
+    real surfaces
+  criteria:
+  - an unknown route returns a 404 body naming the stdio MCP transport (hilo serve
+    --mcp) and the two HTTP endpoints GET /health and GET /metrics, and 'serve --http
+    --help' mentions what the HTTP surface serves
+  status: in_progress
+  created_at: '2026-10-28T02:17:08.499032+00:00'
