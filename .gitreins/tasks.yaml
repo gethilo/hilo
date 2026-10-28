@@ -2419,5 +2419,6 @@ tasks:
   - hilo graph impact pkg:Plug.Conn includes files with direct qualified calls (Plug.Conn.get)
     as well as alias/import/require forms; new parser unit test; cargo test -p hilo_graph
     --lib green
-  status: in_progress
+  status: complete
   created_at: '2026-10-28T03:23:19.112576+00:00'
+  completed_at: '2026-10-28T04:04:29.041103+00:00'
