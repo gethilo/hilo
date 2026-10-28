@@ -115,9 +115,16 @@ pub struct GraphDB {
 pub struct GraphStats {
     /// Total number of rows in `edges`.
     pub total_edges: i64,
-    /// Total number of distinct source files in the graph.
+    /// Total number of distinct source FILES in the graph.
+    ///
+    /// DF-WARPFS-163: file nodes only. Graph nodes that merely NAME something
+    /// (the `type:`/`iface:` symbol nodes the conformance pass emits, `local:`
+    /// import specifiers, `pkg:`/`sys:`/`std:`/`external:` dependencies) are
+    /// not files and are never counted here — filtering uses
+    /// [`crate::prune::is_file_endpoint`], the crate's one predicate for
+    /// "endpoint names a file on disk rather than a graph node".
     pub total_files: i64,
-    /// Count of distinct `from` values (source files).
+    /// Count of distinct real-file `from` values (source files).
     #[serde(skip)]
     pub unique_files: i64,
     /// Count of distinct `to` values (unique dependencies).
@@ -143,9 +150,13 @@ pub struct GraphStats {
 /// One top-level component ("subsystem") in [`GraphStats::components`].
 ///
 /// A component is the first path segment of a real file node: `render/api.go`
-/// belongs to `render`. Graph pseudo-nodes (`pkg:`/`sys:`/`std:`/`external:`)
-/// are never components, and files without a path separator (root files,
-/// e.g. `main.go`) aggregate under the component name ".".
+/// belongs to `render`. Graph nodes that are not files (`pkg:`/`sys:`/`std:`/
+/// `external:` dependencies, `local:` import specifiers, `type:`/`iface:`
+/// symbol nodes) are never components — the roster is built from the same
+/// file-filtered source set as `Total files` (DF-WARPFS-163) — and files
+/// without a path separator (root files, e.g. `main.go`) aggregate under the
+/// component name ".". A "." component therefore means root-level FILES exist,
+/// never that symbol nodes were bucketed at the root.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ComponentStat {
     /// Top-level component name, e.g. "render"; "." for repo-root files.
@@ -2568,11 +2579,30 @@ impl GraphDB {
                 .query_row("SELECT COUNT(*) FROM edges", params![], |row| {
                     row.get::<_, i64>(0)
                 })?;
-        let unique_files: i64 = self.conn.query_row(
-            "SELECT COUNT(DISTINCT \"from\") FROM edges",
-            params![],
-            |row| row.get::<_, i64>(0),
-        )?;
+        // DF-WARPFS-163: `Total files` must count FILES, so the census is
+        // filtered to file nodes. A `from` is not always a file: the
+        // conformance pass (GAP-112) sources `implements` edges from
+        // `type:<T>` symbol nodes, and the parsers source edges from
+        // `local:` import specifiers — neither names a file. The unfiltered
+        // `COUNT(DISTINCT "from")` reported those symbol nodes as source
+        // files (Hilo's own repo: 297 "files" against 219 real ones, +36%).
+        // One grouped pass yields both the filtered census and the
+        // per-component edge weights the roster needs, so the two answers
+        // can never disagree about which nodes are files.
+        let mut source_stmt = self
+            .conn
+            .prepare("SELECT \"from\", COUNT(*) AS cnt FROM edges GROUP BY \"from\"")?;
+        let source_rows = source_stmt.query_map(params![], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        let mut file_sources: Vec<(String, i64)> = Vec::new();
+        for r in source_rows {
+            let (node, cnt) = r?;
+            if crate::prune::is_file_endpoint(&node) {
+                file_sources.push((node, cnt));
+            }
+        }
+        let unique_files: i64 = file_sources.len() as i64;
         let unique_dependencies: i64 = self.conn.query_row(
             "SELECT COUNT(DISTINCT \"to\") FROM edges",
             params![],
@@ -2665,39 +2695,26 @@ impl GraphDB {
         // Components (GAP-097): a "what is this system?" roster. Every real
         // file node is bucketed by its first path segment (the top-level
         // component); root-level files (no separator) aggregate under ".".
-        // Pseudo-node families mirror `resolution::is_symbol_node` —
-        // `pkg:`/`sys:`/`std:`/`external:` are dependency/symbol nodes, not
-        // filesystem paths, and must never appear as components. Full list;
-        // `--limit` capping is a display concern left to the CLI.
-        let mut components_stmt = self.conn.prepare(
-            "WITH real_files AS ( \
-                 SELECT DISTINCT \"from\" AS f \
-                 FROM edges \
-                 WHERE \"from\" NOT LIKE 'pkg:%' \
-                   AND \"from\" NOT LIKE 'sys:%' \
-                   AND \"from\" NOT LIKE 'std:%' \
-                   AND \"from\" NOT LIKE 'external:%' \
-             ) \
-             SELECT CASE WHEN instr(f, '/') = 0 THEN '.' \
-                         ELSE substr(f, 1, instr(f, '/') - 1) END AS component, \
-                    COUNT(DISTINCT f) AS files, \
-                    COUNT(*) AS edges \
-             FROM edges \
-             JOIN real_files ON edges.\"from\" = real_files.f \
-             GROUP BY component \
-             ORDER BY files DESC, component ASC",
-        )?;
-        let comp_rows = components_stmt.query_map(params![], |row| {
-            Ok(ComponentStat {
-                name: row.get::<_, String>(0)?,
-                files: row.get::<_, i64>(1)?,
-                edges: row.get::<_, i64>(2)?,
-            })
-        })?;
-        let mut components = Vec::new();
-        for r in comp_rows {
-            components.push(r?);
+        // DF-WARPFS-163: the roster is built from the same file-filtered
+        // source set as `Total files`. The previous SQL pruned only
+        // `pkg:`/`sys:`/`std:`/`external:` and let every other node family
+        // through, so a repo whose conformance pass emits `type:<T>` sources
+        // grew a "." component made of nothing but symbol nodes (Hilo:
+        // `.: 78 files`) while having no root-level source file at all.
+        // Full list; `--limit` capping is a display concern left to the CLI.
+        let mut per_component: HashMap<String, (i64, i64)> = HashMap::new();
+        for (file, edges) in &file_sources {
+            let entry = per_component
+                .entry(component_name_of(file))
+                .or_insert((0, 0));
+            entry.0 += 1;
+            entry.1 += *edges;
         }
+        let mut components: Vec<ComponentStat> = per_component
+            .into_iter()
+            .map(|(name, (files, edges))| ComponentStat { name, files, edges })
+            .collect();
+        components.sort_by(|a, b| b.files.cmp(&a.files).then_with(|| a.name.cmp(&b.name)));
 
         // GAP-109: the parsed roster is anchored on edge sources, so every
         // non-code top-level directory of the repo root is invisible to it
@@ -3102,6 +3119,20 @@ fn merge_directory_components(components: &mut Vec<ComponentStat>, root: &Path) 
             files: files as i64,
             edges: 0,
         });
+    }
+}
+
+/// The top-level component a file node belongs to (GAP-097): its first path
+/// segment, or "." for a root-level file with no separator.
+///
+/// Used by [`GraphDB::stats`] to bucket the file-filtered source census into
+/// the component roster (DF-WARPFS-163); symbol/dependency pseudo-nodes never
+/// reach it, because the caller filters on
+/// [`crate::prune::is_file_endpoint`] first.
+fn component_name_of(file: &str) -> String {
+    match file.find('/') {
+        None => ".".to_string(),
+        Some(idx) => file[..idx].to_string(),
     }
 }
 
@@ -6045,23 +6076,88 @@ mod tests {
     }
 
     #[test]
-    fn stats_file_census_is_raw_distinct_sources() {
-        // The census is the raw `COUNT(DISTINCT from)` — the exact set warm's
-        // `unique_edge_sources` ledger field counts — so the two reconcile by
-        // construction. Symbol-node sources are excluded upstream by the
-        // parser (pkg:/sys: never take the from side); this test only pins
-        // that the census does not silently drift from the ledger's
-        // definition.
+    fn stats_file_census_excludes_symbol_node_sources() {
+        // DF-WARPFS-163: a `from` is not always a file. The conformance pass
+        // sources `implements` edges from `type:<T>` symbol nodes, so the
+        // unfiltered `COUNT(DISTINCT from)` reported symbol nodes as source
+        // files. The census must count FILES; the same file still contributes
+        // once no matter how many edges fan out of it.
         let db = GraphDB::open(":memory:").unwrap();
         db.insert_edges(&[
             Edge::new("a/lib.rs", "pkg:serde", "imports"),
             Edge::new("b/lib.rs", "a/lib.rs", "imports"),
+            // symbol nodes are edge sources, never files
+            Edge::new("type:Widget", "iface:Display", "implements"),
+            Edge::new("a/lib.rs", "type:Widget", "conformance_of"),
+            Edge::new("a/lib.rs", "iface:Display", "consumes"),
+            // a `local:` import specifier names a file only after resolution
+            Edge::new("local:./util", "a/lib.rs", "imports"),
+        ])
+        .unwrap();
+        db.insert_edges(&[Edge::new("a/lib.rs", "b/lib.rs", "imports")])
+            .unwrap();
+        let stats = db.stats().unwrap();
+        assert_eq!(
+            stats.total_files, 2,
+            "only the real files count (a/lib.rs, b/lib.rs); `type:`/`iface:`/`local:` nodes do not"
+        );
+        assert_eq!(
+            stats.unique_files, stats.total_files,
+            "unique_files and total_files are the same census"
+        );
+    }
+
+    #[test]
+    fn stats_total_files_counts_one_file_in_a_two_node_crate() {
+        // The filed minimal reproduction (run 46c): a 2-file crate whose
+        // `src/widget.rs` implements `Display` reported `Total files: 2`
+        // because the `type:Widget` symbol node was counted as a file. One
+        // source file, one count — and no invented "." component.
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[
+            Edge::new("type:Widget", "iface:Display", "implements"),
+            Edge::new("src/widget.rs", "type:Widget", "conformance_of"),
         ])
         .unwrap();
         let stats = db.stats().unwrap();
         assert_eq!(
-            stats.total_files, 2,
-            "distinct sources across both files (no node-level dedupe beyond the source set)"
+            stats.total_files, 1,
+            "the crate has exactly one source file"
+        );
+        let names: Vec<&str> = stats.components.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["src"],
+            "no '.' component: the root holds no source file, only symbol nodes"
+        );
+        assert_eq!(
+            (
+                stats.components[0].name.as_str(),
+                stats.components[0].files,
+                stats.components[0].edges
+            ),
+            ("src", 1, 1),
+            "the component's edge count follows its real source files"
+        );
+    }
+
+    #[test]
+    fn stats_symbol_only_graph_has_no_files_and_no_components() {
+        // A graph whose only edge sources are symbol nodes has zero files —
+        // and therefore an empty roster, not a "." bucket of `type:` nodes.
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[
+            Edge::new("type:AuditOptions", "iface:Default", "implements"),
+            Edge::new("type:CacheConfig", "iface:Default", "implements"),
+        ])
+        .unwrap();
+        let stats = db.stats().unwrap();
+        assert_eq!(stats.total_edges, 2, "the edges themselves still count");
+        assert_eq!(stats.total_files, 0, "symbol nodes are not files");
+        assert!(
+            stats.components.is_empty(),
+            "no components from symbol nodes, got: {:?}",
+            stats.components
         );
     }
 
