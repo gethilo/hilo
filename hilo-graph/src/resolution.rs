@@ -501,6 +501,12 @@ impl AnchoredRoot {
         Self { root: root.into() }
     }
 
+    /// The underlying root path (GAP-104-R2: the basename-seed evidence
+    /// reader joins repo-relative paths onto it).
+    pub fn as_root(&self) -> &std::path::Path {
+        &self.root
+    }
+
     /// The anchored form of `path`: an absolute path passes through
     /// unchanged (it already names its own location), everything else is
     /// joined onto the root and normalized to forward slashes — the exact

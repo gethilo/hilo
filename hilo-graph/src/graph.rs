@@ -2048,6 +2048,20 @@ impl GraphDB {
             if let Some(pkg) = pkg {
                 targets.push(pkg);
             }
+            // GAP-104-R2: a basename-imported Python module's dependents
+            // target the bare `pkg:<stem>` node (evidence-gated: the dotted
+            // node must be orphaned), so the reverse lookup must include it.
+            if let Some(root) = anchored {
+                if let Some(bare) = crate::basename_import::basename_seed_node(
+                    crate::basename_import::EdgeEvidence::Db(&self.conn),
+                    root.as_root(),
+                    path,
+                ) {
+                    if !targets.contains(&bare) {
+                        targets.push(bare);
+                    }
+                }
+            }
         }
 
         let mut edges = Vec::new();
@@ -2296,6 +2310,7 @@ impl GraphDB {
                 root,
                 &mut resolver,
                 local_resolver.as_ref(),
+                &self.conn,
             )
         });
         Ok(files)
@@ -2385,6 +2400,7 @@ impl GraphDB {
                     root,
                     &mut resolver,
                     local_resolver.as_ref(),
+                    &self.conn,
                 )
             })
             .count() as i64;
@@ -2491,6 +2507,7 @@ impl GraphDB {
         root: &Path,
         resolver: &mut PkgResolver,
         local_resolver: Option<&LocalSpecResolver>,
+        covered_conn: &Connection,
     ) -> bool {
         if tested.contains(file) {
             return true;
@@ -2508,7 +2525,23 @@ impl GraphDB {
         // so a crate-level `tested_by` target must never cover crate
         // members. See the doc comment above.
         if let Some(node) = resolver.pkg_node(&root.join(file).to_string_lossy()) {
-            return tested.contains(&node);
+            if tested.contains(&node) {
+                return true;
+            }
+        }
+        // GAP-104-R2: basename-imported Python modules. A test that
+        // sys.path-inserts the module's own directory and imports by bare
+        // basename emits `tested_by` to `pkg:<stem>` while the dotted
+        // structural node above is orphaned; the evidence rule (bare
+        // targeted, dotted not) covers the file through the bare node.
+        if file.ends_with(".py") {
+            if let Some(bare) = crate::basename_import::basename_seed_node(
+                crate::basename_import::EdgeEvidence::Db(covered_conn),
+                root,
+                file,
+            ) {
+                return tested.contains(&bare);
+            }
         }
         // Rule (iii): TS/JS `local:` resolution (GAP-071). Only files of
         // the JS family are eligible; a file that resolves to no `local:`
@@ -3316,6 +3349,140 @@ mod tests {
             crate::compute_impact(db.conn(), "plugin/terminal_jail/parser.py", 8).unwrap();
         assert_eq!(results.len(), 1, "session-stamped root must anchor the BFS");
         assert_eq!(results[0].path, "plugin/terminal_jail/runner.py");
+    }
+
+    /// GAP-104-R2: `hilo graph impact scripts/drivers/base.py` must reach the
+    /// importers that target `pkg:base` — importers sitting in the module's
+    /// own sys.path-entry subdirectory import by bare basename, and the graph
+    /// evidence (bare node targeted, dotted node orphaned) seeds exactly that
+    /// node into the file-form BFS.
+    #[test]
+    fn impact_reaches_basename_importers_through_the_bare_node() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("scripts/drivers")).unwrap();
+        std::fs::write(root.join("scripts/__init__.py"), "").unwrap();
+        std::fs::write(root.join("scripts/drivers/base.py"), "def helper(): ...\n").unwrap();
+        let db_path = create_graph_path(root);
+        let jsonl = db_path.parent().unwrap().join("edges.jsonl");
+        let edges = [
+            Edge::new("scripts/drivers/__init__.py", "pkg:base", "imports"),
+            Edge::new("top.py", "pkg:base", "imports"),
+        ];
+        let lines: Vec<String> = edges
+            .iter()
+            .map(|e| serde_json::to_string(e).unwrap())
+            .collect();
+        std::fs::write(&jsonl, lines.join("\n") + "\n").unwrap();
+
+        let db = GraphDB::open(db_path.to_str().unwrap()).unwrap();
+        let results = db.impact_or_parse("scripts/drivers/base.py", 8).unwrap();
+        let facts = impact_facts(&results);
+        assert!(
+            facts.contains(&(
+                "top.py".to_string(),
+                "imports".to_string(),
+                2,
+                "crate".to_string(),
+                Some("pkg:base".to_string()),
+            )),
+            "the basename importer must be listed as a dependent, got {facts:?}"
+        );
+        assert!(
+            facts.contains(&(
+                "scripts/drivers/__init__.py".to_string(),
+                "imports".to_string(),
+                2,
+                "crate".to_string(),
+                Some("pkg:base".to_string()),
+            )),
+            "the sibling importer must be listed as a dependent, got {facts:?}"
+        );
+    }
+
+    /// GAP-104-R2 packaged control: when the dotted node IS targeted (the
+    /// normal flask-style layout), the seed never fires and the answer is
+    /// exactly the structural one — the seeded path must not widen it.
+    #[test]
+    fn impact_keeps_the_structural_answer_when_the_dotted_node_is_targeted() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("src/flask/sansio")).unwrap();
+        std::fs::write(root.join("src/flask/__init__.py"), "").unwrap();
+        std::fs::write(root.join("src/flask/sansio/app.py"), "class App: ...\n").unwrap();
+        let db_path = create_graph_path(root);
+        let jsonl = db_path.parent().unwrap().join("edges.jsonl");
+        std::fs::write(
+            &jsonl,
+            serde_json::to_string(&Edge::new(
+                "src/flask/config.py",
+                "pkg:flask.sansio.app",
+                "imports",
+            ))
+            .unwrap()
+                + "\n",
+        )
+        .unwrap();
+
+        let db = GraphDB::open(db_path.to_str().unwrap()).unwrap();
+        let results = db.impact_or_parse("src/flask/sansio/app.py", 8).unwrap();
+        assert_eq!(
+            impact_facts(&results),
+            vec![(
+                "src/flask/config.py".to_string(),
+                "imports".to_string(),
+                2,
+                "crate".to_string(),
+                Some("pkg:flask.sansio.app".to_string()),
+            )],
+            "packaged layout keeps its dotted pkg mediation, unchanged"
+        );
+    }
+
+    /// GAP-104-R2: `graph untested` must not call a basename-imported module
+    /// untested — the tests' bare-basename `tested_by` edges (pkg:hermes)
+    /// cover scripts/drivers/hermes.py through the evidence seed.
+    #[test]
+    fn untested_covers_basename_imported_modules_through_their_bare_node() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("scripts/drivers")).unwrap();
+        std::fs::write(root.join("scripts/__init__.py"), "").unwrap();
+        std::fs::write(root.join("scripts/drivers/__init__.py"), "").unwrap();
+        std::fs::write(root.join("scripts/drivers/hermes.py"), "def t(): ...\n").unwrap();
+        std::fs::create_dir_all(root.join("tests")).unwrap();
+        std::fs::write(
+            root.join("tests/test_proxy_driver_hermes.py"),
+            "import hermes\n",
+        )
+        .unwrap();
+        let db_path = create_graph_path(root);
+        let jsonl = db_path.parent().unwrap().join("edges.jsonl");
+        let edges = [
+            // The parser's emission for `import hermes` in the test (which
+            // sys.path-inserted the drivers dir): a bare pkg target.
+            Edge::new("tests/test_proxy_driver_hermes.py", "pkg:hermes", "imports"),
+            Edge::new(
+                "tests/test_proxy_driver_hermes.py",
+                "pkg:hermes",
+                "tested_by",
+            ),
+            // hermes.py itself imports something, so it enters the import
+            // graph and becomes a coverage candidate at all.
+            Edge::new("scripts/drivers/hermes.py", "pkg:os", "imports"),
+        ];
+        let lines: Vec<String> = edges
+            .iter()
+            .map(|e| serde_json::to_string(e).unwrap())
+            .collect();
+        std::fs::write(&jsonl, lines.join("\n") + "\n").unwrap();
+
+        let db = GraphDB::open(db_path.to_str().unwrap()).unwrap();
+        let untested = db.untested_files_at(root).unwrap();
+        assert!(
+            !untested.contains(&"scripts/drivers/hermes.py".to_string()),
+            "a test-imported module must not read as untested, got {untested:?}"
+        );
     }
 
     /// A `:memory:` connection stamps no root, so the CWD fallback keeps the
