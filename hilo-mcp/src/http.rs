@@ -2,12 +2,14 @@
 //!
 //! `hilo serve --http` exposes the server over TCP on `0.0.0.0` at the port
 //! from the project manifest (`interfaces.mcp.port`, default 8766). Today it
-//! serves the operational health endpoint; JSON-RPC over HTTP POST will grow
-//! on the same router. The stdio transport (`hilo serve --mcp`, see
-//! [`crate::server`]) is unchanged and both can run from one process.
+//! serves `GET /health` and `GET /metrics`; JSON-RPC over HTTP POST will grow
+//! on the same router. The MCP transport is stdio-only (`hilo serve --mcp`,
+//! see [`crate::server`]); unknown HTTP routes get a 404 naming that and the
+//! two real endpoints. Both transports can run from one process.
 
 use std::net::SocketAddr;
 
+use axum::http::StatusCode;
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::Serialize;
@@ -33,6 +35,7 @@ pub fn router() -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/metrics", get(metrics))
+        .fallback(not_found)
 }
 
 async fn health() -> Json<HealthStatus> {
@@ -40,6 +43,28 @@ async fn health() -> Json<HealthStatus> {
         status: "ok",
         version: VERSION,
     })
+}
+
+/// Body for any route the HTTP surface does not serve.
+///
+/// The paths an MCP client author tries first (`POST /`, `POST /mcp`) are
+/// NOT part of this surface: the MCP transport is stdio-only by design. The
+/// 404 says so and names the two endpoints that do exist, instead of axum's
+/// bare "page not found".
+#[derive(Serialize)]
+struct NotFoundHint {
+    error: &'static str,
+    hint: &'static str,
+}
+
+async fn not_found() -> (StatusCode, Json<NotFoundHint>) {
+    (
+        StatusCode::NOT_FOUND,
+        Json(NotFoundHint {
+            error: "not found",
+            hint: "MCP transport is stdio-only: hilo serve --mcp. HTTP serves GET /health and GET /metrics.",
+        }),
+    )
 }
 
 /// `GET /metrics` — the live rate-limiter snapshot
@@ -244,5 +269,60 @@ mod tests {
             raw.starts_with("HTTP/1.1 404"),
             "expected 404 for an unknown route, got: {raw}"
         );
+    }
+
+    /// The 404 body must point a lost MCP client author at the real
+    /// surface: stdio-only MCP, plus the two HTTP endpoints that exist.
+    /// POST / and POST /mcp are the paths clients try first (DF-WARPFS-154).
+    #[test]
+    fn fallback_404_body_names_stdio_transport_and_both_endpoints() {
+        let addr = start_server();
+
+        // One raw POST through the same hand-rolled client, exercising the
+        // fallback with a request method the registered routes reject too.
+        let raw = raw_post(
+            addr,
+            "/mcp",
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#,
+        )
+        .expect("POST /mcp never succeeded");
+
+        assert!(
+            raw.starts_with("HTTP/1.1 404"),
+            "expected 404 for POST /mcp, got: {raw}"
+        );
+
+        let body = raw
+            .split("\r\n\r\n")
+            .nth(1)
+            .expect("HTTP response with a body");
+        let parsed: serde_json::Value =
+            serde_json::from_str(body).unwrap_or_else(|e| panic!("body is not JSON: {e}: {body}"));
+
+        let hint = parsed["hint"]
+            .as_str()
+            .unwrap_or_else(|| panic!("404 body missing a string 'hint' field: {body}"));
+        assert!(
+            hint.contains("stdio") && hint.contains("--mcp"),
+            "hint must name the stdio transport: {hint}"
+        );
+        assert!(
+            hint.contains("/health") && hint.contains("/metrics"),
+            "hint must name both HTTP endpoints: {hint}"
+        );
+    }
+
+    /// POST a raw HTTP/1.1 request (same no-client-dependency trick as
+    /// [`raw_get`]) and return the raw response.
+    fn raw_post(addr: SocketAddr, path: &str, json_body: &str) -> std::io::Result<String> {
+        let mut stream = std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(2))?;
+        let request = format!(
+            "POST {path} HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{json_body}",
+            json_body.len()
+        );
+        stream.write_all(request.as_bytes())?;
+        let mut raw = String::new();
+        stream.read_to_string(&mut raw)?;
+        Ok(raw)
     }
 }

@@ -49,8 +49,8 @@ enum Commands {
     #[command(subcommand)]
     Graph(GraphCommand),
     /// Run a Hilo server: MCP stdio transport (--mcp) and/or an HTTP
-    /// transport with a /health endpoint (--http). Exposes 18 vfs_* tools —
-    /// see README.
+    /// transport serving GET /health and GET /metrics (--http). Exposes
+    /// 18 vfs_* tools — see README.
     Serve(ServeArgs),
     /// Manage virtual backends (S3, gdrive, onedrive, dropbox, external).
     #[command(subcommand)]
@@ -496,8 +496,9 @@ struct ServeArgs {
     #[arg(long)]
     mcp: bool,
 
-    /// Run the HTTP transport: serves GET /health on 0.0.0.0 using the port
-    /// from the manifest (interfaces.mcp.port, default 8766). Combinable
+    /// Run the HTTP transport on 0.0.0.0 using the port from the manifest
+    /// (interfaces.mcp.port, default 8766). Serves GET /health and GET
+    /// /metrics — the MCP transport is stdio-only (--mcp). Combinable
     /// with --mcp; at least one mode is required.
     #[arg(long)]
     http: bool,
