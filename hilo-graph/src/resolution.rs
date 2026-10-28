@@ -3050,4 +3050,80 @@ mod tests {
             "a `package` keyword after real code is not the header"
         );
     }
+
+    // ── PHP file → declared-class resolution (DF-WARPFS-84) ────────────
+
+    /// The PHP deriver resolves a `namespace A\\B; class C {}` source to
+    /// `pkg:A\\B\\C` — the unit link between the impact file-form and the
+    /// `pkg:` edges the parser emits. Guards the whole swallowed-Result
+    /// chain (`read_to_string` → `php_declared_class` → namespace
+    /// qualification): any link degrading to `None` fails here first.
+    #[test]
+    fn php_class_for_file_resolves_namespace_plus_class() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = write(
+            dir.path(),
+            "src/A/B/C.php",
+            "<?php\nnamespace A\\B;\nclass C {}\n",
+        );
+        let mut resolver = PkgResolver::new();
+        assert_eq!(
+            resolver.pkg_node(&file).as_deref(),
+            Some("pkg:A\\B\\C"),
+            "the declared namespace+class IS the node importers target"
+        );
+    }
+
+    /// An unreadable or missing PHP path resolves to `None` — never a
+    /// path-shaped guess.
+    #[test]
+    fn php_missing_file_resolves_to_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut resolver = PkgResolver::new();
+        let missing = dir.path().join("nope/Missing.php");
+        assert_eq!(
+            resolver
+                .pkg_node(missing.display().to_string().as_str())
+                .as_deref(),
+            None,
+            "a missing file must not resolve from its path shape"
+        );
+    }
+
+    /// A PHP file with NO class-like declaration has no derivable node:
+    /// namespace alone is not an identity.
+    #[test]
+    fn php_file_without_class_declaration_resolves_to_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = write(
+            dir.path(),
+            "src/helpers.php",
+            "<?php\nnamespace A\\B;\nfunction helper() {}\n",
+        );
+        let mut resolver = PkgResolver::new();
+        assert_eq!(
+            resolver.pkg_node(&file).as_deref(),
+            None,
+            "no class-like declaration means no node to resolve to"
+        );
+    }
+
+    // ── Ruby regression (DF-WARPFS-78 must stay green, DF-WARPFS-84 AC) ─
+
+    /// AC: the Ruby case from DF-WARPFS-78 stays green in the same run —
+    /// the `.rb` file form still resolves to its module node.
+    #[test]
+    fn ruby_file_form_still_resolves_module_path() {
+        let mut resolver = PkgResolver::new();
+        assert_eq!(
+            resolver.pkg_node("lib/sidekiq/api.rb").as_deref(),
+            Some("pkg:sidekiq/api"),
+            "the DF-WARPFS-78 derivation must not regress"
+        );
+        assert_eq!(
+            resolver.pkg_node("pkg:sidekiq/api"),
+            None,
+            "symbol nodes still resolve to None"
+        );
+    }
 }
