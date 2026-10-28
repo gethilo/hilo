@@ -3573,6 +3573,20 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
+    /// Block until the wall clock is at least one second past `mtime`, so a
+    /// subsequent write is guaranteed to carry a strictly newer stat identity
+    /// even on filesystems whose mtime resolution is a whole second. Bounded so
+    /// a bizarre clock can never hang the suite.
+    fn wait_past_mtime_tick(mtime: std::time::SystemTime) {
+        const ONE_SEC: std::time::Duration = std::time::Duration::from_secs(1);
+        for _ in 0..100 {
+            match std::time::SystemTime::now().duration_since(mtime) {
+                Ok(elapsed) if elapsed >= ONE_SEC => return,
+                _ => std::thread::sleep(std::time::Duration::from_millis(50)),
+            }
+        }
+    }
+
     /// GAP-085: a prefix that is neither a directory on disk nor named by the
     /// graph is an unknown prefix — classifiable without DuckDB, so the
     /// command can fail loudly before it queries anything.
@@ -3997,6 +4011,12 @@ mod tests {
         // Same size, newer mtime: exactly the rewrite the fast path must
         // refuse when the scan could not see one stable revision.
         let opened_at = fs::metadata(&path).unwrap();
+        // Filesystems with coarse mtime resolution (1s granularity) can land the
+        // rewrite inside the same tick as the original write, which leaves the
+        // stat identity unchanged and makes this arm flake. Wait until the wall
+        // clock has moved a full second past the opened file's mtime before
+        // mutating, so the rewrite is guaranteed to be a strictly newer stat.
+        wait_past_mtime_tick(opened_at.modified().unwrap());
         fs::write(&path, "pub fn MutantNeedle() {}\n").unwrap();
         let stat = symbol_file_stat(&path, Some(opened_at));
         assert_eq!(
