@@ -1,0 +1,70 @@
+{
+  "tick_id": "warpfs-foreman-2026-10-28-09-45-34",
+  "wave_start": "2026-10-28T09:45:34-05:00",
+  "tasks": [
+    {
+      "id": "PERF-012",
+      "title": "Remove single-threaded build constraint from .cargo/config.toml",
+      "worktree": "/home/kara/worktrees/warpfs-PERF-012",
+      "branch": "wt/PERF-012"
+    },
+    {
+      "id": "PERF-013",
+      "title": "Fix graph audit to skip target-local/ build output",
+      "worktree": "/home/kara/worktrees/warpfs-PERF-013",
+      "branch": "wt/PERF-013"
+    },
+    {
+      "id": "PERF-014",
+      "title": "Filter build-dir paths from graph search corpus",
+      "worktree": "/home/kara/worktrees/warpfs-PERF-014",
+      "branch": "wt/PERF-014"
+    },
+    {
+      "id": "DF-WARPFS-163",
+      "title": "Fix graph stats to exclude symbol nodes from file count",
+      "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-163",
+      "branch": "wt/DF-WARPFS-163"
+    },
+    {
+      "id": "QA-WARPFS-QA-2",
+      "title": "Fix flaky symbol_cache_records_volatile_files_as_never_current test",
+      "worktree": "/home/kara/worktrees/warpfs-QA-WARPFS-QA-2",
+      "branch": "wt/QA-WARPFS-QA-2"
+    }
+  ],
+  "finished_at": "2026-10-28T19:07:31-05:00",
+  "recovery_tick": "warpfs-foreman-2026-10-28-19-07-31",
+  "recovery_result": {
+    "PERF-012": {
+      "branch": "wt/PERF-012",
+      "stale_base": false,
+      "merged": true,
+      "ahead_of_master": 0
+    },
+    "PERF-013": {
+      "branch": "wt/PERF-013",
+      "stale_base": false,
+      "merged": true,
+      "ahead_of_master": 0
+    },
+    "PERF-014": {
+      "branch": "wt/PERF-014",
+      "stale_base": false,
+      "merged": true,
+      "ahead_of_master": 0
+    },
+    "DF-WARPFS-163": {
+      "branch": "wt/DF-WARPFS-163",
+      "stale_base": false,
+      "merged": true,
+      "ahead_of_master": 0
+    },
+    "QA-WARPFS-QA-2": {
+      "branch": "wt/QA-WARPFS-QA-2",
+      "stale_base": false,
+      "merged": true,
+      "ahead_of_master": 0
+    }
+  }
+}
