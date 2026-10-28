@@ -1,0 +1,24 @@
+=== grep importers of base ===
+scripts/drivers/deepseek_harness.py:35:from base import Driver, register  # noqa: E402
+scripts/drivers/hermes.py:20:from base import Driver, register  # noqa: E402
+scripts/drivers/__init__.py:20:from base import Driver, get_driver, list_drivers  # noqa: E402,F401
+scripts/drivers/openclaw.py:44:from base import Driver, register  # noqa: E402
+scripts/drivers/opencode.py:46:from base import Driver, register  # noqa: E402
+scripts/drivers/pi.py:30:from base import Driver, register  # noqa: E402
+scripts/drivers/__init__.py:20:from base import Driver, get_driver, list_drivers  # noqa: E402,F401
+
+=== impact pkg:base ===
+scripts/drivers/deepseek_harness.py  ←  imports  (depth: 1, scope=crate)  [ast_exact conf=1.00]
+scripts/drivers/hermes.py  ←  imports  (depth: 1, scope=crate)  [ast_exact conf=1.00]
+scripts/drivers/openclaw.py  ←  imports  (depth: 1, scope=crate)  [ast_exact conf=1.00]
+scripts/drivers/opencode.py  ←  imports  (depth: 1, scope=crate)  [ast_exact conf=1.00]
+scripts/drivers/pi.py  ←  imports  (depth: 1, scope=crate)  [ast_exact conf=1.00]
+scripts/drivers/__init__.py  ←  imports  (depth: 1, scope=crate)  [ast_exact conf=1.00]
+scripts/router_server.py  ←  imports  (depth: 2, scope=crate, via pkg:drivers)  [ast_exact conf=1.00]
+tests/test_proxy_driver_opencode.py  ←  imports  (depth: 2, scope=crate, via pkg:drivers)  [ast_exact conf=1.00]
+tests/test_proxy_driver_pi.py  ←  imports  (depth: 2, scope=crate, via pkg:drivers)  [ast_exact conf=1.00]
+tests/test_proxy_driver_hermes.py  ←  imports  (depth: 2, scope=crate, via pkg:drivers)  [ast_exact conf=1.00]
+tests/test_proxy_developer_role.py  ←  imports  (depth: 2, scope=crate, via pkg:drivers)  [ast_exact conf=1.00]
+tests/test_proxy_driver_deepseek_harness.py  ←  imports  (depth: 2, scope=crate, via pkg:drivers)  [ast_exact conf=1.00]
+tests/test_proxy_driver_openclaw.py  ←  imports  (depth: 2, scope=crate, via pkg:drivers)  [ast_exact conf=1.00]
+note: 13 of 13 rows are crate-scoped (via pkg:drivers): matched through the crate's pkg: node, not 'pkg:base' itself. Family expansion (GAP-048) also folds in sibling pkg members (pkg:<crate>::<item>, pkg:<crate>_<sibling>), so this total can exceed the direct importers of the file.

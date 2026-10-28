@@ -56,6 +56,7 @@
       "model": "glm-5.3-flash",
       "provider": "zai-glm",
       "premise_check": "REPRODUCED LIVE at 6adba4d7 with target/debug/hilo on a 2-file scratch tree: a.ex (alias Plug.Conn) + b.ex (Plug.Conn.get(conn, \"/\")) -> impact pkg:Plug.Conn returns only a.ex; edges.jsonl has one edge",
+      "result": "LANDED. Worker commit 01a459af (hilo-graph/src/parser.rs only, +139/-1, 5 new elixir parser tests) rebased onto master, gate GREEN on bunker-las-03 at that commit (scripts/rust-lint.sh RC=0, 539 hilo_graph lib tests passed), merged --no-ff as fd7df870 (tree identity vs 01a459af proven empty), pushed. Foreman re-probe on /var/tmp/df89-post: edges a.ex AND b.ex -> pkg:Plug.Conn; impact lists both. GitReins tier-2 verdict 2859e5bc PASS (evaluated fd7df870). PARTIAL on the corpus arm: >=42/44 on a real plug clone is not measurable locally (no Elixir corpus on host, no network clones).",
       "acceptance": "pkg:Plug.Conn impact on a plug-like corpus >= 42/44 of grep ground truth, or the missing form is documented as a limitation with lowered confidence; elixir_imports regression test stays green"
     }
   ],
