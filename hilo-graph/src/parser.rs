@@ -1262,16 +1262,69 @@ fn extract_swift_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
 // ── Elixir ──────────────────────────────────────────────────────────
 
 fn extract_elixir_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+    // DF-WARPFS-89: the call-reference emission dedupes across the WHOLE
+    // file walk — one edge per (file, module) even if the module is called
+    // twenty times — so the dedupe set lives at file scope, not per node.
+    let mut seen = HashSet::new();
+    extract_elixir_imports_walk(node, source, paths, &mut seen);
+}
+
+fn extract_elixir_imports_walk(
+    node: Node,
+    source: &[u8],
+    paths: &mut Vec<String>,
+    seen: &mut HashSet<String>,
+) {
     // Elixir uses `alias`, `import`, `require`, and `use` keywords.
     // These appear as `call` nodes where the function name is the keyword.
+    // DF-WARPFS-89: a qualified remote call (`Plug.Conn.get(conn, "/")`)
+    // is also a `call` node — per the grammar its `target` field holds a
+    // `dot` whose `left` is the receiver — so the receiver's module path
+    // is a reference the file depends on even with no keyword line.
     if node.kind() == "call" {
         let text = node.utf8_text(source).unwrap_or("");
+        let mut keyword_hit = false;
         for keyword in &["alias ", "import ", "require ", "use "] {
             if let Some(rest) = text.strip_prefix(keyword) {
+                keyword_hit = true;
                 // Take module path up to first space/comma (handles `alias Foo.Bar, as: B`)
                 let path = rest.split([',', ' ']).next().unwrap_or(rest).trim();
                 if !path.is_empty() {
                     paths.push(format!("pkg:{path}"));
+                }
+            }
+        }
+        if !keyword_hit {
+            if let Some(target) = node.child_by_field_name("target") {
+                if target.kind() == "dot" {
+                    // The receiver is the outermost `left` (the grammar's
+                    // `alias` token already covers the full dotted module
+                    // path: `Plug.Conn.Utils` is one alias node, so
+                    // `Plug.Conn.Utils.parse/1` yields the module
+                    // `Plug.Conn.Utils` with the function dropped).
+                    let mut recv = target;
+                    while recv.kind() == "dot" {
+                        match recv.child_by_field_name("left") {
+                            Some(l) => recv = l,
+                            None => break,
+                        }
+                    }
+                    if recv.kind() == "alias" {
+                        // Module references start with an UPPERCASE segment
+                        // (variables and lowercase dot-chains are excluded
+                        // by construction). Single-segment receivers are
+                        // skipped: a bare alias (`Map.get/2`, or a call
+                        // through an `alias .., as: C` shorthand) may name
+                        // a stdlib/stashed module or a local shorthand, and
+                        // emitting it would fabricate `pkg:C`-style nodes.
+                        let recv_text = recv.utf8_text(source).unwrap_or("");
+                        if recv_text.starts_with(|c: char| c.is_ascii_uppercase())
+                            && recv_text.contains('.')
+                            && seen.insert(recv_text.to_string())
+                        {
+                            paths.push(format!("pkg:{recv_text}"));
+                        }
+                    }
                 }
             }
         }
@@ -1281,7 +1334,7 @@ fn extract_elixir_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
         node.children(&mut c).collect()
     };
     for child in children {
-        extract_elixir_imports(child, source, paths);
+        extract_elixir_imports_walk(child, source, paths, seen);
     }
 }
 
@@ -2416,6 +2469,91 @@ use anyhow::{bail, Context as _};
         assert!(imports.contains(&"pkg:MyApp.Repo".into()));
         assert!(imports.contains(&"pkg:Ecto.Query".into()));
         assert!(imports.contains(&"pkg:GenServer".into()));
+    }
+
+    #[test]
+    fn elixir_qualified_remote_call_references_module() {
+        // DF-WARPFS-89: a file whose ONLY reference to a module is a
+        // qualified remote call (`Plug.Conn.get(conn, "/")`) must still
+        // become a dependent of that module node.
+        let imports = parse(
+            Language::Elixir,
+            "defmodule B do\n  def f(conn) do\n    Plug.Conn.get(conn, \"/\")\n  end\nend\n",
+        );
+        assert!(imports.contains(&"pkg:Plug.Conn".into()));
+    }
+
+    #[test]
+    fn elixir_defmodule_name_is_not_a_reference() {
+        // The module being DEFINED is not a reference to itself: the
+        // `defmodule Plug.Conn do` line must not fabricate an import edge.
+        let imports = parse(
+            Language::Elixir,
+            "defmodule Plug.Conn do\n  def get(conn, key), do: conn[key]\nend\n",
+        );
+        assert!(
+            imports.iter().all(|p| !p.contains("Plug.Conn")),
+            "defmodule's own name leaked into references: {imports:?}"
+        );
+    }
+
+    #[test]
+    fn elixir_lowercase_and_bare_alias_receivers_add_nothing() {
+        // Variables (`conn.get`), lowercase-rooted dot-chains
+        // (`m.Utils.parse`) and single-segment bare aliases (`Map.get`,
+        // `Enum.map` — possibly `as:` shorthands) must not fabricate nodes.
+        let imports = parse(
+            Language::Elixir,
+            "defmodule T do\n  def f(conn, m) do\n    conn.get(\"k\")\n    m.Utils.parse(\"x\")\n    Map.get(%{}, :a)\n    Enum.map([1], & &1)\n  end\nend\n",
+        );
+        assert!(
+            imports.is_empty(),
+            "non-module receivers produced edges: {imports:?}"
+        );
+    }
+
+    #[test]
+    fn elixir_remote_calls_dedupe_and_emit_full_module_path() {
+        // One edge per (file, module) even when the module is called
+        // repeatedly, and the emitted node is the full MODULE part with
+        // the function dropped: Plug.Conn.Utils.parse -> pkg:Plug.Conn.Utils.
+        let imports = parse(
+            Language::Elixir,
+            "defmodule T do\n  def go(x) do\n    Plug.Conn.Utils.parse(x)\n  end\n  def go2(x) do\n    Plug.Conn.get(x, \"a\")\n    Plug.Conn.get(x, \"b\")\n    Plug.Conn.fetch_query_params(x)\n  end\nend\n",
+        );
+        assert_eq!(
+            imports
+                .iter()
+                .filter(|p| *p == "pkg:Plug.Conn.Utils")
+                .count(),
+            1,
+            "repeated/nested references not deduped: {imports:?}"
+        );
+        assert_eq!(
+            imports.iter().filter(|p| *p == "pkg:Plug.Conn").count(),
+            1,
+            "repeated calls of one module not deduped: {imports:?}"
+        );
+    }
+
+    #[test]
+    fn elixir_alias_as_shorthand_call_yields_no_bare_node() {
+        // Keyword path unchanged (`alias Plug.Conn, as: C` -> pkg:Plug.Conn
+        // exactly once); a call through the shorthand (`C.get/2`) must NOT
+        // fabricate a bogus `pkg:C` node.
+        let imports = parse(
+            Language::Elixir,
+            "defmodule A do\n  alias Plug.Conn, as: C\n  def f(conn) do\n    C.get(conn, \"/\")\n  end\nend\n",
+        );
+        assert_eq!(
+            imports.iter().filter(|p| *p == "pkg:Plug.Conn").count(),
+            1,
+            "keyword alias behaviour changed: {imports:?}"
+        );
+        assert!(
+            !imports.contains(&"pkg:C".into()),
+            "shorthand receiver fabricated a bare node: {imports:?}"
+        );
     }
 
     #[test]
