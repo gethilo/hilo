@@ -1,0 +1,73 @@
+{
+  "tick_id": "warpfs-foreman-2026-10-28-03-13-41",
+  "project": "warpfs",
+  "repo": "/home/kara/warpfs",
+  "remote": "github.com/gethilo/hilo",
+  "branch": "master",
+  "wave_budget": 9,
+  "workers_dispatched": 2,
+  "base": "origin/master",
+  "base_sha": "6adba4d7",
+  "composed_at": "2026-10-28T03:35:00-05:00",
+  "recovery_of": {
+    "tick_id": "warpfs-foreman-2026-10-28-02-05-39",
+    "result": "COMPLETE - manifest reported 0 workers but carried 2 (DF-WARPFS-84, DF-WARPFS-154) + 1 foreman-direct (DF-WARPFS-152); all three branches MERGED (ahead=0), board rows complete, worktrees removed, branches deleted, master == origin/master"
+  },
+  "independence_check": {
+    "method": "no depends_on edges between rows (verified in tasks.jsonl); file surfaces disjoint",
+    "pairs_checked": [
+      "GAP-104-R2 depends_on=null; DF-WARPFS-89 depends_on=null"
+    ],
+    "file_surfaces": {
+      "GAP-104-R2": ["hilo-graph/src/resolution.rs", "hilo-graph/src/impact.rs (join only if needed)", "hilo-graph/src/graph.rs (untested consumer only if needed)"],
+      "DF-WARPFS-89": ["hilo-graph/src/parser.rs"]
+    },
+    "collision_risk": "low - same crate, disjoint files (resolution.rs vs parser.rs); merges are serial and each merge is gated"
+  },
+  "worker_lane": {
+    "model": "glm-5.3-flash",
+    "provider": "zai-glm",
+    "doctrine": "workers on SUBS, never PAYG deepseek (coding-hermes-worker-model Step 0); same lane that landed the 02-05-39 wave (DF-WARPFS-84/154)"
+  },
+  "tasks": [
+    {
+      "id": "GAP-104-R2",
+      "priority": "P1",
+      "title": "Python subdirectory module imported by basename has no file node (file-form impact + untested lie)",
+      "worktree": "/home/kara/worktrees/warpfs-GAP-104-R2",
+      "branch": "wt/GAP-104-R2",
+      "base_sha": "6adba4d7",
+      "brief": "/tmp/warpfs-104r2-brief-v2.txt",
+      "model": "glm-5.3-flash",
+      "provider": "zai-glm",
+      "premise_check": "REPRODUCED LIVE at 6adba4d7 with target/debug/hilo on a 3-file scratch tree: scripts/__init__.py + scripts/drivers/base.py + top.py ('from base import helper') -> impact scripts/drivers/base.py = 'no dependents' while impact pkg:base lists top.py",
+      "prior_attempts": 1,
+      "prior_attempt_note": "prior dispatch recorded as failed (board event e685a1f7); its brief pointed at the STALE ~/.cargo/bin/hilo - this brief forbids that binary",
+      "acceptance": "file-form impact resolves a subdirectory basename-imported module to the pkg node its importers target; conservative (no fabricated dependents); untested excludes test-imported subdir modules"
+    },
+    {
+      "id": "DF-WARPFS-89",
+      "priority": "P1",
+      "title": "Elixir blast radius blind to direct qualified calls (only alias/import/require/use become edges)",
+      "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-89",
+      "branch": "wt/DF-WARPFS-89",
+      "base_sha": "6adba4d7",
+      "brief": "/tmp/warpfs-89-brief-v2.txt",
+      "model": "glm-5.3-flash",
+      "provider": "zai-glm",
+      "premise_check": "REPRODUCED LIVE at 6adba4d7 with target/debug/hilo on a 2-file scratch tree: a.ex (alias Plug.Conn) + b.ex (Plug.Conn.get(conn, \"/\")) -> impact pkg:Plug.Conn returns only a.ex; edges.jsonl has one edge",
+      "acceptance": "pkg:Plug.Conn impact on a plug-like corpus >= 42/44 of grep ground truth, or the missing form is documented as a limitation with lowered confidence; elixir_imports regression test stays green"
+    }
+  ],
+  "foreman_direct": [
+    {
+      "id": "DF-WARPFS-95",
+      "reason": "PREMISE STALE - already implemented at HEAD by commit 73dc811e (2026-10-14): hilo-metadata/src/sidecar.rs writes the git-tracked .vfs/annotations.jsonl, `hilo meta --set` mirrors into it, list mode merges sidecar records, `hilo meta apply` re-applies them after a clone. Live two-clone proof this tick: A annotates -> sidecar committed+pushed; B fresh clone -> `hilo meta gin.go` prints 'role: entrypoint (sidecar)' with no re-set, `hilo meta apply` -> 'applied 1 of 1 records', second apply -> 'applied 0 of 1' (idempotent). Close verification-only."
+    },
+    {
+      "id": "DF-WARPFS-148",
+      "reason": "premise looks already-fixed (hilo-ffi/src/lib.rs:471/870 drop the '<manifest>#rule:<name>' pseudo-path and a test asserts !path.contains(\"#rule:\")); not picked this tick - needs a build-level probe before closeout."
+    }
+  ],
+  "merge_plan": "serial merge GAP-104-R2 -> DF-WARPFS-89, each gate-verified on bunker3 (scripts/rust-lint.sh), push after each green gate; stale-base check before each merge"
+}

@@ -2406,3 +2406,18 @@ tasks:
   status: complete
   created_at: '2026-10-28T02:17:08.499032+00:00'
   completed_at: '2026-10-28T02:45:14.672411+00:00'
+- id: GAP-104-R2
+  title: Python subdir module imported by basename has no file node
+  criteria:
+  - hilo graph impact on scripts/drivers/base.py lists its importers; impact pkg:base
+    and file-form agree; new regression test; cargo test -p hilo_graph --lib green
+  status: in_progress
+  created_at: '2026-10-28T03:23:18.035450+00:00'
+- id: DF-WARPFS-89
+  title: Elixir qualified remote calls emit no graph edges
+  criteria:
+  - hilo graph impact pkg:Plug.Conn includes files with direct qualified calls (Plug.Conn.get)
+    as well as alias/import/require forms; new parser unit test; cargo test -p hilo_graph
+    --lib green
+  status: in_progress
+  created_at: '2026-10-28T03:23:19.112576+00:00'
