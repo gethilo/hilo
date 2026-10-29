@@ -2464,5 +2464,5 @@ tasks:
   - symbol_cache_records_volatile_files_as_never_current passes reliably under repeated
     runs
   status: complete
-  completed_at: '2026-10-28T19:07:31+00:00'
   created_at: '2026-10-28T09:47:57.282013+00:00'
+  completed_at: '2026-10-28T19:07:31+00:00'
