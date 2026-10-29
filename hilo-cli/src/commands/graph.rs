@@ -638,8 +638,26 @@ const COVERAGE_LEDGER: &str = "coverage.json";
 /// Written on every warm that processes files, including the full-cache-hit
 /// fast path, so the ledger is refreshed in lockstep with the printed
 /// `Coverage:` verdict on every run.
-fn write_coverage_ledger(cwd: &Path, report: &CoverageReport, discovered: usize, sources: usize) {
+fn write_coverage_ledger(
+    cwd: &Path,
+    report: &CoverageReport,
+    discovered: usize,
+    sources: usize,
+    changed: bool,
+) {
     let path = cwd.join(".vfs").join("graph").join(COVERAGE_LEDGER);
+    // `--changed` only observes the files newer than `.last_warm`; its
+    // CoverageReport is therefore incremental, while this ledger is a
+    // corpus-wide accounting consumed by `graph stats`. Keep the last full
+    // ledger rather than replacing it with a one-file snapshot. A missing or
+    // malformed prior ledger falls back to the historical write behavior.
+    if changed {
+        if let Ok(existing) = std::fs::read_to_string(&path) {
+            if serde_json::from_str::<serde_json::Value>(&existing).is_ok() {
+                return;
+            }
+        }
+    }
     let doc = serde_json::json!({
         "schema": 1,
         "discovered_files": discovered,
@@ -1214,7 +1232,7 @@ pub fn run_warm_in(
         if let Err(e) = hilo_graph::freshness::stamp_after_warm(cwd) {
             eprintln!("warning: failed to write graph freshness state: {e}");
         }
-        write_coverage_ledger(cwd, &coverage, total_files, unique_sources.len());
+        write_coverage_ledger(cwd, &coverage, total_files, unique_sources.len(), changed);
         let _ = t_jsonl; // timing span unused on this path
         return Ok(());
     }
@@ -1293,7 +1311,7 @@ pub fn run_warm_in(
     exclusions.print();
     coverage.print();
     // DF-WARPFS-43: persist the accounting stats reconciles against.
-    write_coverage_ledger(cwd, &coverage, total_files, unique_sources.len());
+    write_coverage_ledger(cwd, &coverage, total_files, unique_sources.len(), changed);
 
     // DF-WARPFS-83: stamp the freshness ledger — what this completed warm
     // observed — so staleness checks answer against the graph as it is NOW.

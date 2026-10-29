@@ -211,6 +211,56 @@ fn changed_incremental_warm_never_warns_and_still_stamps() {
         project.ledger_head().as_deref(),
         Some(project.head().as_str())
     );
+
+    // DF-WARPFS-167: --changed observes only the new file, but coverage.json
+    // is corpus-wide. A changed warm must not replace the full ledger with a
+    // one-file snapshot or make stats report a fabricated stale census.
+    let coverage_path = project.path().join(".vfs/graph/coverage.json");
+    let before: Value =
+        serde_json::from_str(&std::fs::read_to_string(&coverage_path).unwrap()).unwrap();
+    let discovered = before
+        .get("discovered_files")
+        .and_then(Value::as_u64)
+        .unwrap();
+    assert!(discovered >= 1);
+    std::fs::write(project.path().join("src/new.rs"), "pub fn new_file() {}\n").unwrap();
+    let changed = Command::new(BIN)
+        .args(["graph", "warm", "--changed"])
+        .current_dir(project.path())
+        .env("HOME", project.home.path())
+        .output()
+        .unwrap();
+    assert!(
+        changed.status.success(),
+        "--changed warm failed: {}",
+        String::from_utf8_lossy(&changed.stderr)
+    );
+    let after: Value =
+        serde_json::from_str(&std::fs::read_to_string(&coverage_path).unwrap()).unwrap();
+    assert_eq!(
+        after.get("discovered_files").and_then(Value::as_u64),
+        Some(discovered)
+    );
+    let stats = Command::new(BIN)
+        .args(["graph", "stats"])
+        .current_dir(project.path())
+        .env("HOME", project.home.path())
+        .output()
+        .unwrap();
+    assert!(
+        stats.status.success(),
+        "stats failed: {}",
+        String::from_utf8_lossy(&stats.stderr)
+    );
+    let stats_stdout = String::from_utf8_lossy(&stats.stdout);
+    assert!(
+        !stats_stdout.contains("warm last counted 1 discovered"),
+        "incremental ledger clobbered: {stats_stdout}"
+    );
+    assert!(
+        !stats_stdout.contains("means the graph predates the last warm"),
+        "false stale census after incremental warm: {stats_stdout}"
+    );
 }
 
 #[test]
