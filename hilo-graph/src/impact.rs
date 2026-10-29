@@ -355,13 +355,19 @@ fn collect(
 }
 
 /// Collect pkg-family rows (GAP-048): edges whose `to` node is a member of
-/// the crate family — `pkg:<name>::<member>` (brace-expanded imports) or
+/// the crate family — `pkg:<name>::<member>` (brace-expanded imports),
 /// `pkg:<name>_<sibling>` (underscore companion crates such as serde_derive
-/// for serde). The SQL pattern is deliberately over-broad (`pkg:<name>%`)
-/// and the exact boundary is enforced here in Rust, because LIKE ESCAPE
-/// semantics vary across DuckDB versions and a wildcard `_` in the pattern
-/// would leak unrelated crates that merely share a name prefix (`pkg:ab`
-/// must never match a query on `pkg:a`).
+/// for serde), or `pkg:<name>.<child>` (DF-WARPFS-90-R2: dotted children of
+/// a dotted module node — the Haskell parser emits `pkg:PostgREST.Config`
+/// and `pkg:PostgREST.Config.PgVersion` verbatim, so a query on the parent
+/// module must reach its child modules' importers; Python/Java/Kotlin/Clojure
+/// emit the same dotted hierarchy). The SQL pattern is deliberately
+/// over-broad (`pkg:<name>%`) and the exact boundary is enforced here in
+/// Rust, because LIKE ESCAPE semantics vary across DuckDB versions and a
+/// wildcard `_` in the pattern would leak unrelated crates that merely share
+/// a name prefix (`pkg:ab` must never match a query on `pkg:a`; a dotted
+/// child boundary keeps `pkg:PostgREST.Config2` out of a
+/// `pkg:PostgREST.Config` query).
 fn collect_family(
     rows: impl Iterator<Item = duckdb::Result<(String, String, String, Option<String>, Option<f64>)>>,
     pkg: &str,
@@ -371,10 +377,11 @@ fn collect_family(
 ) -> GraphResult<()> {
     let member = format!("{pkg}::");
     let sibling = format!("{pkg}_");
+    let child = format!("{pkg}.");
     let child_depth = depth + 1 + kind.extra;
     for row in rows {
         let (from, to, rel, prov, conf) = row?;
-        if !to.starts_with(&member) && !to.starts_with(&sibling) {
+        if !to.starts_with(&member) && !to.starts_with(&sibling) && !to.starts_with(&child) {
             continue;
         }
         if child_depth > cx.max_depth {
@@ -498,8 +505,14 @@ pub(crate) fn compute_impact_streaming(
                     pkg_exact.push(edge);
                     return true;
                 }
-                if edge.to.starts_with(&format!("{pkg}::"))
-                    || edge.to.starts_with(&format!("{pkg}_"))
+                // DF-WARPFS-90-R2: the family forms must stay identical to
+                // collect_family — `::`-members, `_`-companions and now also
+                // dotted children (`pkg:PostgREST.Config.PgVersion` under a
+                // `pkg:PostgREST.Config` query), still anchored so a sibling
+                // prefix (`PostgREST.Config2`) can never match.
+                if edge.to.starts_with(format!("{pkg}::").as_str())
+                    || edge.to.starts_with(format!("{pkg}_").as_str())
+                    || edge.to.starts_with(format!("{pkg}.").as_str())
                 {
                     pkg_family.push(edge);
                     return true;
@@ -654,12 +667,16 @@ pub fn compute_impact_at(
         conn.prepare(r#"SELECT "from", rel, provenance, confidence FROM edges WHERE "to" = ?"#)?;
     // GAP-048: pkg-family edges — member nodes `pkg:<name>::<member>` (the
     // parser expands brace imports like `use serde::{de::Deserializer}` into
-    // one member pseudo-node per symbol) and underscore-sibling companion
+    // one member pseudo-node per symbol), underscore-sibling companion
     // crates `pkg:<name>_<sibling>` (serde_derive, serde_test — the Rust
     // companion-crate convention), which a crate re-exports into its public
-    // surface. The SQL pattern is deliberately over-broad; the exact family
-    // boundary is enforced in Rust (collect_family) so `pkg:ab` can never
-    // leak into a query on `pkg:a`.
+    // surface, and — DF-WARPFS-90-R2 — dotted children `pkg:<name>.<child>`
+    // (the Haskell parser emits `pkg:PostgREST.Config.PgVersion` verbatim;
+    // Python/Java/Kotlin/Clojure use the same dotted hierarchy). The SQL
+    // pattern is deliberately over-broad; the exact family boundary is
+    // enforced in Rust (collect_family) so `pkg:ab` can never leak into a
+    // query on `pkg:a` and `pkg:PostgREST.Config2` can never leak into a
+    // query on `pkg:PostgREST.Config`.
     let mut family_stmt = conn.prepare(
         r#"SELECT "from", "to", rel, provenance, confidence FROM edges WHERE "to" LIKE ?"#,
     )?;
@@ -886,7 +903,9 @@ pub fn compute_impact_with_external(
     let mut stmt =
         conn.prepare(r#"SELECT "from", rel, provenance, confidence FROM edges WHERE "to" = ?"#)?;
     // GAP-048: pkg-family edges — member nodes and underscore-sibling
-    // companion crates; the exact family boundary is enforced in Rust
+    // companion crates; DF-WARPFS-90-R2 adds dotted children
+    // (`pkg:PostgREST.Config.PgVersion` under a `pkg:PostgREST.Config`
+    // query); the exact family boundary is enforced in Rust
     // (collect_family), see compute_impact for the full rationale.
     let mut family_stmt = conn.prepare(
         r#"SELECT "from", "to", rel, provenance, confidence FROM edges WHERE "to" LIKE ?"#,
@@ -1595,6 +1614,300 @@ mod tests {
             via_pkg_a.iter().any(|f| f.path == main),
             "pkg:a impact must include a_derive importers, got: {via_pkg_a:?}"
         );
+    }
+
+    /// DF-WARPFS-90-R2 fixture: a PostgREST-shaped Haskell corpus with no
+    /// Cargo manifest (`.hs` files must not resolve through the crate walk,
+    /// matching how a real Haskell repo sits outside every other resolver).
+    /// Roles: one direct parent importer (`import PostgREST.Config`), one
+    /// direct qualified importer (same exact node), one direct child-module
+    /// importer (`import PostgREST.Config.PgVersion`), a sibling-prefix
+    /// importer (`PostgREST.Config2` — must never match), and a transitively
+    /// connected file that imports a direct importer but never the config
+    /// family itself. The parser edges are returned together with one raw
+    /// file→file edge (importer→module file) so the BFS has a transitive hop.
+    struct HaskellConfigFamily {
+        _dir: tempfile::TempDir,
+        edges: Vec<crate::Edge>,
+        /// The queried module's own file — the subject, never a dependent.
+        config: String,
+        /// Direct parent importer: `import PostgREST.Config`.
+        parent_importer: String,
+        /// Direct child-module importer: `import PostgREST.Config.PgVersion`.
+        child_importer: String,
+        /// Direct qualified importer: `import qualified PostgREST.Config as Cfg`.
+        qualified_importer: String,
+        /// Imports `PostgREST.Config2` — a sibling prefix that must not match.
+        sibling_importer: String,
+        /// Imports `parent_importer` only — transitively connected.
+        transitive_importer: String,
+    }
+
+    fn build_haskell_config_family() -> HaskellConfigFamily {
+        let dir = tempfile::tempdir().unwrap();
+        let write = |rel: &str, content: &str| {
+            let path = dir.path().join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, content).unwrap();
+            path.to_string_lossy().into_owned()
+        };
+        let config = write(
+            "src/PostgREST/Config.hs",
+            "module PostgREST.Config where\nconfigField :: Int\nconfigField = 1\n",
+        );
+        let _pg_version = write(
+            "src/PostgREST/Config/PgVersion.hs",
+            "module PostgREST.Config.PgVersion where\npgVersion :: Int\npgVersion = 15\n",
+        );
+        let parent_importer = write(
+            "src/App/Settings.hs",
+            "module App.Settings where\nimport PostgREST.Config\nsettings :: Int\nsettings = configField\n",
+        );
+        let child_importer = write(
+            "src/App/PgList.hs",
+            "module App.PgList where\nimport PostgREST.Config.PgVersion\nsupported :: Int\nsupported = pgVersion\n",
+        );
+        let qualified_importer = write(
+            "src/App/Db.hs",
+            "module App.Db where\nimport qualified PostgREST.Config as Cfg\ndbSetting :: Int\ndbSetting = Cfg.configField\n",
+        );
+        // Sibling module whose name merely extends the prefix: must stay out
+        // of the `PostgREST.Config` family no matter which boundary is used.
+        let sibling_importer = write(
+            "src/App/Other.hs",
+            "module App.Other where\nimport PostgREST.Config2\nother :: Int\nother = 2\n",
+        );
+        // Transitively connected only: imports a DIRECT importer, never the
+        // config family. The Haskell parser only emits pkg-node edges, so the
+        // importer→file hop is inserted raw (the shape a file-level edge has).
+        let transitive_importer = write(
+            "src/App/Routes.hs",
+            "module App.Routes where\nimport App.Settings\nroutes :: Int\nroutes = settings\n",
+        );
+
+        let parse = |path: &str| {
+            let source = std::fs::read_to_string(path).unwrap();
+            let mut parser = Parser::for_language(Language::Haskell).unwrap();
+            parser.parse_imports(path, &source).unwrap()
+        };
+        let mut edges = Vec::new();
+        for path in [
+            &config,
+            &_pg_version,
+            &parent_importer,
+            &child_importer,
+            &qualified_importer,
+            &sibling_importer,
+            &transitive_importer,
+        ] {
+            edges.extend(parse(path));
+        }
+        edges.push(crate::Edge {
+            from: transitive_importer.clone(),
+            to: parent_importer.clone(),
+            rel: "imports".into(),
+            provenance: "ast_exact".into(),
+            confidence: 1.0,
+        });
+        HaskellConfigFamily {
+            _dir: dir,
+            edges,
+            config,
+            parent_importer,
+            child_importer,
+            qualified_importer,
+            sibling_importer,
+            transitive_importer,
+        }
+    }
+
+    /// Premise guard for the fixture: the Haskell parser really emitted the
+    /// dotted child node and the sibling node, so the impact assertions below
+    /// cannot pass on an empty or wrong-shaped graph.
+    fn assert_haskell_fixture_shape(conn: &duckdb::Connection, fx: &HaskellConfigFamily) {
+        let mut stmt = conn
+            .prepare("SELECT \"to\", count(*) FROM edges GROUP BY \"to\" ORDER BY \"to\"")
+            .unwrap();
+        let counts: Vec<(String, i64)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        let to_count = |node: &str| {
+            counts
+                .iter()
+                .find(|(to, _)| to == node)
+                .map(|(_, n)| *n)
+                .unwrap_or(0)
+        };
+        assert_eq!(
+            to_count("pkg:PostgREST.Config"),
+            2,
+            "parent + qualified importers must target the exact node; edges: {counts:?}"
+        );
+        assert_eq!(
+            to_count("pkg:PostgREST.Config.PgVersion"),
+            1,
+            "the child-module import must emit the dotted node; edges: {counts:?}"
+        );
+        assert_eq!(
+            to_count("pkg:PostgREST.Config2"),
+            1,
+            "the sibling import must emit its own node; edges: {counts:?}"
+        );
+        // The raw transitive edge is a real file→file edge onto the parent.
+        let mut stmt = conn
+            .prepare(r#"SELECT count(*) FROM edges WHERE "to" = ?"#)
+            .unwrap();
+        let onto_parent: i64 = stmt.query_row([&fx.parent_importer], |r| r.get(0)).unwrap();
+        assert_eq!(onto_parent, 1, "transitive edge must target the parent");
+    }
+
+    /// DF-WARPFS-90-R2: a `pkg:PostgREST.Config` query must include every
+    /// DIRECT importer of the module — including importers of a dotted CHILD
+    /// module (`PostgREST.Config.PgVersion`), which the `::`-member and
+    /// `_`-companion family forms never captured. The boundary stays anchored:
+    /// a sibling prefix (`PostgREST.Config2`) matches none of the forms, and a
+    /// file that is only transitively connected (it imports a direct
+    /// importer) is never counted in the direct answer — the BFS reports it
+    /// as its own labeled row (`scope: file`, `depth: 2`), so a consumer can
+    /// always tell direct rows from transitive ones by the existing fields.
+    #[test]
+    fn haskell_pkg_family_impact_includes_child_modules_and_isolates_sibling_prefix() {
+        let fx = build_haskell_config_family();
+
+        let conn = duckdb::Connection::open_in_memory().unwrap();
+        insert_edges_into(&conn, &fx.edges).unwrap();
+        assert_haskell_fixture_shape(&conn, &fx);
+
+        let rows = compute_impact(&conn, "pkg:PostgREST.Config", 10).unwrap();
+
+        // Direct answer: exactly the three importers of the module or its
+        // child, every one at depth 1 (pkg-node query: no extra hop).
+        let mut direct: Vec<String> = rows
+            .iter()
+            .filter(|r| r.depth == 1)
+            .map(|r| r.path.clone())
+            .collect();
+        direct.sort();
+        let mut expected = vec![
+            fx.child_importer.clone(),
+            fx.parent_importer.clone(),
+            fx.qualified_importer.clone(),
+        ];
+        expected.sort();
+        assert_eq!(
+            direct, expected,
+            "depth-1 rows must be exactly the direct importers of the family: {rows:?}"
+        );
+
+        for r in rows.iter().filter(|r| r.depth == 1) {
+            assert_eq!(
+                r.scope, SCOPE_CRATE,
+                "pkg-query rows are crate-scoped: {r:?}"
+            );
+            assert_eq!(r.relation, "imports");
+            if r.path == fx.parent_importer || r.path == fx.qualified_importer {
+                // Matched through the exact node (parent bare, qualified with
+                // the alias stripped) — no family hop, so no `via`.
+                assert_eq!(r.via, None, "exact-node rows carry no via: {r:?}");
+            } else {
+                // The child-module row is the FAMILY match — it must name the
+                // pkg node it was matched through.
+                assert_eq!(
+                    r.via.as_deref(),
+                    Some("pkg:PostgREST.Config"),
+                    "family rows must name the pkg node they were matched through: {r:?}"
+                );
+            }
+        }
+
+        // The child-module importer is the defect: it must be a DIRECT row.
+        let child_row = rows
+            .iter()
+            .find(|r| r.path == fx.child_importer)
+            .unwrap_or_else(|| {
+                panic!("importer of PostgREST.Config.PgVersion must be a direct row: {rows:?}")
+            });
+        assert_eq!(
+            child_row.depth, 1,
+            "child-module importer is direct: {child_row:?}"
+        );
+
+        // Sibling-prefix isolation: `PostgREST.Config2` matches no family
+        // form, so its importer appears nowhere in the answer.
+        assert!(
+            !rows.iter().any(|r| r.path == fx.sibling_importer),
+            "sibling-prefix importer must not leak into the family answer: {rows:?}"
+        );
+
+        // The queried module's own file is the subject, not a dependent.
+        assert!(
+            !rows.iter().any(|r| r.path == fx.config),
+            "the subject file must not be reported as its own dependent: {rows:?}"
+        );
+
+        // Transitive expansion is allowed but must be distinguishable from
+        // the direct answer by the existing fields: deeper depth, file scope.
+        let transitive_row = rows
+            .iter()
+            .find(|r| r.path == fx.transitive_importer)
+            .expect("transitively connected importer stays a labeled BFS row");
+        assert_eq!(
+            transitive_row.depth, 2,
+            "the transitive importer is one hop beyond the direct set: {transitive_row:?}"
+        );
+        assert_eq!(transitive_row.scope, SCOPE_FILE);
+    }
+
+    /// DF-WARPFS-90-R2: the degraded streaming BFS must answer the Haskell
+    /// family identically to the cached BFS — same direct set, same
+    /// depth/scope labels, same sibling isolation.
+    #[test]
+    fn haskell_pkg_family_impact_streaming_matches_cached_family() {
+        let fx = build_haskell_config_family();
+
+        let edges = fx.edges.clone();
+        let rows = compute_impact_streaming("pkg:PostgREST.Config", 10, None, None, |visit| {
+            for edge in &edges {
+                if !visit(edge.clone()) {
+                    break;
+                }
+            }
+            Ok(())
+        })
+        .unwrap();
+
+        let mut direct: Vec<String> = rows
+            .iter()
+            .filter(|r| r.depth == 1)
+            .map(|r| r.path.clone())
+            .collect();
+        direct.sort();
+        let mut expected = vec![
+            fx.child_importer.clone(),
+            fx.parent_importer.clone(),
+            fx.qualified_importer.clone(),
+        ];
+        expected.sort();
+        assert_eq!(
+            direct, expected,
+            "streaming depth-1 rows must match the cached BFS: {rows:?}"
+        );
+        for r in rows.iter().filter(|r| r.depth == 1) {
+            assert_eq!(r.scope, SCOPE_CRATE);
+            assert_eq!(r.relation, "imports");
+        }
+        assert!(
+            !rows.iter().any(|r| r.path == fx.sibling_importer),
+            "streaming must not leak sibling-prefix importers: {rows:?}"
+        );
+        let transitive_row = rows
+            .iter()
+            .find(|r| r.path == fx.transitive_importer)
+            .expect("streaming keeps the transitive row labeled");
+        assert_eq!(transitive_row.depth, 2);
+        assert_eq!(transitive_row.scope, SCOPE_FILE);
     }
 
     /// GAP-117: the review set is the subject, its dependents, and the bounded
