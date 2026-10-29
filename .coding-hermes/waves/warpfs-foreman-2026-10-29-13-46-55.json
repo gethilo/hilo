@@ -1,0 +1,21 @@
+{
+  "tick_id": "warpfs-foreman-2026-10-29-13-46-55",
+  "project": "warpfs",
+  "mode": "serial",
+  "wave_size": 1,
+  "wave_budget": 12,
+  "base_sha": "5c46084b",
+  "tasks": [
+    {
+      "task_id": "DF-WARPFS-167",
+      "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-167",
+      "branch": "wt/DF-WARPFS-167",
+      "base_sha": "5c46084b",
+      "model": "glm-5.3-flash",
+      "provider": "zai-glm",
+      "brief": "/tmp/warpfs-DF-WARPFS-167-brief.txt",
+      "dispatch_pid": 2614103,
+      "dispatch_log": "/tmp/warpfs-DF-WARPFS-167-worker.log"
+    }
+  ]
+}
