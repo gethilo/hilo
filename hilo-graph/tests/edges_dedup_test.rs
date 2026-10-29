@@ -156,3 +156,61 @@ fn edges_dedup_gc_removes_duplicates_from_existing_file() {
     assert_eq!((b2, a2, r2), (2, 2, 0), "second gc is a no-op");
     assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 2);
 }
+
+/// DF-WARPFS-62 acceptance: a file that arrives ALREADY polluted (a
+/// pre-REV-WARPFS-8 writer, a stale `hilo` on PATH, or the union of two
+/// branch inventories at a git merge) is healed by a re-parse, not merely
+/// spared further growth. Dedup-on-append alone can never fix that shape —
+/// it only inspects what it is about to ADD.
+#[test]
+fn edges_dedup_reparse_heals_pre_seeded_duplicate_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("edges.jsonl");
+    let imports = edge("src/main.py", "src/helper.py", "imports", "ast_exact");
+    let tests = edge("tests/test_main.py", "src/main.py", "tests", "heuristic");
+
+    // Premise: the x3 accumulation shape — three copies of one identity next
+    // to one distinct row (4 rows, 3 unique).
+    append_edges(&path, &[imports.clone(), imports.clone(), imports.clone()]).unwrap();
+    append_edges(&path, std::slice::from_ref(&tests)).unwrap();
+    assert_eq!(duplicate_groups(&path), 1, "premise: file is duplicated");
+    assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 4);
+
+    // A warm pass over the same corpus derives both edges again.
+    let appended = append_edges_deduped(&path, &[imports, tests]).unwrap();
+    assert_eq!(appended, 0, "a re-parse of unchanged content adds nothing");
+    assert_eq!(duplicate_groups(&path), 0, "re-parse must heal duplicates");
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap().lines().count(),
+        2,
+        "line count must equal the unique edge count"
+    );
+}
+
+/// Three consecutive re-parse passes over a polluted inventory converge on
+/// the first pass and then hold exactly constant — the acceptance command
+/// (`sort edges.jsonl | uniq -d`) stays empty and `wc -l` stops moving.
+#[test]
+fn edges_dedup_three_passes_over_polluted_file_converge_and_hold() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("edges.jsonl");
+    let row = edge("src/app.rs", "src/lib.rs", "imports", "ast_exact");
+    // Five copies: the multiplicity-5 shape seen in a real tracked inventory.
+    append_edges(
+        &path,
+        &[row.clone(), row.clone(), row.clone(), row.clone(), row],
+    )
+    .unwrap();
+    let polluted = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(polluted.lines().count(), 5);
+    assert_eq!(duplicate_groups(&path), 1);
+
+    let batch = vec![edge("src/app.rs", "src/lib.rs", "imports", "ast_exact")];
+    let mut counts = Vec::new();
+    for _ in 0..3 {
+        append_edges_deduped(&path, &batch).unwrap();
+        counts.push(std::fs::read_to_string(&path).unwrap().lines().count());
+    }
+    assert_eq!(counts, vec![1, 1, 1], "count is stable after the heal");
+    assert_eq!(duplicate_groups(&path), 0, "`uniq -d` must be empty");
+}

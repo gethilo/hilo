@@ -1134,6 +1134,24 @@ pub fn run_warm_in(
         println!("Dropped {dangling_dropped} edge(s) whose file endpoint no longer exists");
     }
 
+    // DF-WARPFS-62: duplicate rows are reconciled by the WRITER, not by a
+    // separate manual pass. `append_edges_deduped` heals on every append, but
+    // a warm that finds a full parse cache returns before that call — so the
+    // classic polluted inventory (written by a pre-REV-WARPFS-8 binary, a
+    // stale `hilo` on PATH, or the union of two branch inventories at a
+    // merge) would keep its duplicates through every "graph unchanged" run.
+    // Compact here, BEFORE the fast-path decision, and force the slow path
+    // when rows were removed so the DuckDB reconcile checkpoint is
+    // re-recorded against the compacted file instead of a vanished size.
+    let (gc_before, gc_after, gc_removed) = hilo_metadata::inventory::gc_edges(&edges_jsonl)
+        .context("failed to compact duplicate rows in edges.jsonl")?;
+    let healed = gc_removed > 0;
+    if healed {
+        println!(
+            "Compacted {gc_removed} duplicate edge row(s) in edges.jsonl ({gc_before} -> {gc_after} rows)"
+        );
+    }
+
     // DF-WARPFS-170, half 2: reconcile the append-only inventory with the tree
     // BEFORE deciding whether the graph changed. `edges.jsonl` never forgets a
     // row on its own, so a DELETED file — or an import deleted from a file that
@@ -1205,6 +1223,7 @@ pub fn run_warm_in(
     if full_cache_hit
         && db_verified
         && prune.is_empty()
+        && !healed
         && count_new_service_edges(&edges_jsonl, &derived_edges) == 0
     {
         if std::env::var("HILO_WARM_TIMING").is_ok() {
@@ -1638,11 +1657,51 @@ fn crate_scope_note(results: &[hilo_graph::ImpactFile], path: &str) -> Option<St
 }
 
 /// Count non-empty lines in `.vfs/graph/edges.jsonl` (the raw edge records
-/// before DuckDB dedup). `None` when the file doesn't exist (JIT-only graph).
-fn raw_edges_jsonl_count(cwd: &std::path::Path) -> Option<usize> {
+/// before DuckDB dedup) together with the number of DISTINCT edge identities
+/// among them. `None` when the file doesn't exist (JIT-only graph).
+///
+/// DF-WARPFS-62: the two numbers used to be one, and a gap between them was
+/// explained away as DuckDB collapsing multi-provenance rows. That
+/// explanation is wrong — the unique index covers `provenance` too — so a
+/// raw/distinct gap means the INVENTORY carries duplicate rows. Returning
+/// both lets `stats` name that instead of hiding it.
+fn raw_edges_jsonl_count(cwd: &std::path::Path) -> Option<(usize, usize)> {
     let path = cwd.join(".vfs").join("graph").join("edges.jsonl");
     let content = std::fs::read_to_string(path).ok()?;
-    Some(content.lines().filter(|l| !l.trim().is_empty()).count())
+    let mut rows = 0usize;
+    let mut identities: std::collections::HashSet<hilo_metadata::inventory::EdgeKey> =
+        std::collections::HashSet::new();
+    let mut malformed = 0usize;
+    for line in content.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        rows += 1;
+        match serde_json::from_str::<Edge>(line) {
+            Ok(edge) => {
+                identities.insert(hilo_metadata::inventory::edge_key(&edge));
+            }
+            // An unparseable row has no identity to collide on, so it is
+            // always its own row (it is preserved, never counted as a dup).
+            Err(_) => malformed += 1,
+        }
+    }
+    Some((rows, identities.len() + malformed))
+}
+
+/// DF-WARPFS-62: say why `raw` exceeds the distinct count, and what fixes
+/// it. `None` when the inventory is clean.
+fn duplicate_rows_note(raw: usize, distinct: usize) -> Option<String> {
+    if raw <= distinct {
+        return None;
+    }
+    Some(format!(
+        "note: {} duplicate row(s) in edges.jsonl ({} unique identities across {} rows) — \
+         `hilo graph gc` (or the next `hilo graph warm`) compacts them",
+        raw - distinct,
+        distinct,
+        raw
+    ))
 }
 
 /// DF-WARPFS-55: find the nearest project graph by walking up from `cwd`.
@@ -1831,14 +1890,21 @@ pub fn run_stats(limit: usize) -> Result<()> {
         return Ok(());
     }
 
-    // GAP-038: DuckDB dedupes multi-provenance edges, so the distinct edge
-    // count can be lower than the raw edges.jsonl line count — always
-    // surface both so the delta is explained instead of looking like a bug.
+    // GAP-038: always surface the raw edges.jsonl line count next to the
+    // distinct count, and DF-WARPFS-62: when the two disagree, say it is
+    // DUPLICATE ROWS in the inventory (never "DuckDB deduped something" — the
+    // unique index covers provenance, so distinct rows and distinct
+    // identities agree on any clean file).
     match raw_edges_jsonl_count(&cwd) {
-        Some(raw) => println!(
-            "Total edges: {} distinct / {} raw (edges.jsonl)",
-            stats.total_edges, raw
-        ),
+        Some((raw, distinct_rows)) => {
+            println!(
+                "Total edges: {} distinct / {} raw (edges.jsonl)",
+                stats.total_edges, raw
+            );
+            if let Some(note) = duplicate_rows_note(raw, distinct_rows) {
+                println!("  {note}");
+            }
+        }
         None => println!("Total edges: {}", stats.total_edges),
     }
     println!("Total files: {}", stats.total_files);
@@ -5305,6 +5371,92 @@ mod tests {
                 .exists(),
             "last-warm marker is a warm cache artifact"
         );
+    }
+
+    /// DF-WARPFS-62 acceptance: the tracked inventory can arrive ALREADY
+    /// duplicated — written by a pre-REV-WARPFS-8 binary, by a stale `hilo` on
+    /// PATH, or unioned at a git merge of two branch inventories. Dedup on
+    /// append cannot fix that (it only inspects what it ADDS), so re-warm must
+    /// COMPACT. The hard case is the fully-cached warm, which returns before
+    /// the append ever runs: pre-fix it reported "graph unchanged" and left
+    /// the duplicates in the tracked file forever.
+    #[test]
+    fn warm_compacts_pre_duplicated_edges_jsonl_even_when_fully_cached() {
+        let home = TempDir::new().unwrap();
+        let project = TempDir::new().unwrap();
+        write_importing_fixture(project.path());
+
+        warm_project_fixture(project.path(), home.path(), &no_manifest).unwrap();
+        let clean = edges_jsonl_lines(project.path());
+        assert!(
+            !clean.is_empty(),
+            "fixture must produce edges, otherwise the premise is vacuous"
+        );
+
+        // The x3 accumulation shape: every row three times over.
+        let edges = project
+            .path()
+            .join(".vfs")
+            .join("graph")
+            .join("edges.jsonl");
+        let mut polluted = String::new();
+        for _ in 0..3 {
+            for line in &clean {
+                polluted.push_str(line);
+                polluted.push('\n');
+            }
+        }
+        std::fs::write(&edges, polluted).unwrap();
+        assert_eq!(
+            edges_jsonl_lines(project.path()).len(),
+            clean.len() * 3,
+            "premise: the inventory is duplicated"
+        );
+
+        // Fully-cached re-warm (the parse cache is intact): this is the path
+        // that used to short-circuit to "graph unchanged" with the file
+        // untouched.
+        warm_project_fixture(project.path(), home.path(), &no_manifest).unwrap();
+
+        let healed = edges_jsonl_lines(project.path());
+        assert_eq!(
+            healed, clean,
+            "re-warm must compact the duplicates back to the unique edge set"
+        );
+        assert!(
+            healed.windows(2).all(|w| w[0] != w[1]),
+            "`sort edges.jsonl | uniq -d` must be empty: {healed:?}"
+        );
+
+        // `graph stats` reports distinct / raw from these two counts, so with
+        // the file healed the two numbers agree with each other and with the
+        // line count.
+        assert_eq!(
+            raw_edges_jsonl_count(project.path()),
+            Some((healed.len(), healed.len())),
+            "stats must see distinct == raw == line count after the heal"
+        );
+
+        // Idempotent: a second warm changes nothing.
+        warm_project_fixture(project.path(), home.path(), &no_manifest).unwrap();
+        assert_eq!(
+            edges_jsonl_lines(project.path()),
+            healed,
+            "the healed inventory must be stable across re-warms"
+        );
+    }
+
+    /// DF-WARPFS-62: the duplicate note is what keeps `Total edges: X
+    /// distinct / Y raw` from reading as an unexplained delta — it fires only
+    /// when the inventory really carries duplicate rows.
+    #[test]
+    fn duplicate_rows_note_fires_only_on_a_duplicate_gap() {
+        assert_eq!(duplicate_rows_note(4, 4), None, "clean file says nothing");
+        assert_eq!(duplicate_rows_note(3, 4), None, "defensive: raw < distinct");
+
+        let note = duplicate_rows_note(10, 7).expect("a gap must be explained");
+        assert!(note.contains("3 duplicate row(s)"), "{note}");
+        assert!(note.contains("hilo graph gc"), "{note}");
     }
 
     // ======================================================================

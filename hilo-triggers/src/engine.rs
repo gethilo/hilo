@@ -2018,6 +2018,90 @@ mod tests {
         );
     }
 
+    /// DF-WARPFS-62 acceptance: the trigger's cold-cache path (a restarted
+    /// mount, or `hilo graph warm` after the parse cache is gone) re-emits the
+    /// file's FULL edge set on every event. Three such firings must leave the
+    /// inventory line count constant with no duplicate rows — and a file that
+    /// arrives already-duplicated (a pre-REV-WARPFS-8 writer, a stale binary,
+    /// a merge union) must be HEALED by the append, not merely spared growth.
+    #[test]
+    fn test_parse_diff_repeated_cold_cache_parse_keeps_edge_inventory_unique() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let go_file = dir.path().join("main.go");
+        std::fs::write(&go_file, "package main\nimport \"fmt\"\n").unwrap();
+        let edges_path = dir.path().join(".vfs/graph/edges.jsonl");
+        let cfg = parse_diff_cfg(None);
+        let event = FileEvent {
+            path: go_file.clone(),
+            event_type: EventType::Write,
+            timestamp: 0,
+        };
+
+        let lines = |path: &std::path::Path| -> Vec<String> {
+            std::fs::read_to_string(path)
+                .unwrap_or_default()
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .map(str::to_string)
+                .collect()
+        };
+
+        // Three "trigger just restarted" firings: a FRESH cache each time, so
+        // the AST-cache diff cannot suppress anything — only the writer can.
+        let mut counts = Vec::new();
+        for _ in 0..3 {
+            let mut cold_cache = HashMap::new();
+            parse_and_diff_sync(
+                &cfg,
+                &event,
+                &mut cold_cache,
+                None,
+                &Some(dir.path().to_path_buf()),
+            );
+            counts.push(lines(&edges_path).len());
+        }
+        assert!(counts[0] > 0, "premise: the file yields import edges");
+        assert_eq!(
+            counts,
+            vec![counts[0], counts[0], counts[0]],
+            "cold-cache re-parses must not grow the inventory"
+        );
+
+        // Premise 2: the shape the fix must REPAIR, not just avoid creating —
+        // duplicate every existing row, then fire once more.
+        let first_pass = lines(&edges_path);
+        let mut polluted = String::new();
+        for _ in 0..2 {
+            for line in &first_pass {
+                polluted.push_str(line);
+                polluted.push('\n');
+            }
+        }
+        std::fs::write(&edges_path, polluted).unwrap();
+
+        let mut cold_cache = HashMap::new();
+        parse_and_diff_sync(
+            &cfg,
+            &event,
+            &mut cold_cache,
+            None,
+            &Some(dir.path().to_path_buf()),
+        );
+
+        let mut healed = lines(&edges_path);
+        let rows = healed.len();
+        healed.sort();
+        assert!(
+            healed.windows(2).all(|w| w[0] != w[1]),
+            "`sort edges.jsonl | uniq -d` must be empty after the heal: {healed:?}"
+        );
+        assert_eq!(
+            rows,
+            first_pass.len(),
+            "a trigger re-parse must heal the inventory back to its unique edge set"
+        );
+    }
+
     #[test]
     fn test_parse_diff_changed_content_delta_edges() {
         let dir = tempfile::TempDir::new().unwrap();

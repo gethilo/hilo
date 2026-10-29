@@ -235,9 +235,9 @@ pub fn append_edges(edges_jsonl: &Path, edges: &[Edge]) -> Result<(), MetadataEr
 
 /// Append only edges that don't already exist in the file.
 ///
-/// Reads existing edges from the file, deduplicates by `(from, to, rel)`
-/// tuple, and appends only genuinely new edges. Returns the count of
-/// actually-appended edges (0 if all were duplicates).
+/// Reads existing edges from the file, deduplicates by `(from, to, rel,
+/// provenance)` tuple, and appends only genuinely new edges. Returns the
+/// count of actually-appended edges (0 if all were duplicates).
 ///
 /// REV-WARPFS-8: the dedup set also grows with each accepted edge, so
 /// duplicates WITHIN one batch collapse to their first occurrence (the
@@ -246,29 +246,43 @@ pub fn append_edges(edges_jsonl: &Path, edges: &[Edge]) -> Result<(), MetadataEr
 /// read-filter-append cycle runs under the `<edges>.jsonl.lock` advisory
 /// flock, so concurrent writers (warm, triggers, `graph gc`) serialize
 /// instead of interleaving.
+///
+/// DF-WARPFS-62: filtering on append is only half the invariant. A file that
+/// is ALREADY duplicated — written by a pre-REV-WARPFS-8 binary, by a stale
+/// `hilo` on PATH, or unioned at a git merge of two branch inventories —
+/// never heals, because dedup-on-append only inspects what it is about to
+/// ADD. So this writer is an upsert, not a blind append: when the scan finds
+/// duplicate rows it rewrites the file atomically (first occurrence of each
+/// identity wins, surviving rows keep their file order, malformed rows are
+/// preserved verbatim) with the new edges appended in the same pass. A clean
+/// file still takes the append path, so its bytes only grow at the tail.
 pub fn append_edges_deduped(edges_jsonl: &Path, edges: &[Edge]) -> Result<usize, MetadataError> {
     with_edges_lock(edges_jsonl, || {
-        // Read existing edges to build a dedup set.
-        let mut seen: std::collections::HashSet<EdgeKey> = std::collections::HashSet::new();
-        if edges_jsonl.exists() {
-            let contents = fs::read_to_string(edges_jsonl)?;
-            for line in contents.lines() {
-                if line.trim().is_empty() {
-                    continue;
-                }
-                if let Ok(edge) = serde_json::from_str::<Edge>(line) {
-                    seen.insert(edge_key(&edge));
-                }
-            }
-        }
+        // Read existing edges to build a dedup set (and, if the file is
+        // already polluted, the surviving rows a heal rewrite must carry).
+        let contents = if edges_jsonl.exists() {
+            fs::read_to_string(edges_jsonl)?
+        } else {
+            String::new()
+        };
+        let mut scan = scan_edge_rows(&contents);
 
         // Filter to genuinely new edges, growing the set as we accept so
         // an intra-batch duplicate is skipped too.
         let mut new_edges: Vec<&Edge> = Vec::with_capacity(edges.len());
         for e in edges {
-            if seen.insert(edge_key(e)) {
+            if scan.seen.insert(edge_key(e)) {
                 new_edges.push(e);
             }
+        }
+
+        // DF-WARPFS-62: heal first. The rewrite already carries every
+        // surviving row, so the new edges ride along in the same atomic
+        // swap — a polluted inventory converges to unique in ONE pass
+        // instead of keeping its duplicates until someone runs `graph gc`.
+        if scan.duplicates > 0 {
+            rewrite_edge_rows(edges_jsonl, &scan.kept, &scan.malformed, &new_edges)?;
+            return Ok(new_edges.len());
         }
 
         if new_edges.is_empty() {
@@ -291,6 +305,87 @@ pub fn append_edges_deduped(edges_jsonl: &Path, edges: &[Edge]) -> Result<usize,
         )?;
         Ok(new_edges.len())
     })
+}
+
+/// One pass over an `edges.jsonl` body, as both the append filter and the
+/// compaction (`gc_edges`) need it. Row order is preserved: `kept` holds the
+/// first occurrence of every parseable identity in file order, `malformed`
+/// holds unparseable rows in file order (a rewrite must carry them through
+/// verbatim — dropping them would be a lossy rewrite hiding a different
+/// problem).
+struct EdgeRowScan<'a> {
+    kept: Vec<&'a str>,
+    malformed: Vec<&'a str>,
+    /// Identity of every parseable row.
+    seen: std::collections::HashSet<EdgeKey>,
+    /// Non-blank rows read.
+    rows: usize,
+    /// Parseable rows skipped because their identity was already seen.
+    duplicates: usize,
+}
+
+fn scan_edge_rows(contents: &str) -> EdgeRowScan<'_> {
+    let mut kept: Vec<&str> = Vec::new();
+    let mut malformed: Vec<&str> = Vec::new();
+    let mut seen: std::collections::HashSet<EdgeKey> = std::collections::HashSet::new();
+    let mut rows: usize = 0;
+    let mut duplicates: usize = 0;
+    for line in contents.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        rows += 1;
+        match serde_json::from_str::<Edge>(line) {
+            Ok(edge) => {
+                if seen.insert(edge_key(&edge)) {
+                    kept.push(line);
+                } else {
+                    duplicates += 1;
+                }
+            }
+            Err(_) => malformed.push(line),
+        }
+    }
+    EdgeRowScan {
+        kept,
+        malformed,
+        seen,
+        rows,
+        duplicates,
+    }
+}
+
+/// Atomically replace `edges_jsonl` with `kept` + `malformed` + `new_edges`
+/// (serialized) via a sibling temp file and a rename — a reader never sees a
+/// torn file, and a crash leaves the original intact. Same filesystem =>
+/// atomic rename. Callers hold the edges lock.
+fn rewrite_edge_rows(
+    edges_jsonl: &Path,
+    kept: &[&str],
+    malformed: &[&str],
+    new_edges: &[&Edge],
+) -> Result<(), MetadataError> {
+    if let Some(parent) = edges_jsonl.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let tmp_path = edges_jsonl.with_extension("jsonl.gc-tmp");
+    {
+        let mut tmp = fs::File::create(&tmp_path)?;
+        for line in kept {
+            writeln!(tmp, "{line}")?;
+        }
+        for line in malformed {
+            writeln!(tmp, "{line}")?;
+        }
+        for edge in new_edges {
+            serde_json::to_writer(&mut tmp, edge)?;
+            tmp.write_all(b"\n")?;
+        }
+        tmp.flush()?;
+        tmp.sync_all()?;
+    }
+    fs::rename(&tmp_path, edges_jsonl)?;
+    Ok(())
 }
 
 /// Remove exact-duplicate rows from `edges.jsonl` (REV-WARPFS-8).
@@ -320,45 +415,15 @@ pub fn gc_edges(edges_jsonl: &Path) -> Result<(usize, usize, usize), MetadataErr
             return Ok((0, 0, 0));
         }
         let contents = fs::read_to_string(edges_jsonl)?;
-        let mut seen: std::collections::HashSet<EdgeKey> = std::collections::HashSet::new();
-        let mut kept: Vec<String> = Vec::new();
-        let mut malformed: Vec<&str> = Vec::new();
-        let mut rows_before: usize = 0;
-        for line in contents.lines() {
-            if line.trim().is_empty() {
-                continue;
-            }
-            rows_before += 1;
-            match serde_json::from_str::<Edge>(line) {
-                Ok(edge) => {
-                    if seen.insert(edge_key(&edge)) {
-                        kept.push(line.to_string());
-                    }
-                }
-                Err(_) => malformed.push(line),
-            }
+        // Same scan the append path heals with, so a file that is clean by
+        // this pass stays clean under appends, and vice versa.
+        let scan = scan_edge_rows(&contents);
+        let rows_before = scan.rows;
+        if scan.duplicates == 0 {
+            return Ok((rows_before, rows_before, 0));
         }
-        let rows_after = kept.len() + malformed.len();
-        let removed = rows_before - rows_after;
-        if removed == 0 {
-            return Ok((rows_before, rows_after, 0));
-        }
-        // Atomic swap: write the compacted file next to the original, then
-        // rename over it. Same filesystem => atomic rename.
-        let tmp_path = edges_jsonl.with_extension("jsonl.gc-tmp");
-        {
-            let mut tmp = fs::File::create(&tmp_path)?;
-            for line in kept.iter() {
-                writeln!(tmp, "{line}")?;
-            }
-            for line in malformed.iter() {
-                writeln!(tmp, "{line}")?;
-            }
-            tmp.flush()?;
-            tmp.sync_all()?;
-        }
-        fs::rename(&tmp_path, edges_jsonl)?;
-        Ok((rows_before, rows_after, removed))
+        rewrite_edge_rows(edges_jsonl, &scan.kept, &scan.malformed, &[])?;
+        Ok((rows_before, rows_before - scan.duplicates, scan.duplicates))
     })
 }
 
@@ -664,5 +729,142 @@ mod tests {
             "malformed line must survive gc: {out}"
         );
         assert_eq!(out.lines().count(), 2);
+    }
+
+    // ── DF-WARPFS-62: the append path HEALS, it does not just filter ──
+
+    fn e(from: &str, to: &str, rel: &str, prov: &str) -> Edge {
+        Edge {
+            from: from.into(),
+            to: to.into(),
+            rel: rel.into(),
+            provenance: prov.into(),
+            confidence: 1.0,
+        }
+    }
+
+    /// Premise the pre-fix writer could not fix: three copies of one identity
+    /// already on disk. A re-parse with NOTHING new must still compact them —
+    /// dedup-on-append alone leaves the file polluted forever.
+    #[test]
+    fn append_deduped_heals_preexisting_duplicates_with_nothing_new() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("edges.jsonl");
+        let dup = e("a.py", "b.py", "imports", "ast_exact");
+        append_edges(&path, &[dup.clone(), dup.clone(), dup.clone()]).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap().lines().count(),
+            3,
+            "premise: the inventory is duplicated"
+        );
+
+        assert_eq!(
+            append_edges_deduped(&path, std::slice::from_ref(&dup)).unwrap(),
+            0,
+            "nothing new to append"
+        );
+        let out = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            out.lines().count(),
+            1,
+            "heal must collapse to one row: {out}"
+        );
+        assert_eq!(out, format!("{}\n", serde_json::to_string(&dup).unwrap()));
+    }
+
+    /// The heal and the append are one atomic pass: surviving rows keep their
+    /// order, the new edge lands at the tail, and the return value still
+    /// reports only the genuinely-new count.
+    #[test]
+    fn append_deduped_heals_duplicates_and_appends_new_edges_together() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("edges.jsonl");
+        let old = e("a.py", "b.py", "imports", "ast_exact");
+        let fresh = e("c.py", "d.py", "imports", "ast_exact");
+        append_edges(&path, &[old.clone(), old.clone()]).unwrap();
+
+        assert_eq!(
+            append_edges_deduped(&path, std::slice::from_ref(&fresh)).unwrap(),
+            1
+        );
+        let out = std::fs::read_to_string(&path).unwrap();
+        let rows: Vec<&str> = out.lines().collect();
+        assert_eq!(rows.len(), 2, "one surviving row + one new row: {out}");
+        assert_eq!(rows[0], serde_json::to_string(&old).unwrap());
+        assert_eq!(rows[1], serde_json::to_string(&fresh).unwrap());
+    }
+
+    /// Malformed rows are carried through a heal verbatim — compaction must
+    /// never silently drop an unparseable line.
+    #[test]
+    fn append_deduped_heal_preserves_malformed_rows() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("edges.jsonl");
+        let dup = e("a.py", "b.py", "imports", "ast_exact");
+        append_edges(&path, &[dup.clone(), dup]).unwrap();
+        let mut contents = std::fs::read_to_string(&path).unwrap();
+        contents.push_str("NOT JSON AT ALL\n");
+        std::fs::write(&path, &contents).unwrap();
+
+        let fresh = e("c.py", "d.py", "imports", "ast_exact");
+        assert_eq!(
+            append_edges_deduped(&path, std::slice::from_ref(&fresh)).unwrap(),
+            1
+        );
+        let out = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            out.contains("NOT JSON AT ALL"),
+            "malformed row must survive the heal: {out}"
+        );
+        assert_eq!(out.lines().count(), 3, "kept + malformed + new: {out}");
+        // and the heal is now complete: nothing left for gc to remove.
+        assert_eq!(gc_edges(&path).unwrap(), (3, 3, 0));
+    }
+
+    /// A heal is one-shot: the second append takes the append path and leaves
+    /// the compacted bytes untouched (idempotent, no rewrite churn).
+    #[test]
+    fn append_deduped_heal_is_idempotent_and_stops_rewriting() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("edges.jsonl");
+        let dup = e("a.py", "b.py", "imports", "ast_exact");
+        append_edges(&path, &[dup.clone(), dup.clone()]).unwrap();
+
+        assert_eq!(
+            append_edges_deduped(&path, std::slice::from_ref(&dup)).unwrap(),
+            0
+        );
+        let healed = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(healed.lines().count(), 1);
+
+        assert_eq!(append_edges_deduped(&path, &[dup]).unwrap(), 0);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            healed,
+            "a clean file must be left byte-identical"
+        );
+    }
+
+    /// The clean path stays a TRUE append: existing bytes are untouched and
+    /// the new row only grows the tail (no rewrite churn in a tracked file).
+    #[test]
+    fn append_deduped_clean_file_only_grows_at_the_tail() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("edges.jsonl");
+        let first = e("a.py", "b.py", "imports", "ast_exact");
+        append_edges(&path, std::slice::from_ref(&first)).unwrap();
+        let before = std::fs::read_to_string(&path).unwrap();
+
+        let second = e("c.py", "d.py", "imports", "ast_exact");
+        assert_eq!(
+            append_edges_deduped(&path, std::slice::from_ref(&second)).unwrap(),
+            1
+        );
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            after.starts_with(&before),
+            "a clean inventory must be appended to, never rewritten: {after}"
+        );
+        assert_eq!(after.lines().count(), 2);
     }
 }
