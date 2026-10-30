@@ -195,9 +195,31 @@ pub fn stamp_after_warm(project_dir: &Path) -> std::io::Result<()> {
 mod tests {
     use super::*;
 
+    /// A tempdir guaranteed to sit outside any git repository.
+    ///
+    /// `tempfile::tempdir()` follows TMPDIR, which can live inside a repo
+    /// (e.g. an agent scratch dir under a home meta-repo) and would make
+    /// "outside repo" fixtures observe that repository's HEAD.
+    fn outside_repo_tempdir() -> tempfile::TempDir {
+        let mut roots = vec![std::env::temp_dir()];
+        roots.push(std::path::PathBuf::from("/var/tmp"));
+        roots.push(std::path::PathBuf::from("/tmp"));
+        for base in &roots {
+            if let Ok(dir) = tempfile::tempdir_in(base) {
+                if git_head(dir.path()).is_none() {
+                    return dir;
+                }
+            }
+        }
+        panic!(
+            "no temp root outside a git repository (TMPDIR contamination: {:?})",
+            std::env::temp_dir()
+        );
+    }
+
     /// A project dir with `.vfs/graph/` (no git — plain fixture).
     fn plain_project() -> tempfile::TempDir {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = outside_repo_tempdir();
         std::fs::create_dir_all(dir.path().join(".vfs").join("graph")).unwrap();
         dir
     }
@@ -282,7 +304,7 @@ mod tests {
 
     #[test]
     fn git_head_none_outside_repo() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = outside_repo_tempdir();
         assert_eq!(git_head(dir.path()), None);
     }
 
