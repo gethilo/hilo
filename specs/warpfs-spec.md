@@ -88,7 +88,7 @@ no `rmcp` (or any other MCP framework) dependency.
 
 | Surface | Technology | For |
 |---|---|---|
-| **MCP protocol** | stdio/SSE JSON-RPC | Agents talk to the VFS |
+| **MCP protocol** | JSON-RPC over stdio (SSE **NOT IMPLEMENTED**) | Agents talk to the VFS |
 | **Wasm plugins** | extism + wasmtime | Custom hooks, new edge types, new triggers — **NOT IMPLEMENTED (DF-WARPFS-59): declared hooks never fire** |
 | **UniFFI bindings** | Generated from `.udl` | Go/Python/Kotlin programs calling VFS functions |
 
@@ -124,7 +124,7 @@ interfaces:
     enabled: true
   mcp:
     enabled: true
-    transport: stdio          # or: sse
+    transport: stdio          # informational only — MCP is stdio-only (SSE NOT IMPLEMENTED); never read
     port: 8766
   golib:
     enabled: false
@@ -666,33 +666,57 @@ Rules defined in the manifest as SQL queries. Invoked via MCP as `vfs_rule_check
 
 ## 11. MCP Server
 
-Served by the same binary. `hilo serve --mcp` starts the MCP server (stdio or SSE transport).
+Served by the same binary. The MCP transport is **stdio only**: `hilo serve --mcp`
+speaks hand-written JSON-RPC (one object per line) over stdin/stdout. **SSE is NOT
+IMPLEMENTED** — no code path speaks SSE, and `interfaces.mcp.transport` is accepted by
+the manifest but never read.
+
+`hilo serve --http` is a separate, non-MCP surface. It binds `interfaces.mcp.port`
+(default 8766) and serves exactly `GET /health` and `GET /metrics`; every other route
+answers `404` naming the stdio transport. Both modes can run in one process
+(`hilo serve --mcp --http`).
 
 ### 11.1 Complete Tool Set
 
+Every tool takes a JSON **object** as `arguments`; `?` marks an optional property.
+Signatures and response shapes below are the ones the server actually serves
+(`hilo-mcp/src/tools/mod.rs`); a required property is enforced server-side.
+
 ```
 File Metadata:
-  vfs_get_metadata(path, keys?)         → {path, xattrs, size, mtime, hash, backend}
-  vfs_set_metadata(path, key, value)    → {success, previous_value?}
+  vfs_get_metadata(path, keys?)         → {path, size, mtime, backend, hash, xattrs}
+  vfs_set_metadata(path, key, value)    → {success, path, key, value, previous_value}
 
 Graph Queries:
-  vfs_graph_related(path, relations?, max_depth?) → {files: [{path, relation, depth}]}
-  vfs_graph_impact(path, max_depth?)    → {dependents: [{path, relation, depth}]}
-  vfs_graph_module(module)              → {files, edges_count, test_coverage_pct}
-  vfs_graph_stats()                     → {total_files, total_edges, most_connected, orphans}
-  vfs_graph_untested()                  → {files: [path]}
+  vfs_graph_related(path, relation?, direction?) → [ {from, to, relation, scope, provenance, confidence} ]
+                                          (a BARE JSON array — there is no {files:…} wrapper)
+  vfs_graph_impact(path, max_depth?)    → {dependents: [...], review_set: [...], total, max_depth_reached}
+  vfs_graph_module(module_name)         → {module, files: [path], edges_count, test_coverage_pct}
+  vfs_graph_stats()                     → {total_files, total_edges, most_connected, orphans, edge_types}
+  vfs_graph_untested()                  → {files: [path], total}
+  vfs_graph_understand(task, budget?, resolution?) → {text, files, tokens_estimate, anchors}
+  vfs_graph_search(query, limit?)       → {results, total}
+  vfs_graph_audit(path?)                → {schema, root, scanned_files, public_symbols, entrypoints,
+                                           buckets: {unreachable, unlinked, ok}, unknown, census, symbols, rules}
 
 Virtual Directory:
-  vfs_list_directory(path)              → {entries: [{name, type, backend?, size?, virtual}]}
-  vfs_resolve_path(path)                → {real_path, backend, cached, sync_status}
+  vfs_list_directory(path)              → {entries: [{name, type, backend?, size?, virtual}], total}
+  vfs_resolve_path(path)                → {real_path, backend, cached, sync_status, remote_url}
 
 Backend Operations:
-  vfs_backend_status(path)              → {backend, cache_hit, cache_path, remote_url, last_synced}
-  vfs_sync_backend(path)                → {synced_files, errors}
+  vfs_backend_status(path)              → {backend, cache_hit, cache_path, remote_url, last_synced, managed}
+  vfs_sync_backend(path)                → {synced_files, errors, skipped_ignored}   (ignored / non-synced
+                                          ephemeral paths only; any other path is a JSON-RPC protocol error
+                                          directing the caller to `hilo backend sync`)
 
 Rules:
-  vfs_rule_check(rule_name)             → [{result}]
-  vfs_rule_list()                       → [{name, description}]
+  vfs_rule_check(name)                  → {rule, description, matches, total}   ({rule, error} on invalid SQL)
+  vfs_rule_list()                       → {rules: [{name, description, query}], total}
+
+Workspace (ephemeral catalog):
+  vfs_workspace_ephemeral(path?)        → {entries: [{path, size, reason}], total_bytes}
+  vfs_workspace_wipe(path?, dry_run?)   → {removed: [{path, bytes}], removed_count, removed_truncated,
+                                           freed_bytes, dry_run}
 ```
 
 ---
@@ -1012,11 +1036,15 @@ Response:
 
 ```
 Request:
-{"method":"tools/call","params":{"name":"vfs_graph_related","arguments":{"path":"src/login.go","relations":["imports"],"max_depth":3}}}
+{"method":"tools/call","params":{"name":"vfs_graph_related","arguments":{"path":"src/login.go","relation":"imports","direction":"forward"}}}
 
-Response:
-{"content":[{"type":"text","text":"{\"files\":[{\"path\":\"src/types.go\",\"relation\":\"imports\",\"depth\":1},{\"path\":\"pkg/utils.go\",\"relation\":\"imports\",\"depth\":1}],\"total\":2}"}]}
+Response (a bare array — no wrapper object):
+{"content":[{"type":"text","text":"[{\"from\":\"src/login.go\",\"to\":\"src/types.go\",\"relation\":\"imports\",\"scope\":\"file\",\"provenance\":\"ast_exact\",\"confidence\":1.0},{\"from\":\"src/login.go\",\"to\":\"pkg/utils.go\",\"relation\":\"imports\",\"scope\":\"file\",\"provenance\":\"ast_exact\",\"confidence\":1.0}]"}]}
 ```
+
+`direction` is `forward` (outgoing, default) or `reverse` (incoming). A path that is
+neither cached nor on disk fails loudly with an isError response instead of an empty
+array.
 
 ### 21.4 vfs_graph_impact
 
@@ -1056,32 +1084,38 @@ Response:
 
 ```
 Response:
-{"content":[{"type":"text","text":"{\"real_path\":\"/tmp/vfs-cache/models/checkpoint.pt\",\"backend\":\"s3\",\"cached\":true,\"cache_path\":\"/tmp/vfs-cache/models/checkpoint.pt\",\"remote_url\":\"s3://my-bucket/prod/checkpoint.pt\",\"sync_status\":\"synced\"}"}]}
+{"content":[{"type":"text","text":"{\"real_path\":\"/tmp/vfs-cache/models/checkpoint.pt\",\"backend\":\"s3\",\"cached\":true,\"sync_status\":\"synced\",\"remote_url\":\"s3://my-bucket/prod/checkpoint.pt\"}"}]}
 ```
 
 ### 21.9 vfs_rule_check
 
 ```
 Request:
-{"method":"tools/call","params":{"name":"vfs_rule_check","arguments":{"rule_name":"stale-files"}}}
+{"method":"tools/call","params":{"name":"vfs_rule_check","arguments":{"name":"stale-files"}}}
 
 Response:
-{"content":[{"type":"text","text":"{\"rule\":\"stale-files\",\"results\":[{\"path\":\"src/login.go\",\"last_modified\":\"2026-06-14T09:33:14Z\",\"last_tested\":\"2026-06-10T14:22:00Z\"}],\"total\":1}"}]}
+{"content":[{"type":"text","text":"{\"rule\":\"stale-files\",\"description\":\"Files changed since last test pass\",\"matches\":[{\"path\":\"src/login.go\",\"last_modified\":\"2026-06-14T09:33:14Z\",\"last_tested\":\"2026-06-10T14:22:00Z\"}],\"total\":1}"}]}
 ```
 
 ### 21.10 vfs_rule_list
 
 ```
 Response:
-{"content":[{"type":"text","text":"{\"rules\":[{\"name\":\"stale-files\",\"description\":\"Files changed since last test pass\"},{\"name\":\"untested-critical\",\"description\":\"Critical path files with no tests\"},{\"name\":\"transitive-impact\",\"description\":\"Full dependency chain for a file\"}]}"}]}
+{"content":[{"type":"text","text":"{\"rules\":[{\"name\":\"stale-files\",\"description\":\"Files changed since last test pass\",\"query\":\"SELECT ...\"},{\"name\":\"untested-critical\",\"description\":\"Critical path files with no tests\",\"query\":\"SELECT ...\"}],\"total\":2}"}]}
 ```
 
 ### 21.11 vfs_graph_module
 
 ```
+Request:
+{"method":"tools/call","params":{"name":"vfs_graph_module","arguments":{"module_name":"src/auth/"}}}
+
 Response:
-{"content":[{"type":"text","text":"{\"module\":\"auth-service\",\"files\":42,\"edges_count\":156,\"test_coverage_pct\":78.3}"}]}
+{"content":[{"type":"text","text":"{\"module\":\"src/auth/\",\"files\":[\"src/auth/login.go\",\"src/auth/token.go\"],\"edges_count\":156,\"test_coverage_pct\":78.3}"}]}
 ```
+
+`module_name` is a directory prefix (`files` is the list of file paths inside it, not a
+count); the server appends a trailing `/` when the prefix lacks one.
 
 ---
 
