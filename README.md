@@ -609,6 +609,26 @@ with the exact line to add if it is missing.
   (types: `s3`, `gdrive`, `onedrive`, `dropbox`, `external`; the
   `git`/`local` types are not supported and fail with
   `unknown backend type`)
+
+  For self-hosted S3-compatible stores (MinIO, the project's own
+  `docker-compose.yml` ships one, or any non-AWS endpoint) pass
+  `--endpoint` explicitly and supply credentials through the standard
+  AWS environment variables — omitting `--endpoint` on a self-hosted
+  store resolves to the DF-WARPFS-65 empty-credential signing path,
+  and `hilo backend mount` does not accept `--access-key`/`--secret-key`
+  flags:
+
+  ```bash
+  AWS_ACCESS_KEY_ID=minioadmin AWS_SECRET_ACCESS_KEY=minioadmin \
+    hilo backend mount --type s3 \
+      --at /mnt/vfs \
+      --endpoint http://127.0.0.1:9000 \
+      --bucket my-bucket
+  ```
+
+  Prefer `--endpoint` over the `AWS_ENDPOINT_URL` environment variable
+  (see §9 and the note at line 589); the env var is only consulted when
+  the flag is absent.
 - `hilo backend list` — list registered backends (from
   `.vfs/backends/mounts.yaml`)
 - `hilo workspace mount [MOUNT_POINT] [--manifest <PATH>] [--allow-other]
