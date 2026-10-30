@@ -17,5 +17,19 @@
       "dispatch_pid": 2614103,
       "dispatch_log": "/tmp/warpfs-DF-WARPFS-167-worker.log"
     }
-  ]
+  ],
+  "finished_at": "2026-10-29T23:16:34-05:00",
+  "recovery": {
+    "status": "complete",
+    "task": "DF-WARPFS-167",
+    "classification": "already landed before recovery",
+    "branch_tip": "e5d4966586e18b1ffa46b98e588d685aceefbc21",
+    "current_main": "72ea1d525a38a9e48bf395ba75dd5c49282e10d7",
+    "base_check": "merge-base branch main equals branch tip; branch_ahead=0; main_ahead=4",
+    "board": "row already complete at current master; commit_hash=8a3b2c1 is stale/unknown shorthand in row narrative, canonical landed implementation is in master history including 057fe0e8 and 72ea1d52",
+    "gate": "not rerun: branch has empty diff against current master; direct CI latest master success",
+    "board_mix": "not applicable: no branch diff against current master",
+    "cleanup": "removed clean worktree /home/kara/worktrees/warpfs-DF-WARPFS-167 and deleted wt/DF-WARPFS-167",
+    "ci": "latest three gethilo/hilo master runs: success, success, cancelled; no unrelated failure"
+  }
 }
