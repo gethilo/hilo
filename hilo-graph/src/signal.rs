@@ -5192,8 +5192,18 @@ public class Service {
             let fixture_root = std::env::var_os("WAVE11_FIXTURES_DIR")
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|| {
-                    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                        .join("tests/fixtures/wave11-context")
+                    let manifest_fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join("tests/fixtures/wave11-context");
+                    if manifest_fixtures.exists() {
+                        manifest_fixtures
+                    } else {
+                        // A shared CARGO_TARGET_DIR can reuse a test binary whose
+                        // baked CARGO_MANIFEST_DIR points at a deleted worktree
+                        // (cargo freshness is path-insensitive). Cargo runs test
+                        // binaries with the crate root as CWD, so fall back to
+                        // the running checkout instead of panicking.
+                        std::path::Path::new("tests/fixtures/wave11-context").to_path_buf()
+                    }
                 });
             fixture_root.join(format!("{id}.json"))
         }
