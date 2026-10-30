@@ -5188,10 +5188,18 @@ public class Service {
             "grpc.alarm-fastpath-context",
         ];
 
+        fn fixture_path(id: &str) -> std::path::PathBuf {
+            let fixture_root = std::env::var_os("WAVE11_FIXTURES_DIR")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| {
+                    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join("tests/fixtures/wave11-context")
+                });
+            fixture_root.join(format!("{id}.json"))
+        }
+
         pub fn load(id: &str) -> Fixture {
-            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/fixtures/wave11-context")
-                .join(format!("{id}.json"));
+            let path = fixture_path(id);
             let text = std::fs::read_to_string(&path)
                 .unwrap_or_else(|e| panic!("wave11 fixture {} unreadable: {e}", path.display()));
             serde_json::from_str(&text)
