@@ -2473,3 +2473,19 @@ tasks:
   status: complete
   created_at: '2026-10-29T15:25:50.461091+00:00'
   completed_at: '2026-10-29T15:26:25.494673+00:00'
+- id: DF-WARPFS-149
+  title: Verify duplicate-edge fix (DF-WARPFS-62) satisfies DF-WARPFS-149 AC
+  criteria:
+  - cargo test -p hilo_graph --test edges_dedup_test exits 0 with warm-pass tests
+    present; sort edges.jsonl | uniq -d empty on this repo
+  status: complete
+  created_at: '2026-10-30T07:07:42.617821+00:00'
+  completed_at: '2026-10-30T07:07:44.467337+00:00'
+- id: DF-WARPFS-53
+  title: "Fix spec \xA711 MCP tool contract drift"
+  criteria:
+  - "spec \xA711 matches shipped hilo-mcp: module_name not module, no SSE transport\
+    \ claims, response shapes match tools/list output; cargo test -p hilo-mcp green"
+  status: complete
+  created_at: '2026-10-30T07:52:16.143849+00:00'
+  completed_at: '2026-10-30T08:32:19.581060+00:00'
