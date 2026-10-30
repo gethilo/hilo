@@ -1,0 +1,22 @@
+{
+  "tick_id": "warpfs-foreman-2026-10-30-05-35-40",
+  "mode": "wave",
+  "tasks": [
+    {
+      "id": "DF-WARPFS-71",
+      "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-71",
+      "branch": "wt/DF-WARPFS-71"
+    },
+    {
+      "id": "DF-WARPFS-161",
+      "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-161",
+      "branch": "wt/DF-WARPFS-161"
+    }
+  ],
+  "created_at": "2026-10-30T05:35:40Z",
+  "finished_at": "2026-10-30T06:42:43Z",
+  "recovery_status": {
+    "DF-WARPFS-71": "already-merged-and-closed",
+    "DF-WARPFS-161": "dispatch-failed-no-work-created"
+  }
+}
