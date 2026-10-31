@@ -2510,3 +2510,13 @@ tasks:
   status: complete
   created_at: '2026-10-31T06:17:20.474948+00:00'
   completed_at: '2026-10-31T07:50:30.589538+00:00'
+- id: DF-WARPFS-161
+  title: Fix graph query root selection
+  criteria:
+  - 'Implement DF-WARPFS-161 acceptance: graph queries must anchor to the cwd project
+    rather than an ancestor cache; add regression coverage for nested and bare-subdirectory
+    cases; preserve a fresh ch:trace row=DF-WARPFS-161 marker in committed source
+    or evidence; run focused tests and report observed evidence.'
+  status: complete
+  created_at: '2026-10-31T13:24:09.650545+00:00'
+  completed_at: '2026-10-31T15:57:14.493231+00:00'
