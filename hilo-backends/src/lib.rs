@@ -31,8 +31,8 @@ pub use sync::{
 // Spec §7 planner (trait-based). Its SyncPlan is reachable as
 // planner::SyncPlan — the crate-root name is held by the legacy sync::SyncPlan.
 pub use planner::{
-    execute_sync, plan_sync, record_conflict, ConflictRecord, ResolvedBy, SyncDirection, SyncError,
-    SyncStats, TransferItem,
+    execute_sync, plan_sync, record_conflict, ConflictKind, ConflictRecord, ResolvedBy,
+    SyncDirection, SyncError, SyncStats, TransferItem,
 };
 
 /// Resolve a virtual path to its real storage location.
