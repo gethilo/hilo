@@ -367,10 +367,15 @@ pub fn run_sync(args: &SyncArgs) -> Result<()> {
         };
         total_transferred += stats.transferred;
         total_bytes += stats.bytes;
+        // DF-WARPFS-67: routine one-sided LWW resolutions are counted as
+        // "resolved", NOT as conflicts — only genuine divergent overwrites
+        // (counterpart strictly newer than the incoming side at execution)
+        // reach conflicts.jsonl and this number.
         println!(
-            "synced {name}: {} transferred ({} bytes), {} conflicts recorded",
+            "synced {name}: {} transferred ({} bytes), {} resolved (LWW), {} conflicts",
             stats.transferred,
             stats.bytes,
+            stats.resolved,
             stats.conflicts.len(),
         );
     }

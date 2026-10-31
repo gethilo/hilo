@@ -1111,9 +1111,13 @@ hilo backend sync --pull       # download remote changes only
 hilo backend sync --push sub/  # limit to a subtree
 ```
 
-Conflict ledger: LWW resolutions are appended to
-`.vfs/sync/conflicts.jsonl` (one JSONL record per resolution, even when
-the winner matches the transfer direction — spec §7).
+Conflict ledger (DF-WARPFS-67): the sync summary distinguishes routine
+one-sided LWW resolutions (`N resolved (LWW)`) from genuine divergence
+(`M conflicts`). Only a genuine divergent overwrite — a transfer whose
+counterpart is strictly newer than the incoming side at execution time —
+appends a row to `.vfs/sync/conflicts.jsonl` (one JSONL record per conflict,
+carrying `kind: "divergent_overwrite"`). A clean incremental push where only
+the local side changed appends zero rows and reports `0 conflicts`.
 
 ### `setup`
 

@@ -28,10 +28,20 @@
 //!   (no `--prune` in v1). `Both` treats remote-only keys as downloads
 //!   (convergent — an agent that just uploaded must not see its file
 //!   deleted); explicit deletes happen only on `Push` runs.
-//! - Conflicts: every executed LWW resolution (a transferred item whose
-//!   counterpart exists on the other side) appends a [`ConflictRecord`] to
-//!   `.vfs/sync/conflicts.jsonl` — even when the winner is the current
-//!   direction, so agents see churn.
+//! - Conflicts (DF-WARPFS-67): the ledger records GENUINE divergence only.
+//!   Before this fix every executed LWW resolution with a counterpart
+//!   appended a [`ConflictRecord`] (even one-sided edits on a clean
+//!   incremental push), so the ledger filled with phantom "conflicts" and
+//!   stopped meaning conflict. The planner keeps no last-sync baseline
+//!   (spec §7 defines none), so a both-sides edit that predates the plan is
+//!   provably indistinguishable from a one-sided edit; the genuine class
+//!   this module DOES record is the one observable at execution: the
+//!   losing side re-stats strictly NEWER than the winning side (spec
+//!   §13.11 file-changes-during-sync), i.e. the LWW overwrite clobbers
+//!   data that moved on both sides since the last alignment. Routine
+//!   resolutions (a one-sided-newer transfer whose counterpart exists)
+//!   count in [`SyncStats::resolved`] and never touch
+//!   `.vfs/sync/conflicts.jsonl`; new-key copies count only as transfers.
 //! - After each transfer the local mtime is aligned to the remote `modified`
 //!   (push: local file mtime = remote modified after put; pull: dest mtime =
 //!   remote modified), so a repeated sync is a no-op instead of a ping-pong.
@@ -120,15 +130,46 @@ pub enum ResolvedBy {
     RemoteWins,
 }
 
-/// One LWW resolution, persisted to `.vfs/sync/conflicts.jsonl`.
+/// What class of event a ledger row describes (DF-WARPFS-67).
+///
+/// Before the fix every LWW resolution was written as an undifferentiated
+/// "conflict". The planner keeps no last-sync baseline (spec §7 defines
+/// none), so the only GENUINE both-sides divergence observable at execution
+/// is a transfer whose losing counterpart re-stats strictly newer than the
+/// winner (`DivergentOverwrite`) — the overwrite-of-newer-data case the
+/// DF-WARPFS-67 finding names. Rows written by this version always carry
+/// `DivergentOverwrite`; `LwwResolution` is the serde default so pre-fix
+/// rows in an existing `conflicts.jsonl` still decode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ConflictKind {
+    /// Legacy class: every LWW resolution (including one-sided edits) was
+    /// recorded. Only appears in rows written before DF-WARPFS-67.
+    #[serde(rename = "lww_resolution")]
+    #[default]
+    LwwResolution,
+    /// Genuine divergence: the transfer overwrote a counterpart that was
+    /// strictly newer than the incoming side at execution time (both sides
+    /// changed since the last alignment; the LWW winner clobbers newer data).
+    #[serde(rename = "divergent_overwrite")]
+    DivergentOverwrite,
+}
+
+/// One genuine conflict, persisted to `.vfs/sync/conflicts.jsonl`.
+///
+/// DF-WARPFS-67: routine LWW resolutions (one-sided newer edits, new keys)
+/// are NO LONGER written here — only `DivergentOverwrite` events are.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConflictRecord {
     pub key: String,
-    /// Local mtime at resolution time, unix seconds.
+    /// Local mtime at resolution time, unix seconds (pre-transfer).
     pub local_mtime: i64,
-    /// Remote modified at resolution time, unix seconds.
+    /// Remote modified at resolution time, unix seconds (pre-transfer).
     pub remote_mtime: i64,
     pub resolved: ResolvedBy,
+    /// DF-WARPFS-67 classification. Absent on pre-fix rows, where it
+    /// deserializes as `LwwResolution`.
+    #[serde(default)]
+    pub kind: ConflictKind,
 }
 
 /// Result of [`execute_sync`].
@@ -138,8 +179,14 @@ pub struct SyncStats {
     pub transferred: usize,
     /// Bytes transferred (source-side sizes).
     pub bytes: u64,
-    /// LWW resolutions recorded this run (also appended to conflicts.jsonl).
+    /// Genuine divergent overwrites recorded this run (DF-WARPFS-67; the
+    /// only rows appended to `.vfs/sync/conflicts.jsonl`).
     pub conflicts: Vec<ConflictRecord>,
+    /// Routine LWW resolutions this run — transfers that had a counterpart
+    /// which did NOT change past the winner (one-sided edits; DF-WARPFS-67).
+    /// Never conflicts, never persisted to the ledger. New-key transfers
+    /// (no counterpart) count only in `transferred`.
+    pub resolved: usize,
 }
 
 /// Sync engine errors (spec §12: `SyncError::TransferFailed`).
@@ -305,9 +352,11 @@ pub fn plan_sync(
 /// [`BackendError`] as its `#[source]`; already-transferred
 /// items are not rolled back.
 ///
-/// Every executed LWW resolution (a transferred item whose counterpart
-/// exists on the other side) appends a [`ConflictRecord`] to
-/// `.vfs/sync/conflicts.jsonl` via [`record_conflict`], and local mtimes are
+/// Only genuine divergent overwrites (a transfer whose counterpart re-stats
+/// strictly newer than the incoming side — see [`execute_transfer`],
+/// DF-WARPFS-67) append a [`ConflictRecord`] to `.vfs/sync/conflicts.jsonl`
+/// via [`record_conflict`]. Routine one-sided resolutions increment
+/// [`SyncStats::resolved`] without touching the ledger. Local mtimes are
 /// aligned to the remote `modified` after each transfer so a repeated sync
 /// is a no-op.
 pub fn execute_sync(
@@ -363,9 +412,28 @@ pub fn execute_sync(
     Ok(stats)
 }
 
-/// Execute one transfer item (push or pull): record the LWW conflict when a
-/// counterpart exists, transfer, count bytes, and align local mtime to the
-/// remote `modified` so a repeated sync is a no-op.
+/// Execute one transfer item (push or pull): classify the outcome (DF-WARPFS-67),
+/// transfer, count bytes, and align local mtime to the remote `modified` so a
+/// repeated sync is a no-op.
+///
+/// Classification against the item's counterpart, observed at execution time
+/// (spec §13.11 — either side may have moved between plan and execute):
+/// - counterpart absent (new key) or not changed past the winner → the
+///   transfer is a ROUTINE resolution: `stats.resolved += 1` when a
+///   counterpart existed, and NO ledger row.
+/// - counterpart strictly newer than the incoming side (a push over a
+///   remote that has since moved ahead, or a pull over a local file that
+///   has since been edited) → the LWW winner clobbers data that moved on
+///   BOTH sides since the last alignment: a genuine
+///   [`ConflictKind::DivergentOverwrite`], recorded with the pre-transfer
+///   mtimes.
+///
+/// LIMITATION (documented honestly, DF-WARPFS-67): the spec (§7) defines no
+/// last-sync baseline, so a both-sides divergence whose LWW winner is the
+/// side that is still strictly newer (e.g. remote edited twice, local once)
+/// is mtime-indistinguishable from a one-sided edit at plan time and is
+/// classified as routine. Only divergence observable at execution — the
+/// overwrite of a newer counterpart — is recorded; nothing is fabricated.
 fn execute_transfer(
     item: &TransferItem,
     backend: &dyn Backend,
@@ -378,13 +446,24 @@ fn execute_transfer(
                 Err(BackendError::NotFound(_)) => None,
                 Err(e) => return Err(SyncError::Backend(e)),
             };
+            let local_mtime = local_mtime_unix(&item.local_path).unwrap_or(0);
             if let Some(ro) = counterpart {
-                stats.conflicts.push(ConflictRecord {
-                    key: item.key.clone(),
-                    local_mtime: local_mtime_unix(&item.local_path).unwrap_or(0),
-                    remote_mtime: ro.modified.unwrap_or(0),
-                    resolved: ResolvedBy::LocalWins,
-                });
+                let remote_mtime = ro.modified.unwrap_or(0);
+                if remote_mtime > local_mtime {
+                    // Divergent overwrite: the push clobbers a remote that
+                    // is newer than the local side being pushed (moved after
+                    // the plan chose Push — both sides changed).
+                    stats.conflicts.push(ConflictRecord {
+                        key: item.key.clone(),
+                        local_mtime,
+                        remote_mtime,
+                        resolved: ResolvedBy::LocalWins,
+                        kind: ConflictKind::DivergentOverwrite,
+                    });
+                } else {
+                    // Routine: local is the newer side, remote unchanged past it.
+                    stats.resolved += 1;
+                }
             }
             backend
                 .put(&item.local_path, &item.key)
@@ -414,12 +493,25 @@ fn execute_transfer(
                 None
             };
             if let Some(ro) = counterpart {
-                stats.conflicts.push(ConflictRecord {
-                    key: item.key.clone(),
-                    local_mtime: local_mtime_unix(&item.local_path).unwrap_or(0),
-                    remote_mtime: ro.modified.unwrap_or(0),
-                    resolved: ResolvedBy::RemoteWins,
-                });
+                let local_mtime = local_mtime_unix(&item.local_path).unwrap_or(0);
+                match ro.modified {
+                    Some(remote_mtime) if local_mtime > remote_mtime => {
+                        // Divergent overwrite: the pull clobbers a local file
+                        // newer than the remote side being pulled (edited
+                        // after the plan chose Pull — both sides changed).
+                        stats.conflicts.push(ConflictRecord {
+                            key: item.key.clone(),
+                            local_mtime,
+                            remote_mtime,
+                            resolved: ResolvedBy::RemoteWins,
+                            kind: ConflictKind::DivergentOverwrite,
+                        });
+                    }
+                    // Routine: remote is the newer (or equal) side, or the
+                    // stat gave no timestamp to dispute — nothing is
+                    // recorded without an observable divergence.
+                    _ => stats.resolved += 1,
+                }
             }
             if let Some(parent) = item.local_path.parent() {
                 std::fs::create_dir_all(parent)?;
@@ -449,8 +541,10 @@ fn execute_transfer(
     Ok(())
 }
 
-/// Append one LWW resolution to `.vfs/sync/conflicts.jsonl` (JSONL, one
-/// record per line), creating the directory as needed.
+/// Append one genuine conflict (DF-WARPFS-67: only divergent overwrites are
+/// recorded by `execute_sync`) to `.vfs/sync/conflicts.jsonl` (JSONL, one
+/// record per line), creating the directory as needed. Routine LWW
+/// resolutions never reach this ledger.
 pub fn record_conflict(workspace_root: &Path, rec: &ConflictRecord) -> Result<(), SyncError> {
     use std::io::Write;
 
@@ -851,8 +945,31 @@ mod tests {
         assert_eq!(pull_keys, vec!["remote_newer.txt"]);
     }
 
+    /// DF-WARPFS-67 regression (the traceability test named in the board
+    /// row): a clean sync whose transfers are ROUTINE one-sided LWW
+    /// resolutions (local-newer push, remote-newer pull, new key) records
+    /// ZERO conflicts and appends ZERO ledger rows, while alignment and
+    /// transfer counts keep working. A genuine divergence — the losing
+    /// side moved past the winner between plan and execute (spec §13.11) —
+    /// is still classified, recorded with pre-transfer mtimes, and
+    /// persisted as `kind: "divergent_overwrite"`.
+    ///
+    /// ch:trace row=DF-WARPFS-67 spec=specs/backend-backed-workspace-spec.md#7 wave=none:serial \
+    ///   test=hilo-backends/src/planner.rs::routine_resolution_is_not_conflict_and_genuine_divergence_is_classified \
+    ///   doc=hilo-cli/src/commands/backend.rs evidence=none:worker-commit-only-until-foreman-verification \
+    ///   witness=none:worker-branch verdict=none:pending-foreman-judge commit=none:self-referential-hash \
+    ///   memory=none:pending
+    ///
+    /// LIMITATION (proven honestly, not fabricated): with no last-sync
+    /// baseline in the planner state (spec §7 defines none), a both-sides
+    /// edit where the LWW winner remains the newer side is
+    /// mtime-indistinguishable from a one-sided edit at plan time — see
+    /// `pre_plan_both_sides_divergence_is_not_fabricated` for the contract
+    /// test pinning that this is NOT logged as a conflict. The genuine
+    /// class recorded here is the observable overwrite-of-newer-counterpart.
     #[test]
-    fn execute_records_conflicts_and_aligns_mtimes() {
+    fn routine_resolution_is_not_conflict_and_genuine_divergence_is_classified() {
+        // Part 1: routine resolutions — one-sided edits + a new key.
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
         write_file(root, "remote_newer.txt", b"local-old", 1000);
@@ -876,42 +993,27 @@ mod tests {
         // pull counts dest bytes ("remote-new" = 10); pushes count source
         // bytes ("local-new" = 9, "fresh" = 5).
         assert_eq!(stats.bytes, 10 + 9 + 5);
-        // LWW resolutions: remote_newer (RemoteWins), local_newer (LocalWins);
-        // brand_new has no counterpart -> no conflict.
-        assert_eq!(stats.conflicts.len(), 2);
-        let rn = stats
-            .conflicts
-            .iter()
-            .find(|c| c.key == "remote_newer.txt")
-            .unwrap();
-        assert_eq!(rn.resolved, ResolvedBy::RemoteWins);
-        assert_eq!((rn.local_mtime, rn.remote_mtime), (1000, 2000));
-        let ln = stats
-            .conflicts
-            .iter()
-            .find(|c| c.key == "local_newer.txt")
-            .unwrap();
-        assert_eq!(ln.resolved, ResolvedBy::LocalWins);
-        assert_eq!((ln.local_mtime, ln.remote_mtime), (3000, 1000));
+        // DF-WARPFS-67: remote_newer (RemoteWins) and local_newer
+        // (LocalWins) are one-sided — routine resolutions, counted in
+        // `resolved`, NOT conflicts. brand_new has no counterpart: only a
+        // transfer. The clean sync must print "0 conflicts".
+        assert_eq!(
+            stats.conflicts.len(),
+            0,
+            "routine resolutions are not conflicts"
+        );
+        assert_eq!(
+            stats.resolved, 2,
+            "both one-sided transfers count as resolved"
+        );
 
-        // Conflicts persisted to .vfs/sync/conflicts.jsonl (JSONL, one per line).
-        let conflicts_path = root.join(".vfs/sync/conflicts.jsonl");
-        assert!(conflicts_path.exists());
-        let lines: Vec<String> = read_plain(&conflicts_path)
-            .lines()
-            .map(|l| l.to_string())
-            .collect();
-        assert_eq!(lines.len(), 2);
-        assert!(lines
-            .iter()
-            .any(|l| l.contains("remote_newer.txt") && l.contains("RemoteWins")));
-        assert!(lines
-            .iter()
-            .any(|l| l.contains("local_newer.txt") && l.contains("LocalWins")));
+        // Zero ledger rows: conflicts.jsonl is never created by a clean run.
+        assert!(
+            !root.join(".vfs/sync/conflicts.jsonl").exists(),
+            "a clean incremental sync must append ZERO rows to conflicts.jsonl"
+        );
 
-        // Content + mtime alignment: pull landed remote content with remote mtime;
-        // push landed local content with remote mtime aligned (2000? no: local_newer
-        // pushed -> remote modified becomes local 3000 -> local aligned to 3000).
+        // Content + mtime alignment still happen (DF-WARPFS-69 contract).
         assert_eq!(read_plain(&root.join("remote_newer.txt")), "remote-new");
         assert_eq!(local_mtime_unix(&root.join("remote_newer.txt")), Some(2000));
         assert_eq!(backend.get_bytes("local_newer.txt").unwrap(), b"local-new");
@@ -928,6 +1030,122 @@ mod tests {
         )
         .unwrap();
         assert!(plan2.to_transfer.is_empty(), "aligned state is a no-op");
+
+        // Part 2a: genuine divergence, push side — the plan chose Push
+        // (local newer), then the REMOTE moved ahead before execution
+        // (spec §13.11: file changes during sync; two agents editing).
+        // The push clobbers a strictly-newer remote: both sides changed —
+        // must be recorded.
+        let tmp_push = tempfile::tempdir().unwrap();
+        let root_push = tmp_push.path();
+        write_file(root_push, "shared.txt", b"local-v2", 3000);
+        let backend_push = MockBackend::new();
+        backend_push.seed("shared.txt", b"remote-v1", 1000);
+        let plan_push = plan_sync(
+            &backend_push,
+            root_push,
+            &empty_ignore(),
+            &empty_ephemeral(root_push),
+            SyncDirection::Both,
+        )
+        .unwrap();
+        assert!(
+            matches!(plan_push.to_transfer[0].direction, SyncDirection::Push),
+            "local-newer plans Push"
+        );
+        // Remote edits DURING the run window: modified jumps past local.
+        backend_push.seed("shared.txt", b"remote-v2", 9000);
+        let stats_push = execute_sync(&plan_push, &backend_push, root_push).unwrap();
+        assert_eq!(
+            stats_push.conflicts.len(),
+            1,
+            "divergent overwrite is recorded"
+        );
+        assert_eq!(stats_push.resolved, 0);
+        let rec = &stats_push.conflicts[0];
+        assert_eq!(rec.key, "shared.txt");
+        assert_eq!(rec.resolved, ResolvedBy::LocalWins);
+        assert_eq!(rec.kind, ConflictKind::DivergentOverwrite);
+        // Pre-transfer mtimes: local 3000 vs the newer remote 9000.
+        assert_eq!((rec.local_mtime, rec.remote_mtime), (3000, 9000));
+        let lines_push = read_plain(&root_push.join(".vfs/sync/conflicts.jsonl"));
+        assert_eq!(lines_push.lines().count(), 1);
+        assert!(lines_push.contains("divergent_overwrite"), "{lines_push}");
+
+        // Part 2b: genuine divergence, pull side — the plan chose Pull
+        // (remote newer), then LOCAL was edited past the remote before
+        // execution. The pull clobbers a strictly-newer local file.
+        let tmp_pull = tempfile::tempdir().unwrap();
+        let root_pull = tmp_pull.path();
+        write_file(root_pull, "shared.txt", b"local-v1", 1000);
+        let backend_pull = MockBackend::new();
+        backend_pull.seed("shared.txt", b"remote-v2", 3000);
+        let plan_pull = plan_sync(
+            &backend_pull,
+            root_pull,
+            &empty_ignore(),
+            &empty_ephemeral(root_pull),
+            SyncDirection::Both,
+        )
+        .unwrap();
+        assert!(
+            matches!(plan_pull.to_transfer[0].direction, SyncDirection::Pull),
+            "remote-newer plans Pull"
+        );
+        // Local edits DURING the run window: mtime jumps past remote.
+        write_file(root_pull, "shared.txt", b"local-v2", 9000);
+        let stats_pull = execute_sync(&plan_pull, &backend_pull, root_pull).unwrap();
+        assert_eq!(
+            stats_pull.conflicts.len(),
+            1,
+            "divergent overwrite is recorded"
+        );
+        assert_eq!(stats_pull.resolved, 0);
+        let rec = &stats_pull.conflicts[0];
+        assert_eq!(rec.key, "shared.txt");
+        assert_eq!(rec.resolved, ResolvedBy::RemoteWins);
+        assert_eq!(rec.kind, ConflictKind::DivergentOverwrite);
+        // Pre-transfer mtimes: the newer local 9000 vs remote 3000.
+        assert_eq!((rec.local_mtime, rec.remote_mtime), (9000, 3000));
+        let lines_pull = read_plain(&root_pull.join(".vfs/sync/conflicts.jsonl"));
+        assert_eq!(lines_pull.lines().count(), 1);
+        assert!(lines_pull.contains("divergent_overwrite"), "{lines_pull}");
+    }
+
+    /// DF-WARPFS-67 limitation contract (proves the boundary rather than
+    /// fabricating detection): when BOTH sides changed BEFORE the plan runs
+    /// and the LWW winner is still the strictly-newer side, the planner has
+    /// no persistent last-sync baseline (spec §7 defines none), so this
+    /// state is mtime-indistinguishable from a one-sided edit. The honest
+    /// contract: it transfers (LWW), counts as routine, and does NOT
+    /// write a phantom ledger row. A false "both sides changed" claim is
+    /// worse than none — the ledger's meaning is the deliverable.
+    #[test]
+    fn pre_plan_both_sides_divergence_is_not_fabricated() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        // local edited (1000 -> 2000), remote edited more (1000 -> 5000):
+        // both sides changed since some past point; only remote's number
+        // survives in the current state.
+        write_file(root, "shared.txt", b"local-v2", 2000);
+        let backend = MockBackend::new();
+        backend.seed("shared.txt", b"remote-v2", 5000);
+
+        let plan = plan_sync(
+            &backend,
+            root,
+            &empty_ignore(),
+            &empty_ephemeral(root),
+            SyncDirection::Both,
+        )
+        .unwrap();
+        assert_eq!(plan.to_transfer.len(), 1);
+        let stats = execute_sync(&plan, &backend, root).unwrap();
+
+        // Observable state says "remote newer": routine pull, no row.
+        assert_eq!(stats.conflicts.len(), 0);
+        assert_eq!(stats.resolved, 1);
+        assert!(!root.join(".vfs/sync/conflicts.jsonl").exists());
     }
 
     /// DF-WARPFS-69 regression: a repeat sync over an aligned (equal-mtime)
@@ -978,10 +1196,10 @@ mod tests {
         }
     }
 
-    // A genuinely changed file (mtime differs) still transfers and logs
-    // exactly one conflict row per changed file per sync.
+    // A genuinely changed file (mtime differs) still transfers — one-sided
+    // so it is a ROUTINE resolution, not a conflict row (DF-WARPFS-67).
     #[test]
-    fn changed_file_still_transfers_and_logs_one_conflict() {
+    fn changed_file_still_transfers_without_a_conflict_row() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
         write_file(root, "changed.txt", b"local-old", 1000);
@@ -993,16 +1211,20 @@ mod tests {
         assert_eq!(plan.to_transfer.len(), 1);
         let stats = execute_sync(&plan, &backend, root).unwrap();
         assert_eq!(stats.transferred, 1);
-        assert_eq!(stats.conflicts.len(), 1);
+        assert_eq!(
+            stats.conflicts.len(),
+            0,
+            "one-sided edit is routine (DF-WARPFS-67)"
+        );
+        assert_eq!(stats.resolved, 1);
 
         // Second pull: mtime aligned to 5000 -> full no-op (AC1 shape).
         let plan2 = plan_sync(&backend, root, &empty_ignore(), &eph, SyncDirection::Pull).unwrap();
         assert!(plan2.to_transfer.is_empty());
-        let conflicts_path = root.join(".vfs/sync/conflicts.jsonl");
-        let lines = read_plain(&conflicts_path).lines().count();
+        // The ledger was never written: zero rows on a clean one-sided sync.
+        assert!(!root.join(".vfs/sync/conflicts.jsonl").exists());
         let stats2 = execute_sync(&plan2, &backend, root).unwrap();
         assert_eq!(stats2.transferred, 0);
-        assert_eq!(read_plain(&conflicts_path).lines().count(), lines);
     }
 
     #[test]
@@ -1220,6 +1442,7 @@ mod tests {
             local_mtime: 100,
             remote_mtime: 200,
             resolved: ResolvedBy::RemoteWins,
+            kind: ConflictKind::DivergentOverwrite,
         };
         record_conflict(root, &rec).unwrap();
         record_conflict(root, &rec).unwrap();
@@ -1230,5 +1453,28 @@ mod tests {
         assert_eq!(lines.len(), 2);
         let parsed: ConflictRecord = serde_json::from_str(&lines[0]).unwrap();
         assert_eq!(parsed, rec);
+    }
+
+    /// DF-WARPFS-67 ledger compat: rows written before the fix (no `kind`
+    /// field) decode as `LwwResolution`; rows written now carry the
+    /// explicit `divergent_overwrite` tag so consumers can tell the classes
+    /// apart in one file.
+    #[test]
+    fn legacy_conflict_rows_decode_as_lww_resolution() {
+        let legacy = r#"{"key":"a.txt","local_mtime":1,"remote_mtime":2,"resolved":"RemoteWins"}"#;
+        let parsed: ConflictRecord = serde_json::from_str(legacy).unwrap();
+        assert_eq!(parsed.kind, ConflictKind::LwwResolution);
+
+        let line = serde_json::to_string(&ConflictRecord {
+            key: "a.txt".into(),
+            local_mtime: 1,
+            remote_mtime: 2,
+            resolved: ResolvedBy::RemoteWins,
+            kind: ConflictKind::DivergentOverwrite,
+        })
+        .unwrap();
+        assert!(line.contains("\"kind\":\"divergent_overwrite\""), "{line}");
+        let round: ConflictRecord = serde_json::from_str(&line).unwrap();
+        assert_eq!(round.kind, ConflictKind::DivergentOverwrite);
     }
 }

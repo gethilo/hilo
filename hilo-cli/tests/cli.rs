@@ -3468,6 +3468,94 @@ fn backend_sync_no_mounts_exits_2() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// DF-WARPFS-67: the operator-facing sync summary distinguishes routine
+/// LWW resolutions from genuine conflicts, and the conflicts ledger stays
+/// empty for a clean push. Sequence: initial push (all keys new) → edit ONE
+/// file locally, remote untouched elsewhere → incremental push. The
+/// incremental run transfers only the edited file, reports it as
+/// "1 resolved (LWW), 0 conflicts", and appends ZERO rows to
+/// .vfs/sync/conflicts.jsonl — the exact phantom-conflict shape the dogfood
+/// run measured ("3 transferred, 3 conflicts recorded" on a one-file edit).
+#[test]
+fn backend_sync_clean_incremental_push_reports_zero_conflicts() {
+    let dir = unique_tempdir("backend-sync-conflicts");
+    let workspace = dir.join("workspace");
+    let backend_root = dir.join("backend-root");
+    fs::create_dir_all(&workspace).expect("failed to create workspace");
+    fs::create_dir_all(&backend_root).expect("failed to create backend root");
+
+    fs::write(workspace.join("a.txt"), "one\n").expect("failed to write a.txt");
+    fs::write(workspace.join("b.txt"), "two\n").expect("failed to write b.txt");
+    write_mounts_yaml(
+        &workspace,
+        &format!(
+            "- name: test\n  type: local\n  prefix: {}\n  mode: mirror\n",
+            backend_root.display()
+        ),
+    );
+
+    // (1) Initial push: every key is new — a transfer, not a resolution.
+    let pushed = run_hilo_with_retry(
+        hilo_cmd()
+            .args(["backend", "sync", "--push"])
+            .current_dir(&workspace),
+    );
+    assert!(
+        pushed.status.success(),
+        "initial sync --push failed: {}",
+        String::from_utf8_lossy(&pushed.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&pushed.stdout);
+    assert!(
+        stdout.contains("2 transferred") && stdout.contains("0 conflicts"),
+        "initial push must report transfers with zero conflicts: {stdout}"
+    );
+    assert!(
+        !workspace.join(".vfs/sync/conflicts.jsonl").exists(),
+        "a clean initial push must not create conflicts.jsonl"
+    );
+
+    // (2) Incremental push: edit ONLY a.txt. The planner compares whole-second
+    // mtimes, so wait past one second (the proven pattern above in the
+    // DF-WARPFS-69 test). b.txt stays aligned → no-op (DF-WARPFS-69 holds).
+    std::thread::sleep(Duration::from_millis(1100));
+    fs::write(workspace.join("a.txt"), "one-edited\n").expect("failed to edit a.txt");
+
+    let second = run_hilo_with_retry(
+        hilo_cmd()
+            .args(["backend", "sync", "--push"])
+            .current_dir(&workspace),
+    );
+    assert!(
+        second.status.success(),
+        "incremental sync --push failed: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    let stdout2 = String::from_utf8_lossy(&second.stdout);
+    // One-sided edit = ROUTINE resolution: counted in resolved (LWW), NOT a
+    // conflict. This is the acceptance print for DF-WARPFS-67.
+    assert!(
+        stdout2.contains("1 transferred") && stdout2.contains("1 resolved (LWW)"),
+        "incremental push must count the one-sided edit as a routine resolution: {stdout2}"
+    );
+    assert!(
+        stdout2.contains("0 conflicts"),
+        "incremental push with zero divergence must print 0 conflicts: {stdout2}"
+    );
+    assert_eq!(
+        fs::read_to_string(backend_root.join("a.txt")).expect("read remote a.txt"),
+        "one-edited\n",
+        "the edited file must land on the backend"
+    );
+    // Zero rows appended — the ledger never existed for this clean session.
+    assert!(
+        !workspace.join(".vfs/sync/conflicts.jsonl").exists(),
+        "a clean incremental push must append ZERO rows to conflicts.jsonl"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn backend_setup_reports_detection_and_next_steps() {
     let dir = unique_tempdir("backend-setup");
