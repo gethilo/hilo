@@ -157,11 +157,33 @@ pub fn list_tools() -> Vec<Tool> {
         },
         Tool {
             name: "vfs_graph_understand".into(),
-            description: "Get harmonic multi-resolution context for a task — MAP (file→symbols), SIGNATURES (one-line per symbol), DETAIL (whitespace-minified source). Position-ordered, budget-controlled, deterministic. Definitions that name the task are always listed; `local:` import specifiers are resolved to the file they name.".into(),
+            description: concat!(
+                "Get harmonic multi-resolution context for a task — MAP (file→symbols), ",
+                "SIGNATURES (one-line per symbol), DETAIL (whitespace-minified source). ",
+                "Position-ordered, budget-controlled, deterministic. Definitions that name the ",
+                "task are always listed; `local:` import specifiers are resolved to the file ",
+                "they name.\n\n",
+                "ANCHORING IS LITERAL: task words are matched against file paths and symbol ",
+                "names, so the task text IS the query. Name the subsystem plus what it does, ",
+                "in 3-6 concrete words.\n\n",
+                "Good task descriptions (every word names something in the tree):\n",
+                "- \"trigger debounce middleware\" → the debounce engine and its trigger config\n",
+                "- \"parse edges duckdb\" → the graph parser and the DuckDB store\n",
+                "- \"workspace mount preflight\" → the mount preflight path\n\n",
+                "Too vague:\n",
+                "- \"workspace\", \"config\", \"auth\" → a single generic word matches weakly, so ",
+                "the map comes back thin and unfocused\n\n",
+                "If the MAP looks thin, or the output says nothing anchored: do NOT retry the ",
+                "same words. Add the subsystem and the action (\"fuse workspace mount ",
+                "preflight\", \"debounce should_fire per file\") and call again. The no-anchor ",
+                "output names the subsystems this repository actually has; vfs_graph_search ",
+                "is the keyword-sweep fallback."
+            )
+            .into(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "task": {"type": "string", "description": "Natural-language task description (e.g. 'rate limiter middleware')"},
+                    "task": {"type": "string", "description": "Natural-language task description — 3-6 words naming the subsystem and what it does (e.g. 'trigger debounce middleware'), not a single generic word (e.g. 'workspace')"},
                     "budget": {"type": "integer", "description": "Token budget (default: 6000)"},
                     "resolution": {"type": "string", "description": "Output mode: 'harmonic' (3-tier, default) or 'flat' (single-tier)"}
                 },

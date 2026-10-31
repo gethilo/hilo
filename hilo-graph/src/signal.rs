@@ -362,8 +362,24 @@ where
     // 4. Extract symbols and assign tiers.
     let signal_files = build_signal_files(&sorted_files, opts, source_reader, &task_tokens)?;
 
-    // 5. Format output text.
-    let text = format_output(&signal_files, &anchors, opts);
+    // 5. Format output text. The no-match path is rendered here rather than
+    //    inside `format_output` because the guidance it has to carry — what
+    //    WOULD anchor this query — needs the task tokens and the graph's own
+    //    file set (DF-WARPFS-54). The formatter receives neither, and
+    //    "try a different task description" is advice an agent can only
+    //    guess at.
+    let text = if signal_files.is_empty() {
+        format_no_match(&anchors, &task_tokens, &known_files)
+    } else {
+        let mut text = format_output(&signal_files, &anchors, opts);
+        // A one-word task can anchor without naming a subsystem: the map then
+        // reads as complete while it is really a keyword dump (DF-WARPFS-54),
+        // so say which words would sharpen it.
+        if is_thin_task(&task_tokens) {
+            text.push_str(&thin_task_footer(&task_tokens, &known_files));
+        }
+        text
+    };
 
     let tokens_estimate = text.len() / 4;
 
@@ -2543,6 +2559,112 @@ fn minify_whitespace(source: &str) -> String {
 /// `##` header is never followed by another header or by EOF (GAP-084).
 const EMPTY_TIER: &str = "(no files in this tier)";
 
+/// The fix for a query that anchors nothing, stated once.
+///
+/// Anchoring is literal — task words are matched against file paths and
+/// symbol names — so the only advice an agent can act on is "name something
+/// this tree actually contains". The good/vague pair below is the dogfood
+/// evidence from DF-WARPFS-54: 3-6 concrete words anchored 5-7 aimed files,
+/// while a single generic word anchored a handful of unrelated matches and
+/// read like a complete map.
+const ANCHOR_GUIDANCE: &str = "\
+What anchors it: name the subsystem plus what it does — 3-6 concrete words.
+  Strong: \"trigger debounce middleware\", \"parse edges duckdb\", \"workspace mount preflight\"
+  Too vague: a bare \"workspace\" or \"config\" — one generic word matches weakly and returns a thin map.
+";
+
+/// How many top-level subsystems the no-anchor guidance may name.
+const NO_MATCH_CANDIDATE_LIMIT: usize = 8;
+
+/// Top-level subsystems of the graph, sorted, for the no-anchor guidance.
+///
+/// Derived from the graph's own file set rather than an assumed layout, so a
+/// graph of a foreign repo names its own directories (and a flat corpus names
+/// none, in which case the sentence is omitted rather than guessed).
+fn top_level_subsystems(known_files: &HashSet<String>) -> Vec<String> {
+    let mut names: Vec<String> = known_files
+        .iter()
+        .filter_map(|path| path.split_once('/').map(|(top, _)| top))
+        .filter(|top| !top.is_empty() && !top.starts_with('.'))
+        .map(str::to_string)
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    names.truncate(NO_MATCH_CANDIDATE_LIMIT);
+    names
+}
+
+/// Render the no-match result: what was searched, and what would anchor it.
+///
+/// The first body line keeps the long-standing `No files matched task:` form
+/// (callers and tests key on it); everything after it is the DF-WARPFS-54
+/// fix — the cause, the worked examples, and the names of this graph's own
+/// subsystems, which turn "try something else" into a retry the agent can
+/// actually write.
+fn format_no_match(
+    anchors: &[String],
+    task_tokens: &[String],
+    known_files: &HashSet<String>,
+) -> String {
+    let mut output = String::with_capacity(1024);
+    output.push_str("## MAP\n");
+    output.push_str(&format!("No files matched task: {task_tokens:?}\n"));
+    if !anchors.is_empty() {
+        // Weak anchors: seeds were found but none of them is a file that
+        // contributes rows, so naming them is the only trace of the attempt.
+        output.push_str(&format!("Anchors that resolved to no file: {anchors:?}\n"));
+    }
+    output.push_str(
+        "\nNothing anchored: no task word appears in a file path or symbol name this graph knows.\n\n",
+    );
+    if task_tokens.is_empty() {
+        output.push_str(
+            "The task reduced to no searchable words — words shorter than 3 characters are dropped.\n",
+        );
+    }
+    output.push_str(ANCHOR_GUIDANCE);
+
+    let subsystems = top_level_subsystems(known_files);
+    if !subsystems.is_empty() {
+        output.push_str(&format!(
+            "Subsystems this graph knows: {}\n",
+            subsystems.join(", ")
+        ));
+    }
+    output.push_str(
+        "Or run `hilo graph search KEYWORD` for a keyword sweep, then retry here with a word from a hit.\n",
+    );
+    output
+}
+
+/// Whether the task is too thin to name a subsystem — one searchable word or
+/// none at all.
+fn is_thin_task(task_tokens: &[String]) -> bool {
+    task_tokens.len() <= 1
+}
+
+/// Closing note for a task thin enough that its map may mislead.
+///
+/// Appended after the last tier rather than injected into one, so the tier
+/// rows stay machine-parseable.
+fn thin_task_footer(task_tokens: &[String], known_files: &HashSet<String>) -> String {
+    let mut output = String::from("\n(Thin task: ");
+    match task_tokens.first() {
+        Some(token) => output.push_str(&format!("\"{token}\" is a single word — ")),
+        None => output.push_str("no searchable word — "),
+    }
+    output.push_str("the map only shows what that word matches.\n");
+    output.push_str(
+        " Name the subsystem and the action instead, e.g. \"trigger debounce middleware\" or \"workspace mount preflight\".\n",
+    );
+    let subsystems = top_level_subsystems(known_files);
+    if !subsystems.is_empty() {
+        output.push_str(&format!(" Subsystems here: {}.\n", subsystems.join(", ")));
+    }
+    output.push_str(")\n");
+    output
+}
+
 /// Format the full output text with MAP → SIGNATURES → DETAIL sections.
 ///
 /// Files are position-ordered: highest-signal at the edges (first and last),
@@ -2557,11 +2679,12 @@ const EMPTY_TIER: &str = "(no files in this tier)";
 fn format_output(files: &[SignalFile], anchors: &[String], opts: &SignalOpts) -> String {
     if files.is_empty() {
         // Nothing matched: the MAP tier states that explicitly and no
-        // further tiers are emitted (there is nothing to tier).
-        return format!(
-            "## MAP\nNo files matched task: {:?}\n\n(No anchors found — try a different task description.)\n",
-            anchors
-        );
+        // further tiers are emitted (there is nothing to tier). The caller
+        // normally renders this case itself, with the task tokens and the
+        // graph's file set so the guidance can name what WOULD anchor the
+        // query; a direct formatter call has neither and still gets the
+        // cause-and-fix text rather than a bare header.
+        return format_no_match(anchors, &[], &HashSet::new());
     }
 
     if opts.resolution == Resolution::Flat {
@@ -2917,6 +3040,106 @@ mod tests {
         assert!(
             body.starts_with("No files matched"),
             "MAP must state the empty result, got {body:?}"
+        );
+    }
+
+    #[test]
+    fn understand_no_match_names_what_would_anchor_it() {
+        // DF-WARPFS-54: the old message ("No anchors found — try a different
+        // task description") named no fix. The no-match result must state the
+        // cause, show a good/vague pair, and name this graph's own subsystems.
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[
+            edge(
+                "hilo-graph/src/parser.rs",
+                "hilo-core/src/store.rs",
+                "imports",
+            ),
+            edge(
+                "hilo-cli/src/main.rs",
+                "hilo-graph/src/parser.rs",
+                "imports",
+            ),
+        ])
+        .unwrap();
+
+        let result = understand(&db, "zzqx nowhere", &SignalOpts::default()).unwrap();
+
+        assert!(
+            result.files.is_empty(),
+            "premise: no file names this task's words, got {:?}",
+            result.files.iter().map(|f| &f.path).collect::<Vec<_>>()
+        );
+        let first = tier_first_body_line(&result.text, "## MAP");
+        assert!(
+            first.starts_with("No files matched"),
+            "the empty MAP body must still state the miss, got {first:?}"
+        );
+        for expected in [
+            "What anchors it",
+            "trigger debounce middleware",
+            "Too vague",
+            "Subsystems this graph knows: hilo-cli, hilo-core, hilo-graph",
+            "hilo graph search",
+        ] {
+            assert!(
+                result.text.contains(expected),
+                "no-match guidance must carry {expected:?}:\n{}",
+                result.text
+            );
+        }
+
+        // The names come from the graph's own file set, not a baked-in layout.
+        assert_eq!(
+            top_level_subsystems(&graph_file_set(&db)),
+            vec!["hilo-cli", "hilo-core", "hilo-graph"]
+        );
+    }
+
+    #[test]
+    fn understand_thin_task_footer_names_the_fix() {
+        // DF-WARPFS-54 (dogfood run 15): a single generic word anchored a
+        // handful of files and the map read as complete. The footer says what
+        // would sharpen it; a task that already names a subsystem does not
+        // get one.
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[edge("src/auth/middleware.go", "src/db/query.go", "imports")])
+            .unwrap();
+
+        let thin = understand(&db, "middleware", &SignalOpts::default()).unwrap();
+        assert!(
+            !thin.files.is_empty(),
+            "premise: the single word anchors something"
+        );
+        assert!(thin.text.contains("Thin task:"), "got:\n{}", thin.text);
+        assert!(thin.text.contains("\"middleware\" is a single word"));
+        assert!(thin.text.contains("Name the subsystem and the action"));
+        assert!(thin.text.contains("Subsystems here: src"));
+
+        // Negative control: a concrete task gets no footer.
+        let concrete = understand(&db, "auth middleware debounce", &SignalOpts::default()).unwrap();
+        assert!(
+            !concrete.files.is_empty(),
+            "premise: the concrete task anchors"
+        );
+        assert!(
+            !concrete.text.contains("Thin task:"),
+            "a concrete task must not be told it is thin:\n{}",
+            concrete.text
+        );
+    }
+
+    #[test]
+    fn no_match_without_graph_context_omits_the_subsystem_sentence() {
+        // Direct formatter contract: with no file set there is nothing honest
+        // to name, so the sentence is omitted rather than guessed — and a
+        // task that tokenized to nothing says why.
+        let text = format_no_match(&[], &[], &HashSet::new());
+        assert!(text.contains("What anchors it"));
+        assert!(text.contains("reduced to no searchable words"));
+        assert!(
+            !text.contains("Subsystems this graph knows"),
+            "no file set means no subsystem claims:\n{text}"
         );
     }
 
