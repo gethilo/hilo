@@ -173,4 +173,10 @@ fi
 
 # Existing coverage is preserved: the graph unit suite still runs, fail-closed.
 echo "rust-lint: running cargo test -p hilo_graph --lib"
-exec cargo test -p hilo_graph --lib
+cargo test -p hilo_graph --lib || exit $?
+
+# DF-WARPFS-169: keep skills/hilo-usage/SKILL.md in step with the shipped
+# surface (tool count, gitignore claims, file-form-impact claims). Runs last
+# so a stale coaching doc fails the guard even when code is green.
+echo "rust-lint: checking skills/hilo-usage/SKILL.md against shipped surface"
+python3 "$(dirname "$0")/check_usage_skill.py" || exit $?
