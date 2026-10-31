@@ -2500,3 +2500,13 @@ tasks:
   status: complete
   created_at: '2026-10-31T03:07:58.028991+00:00'
   completed_at: '2026-10-31T03:15:08.109935+00:00'
+- id: DF-WARPFS-67
+  title: Fix routine LWW conflict ledger semantics
+  criteria:
+  - On the merged implementation tree, a clean incremental push with unchanged counterpart
+    state reports 0 conflicts and appends no conflicts.jsonl rows, while a genuine
+    divergent transfer still records a conflict; focused planner tests pass; the committed
+    worker trace marker for DF-WARPFS-67 resolves row, test, evidence, and commit.
+  status: complete
+  created_at: '2026-10-31T06:17:20.474948+00:00'
+  completed_at: '2026-10-31T07:50:30.589538+00:00'
