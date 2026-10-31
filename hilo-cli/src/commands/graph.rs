@@ -1495,6 +1495,15 @@ pub fn run_impact(path: &str, max_depth: u32, format: Option<&str>, external: bo
     // still what a bogus subject produces.
     let (project_root, graph_db) = resolve_graph_query_root(&cwd);
     require_completed_warm(&project_root)?;
+
+    // Ensure the .vfs/graph directory exists (create on first use): the
+    // fresh-empty-db path for an unwarmed, uninitialized directory must keep
+    // producing the GAP-039 loud "not in the graph" error for a bogus subject
+    // instead of failing at open with a missing-directory IO error.
+    if let Some(parent) = graph_db.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+
     let graph_db_str = graph_db.to_str().unwrap_or(".vfs/graph/graph.db");
     let graph =
         GraphDB::open_read_only(graph_db_str).context("failed to open DuckDB graph database")?;
@@ -1837,7 +1846,10 @@ fn require_completed_warm(cwd: &std::path::Path) -> Result<()> {
             || cwd.join("hilo.yaml").is_file()
             || cwd.join("hilo.yml").is_file();
         if has_project_manifest {
-            anyhow::bail!("No complete graph warm found. Run `hilo graph warm` first.");
+            anyhow::bail!(
+                "No complete graph warm found. Run `hilo graph warm` first (project root: {}).",
+                cwd.display()
+            );
         }
         return Ok(());
     }
@@ -3909,6 +3921,49 @@ mod tests {
         assert_eq!(
             db,
             project.path().join(".vfs").join("graph").join("graph.db")
+        );
+    }
+
+    // ch:trace row=DF-WARPFS-161 spec=none:board-acceptance wave=none:serial test=hilo-cli/src/commands/graph.rs::graph_query_root_garbage_ancestor_manifest_warm_error_names_project doc=none:no-doc-change prompt=/home/kara/.hermes/scratch/warpfs-foreman-2026-10-31-13-15-07/DF-WARPFS-161-brief.txt evidence=hilo-cli/src/commands/graph.rs::graph_query_root_tests witness=none:local-test verdict=none:worker-pending commit=none:self-referential-hash memory=none:worker-no-write
+    #[test]
+    fn graph_query_root_garbage_ancestor_manifest_warm_error_names_project() {
+        // Acceptance DF-WARPFS-161: with a stray, unparseable ancestor
+        // manifest present, a fresh nested tree must answer for its OWN
+        // project — and when it is not yet warmed, the error must name the
+        // cwd project plus the warm hint, never a path relative to the
+        // foreign ancestor root.
+        let outer = TempDir::new().unwrap();
+        let inner = outer.path().join("inner");
+        fs::create_dir_all(inner.join("src")).unwrap();
+        fs::create_dir_all(outer.path().join(".vfs").join("graph")).unwrap();
+        fs::write(
+            outer.path().join(".vfs").join("manifest.yaml"),
+            "\u{0}\u{1}not utf-8 \u{fffd}",
+        )
+        .unwrap();
+        fs::write(
+            outer.path().join(".vfs").join("graph").join("graph.db"),
+            "outer cache",
+        )
+        .unwrap();
+        fs::create_dir_all(inner.join(".vfs")).unwrap();
+        fs::write(
+            inner.join(".vfs").join("manifest.yaml"),
+            "project:\n  name: inner\n",
+        )
+        .unwrap();
+
+        let (root, _db) = resolve_graph_query_root(&inner.join("src"));
+        assert_eq!(root, inner);
+
+        let err = require_completed_warm(&root).unwrap_err().to_string();
+        assert!(
+            err.contains("hilo graph warm"),
+            "warm error must carry the warm hint, got: {err}"
+        );
+        assert!(
+            err.contains(&inner.display().to_string()),
+            "warm error must name the cwd project root, got: {err}"
         );
     }
 
