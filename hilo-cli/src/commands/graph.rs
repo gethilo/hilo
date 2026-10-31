@@ -1379,7 +1379,7 @@ fn write_last_warm_marker(path: &Path) -> Result<()> {
 /// no `hilo graph warm` pre-requisite needed.
 pub fn run_related(path: &str, relation: Option<&str>, direction: Option<&str>) -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
-    let graph_db = cwd.join(".vfs").join("graph").join("graph.db");
+    let (project_root, graph_db) = resolve_graph_query_root(&cwd);
 
     // Ensure the .vfs/graph directory exists (create on first use).
     if let Some(parent) = graph_db.parent() {
@@ -1399,10 +1399,6 @@ pub fn run_related(path: &str, relation: Option<&str>, direction: Option<&str>) 
     // mount or referencing a file absolutely) resolves to the same node as
     // its repo-relative spelling — and an absolute path outside the project
     // root errors instead of silently answering "No outgoing edges".
-    let project_root = graph
-        .root()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| cwd.clone());
     let path = normalize_subject(&project_root, path)?;
 
     // JIT: parse on cache miss, query on cache hit.
@@ -1487,7 +1483,6 @@ pub fn run_related(path: &str, relation: Option<&str>, direction: Option<&str>) 
 /// only the first file parsed on demand.
 pub fn run_impact(path: &str, max_depth: u32, format: Option<&str>, external: bool) -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
-    require_completed_warm(&cwd)?;
 
     // DF-WARPFS-55: `graph impact` answers for a REPO-RELATIVE subject, so
     // running from a subdirectory must find the project root the graph lives
@@ -1498,13 +1493,8 @@ pub fn run_impact(path: &str, max_depth: u32, format: Option<&str>, external: bo
     // graph exists upward (an unwarmed directory), keep the historical
     // fresh-empty-db path so the GAP-039 loud "not in the graph" error is
     // still what a bogus subject produces.
-    let (project_root, graph_db) = discover_graph_root(&cwd).unwrap_or_else(|| {
-        let graph_db = cwd.join(".vfs").join("graph").join("graph.db");
-        if let Some(parent) = graph_db.parent() {
-            std::fs::create_dir_all(parent).ok();
-        }
-        (cwd.clone(), graph_db)
-    });
+    let (project_root, graph_db) = resolve_graph_query_root(&cwd);
+    require_completed_warm(&project_root)?;
     let graph_db_str = graph_db.to_str().unwrap_or(".vfs/graph/graph.db");
     let graph =
         GraphDB::open_read_only(graph_db_str).context("failed to open DuckDB graph database")?;
@@ -1704,26 +1694,35 @@ fn duplicate_rows_note(raw: usize, distinct: usize) -> Option<String> {
     ))
 }
 
-/// DF-WARPFS-55: find the nearest project graph by walking up from `cwd`.
+/// Resolve the project root and graph cache for all graph query commands.
 ///
-/// Returns `(project_root, graph_db_path)` for the first directory in the
-/// CWD→root chain that carries `.vfs/graph/graph.db` (or a sibling
-/// `edges.jsonl` the open can rebuild from). This is what lets
-/// `hilo graph impact` answer correctly from a subdirectory: the subject is
-/// repo-relative, so the query must run against the repo's graph, not a
-/// fresh, empty db created in the current directory.
-fn discover_graph_root(cwd: &Path) -> Option<(PathBuf, PathBuf)> {
-    for dir in cwd.ancestors() {
-        let graph_db = dir.join(".vfs").join("graph").join("graph.db");
-        if graph_db.exists() {
-            return Some((dir.to_path_buf(), graph_db));
-        }
-        let jsonl = dir.join(".vfs").join("graph").join("edges.jsonl");
-        if jsonl.exists() {
-            return Some((dir.to_path_buf(), graph_db)); // open() rebuilds from jsonl
-        }
-    }
-    None
+/// A manifest is a project boundary, not merely a file that may be parsed. The
+/// nearest manifest ancestor therefore wins before cache discovery: an inner
+/// project with a cold or corrupt cache must not fall through to a usable cache
+/// belonging to an outer project. If there is no inner boundary, a subdirectory
+/// keeps the historical behavior of resolving to its containing project.
+fn resolve_graph_query_root(cwd: &Path) -> (PathBuf, PathBuf) {
+    let project_root = cwd
+        .ancestors()
+        .find(|dir| guard::manifest_path(dir).is_some())
+        .map(Path::to_path_buf);
+
+    let root = project_root.unwrap_or_else(|| {
+        // Preserve the pre-boundary behavior for uninitialized directories:
+        // an existing cache or edges inventory still identifies the query root.
+        cwd.ancestors()
+            .find(|dir| {
+                dir.join(".vfs").join("graph").join("graph.db").exists()
+                    || dir.join(".vfs").join("graph").join("edges.jsonl").exists()
+            })
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| cwd.to_path_buf())
+    });
+
+    (
+        root.clone(),
+        root.join(".vfs").join("graph").join("graph.db"),
+    )
 }
 
 /// DF-WARPFS-55 / DF-WARPFS-133: normalize an impact/related subject to
@@ -1872,11 +1871,18 @@ fn resolve_graph_db_path(cwd: &std::path::Path) -> Option<std::path::PathBuf> {
 /// or eagerly via `hilo graph warm`.
 pub fn run_stats(limit: usize) -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
-    require_completed_warm(&cwd)?;
-    let Some(graph_db) = resolve_graph_db_path(&cwd) else {
+    let (project_root, graph_db) = resolve_graph_query_root(&cwd);
+    require_completed_warm(&project_root)?;
+    if !graph_db.exists()
+        && !project_root
+            .join(".vfs")
+            .join("graph")
+            .join("edges.jsonl")
+            .exists()
+    {
         println!("Graph cache is empty. Query a file or run `hilo graph warm` to populate.");
         return Ok(());
-    };
+    }
 
     let graph_db_str = graph_db.to_str().unwrap_or(".vfs/graph/graph.db");
     let graph =
@@ -1895,7 +1901,7 @@ pub fn run_stats(limit: usize) -> Result<()> {
     // DUPLICATE ROWS in the inventory (never "DuckDB deduped something" — the
     // unique index covers provenance, so distinct rows and distinct
     // identities agree on any clean file).
-    match raw_edges_jsonl_count(&cwd) {
+    match raw_edges_jsonl_count(&project_root) {
         Some((raw, distinct_rows)) => {
             println!(
                 "Total edges: {} distinct / {} raw (edges.jsonl)",
@@ -3834,7 +3840,78 @@ mod tests {
         );
     }
 
-    /// Symbol node ids pass through untouched, unchanged by DF-WARPFS-133.
+    // ch:trace row=DF-WARPFS-161 spec=none:board-acceptance wave=none:serial test=hilo-cli/src/commands/graph.rs::graph_query_root_prefers_nested_project_boundary doc=none:no-doc-change prompt=/home/kara/.hermes/scratch/warpfs-foreman-2026-10-31-13-15-07/DF-WARPFS-161-brief.txt evidence=hilo-cli/src/commands/graph.rs::graph_query_root_tests witness=none:local-test verdict=none:worker-pending commit=none:self-referential-hash memory=none:worker-no-write
+    #[test]
+    fn graph_query_root_prefers_nested_project_boundary() {
+        let outer = TempDir::new().unwrap();
+        let inner = outer.path().join("inner");
+        let cwd = inner.join("src").join("nested");
+        fs::create_dir_all(&cwd).unwrap();
+
+        // The ancestor cache and malformed ancestor manifest must be ignored.
+        fs::create_dir_all(outer.path().join(".vfs").join("graph")).unwrap();
+        fs::write(
+            outer.path().join(".vfs").join("manifest.yaml"),
+            "not: [valid",
+        )
+        .unwrap();
+        fs::write(
+            outer.path().join(".vfs").join("graph").join("graph.db"),
+            "outer cache",
+        )
+        .unwrap();
+        fs::create_dir_all(inner.join(".vfs")).unwrap();
+        fs::write(
+            inner.join(".vfs").join("manifest.yaml"),
+            "project:\n  name: inner\n",
+        )
+        .unwrap();
+
+        let (cold_root, cold_db) = resolve_graph_query_root(&cwd);
+        assert_eq!(cold_root, inner);
+        assert_eq!(cold_db, inner.join(".vfs").join("graph").join("graph.db"));
+        assert!(
+            !cold_db.exists(),
+            "cold inner project must not inherit outer cache"
+        );
+
+        fs::create_dir_all(inner.join(".vfs").join("graph")).unwrap();
+        fs::write(
+            inner.join(".vfs").join("graph").join("graph.db"),
+            "inner cache",
+        )
+        .unwrap();
+        let (warm_root, warm_db) = resolve_graph_query_root(&cwd);
+        assert_eq!(warm_root, inner);
+        assert_eq!(warm_db, inner.join(".vfs").join("graph").join("graph.db"));
+    }
+
+    #[test]
+    fn graph_query_root_bare_subdirectory_uses_containing_project() {
+        let project = TempDir::new().unwrap();
+        let cwd = project.path().join("src").join("nested");
+        fs::create_dir_all(&cwd).unwrap();
+        fs::create_dir_all(project.path().join(".vfs")).unwrap();
+        fs::write(
+            project.path().join(".vfs").join("manifest.yaml"),
+            "project:\n  name: project\n",
+        )
+        .unwrap();
+        fs::create_dir_all(project.path().join(".vfs").join("graph")).unwrap();
+        fs::write(
+            project.path().join(".vfs").join("graph").join("graph.db"),
+            "project cache",
+        )
+        .unwrap();
+
+        let (root, db) = resolve_graph_query_root(&cwd);
+        assert_eq!(root, project.path());
+        assert_eq!(
+            db,
+            project.path().join(".vfs").join("graph").join("graph.db")
+        );
+    }
+
     #[test]
     fn normalize_subject_symbol_nodes_pass_through() {
         let dir = TempDir::new().unwrap();
