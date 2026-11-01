@@ -284,6 +284,8 @@ pub fn run_sync(args: &SyncArgs) -> Result<()> {
     let prefixes: Vec<PathBuf> = args.paths.iter().map(|p| root.join(p)).collect();
 
     let mut total_transferred = 0usize;
+    let mut total_pushed = 0usize;
+    let mut total_pulled = 0usize;
     let mut total_bytes = 0u64;
     for name in &names {
         let backend = registry
@@ -366,13 +368,18 @@ pub fn run_sync(args: &SyncArgs) -> Result<()> {
             }
         };
         total_transferred += stats.transferred;
+        total_pushed += stats.pushed;
+        total_pulled += stats.pulled;
         total_bytes += stats.bytes;
         // DF-WARPFS-67: routine one-sided LWW resolutions are counted as
         // "resolved", NOT as conflicts — only genuine divergent overwrites
         // (counterpart strictly newer than the incoming side at execution)
-        // reach conflicts.jsonl and this number.
+        // reach conflicts.jsonl and this number. DF-WARPFS-68: the summary
+        // splits transfers per direction (pushed upstream vs pulled down).
         println!(
-            "synced {name}: {} transferred ({} bytes), {} resolved (LWW), {} conflicts",
+            "synced {name}: {} pushed, {} pulled, {} transferred ({} bytes), {} resolved (LWW), {} conflicts",
+            stats.pushed,
+            stats.pulled,
             stats.transferred,
             stats.bytes,
             stats.resolved,
@@ -380,7 +387,7 @@ pub fn run_sync(args: &SyncArgs) -> Result<()> {
         );
     }
     println!(
-        "done: {total_transferred} transferred, {total_bytes} bytes across {} backend(s)",
+        "done: {total_transferred} transferred ({total_pushed} pushed, {total_pulled} pulled), {total_bytes} bytes across {} backend(s)",
         names.len()
     );
     Ok(())
