@@ -103,9 +103,11 @@ pub struct SignalFile {
 pub struct SignalOpts {
     /// Approximate token budget (1 token ≈ 4 chars). Default 6000.
     ///
-    /// Only the harmonic resolution consumes it: the DETAIL tier is capped at
-    /// `token_budget * 4 * 60 / 100` chars, so for a fixed graph the output
-    /// size is non-decreasing in this value. `Resolution::Flat` ignores it.
+    /// Harmonic output accounts for the complete rendered response: MAP,
+    /// SIGNATURES, DETAIL, and any footer all share `token_budget * 4` chars.
+    /// The historical 15/25/60 tier split remains the allocation target, with
+    /// unused tier space not charged to another tier. `Resolution::Flat`
+    /// ignores the budget by design.
     pub token_budget: usize,
     /// Maximum anchor/seed files. Default 8.
     pub seed_limit: usize,
@@ -368,15 +370,27 @@ where
     //    file set (DF-WARPFS-54). The formatter receives neither, and
     //    "try a different task description" is advice an agent can only
     //    guess at.
+    let budget_chars = opts.token_budget.saturating_mul(4);
     let text = if signal_files.is_empty() {
-        format_no_match(&anchors, &task_tokens, &known_files)
+        truncate_to_budget(
+            format_no_match(&anchors, &task_tokens, &known_files),
+            budget_chars,
+        )
     } else {
-        let mut text = format_output(&signal_files, &anchors, opts);
         // A one-word task can anchor without naming a subsystem: the map then
         // reads as complete while it is really a keyword dump (DF-WARPFS-54),
-        // so say which words would sharpen it.
-        if is_thin_task(&task_tokens) {
-            text.push_str(&thin_task_footer(&task_tokens, &known_files));
+        // so say which words would sharpen it. Reserve space for this footer
+        // before allocating the three tiers so the documented bound covers the
+        // complete rendered response, not just the tier formatter.
+        let footer = if is_thin_task(&task_tokens) {
+            thin_task_footer(&task_tokens, &known_files)
+        } else {
+            String::new()
+        };
+        let mut text = format_output_with_reserve(&signal_files, &anchors, opts, footer.len());
+        text.push_str(&footer);
+        if opts.resolution != Resolution::Flat {
+            text = truncate_to_budget(text, budget_chars);
         }
         text
     };
@@ -2676,14 +2690,25 @@ fn thin_task_footer(task_tokens: &[String], known_files: &HashSet<String>) -> St
 /// (`<file> →`, `<file>:<line>  <signature>`, `<file> [provenance=…]`, …) is
 /// never emitted — it was indistinguishable from data to any parser reading
 /// the answer.
+#[cfg(test)]
 fn format_output(files: &[SignalFile], anchors: &[String], opts: &SignalOpts) -> String {
+    format_output_with_reserve(files, anchors, opts, 0)
+}
+
+/// Format harmonic output with a reservation for text appended by the caller.
+///
+/// Each tier receives its historical share of the complete budget. Rendering is
+/// line/block aware so a detail candidate that does not fit cannot prevent a
+/// later, smaller candidate from being considered. The final truncation is a
+/// defensive guard for headers and formatting overhead at extremely small
+/// budgets; ordinary budgets stay within their tier allocations without it.
+fn format_output_with_reserve(
+    files: &[SignalFile],
+    anchors: &[String],
+    opts: &SignalOpts,
+    reserved_chars: usize,
+) -> String {
     if files.is_empty() {
-        // Nothing matched: the MAP tier states that explicitly and no
-        // further tiers are emitted (there is nothing to tier). The caller
-        // normally renders this case itself, with the task tokens and the
-        // graph's file set so the guidance can name what WOULD anchor the
-        // query; a direct formatter call has neither and still gets the
-        // cause-and-fix text rather than a bare header.
         return format_no_match(anchors, &[], &HashSet::new());
     }
 
@@ -2691,35 +2716,19 @@ fn format_output(files: &[SignalFile], anchors: &[String], opts: &SignalOpts) ->
         return format_flat(files);
     }
 
-    // Position-ordered file list for DETAIL tier.
-    // Highest-signal files at edges (first and last), lower-signal in middle.
+    let total_budget = opts.token_budget.saturating_mul(4);
+    let available = total_budget.saturating_sub(reserved_chars);
+    let map_budget = available * 15 / 100;
+    let signature_budget = available * 25 / 100;
+    // Tier headers and empty markers are structural overhead, so the final
+    // whole-response guard below remains authoritative when a budget is too
+    // small to hold every section. For normal budgets each tier gets its
+    // historical share without borrowing from its neighbours.
+    let detail_budget = available.saturating_sub(map_budget + signature_budget);
+
     let detail_files: Vec<&SignalFile> = files.iter().filter(|f| f.tier == Tier::Detail).collect();
     let position_ordered = position_order(&detail_files);
 
-    let mut output = String::with_capacity(opts.token_budget * 6);
-
-    // ── MAP tier (15% budget) ──
-    output.push_str("## MAP\n");
-
-    // Render in the caller's relevance order (signal score descending,
-    // anchor grade then path ascending as tie-breaks) so anchors lead the
-    // tier — alphabetical rendering buried the on-task file at MAP position
-    // 54 of 61 behind demo apps (GAP-078).
-    //
-    // REV-WARPFS-6: two path-aware levers apply to this tier only:
-    //
-    // * FILTER — files under an excluded prefix (`opts.map_exclude_paths`;
-    //   tests/fixtures, examples, vendor by default) do not render here at
-    //   all. The MAP is the agent's orientation budget; sample corpora have
-    //   high symbol density and zero relevance, and on hilo's own repo 54
-    //   fixture rows drowned the file the task named. The filter touches
-    //   this tier only: the file stays in the result set, keeps its
-    //   traversal-order tier assignment, and still gets its DETAIL block.
-    // * WEIGHT — the remaining files re-order by signal score minus a
-    //   bounded depth demotion (`map_depth_adjustment`), so of two
-    //   same-band files the shallower (closer to the repo root) leads. The
-    //   cap keeps the weighting inside one relevance band — it re-sorts
-    //   ties, it never promotes a 2-hop file above an anchor.
     let mut map_order: Vec<&SignalFile> = files
         .iter()
         .filter(|sf| !is_map_excluded(&sf.path, &opts.map_exclude_paths))
@@ -2733,58 +2742,70 @@ fn format_output(files: &[SignalFile], anchors: &[String], opts: &SignalOpts) ->
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| a.path.cmp(&b.path))
     });
+
+    let mut map = String::from("## MAP\n");
     if map_order.is_empty() {
-        // Every candidate was filtered (or the graph matched nothing that
-        // survives the filter) — say so instead of shipping a bare header.
-        output.push_str(&format!(
+        map.push_str(&format!(
             "{EMPTY_TIER} — every matched file sits under a MAP-excluded path\n"
         ));
-    }
-    for sf in &map_order {
-        let path = &sf.path;
-        if sf.symbols.is_empty() {
-            output.push_str(&format!("{path} → (no symbols extracted)\n"));
-            continue;
+    } else {
+        for sf in &map_order {
+            let mut row = if sf.symbols.is_empty() {
+                format!("{} → (no symbols extracted)\n", sf.path)
+            } else {
+                let mut row = format!("{} →\n", sf.path);
+                for sym in &sf.symbols {
+                    row.push_str(&format!("  - {sym}\n"));
+                }
+                row
+            };
+            if !append_if_fits(&mut map, &row, map_budget) {
+                break;
+            }
+            row.clear();
         }
-        // One symbol per line — comma-joined symbols become an unreadable
-        // wall of text when names carry truncated signatures (GAP-053).
-        output.push_str(&format!("{path} →\n"));
-        for sym in &sf.symbols {
-            output.push_str(&format!("  - {sym}\n"));
-        }
     }
-    output.push('\n');
+    if map.trim_end() == "## MAP" {
+        map.push_str(EMPTY_TIER);
+        map.push('\n');
+    }
+    map.push('\n');
 
-    // ── SIGNATURES tier (25% budget) ──
-    output.push_str("## SIGNATURES\n");
-
+    let mut signatures = String::from("## SIGNATURES\n");
     let sig_files: Vec<&SignalFile> = files
         .iter()
         .filter(|f| f.tier == Tier::Signature || f.tier == Tier::Detail)
         .collect();
-
     if sig_files.is_empty() {
-        output.push_str(EMPTY_TIER);
-        output.push('\n');
-    }
-    for sf in &sig_files {
-        if sf.signatures.is_empty() {
-            output.push_str(&format!("{}:0  (no symbols)\n", sf.path));
-        } else {
-            for sig in &sf.signatures {
-                output.push_str(&format!("{}:{}  {}\n", sf.path, sig.line, sig.signature));
+        signatures.push_str(EMPTY_TIER);
+        signatures.push('\n');
+    } else {
+        for sf in &sig_files {
+            if sf.signatures.is_empty() {
+                let row = format!("{}:0  (no symbols)\n", sf.path);
+                if !append_if_fits(&mut signatures, &row, signature_budget) {
+                    break;
+                }
+            } else {
+                let mut full = String::new();
+                for sig in &sf.signatures {
+                    full.push_str(&format!("{}:{}  {}\n", sf.path, sig.line, sig.signature));
+                }
+                if !append_if_fits(&mut signatures, &full, signature_budget) {
+                    break;
+                }
             }
         }
     }
-    output.push('\n');
+    if signatures.trim_end() == "## SIGNATURES" {
+        signatures.push_str(EMPTY_TIER);
+        signatures.push('\n');
+    }
+    signatures.push('\n');
 
-    // ── DETAIL tier (60% budget) ──
-    output.push_str("## DETAIL\n");
-
-    let detail_budget_chars = opts.token_budget * 4 * 60 / 100;
-    let mut used = 0usize;
+    let mut detail_output = String::from("## DETAIL\n");
     let mut rendered = 0usize;
-
+    let mut skipped: Vec<(&str, usize)> = Vec::new();
     for sf in &position_ordered {
         if let Some(ref detail) = sf.detail {
             let header = format!(
@@ -2792,31 +2813,61 @@ fn format_output(files: &[SignalFile], anchors: &[String], opts: &SignalOpts) ->
                 sf.path, sf.provenance, sf.signal_score
             );
             let block = format!("{header}{detail}\n\n");
-
-            if used + block.len() > detail_budget_chars && !position_ordered.is_empty() {
-                // Budget exhausted — stop adding detail blocks.
-                break;
+            if append_if_fits(&mut detail_output, &block, detail_budget) {
+                rendered += 1;
+            } else {
+                skipped.push((&sf.path, block.len()));
             }
-
-            output.push_str(&block);
-            used += block.len();
-            rendered += 1;
         }
     }
-
     if rendered == 0 {
         if position_ordered.is_empty() {
-            output.push_str(EMPTY_TIER);
-            output.push('\n');
+            detail_output.push_str(EMPTY_TIER);
         } else {
-            // Candidates existed but not even the first block fit the 60%
-            // slice — say so instead of shipping a bare header.
-            output.push_str(&format!(
-                "{EMPTY_TIER} — no detail block fits the {detail_budget_chars}-char budget\n"
+            let skipped_text = skipped
+                .first()
+                .map(|(path, size)| format!("; skipped {path} ({size} chars)"))
+                .unwrap_or_default();
+            detail_output.push_str(&format!(
+                "{EMPTY_TIER} — no detail block fits the {detail_budget}-char budget{skipped_text}"
             ));
         }
+        detail_output.push('\n');
     }
 
+    let mut output = map;
+    output.push_str(&signatures);
+    output.push_str(&detail_output);
+    truncate_to_budget(output, available)
+}
+
+/// Append a complete line/block when it fits the tier allocation.
+fn append_if_fits(output: &mut String, item: &str, budget: usize) -> bool {
+    if output.len().saturating_add(item.len()) > budget {
+        return false;
+    }
+    output.push_str(item);
+    true
+}
+
+/// Truncate at a UTF-8 boundary for the defensive whole-response bound.
+/// A harmonic response keeps all three tier headers for compatibility. Budgets
+/// below this floor are too small to hold that structural contract, so they use
+/// the historical untruncated rendering rather than emitting a partial answer.
+const MIN_HARMONIC_BUDGET_CHARS: usize = 256;
+
+fn truncate_to_budget(mut output: String, budget: usize) -> String {
+    if budget < MIN_HARMONIC_BUDGET_CHARS || output.len() <= budget {
+        return output;
+    }
+    let end = output
+        .char_indices()
+        .take_while(|(index, _)| *index < budget)
+        .map(|(index, ch)| index + ch.len_utf8())
+        .last()
+        .unwrap_or(0)
+        .min(budget);
+    output.truncate(end);
     output
 }
 
@@ -4155,6 +4206,55 @@ mod tests {
         assert!(
             detail_block_count(&big) > 0,
             "fixture must render detail blocks at a large budget"
+        );
+    }
+
+    #[test]
+    fn understand_harmonic_output_stays_within_total_budget() {
+        let db = budget_fixture();
+        for budget in [1_000usize, 6_000, 40_000] {
+            let text = harmonic_text(
+                &db,
+                &SignalOpts {
+                    token_budget: budget,
+                    ..Default::default()
+                },
+            );
+            assert!(
+                text.len() <= budget * 4,
+                "harmonic output exceeded {budget}-token budget: {} chars",
+                text.len()
+            );
+        }
+    }
+
+    #[test]
+    fn understand_budget_1000_is_strictly_smaller_than_6000() {
+        let db = budget_fixture();
+        let small = harmonic_text(
+            &db,
+            &SignalOpts {
+                token_budget: 1_000,
+                ..Default::default()
+            },
+        );
+        let large = harmonic_text(
+            &db,
+            &SignalOpts {
+                token_budget: 6_000,
+                ..Default::default()
+            },
+        );
+
+        assert!(
+            large.contains(" [provenance="),
+            "the normal budget must render a DETAIL block"
+        );
+        assert!(
+            small.len() < large.len(),
+            "1000-token output ({} chars) must be smaller than 6000-token output ({} chars)",
+            small.len(),
+            large.len()
         );
     }
 
