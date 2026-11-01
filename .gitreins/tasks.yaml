@@ -2520,3 +2520,14 @@ tasks:
   status: complete
   created_at: '2026-10-31T13:24:09.650545+00:00'
   completed_at: '2026-10-31T15:57:14.493231+00:00'
+- id: DF-WARPFS-158
+  title: Fix graph understand budget enforcement and empty DETAIL tier
+  criteria:
+  - On the delivered DF-WARPFS-158 source tree, harmonic graph understand output including
+    MAP, SIGNATURES, DETAIL, and any footer is bounded by token_budget*4 for normal
+    budgets; budget 1000 is strictly shorter than 6000; DETAIL considers later candidates
+    after an oversized block; when none fit, output names a skipped path and block
+    size; focused formatter tests pass.
+  status: complete
+  created_at: '2026-10-31T18:33:51.338860+00:00'
+  completed_at: '2026-11-01T07:08:40.800238+00:00'
