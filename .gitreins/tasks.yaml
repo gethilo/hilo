@@ -2531,3 +2531,16 @@ tasks:
   status: complete
   created_at: '2026-10-31T18:33:51.338860+00:00'
   completed_at: '2026-11-01T07:08:40.800238+00:00'
+- id: DF-WARPFS-68
+  title: Fix pull direction transfer accounting
+  criteria:
+  - 'Implement DF-WARPFS-68: backend sync --pull must transfer only remote-present
+    keys and its summary must distinguish pushed and pulled counts. Add regression
+    coverage for a workspace with local-only files plus exactly one remote-only file,
+    proving --pull transfers exactly one file and leaves local-only files untouched;
+    verify the CLI summary reports separate pushed and pulled counts. Include a fresh
+    ch:trace row=DF-WARPFS-68 marker in the changed test or evidence artifact and
+    bind it to the implementation commit.'
+  status: complete
+  created_at: '2026-11-01T08:09:36.869948+00:00'
+  completed_at: '2026-11-01T10:15:08.805102+00:00'
