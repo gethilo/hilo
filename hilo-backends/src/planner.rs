@@ -177,6 +177,12 @@ pub struct ConflictRecord {
 pub struct SyncStats {
     /// Number of transferred items (pushes + pulls; deletes not counted).
     pub transferred: usize,
+    /// Transfers pushed upstream (local → backend) — the push-direction
+    /// subset of `transferred` (DF-WARPFS-68).
+    pub pushed: usize,
+    /// Transfers pulled downstream (backend → local) — the pull-direction
+    /// subset of `transferred` (DF-WARPFS-68).
+    pub pulled: usize,
     /// Bytes transferred (source-side sizes).
     pub bytes: u64,
     /// Genuine divergent overwrites recorded this run (DF-WARPFS-67; the
@@ -413,7 +419,8 @@ pub fn execute_sync(
 }
 
 /// Execute one transfer item (push or pull): classify the outcome (DF-WARPFS-67),
-/// transfer, count bytes, and align local mtime to the remote `modified` so a
+/// transfer, count bytes and per-direction pushed/pulled counts (DF-WARPFS-68),
+/// and align local mtime to the remote `modified` so a
 /// repeated sync is a no-op.
 ///
 /// Classification against the item's counterpart, observed at execution time
@@ -473,6 +480,7 @@ fn execute_transfer(
                 })?;
             stats.bytes += std::fs::metadata(&item.local_path)?.len();
             stats.transferred += 1;
+            stats.pushed += 1;
             // Align local mtime to the remote modified (no ping-pong).
             if let Ok(ro) = backend.stat(&item.key) {
                 if let Some(modified) = ro.modified {
@@ -530,6 +538,7 @@ fn execute_transfer(
             std::fs::rename(&part, &item.local_path)?;
             stats.bytes += std::fs::metadata(&item.local_path)?.len();
             stats.transferred += 1;
+            stats.pulled += 1;
             if let Ok(ro) = backend.stat(&item.key) {
                 if let Some(modified) = ro.modified {
                     let _ = set_mtime(&item.local_path, modified);
@@ -990,6 +999,10 @@ mod tests {
         let stats = execute_sync(&plan, &backend, root).unwrap();
 
         assert_eq!(stats.transferred, 3);
+        // DF-WARPFS-68 per-direction accounting: brand_new + local_newer
+        // push upstream, remote_newer pulls downstream.
+        assert_eq!(stats.pushed, 2, "new key + one-sided edit are pushes");
+        assert_eq!(stats.pulled, 1, "remote-newer edit is a pull");
         // pull counts dest bytes ("remote-new" = 10); pushes count source
         // bytes ("local-new" = 9, "fresh" = 5).
         assert_eq!(stats.bytes, 10 + 9 + 5);

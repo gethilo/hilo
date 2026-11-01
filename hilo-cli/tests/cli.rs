@@ -3377,6 +3377,35 @@ fn backend_sync_local_pushes_pulls_and_filters() {
         "pull did not update local copy"
     );
 
+    // DF-WARPFS-68: a Pull with one remote-only file must pull exactly that
+    // file, not local-only files that exist only in the workspace.
+    fs::write(backend_root.join("remote-only.txt"), "remote-only\n")
+        .expect("failed to create remote-only file");
+    let remote_only_pull = hilo_cmd()
+        .args(["backend", "sync", "--pull"])
+        .current_dir(&workspace)
+        .output()
+        .expect("failed to spawn remote-only pull sync");
+    assert!(
+        remote_only_pull.status.success(),
+        "remote-only pull failed: {}",
+        String::from_utf8_lossy(&remote_only_pull.stderr)
+    );
+    let remote_only_stdout = String::from_utf8_lossy(&remote_only_pull.stdout);
+    assert!(
+        remote_only_stdout.contains("0 pushed, 1 pulled"),
+        "Pull summary must separate directions: {remote_only_stdout}"
+    );
+    assert!(
+        workspace.join("remote-only.txt").exists(),
+        "remote-only file should be pulled"
+    );
+    assert!(
+        workspace.join("x.tmp").exists(),
+        "local-only ignored file must remain untouched"
+    );
+    // ch:trace row=DF-WARPFS-68 spec=none:board-row wave=none:serial test=hilo-cli/tests/cli.rs::backend_sync_local_pushes_pulls_and_filters doc=none:no-doc-change prompt=none:worker-brief evidence=hilo-cli/tests/cli.rs witness=none:worker-local verdict=none:foreman-judge commit=none:self-referential-hash memory=none:not-written
+
     let _ = fs::remove_dir_all(&dir);
 }
 
