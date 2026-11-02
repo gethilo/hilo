@@ -1279,6 +1279,86 @@ fn graph_warm_help_documents_discovery_overrides() {
 // ─────────────────────── graph warm ───────────────────────
 
 #[test]
+fn graph_warm_workspace_indexes_members_and_marks_cross_repo_edges_external() {
+    let dir = unique_tempdir("warm-workspace-external");
+    let auth = dir.join("auth-service/src");
+    let shared = dir.join("shared-lib/src");
+    fs::create_dir_all(&auth).expect("create auth-service source tree");
+    fs::create_dir_all(&shared).expect("create shared-lib source tree");
+    fs::write(
+        auth.join("index.ts"),
+        "import { authenticate } from '../../shared-lib/src/index';\nexport const login = () => authenticate();\n",
+    )
+    .expect("write auth-service import");
+    fs::write(
+        shared.join("index.ts"),
+        "export function authenticate() { return true; }\n",
+    )
+    .expect("write shared-lib export");
+
+    let init = hilo_cmd()
+        .arg("init")
+        .current_dir(&dir)
+        .output()
+        .expect("spawn hilo init");
+    assert!(
+        init.status.success(),
+        "init failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    fs::write(
+        dir.join(".vfs/manifest.yaml"),
+        "version: 2\nproject:\n  name: workspace\nrepos:\n  - name: auth-service\n    url: /tmp/auth-service\n    ref: main\n    at: auth-service\n  - name: shared-lib\n    url: /tmp/shared-lib\n    ref: main\n    at: shared-lib\n",
+    )
+    .expect("write workspace manifest");
+
+    let warm = hilo_cmd()
+        .args(["graph", "warm", "--workspace"])
+        .current_dir(&dir)
+        .output()
+        .expect("spawn workspace graph warm");
+    assert!(
+        warm.status.success(),
+        "workspace warm failed: {}",
+        String::from_utf8_lossy(&warm.stderr)
+    );
+    let warm_stdout = String::from_utf8_lossy(&warm.stdout);
+    assert!(
+        warm_stdout.contains("Coverage: 2 files"),
+        "workspace warm must count both member files: {warm_stdout}"
+    );
+    let edges = fs::read_to_string(dir.join(".vfs/graph/edges.jsonl"))
+        .expect("read workspace edge inventory");
+    assert!(
+        edges.contains("external:shared-lib:src/index.ts"),
+        "cross-repo import must be stored as an external edge: {edges}"
+    );
+
+    let related = hilo_cmd()
+        .args([
+            "graph",
+            "related",
+            "auth-service/src/index.ts",
+            "--direction",
+            "both",
+        ])
+        .current_dir(&dir)
+        .output()
+        .expect("spawn related query");
+    assert!(
+        related.status.success(),
+        "related query failed: {}",
+        String::from_utf8_lossy(&related.stderr)
+    );
+    let related_stdout = String::from_utf8_lossy(&related.stdout);
+    assert!(
+        related_stdout.contains("external:shared-lib:src/index.ts"),
+        "related query must show the imported workspace member: {related_stdout}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn graph_warm_creates_graph_directory() {
     // `graph warm` should create `.vfs/graph/` and produce edges.
     let dir = unique_tempdir("warm");

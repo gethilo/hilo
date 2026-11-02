@@ -757,18 +757,53 @@ pub fn run_warm_in(
         eprintln!("warning: graph is out of date — {reason}");
     }
 
-    // Collect every source file under the current directory.
+    // Workspace warms are scoped to manifest-declared mounted members.
     let mut source_files = Vec::new();
     let mut exclusions = ExclusionReport::default();
-    collect_source_files(
-        cwd,
-        Path::new(""),
-        None,
-        &include_paths,
-        &mut source_files,
-        &mut exclusions,
-    )
-    .context("failed to walk directory tree for source files")?;
+    let workspace_manifest = if workspace {
+        load_workspace_manifest_at(cwd).ok()
+    } else {
+        None
+    };
+    if let Some(ws) = workspace_manifest.as_ref() {
+        let mut roots = HashSet::new();
+        for mount in &ws.mounts {
+            let path = Path::new(&mount.at);
+            let path = if path.is_absolute() {
+                path.strip_prefix("/").unwrap_or(path)
+            } else {
+                path
+            };
+            let member_root = cwd.join(path);
+            if !member_root.is_dir() || !roots.insert(member_root.clone()) {
+                continue;
+            }
+            let member_includes = load_manifest_at(&member_root)
+                .map(|manifest| manifest.graph.include_paths)
+                .unwrap_or_default();
+            collect_source_files(
+                &member_root,
+                path,
+                None,
+                &member_includes,
+                &mut source_files,
+                &mut exclusions,
+            )
+            .with_context(|| {
+                format!("failed to walk workspace member {}", member_root.display())
+            })?;
+        }
+    } else {
+        collect_source_files(
+            cwd,
+            Path::new(""),
+            None,
+            &include_paths,
+            &mut source_files,
+            &mut exclusions,
+        )
+        .context("failed to walk directory tree for source files")?;
+    }
 
     // When --changed is set, filter to files modified since the last warm.
     // The timestamp is stored in `.vfs/graph/.last_warm`.
@@ -1097,7 +1132,7 @@ pub fn run_warm_in(
 
     // Detect cross-repo external edges when --workspace is set.
     if workspace {
-        if let Ok(ws) = load_workspace_manifest() {
+        if let Some(ws) = workspace_manifest.as_ref() {
             let pairs: Vec<(String, String)> = ws
                 .mounts
                 .iter()
@@ -1107,6 +1142,12 @@ pub fn run_warm_in(
 
             let mut external_count = 0;
             for edge in all_edges.iter_mut() {
+                if edge.to.starts_with("local:") {
+                    if let Some(target) = resolve_workspace_local_target(cwd, &edge.from, &edge.to)
+                    {
+                        edge.to = target;
+                    }
+                }
                 if let Some((repo, path)) = edges::find_external_repo(&edge.to, &repo_mounts) {
                     edge.to = edges::format_external_edge(&repo, &path);
                     external_count += 1;
@@ -3257,10 +3298,13 @@ fn glob_matches(pattern: &str, path: &str) -> bool {
 /// The candidate list is shared with the project precondition
 /// ([`guard::ensure_project_root`]) so a directory warm accepts can never
 /// disagree with a directory the loader can read.
-fn load_manifest() -> Result<hilo_core::manifest::Manifest> {
+fn load_manifest_at(root: &Path) -> Result<hilo_core::manifest::Manifest> {
     for path in guard::MANIFEST_PATHS {
-        if std::path::Path::new(path).exists() {
-            return Ok(hilo_core::manifest::Manifest::from_file(path)?);
+        let path = root.join(path);
+        if path.exists() {
+            return Ok(hilo_core::manifest::Manifest::from_file(
+                &path.to_string_lossy(),
+            )?);
         }
     }
     anyhow::bail!(
@@ -3268,11 +3312,50 @@ fn load_manifest() -> Result<hilo_core::manifest::Manifest> {
     );
 }
 
-/// Load the workspace manifest from the first available path.
-fn load_workspace_manifest() -> Result<hilo_core::workspace::WorkspaceManifest> {
+fn load_manifest() -> Result<hilo_core::manifest::Manifest> {
+    load_manifest_at(Path::new("."))
+}
+
+fn resolve_workspace_local_target(root: &Path, from: &str, target: &str) -> Option<String> {
+    let specifier = target.strip_prefix("local:")?;
+    let source_parent = Path::new(from).parent()?;
+    let candidate = root.join(source_parent).join(specifier);
+    let candidates = if candidate.is_dir() {
+        [
+            "index.ts",
+            "index.tsx",
+            "index.js",
+            "index.jsx",
+            "index.rs",
+            "__init__.py",
+        ]
+        .into_iter()
+        .map(|name| candidate.join(name))
+        .collect::<Vec<_>>()
+    } else if candidate.extension().is_some() {
+        vec![candidate]
+    } else {
+        ["ts", "tsx", "js", "jsx", "rs", "py"]
+            .into_iter()
+            .map(|ext| candidate.with_extension(ext))
+            .collect()
+    };
+    candidates.into_iter().find_map(|path| {
+        path.canonicalize()
+            .ok()?
+            .strip_prefix(root.canonicalize().ok()?)
+            .ok()
+            .map(|relative| relative.to_string_lossy().replace('\\', "/"))
+    })
+}
+
+fn load_workspace_manifest_at(root: &Path) -> Result<hilo_core::workspace::WorkspaceManifest> {
     for path in guard::MANIFEST_PATHS {
-        if std::path::Path::new(path).exists() {
-            return Ok(hilo_core::workspace::WorkspaceManifest::load(path)?);
+        let path = root.join(path);
+        if path.exists() {
+            return Ok(hilo_core::workspace::WorkspaceManifest::load(
+                &path.to_string_lossy(),
+            )?);
         }
     }
     anyhow::bail!("No workspace manifest found");

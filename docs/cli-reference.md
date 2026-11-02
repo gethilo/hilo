@@ -105,7 +105,9 @@ applied 0 of 1 records
 
 Walk the directory tree, parse all source files with tree-sitter, and
 build the dependency graph. Writes to `.vfs/graph/edges.jsonl` and
-`.vfs/graph/graph.db`.
+`.vfs/graph/graph.db`. With `--workspace`, the workspace manifest's mounted
+member roots are scanned independently (using each member's inclusion rules),
+and imports resolved into another member are recorded as `external:<repo>:<path>`.
 
 ```bash
 hilo graph warm
