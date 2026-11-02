@@ -743,6 +743,13 @@ The classification walks up from the current directory (like `cargo` finding
 `Cargo.toml`), so a run inside a Hilo subdirectory still reads as `self`; it
 stops at the first repository root that is not Hilo, so a foreign checkout
 nested under a Hilo tree reads as `foreign`.
+
+The rest of the COV chain shares this gate: `graph coverage-links`,
+`graph test-classes`, and `graph rollup` model the Hilo repository itself
+only, so on a foreign tree each refuses up front with that limitation named —
+never the missing-artifact instruction that would send the user to
+`graph surfaces`, a command that refuses on this very tree.
+
 ### `test-classes`
 
 Report the test-class taxonomy: how many tests of each **class** exist and,

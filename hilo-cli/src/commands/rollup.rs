@@ -27,6 +27,15 @@ const NAME_LIST_CAP: usize = 20;
 
 /// `hilo graph rollup [--by feature|crate|module] [--json] [--group <name>]`
 pub fn run(json: bool, by: &str, group: Option<&str>) -> Result<()> {
+    let cwd = std::env::current_dir().context("failed to determine the current directory")?;
+    // DF-WARPFS-159: the COV chain is self-hosted-only. Refuse HERE on a
+    // foreign tree, naming that limitation, before any artifact check can
+    // send the user to `hilo graph surfaces` — a command that refuses on
+    // this very tree. (Rollup must refuse even though it tolerates absent
+    // COV artifacts on a self tree — the artifacts' absence is never what
+    // saves a foreign tree from a confident wrong answer.)
+    crate::commands::surfaces::require_self_scope(&cwd, "graph rollup")?;
+
     // A `--by` typo is a usage error, so it fails before any artifact is read.
     let by = GroupBy::parse(by).ok_or_else(|| {
         let valid = GroupBy::ALL
@@ -37,7 +46,6 @@ pub fn run(json: bool, by: &str, group: Option<&str>) -> Result<()> {
         anyhow::anyhow!("unknown grouping dimension '{by}'. Valid dimensions: {valid}")
     })?;
 
-    let cwd = std::env::current_dir().context("failed to determine the current directory")?;
     let graph_dir = cwd.join(".vfs").join("graph");
 
     let surfaces = read_surfaces(&graph_dir.join("surfaces.jsonl"))?;
@@ -304,5 +312,51 @@ mod tests {
             source: GroupSource::Crate,
         };
         assert_eq!(row.source.as_str(), "crate");
+    }
+
+    /// DF-WARPFS-159 regression: on a WARMed foreign repo (its own `.git` plus
+    /// planted COV artifacts) `graph rollup` must refuse at the scope
+    /// precondition with the self-only limitation NAMED — not the
+    /// missing-artifact instruction that would send the user to `hilo graph
+    /// surfaces`, a command that refuses on this very tree — and must leave
+    /// every planted artifact byte-identical (no foreign writes, no new
+    /// artifacts). This matters MORE for rollup than for its siblings: it
+    /// tolerates absent COV artifacts on a self tree (a named-absence state),
+    /// so on a foreign tree only the scope precondition stands between the
+    /// user and a confident empty answer. Unit-level: this exercises the
+    /// exact `run` path the CLI dispatches (cli.rs `rollup::run`), not an
+    /// external process.
+    #[test]
+    fn warmed_foreign_repo_gets_the_named_scope_error_and_no_artifact_writes() {
+        let foreign = crate::commands::surfaces::scope_fixtures::warmed_foreign_repo();
+        let before = crate::commands::surfaces::scope_fixtures::snapshot_tree(foreign.path());
+
+        // `run` reads the process CWD (the CLI contract), so switch into the
+        // foreign repo for the call and restore it on every exit path — the
+        // discipline the cwd-touching graph.rs suites document. The lock
+        // serializes the COV scope tests against each other: the cwd is
+        // process-global and the harness runs tests on parallel threads.
+        let _guard = crate::commands::surfaces::scope_fixtures::cwd_lock();
+        let prev_cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(foreign.path()).unwrap();
+        let result = run(false, "crate", None);
+        std::env::set_current_dir(prev_cwd).unwrap();
+        drop(_guard);
+
+        let err = result.expect_err("a warmed foreign repo must be refused");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("graph rollup"), "{msg}");
+        assert!(msg.contains("Hilo repository itself only"), "{msg}");
+        assert!(msg.contains("scope: foreign"), "{msg}");
+        assert!(
+            !msg.contains("run `hilo graph surfaces` first"),
+            "the foreign refusal must not instruct the user to run a command \
+             that refuses on this very tree: {msg}"
+        );
+        assert_eq!(
+            before,
+            crate::commands::surfaces::scope_fixtures::snapshot_tree(foreign.path()),
+            "planted foreign artifacts must be neither modified nor extended"
+        );
     }
 }

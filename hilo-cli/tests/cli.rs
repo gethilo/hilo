@@ -168,6 +168,25 @@ fn run_hilo_ok(dir: &std::path::Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
+/// Plant the three Hilo workspace markers in `dir` so `detect_scope` (GAP-112)
+/// classifies it as `self`. The COV chain's downstream commands are
+/// self-hosted-only (DF-WARPFS-159): tests that exercise their downstream
+/// logic through the compiled binary opt their fixture into the self class
+/// this way. The foreign-refusal contract itself is covered by the unit
+/// tests in the command modules.
+fn plant_hilo_markers(dir: &std::path::Path) {
+    for marker in [
+        "hilo-cli/src/cli.rs",
+        "hilo-mcp/src/tools/mod.rs",
+        "hilo-graph/src/lib.rs",
+    ] {
+        let path = dir.join(marker);
+        fs::create_dir_all(path.parent().expect("marker path has a parent"))
+            .expect("failed to create marker dir");
+        fs::write(&path, "").expect("failed to write marker");
+    }
+}
+
 // ─────────────────────── init ───────────────────────
 
 #[test]
@@ -4246,6 +4265,9 @@ fn graph_impact_from_subdirectory_matches_root_run() {
 #[test]
 fn graph_test_classes_reports_totals_and_flags_class_gap_surfaces() {
     let dir = unique_tempdir("test-classes");
+    // The COV chain is self-hosted-only (DF-WARPFS-159); this fixture tests
+    // the downstream taxonomy, so it must classify as self (GAP-112).
+    plant_hilo_markers(&dir);
     let graph = dir.join(".vfs").join("graph");
     fs::create_dir_all(&graph).expect("failed to create .vfs/graph");
     fs::create_dir_all(dir.join("src")).expect("failed to create src");
@@ -4379,6 +4401,10 @@ fn graph_test_classes_reports_totals_and_flags_class_gap_surfaces() {
 #[test]
 fn graph_test_classes_names_the_missing_prerequisite() {
     let dir = unique_tempdir("test-classes-missing");
+    // The COV chain is self-hosted-only (DF-WARPFS-159); this fixture tests
+    // the missing-input naming BEHIND the scope gate, so it must classify as
+    // self (GAP-112) — otherwise the scope refusal fires first.
+    plant_hilo_markers(&dir);
     // No .vfs/graph at all: surfaces.jsonl is the first missing input.
     let out = run_hilo_with_retry(hilo_cmd().args(["graph", "test-classes"]).current_dir(&dir));
     assert!(!out.status.success(), "must fail without surfaces.jsonl");
