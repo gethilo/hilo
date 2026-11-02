@@ -2571,3 +2571,31 @@ tasks:
   status: complete
   created_at: '2026-11-02T08:52:31.315094+00:00'
   completed_at: '2026-11-02T08:52:39.665520+00:00'
+- id: QA-WARPFS-REVIEW-2
+  title: Collect cell failed due to missing agent (run 1792978032105-1)
+  criteria:
+  - "PASS when: (1) the collect step is re-run as bash /home/kara/.hermes/scripts/bunker-qa.sh\
+    \ collect --evidence /tmp/bunker-qa-evidence-1792978032105-1.jsonl and its honest\
+    \ result is recorded in the evidence file; (2) the graded board row for the collected\
+    \ run_battery cell (launch refused: stand-in review dir is a subdirectory of git\
+    \ repo /home/kara) is appended to .coding-hermes/board/tasks.jsonl \u2014 one\
+    \ row per collected cell, run_battery and collect both represented on the board;\
+    \ (3) every line of the evidence file parses as JSON; (4) bunker list on every\
+    \ server (bunker-mvp, bunker-las-02, bunker-las-03) shows no agent from this run\
+    \ still running"
+  status: complete
+  created_at: '2026-11-02T09:30:26.353663+00:00'
+  completed_at: '2026-11-02T09:40:38.147967+00:00'
+- id: QA-WARPFS-REVIEW-1
+  title: "warpfs-review battery uncollected at collect deadline \u2014 second collect\
+    \ pass (run 1792978032105-1)"
+  criteria:
+  - "PASS when: (1) a second collect pass has run for evidence file /tmp/bunker-qa-evidence-1792978032105-1.jsonl\
+    \ and its result is recorded in that file; (2) bunker list exits 0 showing zero\
+    \ agents left running from the interrupted warpfs-review battery (run 1792978032105-1)\
+    \ \u2014 any other project's live agent must be attributed, not destroyed; (3)\
+    \ the graded rows for the cells that did run are appended to .coding-hermes/board/tasks.jsonl\
+    \ (one row per collected cell: run_battery and collect both represented)"
+  status: complete
+  created_at: '2026-11-02T09:45:00.315318+00:00'
+  completed_at: '2026-11-02T09:45:01.091057+00:00'
