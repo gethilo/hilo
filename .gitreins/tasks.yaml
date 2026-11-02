@@ -2554,3 +2554,20 @@ tasks:
   status: complete
   created_at: '2026-11-02T04:24:49.527811+00:00'
   completed_at: '2026-11-02T07:03:48.205936+00:00'
+- id: INT-CI-016-R2
+  title: Verify INT-CI-016 exact-head green and close the CI-red row
+  criteria:
+  - 'CI acceptance and traceability verified: gh run view 41411245038 --repo gethilo/hilo
+    shows headSha 71860107a1b06cb74f9a0119425346187c8b0d87, conclusion success, and
+    job Build & Test (stable) success; the two original master failures are classified
+    repository-owned (run 41383605582 at 350736e5 failed job Build & Test (stable)
+    step Build; run 41390332447 at 13414d29 failed the same job step Test with test
+    backend_mount_local_type_rejected at hilo-cli/tests/cli.rs:3250) and were repaired
+    by bcd058e7 + bd2570c1 + 98892f9e merged at 5ea315e6115f101b957595462ee4284e9242e91a
+    with tier-2 verdict ac364eb0 PASS; and the closeout preserves a ch:trace marker
+    binding verified head 71860107a1b06cb74f9a0119425346187c8b0d87 and evidence run
+    41411245038 in board row INT-CI-016 closeout fields in .coding-hermes/board/tasks.jsonl
+    (working tree or committed)'
+  status: complete
+  created_at: '2026-11-02T08:52:31.315094+00:00'
+  completed_at: '2026-11-02T08:52:39.665520+00:00'
