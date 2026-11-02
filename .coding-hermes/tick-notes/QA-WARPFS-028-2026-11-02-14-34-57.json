@@ -1,0 +1,28 @@
+{
+  "tick_id": "warpfs-foreman-2026-11-02-14-34-57",
+  "selected_row": "QA-WARPFS-028",
+  "classification": "infrastructure-owner-controlled",
+  "status": "pending",
+  "tested_head": "90b943bb13b0a6e45a0d6201000abc0b7a5e5ea6",
+  "probes": [
+    {
+      "command": "ssh bunker-mvp df -h /",
+      "output": "/dev/sda1 150G 59G 86G 41% /",
+      "exit_code": 0
+    },
+    {
+      "command": "ssh bunker-mvp bunker list",
+      "output": "No agents found.",
+      "exit_code": 0
+    },
+    {
+      "command": "ssh bunker2 true",
+      "output": "reachable",
+      "exit_code": 0
+    }
+  ],
+  "result": "The prior bunker-mvp ENOSPC and bunker2 reachability blockers are not reproduced. The full owner-controlled clean-machine battery is still not launched because current repository evidence does not provide an owner-authorized runnable battery invocation. No product cell was graded.",
+  "owner_action": "QA owner must launch the full battery on a verified reachable JIT server, capture pre-launch disk and SSH-port evidence, and grade every named cell.",
+  "wave": "none:verification-only",
+  "trace": "ch:trace row=QA-WARPFS-028 spec=none:owner-infrastructure-acceptance wave=warpfs-foreman-2026-11-02-14-34-57#verification-only test=none:battery-not-run doc=none:no-doc-change prompt=none:verification-only evidence=.coding-hermes/tick-notes/QA-WARPFS-028-2026-11-02-14-34-57.json witness=live:ssh+bunker-status verdict=none:verification-only-no-task commit=none:pending-closeout"
+}
