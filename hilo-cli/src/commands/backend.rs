@@ -29,7 +29,7 @@ pub enum BackendCommand {
 
 #[derive(Args)]
 pub struct MountArgs {
-    /// Backend type: "s3", "gdrive", "onedrive", "dropbox", "external", "local"
+    /// Backend type: "s3", "gdrive", "onedrive", "dropbox", "external"
     #[arg(long)]
     pub r#type: String,
     /// S3 bucket name
@@ -108,8 +108,9 @@ pub struct SetupArgs {
 /// into ~/.hilo/worktrees, invisible to `list`/`sync`. Any type outside
 /// s3|gdrive|onedrive|dropbox|external now fails with the same
 /// `unknown backend type` InvalidConfig error (exit 2, nothing on stdout).
-/// LocalDriver (DF-WARPFS-125) is reachable via --type local for the
-/// zero-credential test/demo path.
+/// LocalDriver (DF-WARPFS-125) stays a `hilo-backends` library API,
+/// reachable only via a hand-written mounts.yaml (e.g. tests), never via
+/// `--type local`.
 pub fn run_mount(args: &MountArgs) -> Result<()> {
     match run_mount_new(args) {
         Ok(()) => Ok(()),
