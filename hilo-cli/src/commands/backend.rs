@@ -129,10 +129,14 @@ fn run_mount_new(args: &MountArgs) -> Result<(), BackendError> {
         "onedrive" => BackendKind::OneDrive,
         "dropbox" => BackendKind::Dropbox,
         "external" => BackendKind::External,
-        "local" => BackendKind::Local,
+        "local" => {
+            return Err(BackendError::InvalidConfig(
+                "unknown backend type: local (expected s3|gdrive|onedrive|dropbox|external)".into(),
+            ))
+        }
         other => {
             return Err(BackendError::InvalidConfig(format!(
-                "unknown backend type: {other} (expected s3|gdrive|onedrive|dropbox|external|local)"
+                "unknown backend type: {other} (expected s3|gdrive|onedrive|dropbox|external)"
             )))
         }
     };

@@ -2546,3 +2546,11 @@ tasks:
   status: complete
   created_at: '2026-11-01T08:09:36.869948+00:00'
   completed_at: '2026-11-01T10:15:08.805102+00:00'
+- id: INT-CI-016
+  title: 'P1 CI red: unreachable pattern in backend.rs:434'
+  criteria:
+  - cargo build --workspace succeeds under -D warnings; CI Build & Test job is green
+    on the pushed commit
+  status: complete
+  created_at: '2026-11-02T04:24:49.527811+00:00'
+  completed_at: '2026-11-02T04:32:51.589069+00:00'
