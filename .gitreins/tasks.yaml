@@ -2281,8 +2281,9 @@ tasks:
   - 'file-form impact/related returns dependents for Ruby files (sidekiq corpus: lib/sidekiq/api.rb
     shows 21 dependents); stats no longer lists resolved files as orphans; cargo test
     -p hilo_graph --lib PASS'
-  status: in_progress
+  status: complete
   created_at: '2026-10-22T00:23:51.749192+00:00'
+  completed_at: '2026-11-02T03:03:18.091884+00:00'
 - id: DF-WARPFS-49
   title: fix workspace mount writable flag
   criteria:
@@ -2311,8 +2312,9 @@ tasks:
     headSha 0c46f71ba6d046f47e27c0e503c320dcc8a12899, conclusion success, and Build
     & Test (stable) success; preserve a trace marker bound to the verified head and
     evidence run.'
-  status: in_progress
+  status: complete
   created_at: '2026-10-22T22:57:08.925397+00:00'
+  completed_at: '2026-11-02T03:14:29.369287+00:00'
 - id: DF-WARPFS-162
   title: hilo init hooks safety
   criteria:
