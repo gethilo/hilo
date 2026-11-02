@@ -1442,6 +1442,15 @@ pub fn run_related(path: &str, relation: Option<&str>, direction: Option<&str>) 
     // root errors instead of silently answering "No outgoing edges".
     let path = normalize_subject(&project_root, path)?;
 
+    // Same-HEAD working-tree source additions are invisible to the graph cache:
+    // `related_or_parse` only JIT-parses a subject missing from the graph. Warn
+    // before that cache hit so the caller cannot mistake an older source set
+    // for the current graph. The freshness check is fail-open outside Git or
+    // with a missing/corrupt ledger.
+    if let Some(reason) = hilo_graph::freshness::check_query_staleness(&project_root) {
+        eprintln!("warning: graph is out of date — {reason}");
+    }
+
     // JIT: parse on cache miss, query on cache hit.
     let edges = graph
         .related_or_parse(&path, relation, dir)

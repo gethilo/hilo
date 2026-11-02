@@ -135,6 +135,59 @@ impl Project {
             .output()
             .expect("hilo binary must spawn")
     }
+
+    fn related_reverse(&self, path: &str) -> std::process::Output {
+        Command::new(BIN)
+            .args(["graph", "related", path, "--direction", "reverse"])
+            .current_dir(self.path())
+            .env("HOME", self.home.path())
+            .output()
+            .expect("hilo binary must spawn")
+    }
+}
+
+#[test]
+fn additive_source_change_is_not_silent() {
+    let project = Project::new();
+    project.commit("src/target.ts", "export const target = 1;\n", "c1 target");
+    project.commit(
+        "src/initial.ts",
+        "import { target } from \"./target\";\n",
+        "c2 initial importer",
+    );
+
+    let out = project.warm();
+    assert!(
+        out.status.success(),
+        "initial warm failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let warm_head = project.head();
+
+    // Keep HEAD unchanged and do not warm after adding a source importer.
+    std::fs::write(
+        project.path().join("src/added.ts"),
+        "import { target } from \"./target\";\n",
+    )
+    .unwrap();
+    let out = project.related_reverse("src/target.ts");
+    assert_eq!(
+        project.head(),
+        warm_head,
+        "the additive repro must keep HEAD fixed"
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "related failed: {stderr}");
+    assert!(
+        stdout.contains("src/initial.ts"),
+        "baseline importer missing from related output: {stdout}"
+    );
+    assert!(
+        stdout.contains("src/added.ts")
+            || stderr.contains("graph is as of") && stderr.contains("hilo graph warm"),
+        "same-HEAD additive source must be included or clearly warn with graph as-of state and warm remedy; stdout: {stdout}; stderr: {stderr}"
+    );
 }
 
 #[test]
