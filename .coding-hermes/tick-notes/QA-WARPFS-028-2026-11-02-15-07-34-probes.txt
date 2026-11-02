@@ -1,0 +1,12 @@
+tick=warpfs-foreman-2026-11-02-15-07-34
+source=reused immediately preceding sibling verification-only evidence at 2026-11-02T14:34:57Z
+command=ssh bunker-mvp df -h /
+observed=bunker-mvp 86G available, 41% used
+command=bunker list --server bunker-mvp
+observed=bunker-mvp ONLINE, 0 agents
+command=ssh bunker2 true
+observed=reachable
+product_cells=0
+classification=infrastructure-owner-controlled
+result=full owner-controlled clean-machine battery not launched; no current owner-authorized runnable invocation identified
+owner_action=QA owner must launch the full battery on a verified reachable JIT server, capture pre-launch disk and SSH-port evidence, and grade every named cell
