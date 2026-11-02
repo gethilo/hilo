@@ -12,10 +12,11 @@
 //!    worktrees and custom `core.worktree` resolve the way Git itself
 //!    resolves them.
 //! 3. [`check_staleness`] — the comparison: `Some(reason)` when the working
-//!    tree's HEAD differs from the ledger's `last_warm_head` (or the ledger
-//!    never recorded a HEAD while a repo exists), `None` when the graph is
-//!    provably fresh or freshness is undecidable (not a git repo, git
-//!    unavailable, corrupt/absent ledger).
+//!    tree's HEAD differs from the ledger's `last_warm_head`; the related
+//!    [`check_query_staleness`] query guard also detects tracked or
+//!    untracked source files changed after a warm at the same HEAD; `None`
+//!    when the graph is provably fresh or freshness is undecidable (not a git
+//!    repo, git unavailable, corrupt/absent ledger).
 //!
 //! Design rules inherited from the marker history (GAP-087): the ledger is
 //! written ONLY by a completed warm (the repair already happened), it lives
@@ -147,6 +148,37 @@ pub fn git_head(project_dir: &Path) -> Option<String> {
     }
 }
 
+/// Return the first tracked or untracked source path changed in the working
+/// tree, or `None` when Git cannot answer. Git already maintains the index and
+/// untracked-file walk needed here, so this avoids a second full source parse
+/// or graph rebuild on each query. Non-source changes are ignored.
+fn changed_source_path(project_dir: &Path) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(project_dir)
+        .args(["status", "--porcelain=v1", "--untracked-files=all", "--"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.get(3..))
+        .flat_map(|paths| paths.split(" -> "))
+        .map(str::trim)
+        .map(|path| path.trim_matches('"'))
+        .find(|path| {
+            Path::new(path)
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .and_then(crate::parser::Language::from_extension)
+                .is_some()
+        })
+        .map(str::to_string)
+}
+
 /// Staleness verdict returned by [`check_staleness`]: the human-readable
 /// reason the graph is presumed out of date. `None` means fresh (or
 /// freshness undecidable — not a git repo, no git binary, corrupt ledger):
@@ -161,8 +193,7 @@ pub type StaleReason = String;
 /// - `None` — the graph is fresh (HEAD matches the ledger), or freshness is
 ///   undecidable: not a git repository, git unavailable, unborn HEAD, or a
 ///   missing/corrupt ledger. Undecidable states resolve to "not stale" so
-///   the check can never wedge a warm; the next completed warm stamps the
-///   ledger and future comparisons become decidable.
+///   the check can never wedge a warm.
 #[must_use]
 pub fn check_staleness(project_dir: &Path) -> Option<StaleReason> {
     let head = git_head(project_dir)?;
@@ -172,9 +203,27 @@ pub fn check_staleness(project_dir: &Path) -> Option<StaleReason> {
         Some(last) if last != head => Some(format!(
             "git HEAD is {head} but the last graph warm ran at {last} — pull? run a full `hilo graph warm`"
         )),
-        // Same HEAD, or the ledger predates stamping (last_warm_head: None):
-        // no evidence of staleness. The warn path stays silent; warm stamps
-        // the ledger so the NEXT pull is detectable.
+        _ => None,
+    }
+}
+
+/// Check all freshness signals relevant before serving a query. This combines
+/// the HEAD and same-HEAD working-tree checks so a query runs one Git HEAD
+/// lookup and only asks Git for changed paths after the ledger matches.
+#[must_use]
+pub fn check_query_staleness(project_dir: &Path) -> Option<StaleReason> {
+    let head = git_head(project_dir)?;
+    let graph_dir = project_dir.join(".vfs").join("graph");
+    let state = FreshnessState::load(&graph_dir);
+    match state.last_warm_head {
+        Some(last) if last != head => Some(format!(
+            "git HEAD is {head} but the last graph warm ran at {last} — pull? run a full `hilo graph warm`"
+        )),
+        Some(last) => changed_source_path(project_dir).map(|path| {
+            format!(
+                "graph is as of git HEAD {last}, but source file {path} changed in the working tree — run a full `hilo graph warm`"
+            )
+        }),
         _ => None,
     }
 }
@@ -350,6 +399,58 @@ mod tests {
             reason.contains("0000000"),
             "reason must name the last-warm HEAD: {reason}"
         );
+    }
+
+    #[test]
+    fn check_query_staleness_reports_source_change_at_same_head() {
+        let (dir, head) = git_project();
+        let graph = dir.path().join(".vfs").join("graph");
+        std::fs::create_dir_all(&graph).unwrap();
+        FreshnessState::stamped(Some(head.clone()))
+            .write(&graph)
+            .unwrap();
+        std::fs::write(dir.path().join("added.rs"), "fn added() {}\n").unwrap();
+
+        let reason = check_query_staleness(dir.path()).expect("source addition must be reported");
+        assert!(
+            reason.contains("graph is as of git HEAD"),
+            "reason: {reason}"
+        );
+        assert!(
+            reason.contains("added.rs"),
+            "reason must name the changed source: {reason}"
+        );
+        assert!(
+            reason.contains("hilo graph warm"),
+            "reason must name the remedy: {reason}"
+        );
+    }
+
+    #[test]
+    fn check_query_staleness_ignores_non_source_worktree_changes() {
+        let (dir, head) = git_project();
+        let graph = dir.path().join(".vfs").join("graph");
+        std::fs::create_dir_all(&graph).unwrap();
+        FreshnessState::stamped(Some(head)).write(&graph).unwrap();
+        std::fs::write(dir.path().join("notes.txt"), "not graph input\n").unwrap();
+        assert_eq!(check_query_staleness(dir.path()), None);
+    }
+
+    #[test]
+    fn check_query_staleness_fails_open_for_corrupt_ledger() {
+        let (dir, _head) = git_project();
+        let graph = dir.path().join(".vfs").join("graph");
+        std::fs::create_dir_all(&graph).unwrap();
+        std::fs::write(graph.join(FRESHNESS_STATE_FILE), "{{corrupt").unwrap();
+        std::fs::write(dir.path().join("added.rs"), "fn added() {}\n").unwrap();
+        assert_eq!(check_query_staleness(dir.path()), None);
+    }
+
+    #[test]
+    fn check_query_staleness_none_outside_git_repo() {
+        let dir = plain_project();
+        std::fs::write(dir.path().join("added.rs"), "fn added() {}\n").unwrap();
+        assert_eq!(check_query_staleness(dir.path()), None);
     }
 
     #[test]

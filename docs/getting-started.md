@@ -160,8 +160,12 @@ you need to regenerate:
 From the clone root:
 
 ```bash
-hilo init        # see note below — safe on a clone, but usually unnecessary
-hilo graph warm  # parse all sources, write .vfs/graph/graph.db + .last_warm
+# Hooks are local Git state and do not travel with a clone. Run init only when
+# this clone needs Hilo initialization; it installs local hooks only when that
+# initialization creates a fresh manifest:
+hilo init        # creates the manifest, cache ignore rules, and local hooks when appropriate
+# A clone still needs this manual full warm to build its initial graph cache:
+hilo graph warm  # parse all sources and write .vfs/graph/graph.db + .last_warm
 hilo graph stats # verify: prints edge/file counts from the rebuilt cache
 ```
 
@@ -180,12 +184,14 @@ raw (edges.jsonl)` — the distinct-vs-raw delta is expected (DuckDB dedupes
 multi-provenance edges; see [inventory policy](inventory-policy.md)).
 
 **`hilo init` on a fresh clone is a no-op for hilo itself** — a manifest
-already exists and `init` never overwrites one. It only earns its keep when
-you clone a repo that is *not* yet Hilo-initialized, or want its side
-effects in a repo where the manifest was deleted: it creates `.vfs/` +
-`manifest.yaml`, appends the rebuildable-cache block to `.gitignore`, and
-installs the git hooks below (hooks are installed only when a fresh
-manifest is created).
+already exists and `init` never overwrites one. Git hooks are not part of a
+clone, so this no-op does not recreate another checkout's local hooks. Run
+`hilo init` when the repository is not yet Hilo-initialized, or when its
+manifest was deleted: it creates `.vfs/` + `manifest.yaml`, appends the
+rebuildable-cache block to `.gitignore`, and installs local git hooks when that
+initialization is appropriate (hooks are installed only when a fresh manifest
+is created). In every case, run the manual full `hilo graph warm` above to
+build the initial graph cache; `graph stats` only verifies that rebuilt cache.
 
 ### Is `warm` actually required?
 
