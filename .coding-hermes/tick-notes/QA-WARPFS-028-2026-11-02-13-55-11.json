@@ -1,0 +1,14 @@
+{
+  "tick_id": "warpfs-foreman-2026-11-02-13-55-11",
+  "row": "QA-WARPFS-028",
+  "classification": "infrastructure-owner-controlled",
+  "commands": [
+    {"command":"ssh -o ConnectTimeout=15 bunker-mvp 'df -h /'","exit_code":0,"result":"86G available, 41% used"},
+    {"command":"bunker status --server bunker-mvp","exit_code":0,"result":"ONLINE; Agents 0/50; 86G available; 0 orphan users/homes; 20 orphan keys"},
+    {"command":"bunker list --server bunker-mvp","exit_code":0,"result":"No agents found"},
+    {"command":"ssh -o ConnectTimeout=15 bunker2 true","exit_code":0,"result":"reachable"}
+  ],
+  "battery": "not launched: acceptance requires full owner-controlled clean-machine battery and current repository evidence does not provide an owner-authorized runnable battery invocation",
+  "owner_action": "QA owner must launch the full battery on a verified reachable JIT server, capture pre-launch disk and SSH-port evidence, and grade every cell.",
+  "trace": "ch:trace row=QA-WARPFS-028 spec=none:owner-infrastructure-acceptance wave=warpfs-foreman-2026-11-02-13-55-11#verification-only test=none:battery-not-run doc=none:no-doc-change prompt=none:verification-only evidence=.coding-hermes/tick-notes/QA-WARPFS-028-2026-11-02-13-55-11-probes.txt witness=live:ssh+bunker-status verdict=none:verification-only-no-task commit=none:board-closeout-pending memory=none:pending"
+}

@@ -1,0 +1,29 @@
+=== UTC ===
+2026-11-02T14:01:15Z
+=== ssh bunker-mvp df -h / ===
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/sda1       150G   59G   86G  41% /
+exit=0
+=== bunker status --server bunker-mvp ===
+── bunker-mvp ──
+  Hostname: bunker-mvp
+  URL:      http://100.115.67.116:19090
+  Version:  0.2.1
+  Status:   ONLINE
+  Uptime:   9d 15h 41m
+  Agents:   0/50
+  /tmp:     private (per-session pam_namespace instance)
+  Net mode: shared — host network namespace (no network isolation: shared loopback, global port space) — NOT tenant isolation
+  Residue:  0 orphan users, 0 orphan homes, 20 orphan keys, 0 stale linger entries (77 registered agents)
+            residue present: this host holds agent users/homes/keys/linger entries with no registered agent behind them
+  CPU:      3.6%
+  Memory:   1.8 GB / 15.2 GB
+  Disk:     39% (58.5 GB/149.9 GB)
+  Docker:   9 containers
+exit=0
+=== bunker list --server bunker-mvp ===
+bunker: reading server "bunker-mvp"
+No agents found.
+exit=0
+=== ssh bunker2 true ===
+exit=0

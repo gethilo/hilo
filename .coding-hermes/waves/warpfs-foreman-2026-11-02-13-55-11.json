@@ -1,0 +1,17 @@
+{
+  "tick_id": "warpfs-foreman-2026-11-02-13-55-11",
+  "project": "warpfs",
+  "mode": "verification-only",
+  "status": "closed",
+  "created_at": "2026-11-02T14:01:15Z",
+  "finished_at": "2026-11-02T14:04:00Z",
+  "base_sha": "2ea6db37f5614993f9f107934e5db5efe1e03902",
+  "selected_row": "QA-WARPFS-028",
+  "eligible_independent": 0,
+  "workers": [],
+  "dispatch": "none:infrastructure-owner-controlled-battery",
+  "board_census": {"physical_rows":452,"unique_ids":452,"pending":51,"complete":400,"failed":0,"in_progress":0,"duplicate_ids":0},
+  "blocker": "The named full clean-machine battery is owner-controlled external work. Read-only current probes show bunker-mvp has 86G available, is ONLINE with 0 agents, and bunker2 is reachable; no full battery was launched this tick.",
+  "owner_action": "QA owner must launch the full battery on a verified reachable JIT server, capture pre-launch disk and SSH-port evidence, and grade every cell.",
+  "trace": "ch:trace row=QA-WARPFS-028 spec=none:owner-infrastructure-acceptance wave=warpfs-foreman-2026-11-02-13-55-11#verification-only test=none:battery-not-run doc=none:no-doc-change prompt=none:verification-only evidence=.coding-hermes/tick-notes/QA-WARPFS-028-2026-11-02-13-55-11-probes.txt witness=live:ssh+bunker-status verdict=none:verification-only-no-task commit=none:board-closeout-pending memory=none:pending"
+}
