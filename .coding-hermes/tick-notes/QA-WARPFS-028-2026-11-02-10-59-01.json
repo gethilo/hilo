@@ -1,0 +1,23 @@
+{
+  "tick_id": "warpfs-foreman-2026-11-02-10-59-01",
+  "project": "warpfs",
+  "task_id": "QA-WARPFS-028",
+  "tested_commit": "b6a369d1ce3f58f9b226abace944f599f3384caf",
+  "row_status": "pending",
+  "classification": "infrastructure-blocked",
+  "probes": {
+    "bunker_mvp_df": "ssh bunker-mvp df -h / -> /dev/sda1 150G, 59G used, 86G available, 41%",
+    "bunker_mvp_status": "ONLINE, 0/50 agents, 39% disk",
+    "bunker_mvp_list": "No agents found",
+    "bunker2_ssh": "ssh bunker2 true -> exit 0"
+  },
+  "result": "The prior ENOSPC/SSH-port blocker is not reproduced on the current infrastructure snapshot; no clean-machine battery was launched by this tick because the acceptance requires a complete battery and the prior evidence does not provide a current runnable battery command/configuration.",
+  "owner_action": "QA owner: launch the full battery on a verified reachable JIT server, capture pre-launch disk and selected SSH port, then grade every cell.",
+  "local_repo": {
+    "root": "/home/kara/warpfs",
+    "remote": "github.com/gethilo/hilo",
+    "head": "b6a369d1ce3f58f9b226abace944f599f3384caf",
+    "parity": "origin/master 0 ahead/0 behind"
+  },
+  "ci": "latest three master runs completed successfully; exact current HEAD run b6a369d1 is success"
+}

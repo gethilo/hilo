@@ -1,0 +1,25 @@
+{
+  "tick_id": "warpfs-foreman-2026-11-02-10-59-01",
+  "project": "warpfs",
+  "mode": "verification-only",
+  "status": "closed",
+  "created_at": "2026-11-02T11:22:45Z",
+  "finished_at": "2026-11-02T11:22:45Z",
+  "base_sha": "b6a369d1ce3f58f9b226abace944f599f3384caf",
+  "selected_row": "QA-WARPFS-028",
+  "eligible_independent": 0,
+  "workers": [],
+  "dispatch": "none:infrastructure-blocked-verification-only",
+  "board_census": {
+    "physical_rows": 452,
+    "unique_ids": 452,
+    "pending": 51,
+    "complete": 399,
+    "failed": 1,
+    "in_progress": 0,
+    "duplicate_ids": 0
+  },
+  "blocker": "The row requires a complete clean-machine battery. Current read-only probes show bunker-mvp healthy with 86G available and bunker2 reachable, but no battery was launched because the prior evidence does not identify a current runnable battery command/configuration and the owner-controlled battery remains unexecuted.",
+  "owner_action": "QA owner must launch the full battery on a verified reachable JIT server, capture pre-launch disk and SSH-port evidence, and grade every cell.",
+  "trace": "ch:trace row=QA-WARPFS-028 spec=none:owner-infrastructure-acceptance wave=warpfs-foreman-2026-11-02-10-59-01#verification-only test=none:battery-not-run doc=none:no-doc-change prompt=none:verification-only evidence=.coding-hermes/tick-notes/QA-WARPFS-028-2026-11-02-10-59-01.json witness=live:ssh+bunker-status verdict=none:verification-only-no-task commit=none:board-closeout-pending memory=none:pending"
+}
