@@ -1,0 +1,40 @@
+{
+  "tick_id": "warpfs-foreman-2026-11-02-11-37-43",
+  "project": "warpfs",
+  "mode": "serial-worker",
+  "status": "closed",
+  "created_at": "2026-11-02T12:26:37Z",
+  "finished_at": "2026-11-02T13:44:23Z",
+  "base_sha": "5667c4e1e36f88e3bf918fb3af542f4bacdd67d1",
+  "implementation_commit": "172f55f5c38119ef9cf0f1cd1098a9160e2286cd",
+  "verdict": "gitreins:e34396d6 PASS (tier-2 judged commit 172f55f5c38119ef9cf0f1cd1098a9160e2286cd, passed=true)",
+  "result": "landed: worker commit 172f55f5 ff-merged to master and pushed (parity 0/0); row DF-WARPFS-51 closed (events 10018 auto + 10019 audit); tier-1 guard PASS; acceptance verified by foreman fixture",
+  "selected_row": "DF-WARPFS-51",
+  "eligible_independent": 1,
+  "workers": [
+    {
+      "task_id": "DF-WARPFS-51",
+      "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-51-FIXUP",
+      "branch": "wt/DF-WARPFS-51-FIXUP",
+      "base": "origin/master",
+      "base_sha": "5667c4e1e36f88e3bf918fb3af542f4bacdd67d1",
+      "model": "gpt-6-luna",
+      "provider": "openai-codex",
+      "brief": "/home/kara/.hermes/cache/scratch/warpfs-tick-20261102-113743-YyZY/warpfs-DF-WARPFS-51-brief.md"
+    }
+  ],
+  "dispatch": "serial-one-worker (lane contract: max ONE worker per tick)",
+  "board_census": {
+    "physical_rows": 452,
+    "unique_ids": 452,
+    "pending": 51,
+    "complete": 399,
+    "failed": 1,
+    "done": 1,
+    "in_progress": 0,
+    "duplicate_ids": 0
+  },
+  "pick_reason": "DF-WARPFS-51 is the board's only failed row and its own recovery note prescribes a fresh fixup; dependency DF-WARPFS-48 is complete; premise re-verified at HEAD (run_warm_in walks only the literal root; workspace manifest used solely for edge detection at graph.rs:1098, member repos never walked). QA-WARPFS-028 (P1) remains owner/infra-gated (full clean-machine battery capacity unresolved per QA-WARPFS-027 OWNER-QA-CAPACITY); its live probes were refreshed 25 min earlier by tick warpfs-foreman-2026-11-02-10-59-01.",
+  "residue_reconciled": "Prior tick warpfs-foreman-2026-11-02-10-59-01 left uncommitted duplicate residue in canonical (events.jsonl draft line + tick note + wave manifest); its closeout was published as 5667c4e1 (push 2026-11-02T11:29:35Z, byte-verified 2/3 identical, events.jsonl delta was a stale draft timestamp). Canonical reconciled to 5667c4e1 (ff-only, zero-loss; draft preserved at scratch/warpfs-tick-20261102-113743-YyZY/worktree-10017.json).",
+  "trace": "ch:trace row=DF-WARPFS-51 spec=.coding-hermes/board/tasks.jsonl#DF-WARPFS-51 acceptance wave=warpfs-foreman-2026-11-02-11-37-43 test=none:pending-worker doc=none:pending-worker prompt=scratch/warpfs-DF-WARPFS-51-brief.md evidence=none:pending-worker witness=none:pending-worker verdict=none:pending-worker commit=none:pending-worker memory=none:pending"
+}

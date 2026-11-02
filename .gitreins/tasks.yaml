@@ -2599,3 +2599,17 @@ tasks:
   status: complete
   created_at: '2026-11-02T09:45:00.315318+00:00'
   completed_at: '2026-11-02T09:45:01.091057+00:00'
+- id: DF-WARPFS-51
+  title: 'DF-WARPFS-51: warm --workspace follows the workspace manifest and emits
+    cross-repo external: edges (spec 6)'
+  criteria:
+  - 'PASS iff all: (1) hilo graph warm --workspace run from a workspace root indexes
+    member repos (Coverage reports >0 files, not 0 / No supported source files); (2)
+    a cross-repo import (auth-service imports shared-lib) produces an external: edge
+    and hilo graph related --direction both on a cross-repo symbol shows the other
+    repo; (3) an integration test asserts the cross-repo external: edge; (4) the commit
+    message carries a ch:trace marker with row=DF-WARPFS-51; (5) cargo fmt --check
+    and cargo test pass for touched crates.'
+  status: complete
+  created_at: '2026-11-02T12:26:37.566290+00:00'
+  completed_at: '2026-11-02T13:19:07.606563+00:00'
