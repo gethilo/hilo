@@ -431,7 +431,6 @@ pub fn run_setup(args: &SetupArgs) -> Result<()> {
                 println!("  LocalDriver: zero-credential reference backend (prefix = local dir)");
                 println!("  status: ready (no external tool required)");
             }
-            _ => {}
         }
     }
     Ok(())
