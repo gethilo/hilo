@@ -29,7 +29,7 @@ pub enum BackendCommand {
 
 #[derive(Args)]
 pub struct MountArgs {
-    /// Backend type: "s3", "gdrive", "onedrive", "dropbox", "external"
+    /// Backend type: "s3", "gdrive", "onedrive", "dropbox", "external", "local"
     #[arg(long)]
     pub r#type: String,
     /// S3 bucket name
@@ -108,6 +108,8 @@ pub struct SetupArgs {
 /// into ~/.hilo/worktrees, invisible to `list`/`sync`. Any type outside
 /// s3|gdrive|onedrive|dropbox|external now fails with the same
 /// `unknown backend type` InvalidConfig error (exit 2, nothing on stdout).
+/// LocalDriver (DF-WARPFS-125) is reachable via --type local for the
+/// zero-credential test/demo path.
 pub fn run_mount(args: &MountArgs) -> Result<()> {
     match run_mount_new(args) {
         Ok(()) => Ok(()),
@@ -127,9 +129,10 @@ fn run_mount_new(args: &MountArgs) -> Result<(), BackendError> {
         "onedrive" => BackendKind::OneDrive,
         "dropbox" => BackendKind::Dropbox,
         "external" => BackendKind::External,
+        "local" => BackendKind::Local,
         other => {
             return Err(BackendError::InvalidConfig(format!(
-                "unknown backend type: {other} (expected s3|gdrive|onedrive|dropbox|external)"
+                "unknown backend type: {other} (expected s3|gdrive|onedrive|dropbox|external|local)"
             )))
         }
     };
@@ -403,14 +406,16 @@ pub fn run_setup(args: &SetupArgs) -> Result<()> {
             ("onedrive", BackendKind::OneDrive),
             ("dropbox", BackendKind::Dropbox),
             ("external", BackendKind::External),
+            ("local", BackendKind::Local),
         ],
         Some("s3") => vec![("s3", BackendKind::S3)],
         Some("gdrive") => vec![("gdrive", BackendKind::GDrive)],
         Some("onedrive") => vec![("onedrive", BackendKind::OneDrive)],
         Some("dropbox") => vec![("dropbox", BackendKind::Dropbox)],
         Some("external") => vec![("external", BackendKind::External)],
+        Some("local") => vec![("local", BackendKind::Local)],
         Some(other) => anyhow::bail!(
-            "unknown backend type: {other} (expected s3|gdrive|onedrive|dropbox|external)"
+            "unknown backend type: {other} (expected s3|gdrive|onedrive|dropbox|external|local)"
         ),
     };
 
@@ -422,6 +427,10 @@ pub fn run_setup(args: &SetupArgs) -> Result<()> {
             BackendKind::OneDrive => setup_external("onedrive", "onedrive"),
             BackendKind::Dropbox => setup_external("dropbox", "dropbox"),
             BackendKind::External => setup_external("external", "rclone"),
+            BackendKind::Local => {
+                println!("  LocalDriver: zero-credential reference backend (prefix = local dir)");
+                println!("  status: ready (no external tool required)");
+            }
             _ => {}
         }
     }
