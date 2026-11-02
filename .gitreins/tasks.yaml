@@ -2613,3 +2613,12 @@ tasks:
   status: complete
   created_at: '2026-11-02T12:26:37.566290+00:00'
   completed_at: '2026-11-02T13:19:07.606563+00:00'
+- id: QA-WARPFS-028-R3
+  title: Verify QA-WARPFS-028 owner-controlled blocker evidence
+  criteria:
+  - The committed wave manifest and tick evidence document the unexecuted owner-controlled
+    full clean-machine battery, current read-only probes, no-dispatch decision, and
+    required owner action; keep QA-WARPFS-028 pending.
+  status: complete
+  created_at: '2026-11-02T15:25:46.953582+00:00'
+  completed_at: '2026-11-02T15:25:48.615556+00:00'
