@@ -2412,7 +2412,21 @@ const SYMBOL_NAMED_WINDOW: usize = 24;
 const DETAIL_BUDGET_PERCENT: usize = 60;
 
 /// Lines covered by one window of a focused excerpt.
+///
+/// This is the ceiling, not the size: [`focused_excerpt`] narrows the window
+/// when the file's task-naming definitions are numerous or the excerpt budget
+/// is small, because covering every named step of the flow matters more than
+/// depth on any one of them.
 const DETAIL_EXCERPT_WINDOW: usize = 24;
+
+/// Floor for the narrowed window — below this a window is a signature and a
+/// line or two, which the SIGNATURES tier already carries.
+const DETAIL_EXCERPT_MIN_WINDOW: usize = 8;
+
+/// Average source line cost assumed when sizing a window to its share of the
+/// excerpt budget (bytes per line, long enough for a signature and one body
+/// line).
+const DETAIL_EXCERPT_LINE_CHARS: usize = 50;
 
 /// Windows a focused excerpt may carry: enough for a flow's steps
 /// (`wsgi_app` → `full_dispatch_request` → `finalize_request`), far short of
@@ -2427,7 +2441,7 @@ const DETAIL_EXCERPT_WINDOW: usize = 24;
 /// middle of the chain but not where it starts. The character budget, not this
 /// count, remains the real bound: `focused_excerpt` stops appending as soon as
 /// the next window would overflow.
-const DETAIL_EXCERPT_WINDOWS: usize = 10;
+const DETAIL_EXCERPT_WINDOWS: usize = 12;
 
 /// Smallest DETAIL allocation (chars) worth excerpting.
 ///
@@ -2901,12 +2915,27 @@ fn focused_excerpt(
     anchors.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
     anchors.truncate(DETAIL_EXCERPT_WINDOWS);
 
+    // Window depth follows the named set: the budget is split evenly across
+    // the definitions that name the task, so a file with a long named band
+    // covers all of its steps rather than the first few at full depth. With
+    // three names a window stays the full 24 lines; with ten it narrows to
+    // what the share affords, floored at the minimum.
+    let window_lines = if anchors.is_empty() {
+        DETAIL_EXCERPT_WINDOW
+    } else {
+        let per_window = budget_chars / anchors.len();
+        (per_window / DETAIL_EXCERPT_LINE_CHARS).clamp(
+            DETAIL_EXCERPT_MIN_WINDOW.min(DETAIL_EXCERPT_WINDOW),
+            DETAIL_EXCERPT_WINDOW,
+        )
+    };
+
     let mut windows: Vec<(usize, usize)> = if anchors.is_empty() {
-        vec![(0, (DETAIL_EXCERPT_WINDOW - 1).min(last))]
+        vec![(0, (window_lines - 1).min(last))]
     } else {
         anchors
             .into_iter()
-            .map(|(_, start)| (start, (start + DETAIL_EXCERPT_WINDOW - 1).min(last)))
+            .map(|(_, start)| (start, (start + window_lines - 1).min(last)))
             .collect()
     };
     windows.sort_unstable();
@@ -4348,6 +4377,84 @@ mod tests {
                 .text
                 .contains("src/core/request_flow.rs [provenance="),
             "the excerpt must render inside the DETAIL tier"
+        );
+    }
+
+    #[test]
+    fn understand_detail_excerpt_covers_every_task_naming_definition() {
+        // A flow's steps sit far apart in the module that owns them (flask's
+        // app.py names its WSGI chain between lines 993 and 1627 of 1686), and
+        // the excerpt budget is fixed. Sizing every window at the 24-line
+        // ceiling spent the budget on the first few names and cut the rest —
+        // including the entry point the question starts from. Window depth now
+        // follows the named set, so all ten steps of this fixture are covered.
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[edge("src/flow/pipeline.rs", "src/flow/lib.rs", "imports")])
+            .unwrap();
+
+        let steps: [(usize, &str); 10] = [
+            (200, "pub fn wsgi_entry() -> u8 {"),
+            (500, "pub fn dispatch_request() -> u8 {"),
+            (800, "pub fn full_dispatch_request() -> u8 {"),
+            (1_100, "pub fn finalize_request() -> u8 {"),
+            (1_400, "pub fn preprocess_request() -> u8 {"),
+            (1_700, "pub fn process_response() -> u8 {"),
+            (2_000, "pub fn make_response() -> u8 {"),
+            (2_300, "pub fn view_args() -> u8 {"),
+            (2_600, "pub fn request_guard() -> u8 {"),
+            (2_900, "pub fn response_guard() -> u8 {"),
+        ];
+        let mut source = String::new();
+        for line in 1..=3_000usize {
+            match steps.iter().find(|(at, _)| *at == line) {
+                Some((_, signature)) => {
+                    source.push_str(signature);
+                    source.push_str("\n    7\n}\n");
+                }
+                None => {
+                    source.push_str(&format!("// filler line {line} keeps the file large\n"));
+                }
+            }
+        }
+        let reader = move |path: &str| -> Option<String> {
+            (path == "src/flow/pipeline.rs").then(|| source.clone())
+        };
+
+        let opts = SignalOpts {
+            token_budget: 6_000,
+            ..Default::default()
+        };
+        let result =
+            understand_with_source(&db, "request flow wsgi view response", &opts, Some(reader))
+                .unwrap();
+        let detail = result
+            .files
+            .iter()
+            .find(|f| f.path == "src/flow/pipeline.rs")
+            .and_then(|f| f.detail.as_deref())
+            .expect("the oversized owner must carry a DETAIL body");
+
+        for (_, signature) in steps {
+            let name = signature
+                .trim_start_matches("pub fn ")
+                .split('(')
+                .next()
+                .unwrap();
+            assert!(
+                detail.contains(name),
+                "the excerpt must reach {name} — coverage of the named steps, got:\n{detail}"
+            );
+        }
+        // One elision marker per window, and the body stays inside the
+        // excerpt budget (`token_budget * 4 * 60% / 2`).
+        assert!(
+            detail.matches("… lines ").count() >= steps.len(),
+            "each named step needs its own window, got:\n{detail}"
+        );
+        assert!(
+            detail.len() <= 6_000 * 4 * 60 / 100 / 2,
+            "the excerpt must stay inside its budget, got {} chars",
+            detail.len()
         );
     }
 
