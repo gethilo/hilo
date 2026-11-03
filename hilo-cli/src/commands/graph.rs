@@ -3377,11 +3377,65 @@ pub fn run_rule_list() -> Result<()> {
     Ok(())
 }
 
+/// The harmonic tiers, in render order. `--tier` selects among these.
+const HARMONIC_TIERS: [&str; 3] = ["MAP", "SIGNATURES", "DETAIL"];
+
+/// Keep only the requested tier section(s) of a harmonic answer (DF-WARPFS-118).
+///
+/// `hilo graph understand` always renders all three tiers because they are one
+/// answer — orientation, spine, exact lines. A caller that wants exactly one of
+/// them (`--tier detail` for "show me the code, not the map") gets the same
+/// bytes the tier had in the whole answer, never a re-render: the sections are
+/// sliced out of the rendered text, so budget accounting and truncation stay
+/// the ones the engine already applied.
+///
+/// Accepted: `map`, `signatures`, `detail`, `all` (default). Anything else is
+/// an error naming the accepted set — a silently-ignored value would hand back
+/// a full answer to a caller who asked for one tier.
+fn select_tier_sections(text: &str, tier: Option<&str>) -> Result<String> {
+    let Some(tier) = tier else {
+        return Ok(text.to_string());
+    };
+    let wanted: &[&str] = match tier.to_ascii_lowercase().as_str() {
+        "all" => &HARMONIC_TIERS,
+        "map" => &["MAP"],
+        "signature" | "signatures" => &["SIGNATURES"],
+        "detail" => &["DETAIL"],
+        other => anyhow::bail!(
+            "unknown --tier {other:?}: accepted values are map, signatures, detail, all"
+        ),
+    };
+
+    let mut out = String::new();
+    for section in wanted {
+        let header = format!("## {section}\n");
+        let Some(start) = text.find(&header) else {
+            continue;
+        };
+        let rest = &text[start..];
+        // The section ends where the next tier header begins (or at EOF).
+        let end = HARMONIC_TIERS
+            .iter()
+            .map(|other| format!("## {other}\n"))
+            .filter(|other_header| other_header != &header)
+            .filter_map(|other_header| rest[header.len()..].find(&other_header))
+            .map(|index| index + header.len())
+            .min()
+            .unwrap_or(rest.len());
+        out.push_str(&rest[..end]);
+    }
+    Ok(out)
+}
+
 /// `hilo graph understand <task>` — multi-resolution harmonic context output.
 ///
 /// Runs the signal engine against the graph and prints the 3-tier harmonic
 /// output (MAP → SIGNATURES → DETAIL). See `hilo-graph/src/signal.rs`.
-pub fn run_understand(task: &str, budget: Option<usize>) -> Result<()> {
+///
+/// `tier` narrows the printed output to one tier (`--tier detail`); the engine
+/// always computes all three, so the slice is byte-identical to the section
+/// the full answer carried.
+pub fn run_understand(task: &str, budget: Option<usize>, tier: Option<&str>) -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
     let Some(graph_db) = resolve_graph_db_path(&cwd) else {
         anyhow::bail!("No graph data. Run `hilo graph warm` first.");
@@ -3413,7 +3467,7 @@ pub fn run_understand(task: &str, budget: Option<usize>) -> Result<()> {
         hilo_graph::signal::understand_with_symbols(&graph, task, &opts, Some(&cached_symbols))
             .context("failed to run signal engine")?;
 
-    println!("{}", result.text);
+    println!("{}", select_tier_sections(&result.text, tier)?);
     Ok(())
 }
 
@@ -7333,5 +7387,67 @@ mod tests {
         );
         assert!(note.starts_with("note: "), "{note}");
         assert_eq!(note.lines().count(), 1, "the note is one line: {note}");
+    }
+
+    /// A rendered harmonic answer, in the engine's own shape.
+    fn harmonic_fixture() -> &'static str {
+        "## MAP\nsrc/a.rs →\n  - A\n\n## SIGNATURES\nsrc/a.rs:1  fn a()\n\n## DETAIL\nsrc/a.rs [provenance=ast_exact, score=1.00]\nfn a() {}\n\n"
+    }
+
+    /// DF-WARPFS-118 acceptance, CLI half: `--tier detail` must hand back the
+    /// DETAIL section — the file's exact lines — and nothing else, because the
+    /// acceptance criterion is stated as a `--tier detail` invocation and the
+    /// flag did not exist before the fix.
+    #[test]
+    fn understand_tier_selection_keeps_only_the_requested_section() {
+        let text = harmonic_fixture();
+
+        let detail = select_tier_sections(text, Some("detail")).unwrap();
+        assert!(detail.starts_with("## DETAIL\n"), "got: {detail:?}");
+        assert!(
+            detail.contains("src/a.rs [provenance=ast_exact, score=1.00]"),
+            "the DETAIL header must survive the slice, got: {detail:?}"
+        );
+        assert!(
+            !detail.contains("## MAP") && !detail.contains("## SIGNATURES"),
+            "no other tier may print, got: {detail:?}"
+        );
+
+        let map = select_tier_sections(text, Some("MAP")).unwrap();
+        assert!(
+            map.starts_with("## MAP\n"),
+            "tier names are case-insensitive"
+        );
+        assert!(!map.contains("## DETAIL"), "got: {map:?}");
+
+        // The slice is exactly the text the full answer carried: same bytes,
+        // no re-render.
+        assert!(
+            text.contains(map.trim_end()),
+            "MAP slice must come from {text:?}"
+        );
+    }
+
+    /// `--tier all` and an absent flag both print the whole answer; an unknown
+    /// value fails with the accepted set named rather than silently printing
+    /// everything to a caller who asked for one tier.
+    #[test]
+    fn understand_tier_selection_defaults_to_the_whole_answer_and_rejects_unknown() {
+        let text = harmonic_fixture();
+
+        assert_eq!(select_tier_sections(text, None).unwrap(), text);
+        assert_eq!(select_tier_sections(text, Some("all")).unwrap(), text);
+
+        let err = select_tier_sections(text, Some("detial"))
+            .expect_err("an unknown tier must be an error");
+        let message = err.to_string();
+        assert!(
+            message.contains("detial"),
+            "error names the value: {message}"
+        );
+        assert!(
+            message.contains("map, signatures, detail, all"),
+            "error names the accepted set: {message}"
+        );
     }
 }

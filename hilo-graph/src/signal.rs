@@ -2417,7 +2417,17 @@ const DETAIL_EXCERPT_WINDOW: usize = 24;
 /// Windows a focused excerpt may carry: enough for a flow's steps
 /// (`wsgi_app` → `full_dispatch_request` → `finalize_request`), far short of
 /// a whole 1.6 k-line module.
-const DETAIL_EXCERPT_WINDOWS: usize = 6;
+///
+/// Ten, not six: the cap is applied to the task-naming definitions ordered by
+/// match grade, and a Flask-like module carries more grade-4 names than six
+/// (`wsgi_app`, `dispatch_request`, `full_dispatch_request`,
+/// `finalize_request`, `preprocess_request`, `process_response`,
+/// `make_response`, …). At six the flow's own entry point — `wsgi_app`, the
+/// last of the band in source order — was cut, so the excerpt showed the
+/// middle of the chain but not where it starts. The character budget, not this
+/// count, remains the real bound: `focused_excerpt` stops appending as soon as
+/// the next window would overflow.
+const DETAIL_EXCERPT_WINDOWS: usize = 10;
 
 /// Smallest DETAIL allocation (chars) worth excerpting.
 ///

@@ -452,6 +452,13 @@ struct UnderstandArgs {
     /// Token budget override (default: 6000).
     #[arg(long)]
     budget: Option<usize>,
+    /// Print only one tier: map, signatures, detail, or all (default).
+    ///
+    /// The engine always computes all three tiers; this narrows what is
+    /// printed, so `--tier detail` is exactly the DETAIL section of the
+    /// harmonic answer.
+    #[arg(long)]
+    tier: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -665,7 +672,7 @@ pub fn run() -> anyhow::Result<()> {
             args.external,
         ),
         Commands::Graph(GraphCommand::Understand(args)) => {
-            graph::run_understand(&args.task, args.budget)
+            graph::run_understand(&args.task, args.budget, args.tier.as_deref())
         }
         Commands::Graph(GraphCommand::Search(args)) => {
             graph::run_search(&args.query, args.limit, args.no_symbols)
