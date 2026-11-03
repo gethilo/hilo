@@ -246,6 +246,35 @@ so agents get the *shape* of the code first, then exact lines last.
 | SIGNATURES | 25% | `file:line  fn foo(x: i32) -> bool` — spine |
 | DETAIL | 60% | whitespace-minified source blocks — exact lines |
 
+### DETAIL Ranking (DF-WARPFS-118)
+
+The DETAIL band is not "the first `seed_limit` files by score". Anchors score
+1.0 and everything the traversal discovers enters at or below 0.8, so a
+score-prefix band is a *literal-match* band: on flask,
+`graph understand "request flow WSGI->view->response"` filled DETAIL with three
+`views.py` files while `src/flask/app.py` — owner of `wsgi_app`,
+`full_dispatch_request`, `finalize_request`, and the highest-degree file in the
+graph — never appeared.
+
+The band is ranked by a lexicographic key instead (higher wins):
+
+1. **code class** — implementation, then tests, then `example`/`sample`/`demo`
+   apps (exact path components, so `src/exampler.py` is not demoted). Tests are
+   `classify::is_test_file`, the same predicate coverage links use.
+2. **names the task** — one of the file's definitions carries a task word as a
+   whole word (`wsgi_app` for "wsgi"), whether or not its path does.
+3. **graph degree** — incident edge count over the whole graph
+   (`GraphDB::file_degrees`, one scan). Measured over the whole graph because
+   the owner of a flow is often a file the traversal never expands.
+4. traversal proximity, then the path's token grade, then the path.
+
+Two floors: the best anchor by that same key always keeps a slot, and the
+file ranked first renders head-first with an explicit
+`… (truncated: N of M chars shown)` marker when it is larger than the whole
+tier (flask's `app.py` minifies to 67,464 chars against a 14,400-char
+allocation). A quarter of the tier is held back so the next candidates still
+render.
+
 ### Position Ordering
 
 Highest-signal files are placed at the **edges** of the output (first and last),
@@ -302,7 +331,7 @@ Two path-aware levers apply to the MAP tier only:
    MAP tier **at all**. The MAP is the agent's orientation budget; sample
    corpora have high symbol density and low relevance, so they are filtered
    from it. The filter is tier-local: the file stays in the machine-readable
-   `files` list, keeps its traversal-order tier assignment, and an
+   `files` list, keeps its tier assignment, and an
    anchor-band fixture still gets its full DETAIL source block. If every
    matched file is filtered, the MAP prints an explicit empty-tier marker.
 2. **Path depth weighting** — the remaining files re-order by signal score

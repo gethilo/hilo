@@ -536,7 +536,10 @@ hilo graph understand "how does plugin execution get sandboxed"
 Output is three tiers — `## MAP` (file → symbols), `## SIGNATURES`
 (`file:line  signature`) and `## DETAIL` (`file [provenance=…, score=…]` plus
 whitespace-minified source). A tier with nothing to show says
-`(no files in this tier)` instead of printing an empty body.
+`(no files in this tier)` instead of printing an empty body. A DETAIL file
+larger than the whole tier renders its head, cut on a line boundary, followed
+by `… (truncated: N of M chars shown)` — ranked first, so the file that owns
+the task is never dropped in favour of the small ones that happen to fit.
 
 Token budget override (default: 6000):
 
