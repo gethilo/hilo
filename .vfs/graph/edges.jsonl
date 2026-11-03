@@ -39337,3 +39337,5 @@
 {"from":"scripts/check_usage_skill.py","to":"pkg:re","rel":"imports","provenance":"ast_exact","confidence":1.0}
 {"from":"scripts/check_usage_skill.py","to":"pkg:sys","rel":"imports","provenance":"ast_exact","confidence":1.0}
 {"from":"scripts/check_usage_skill.py","to":"pkg:pathlib","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/surfaces.rs","to":"pkg:tempfile","rel":"imports","provenance":"ast_exact","confidence":1.0}
+{"from":"hilo-cli/src/commands/surfaces.rs","to":"pkg:scope_fixtures","rel":"imports","provenance":"ast_exact","confidence":1.0}
