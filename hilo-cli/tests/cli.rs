@@ -951,7 +951,7 @@ fn graph_warm_accounts_for_every_discovered_file() {
     let (expected_no_imports, expected_unreadable) = if is_root { (2, 0) } else { (1, 1) };
     let expected_summary = format!(
         "Coverage: 5 files = 2 contribute edges + 1 package facades (__init__.py) \
-         + {expected_no_imports} no imports + {expected_unreadable} unreadable \
+         + {expected_no_imports} no imports + 0 parse-miss + {expected_unreadable} unreadable \
          + 0 unsupported extension"
     );
     let summary = stdout
@@ -995,7 +995,7 @@ fn graph_warm_accounts_for_every_discovered_file() {
         assert_eq!(
             rewarm_summary,
             "Coverage: 5 files = 2 contribute edges + 1 package facades (__init__.py) \
-             + 2 no imports + 0 unreadable + 0 unsupported extension",
+             + 2 no imports + 0 parse-miss + 0 unreadable + 0 unsupported extension",
             "rewarm {round} stdout:\n{rewarm_stdout}"
         );
         if round == 3 {

@@ -60,7 +60,7 @@ pub use impact::{
     expand_review_set, ImpactFile, ImpactResult, REL_SELF, REVIEW_FORWARD_DEPTH,
     REVIEW_REVERSE_DEPTH, SCOPE_CRATE, SCOPE_DEPENDENCY, SCOPE_FILE, SCOPE_LINK, SCOPE_SELF,
 };
-pub use parser::{Language, Parser};
+pub use parser::{ImportParse, ImportRecovery, Language, ParseMiss, Parser};
 pub use provenance::Provenance;
 pub use resolution::{AnchoredRoot, PkgResolver};
 pub use rules::{Rule, RuleCheckResult, RuleEngine, RuleError};

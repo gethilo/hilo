@@ -170,7 +170,7 @@ Expected `graph warm` output (hilo's own repo, v0.3.x): progress lines
 
 ```
 Discovered 1167 edges across 104 files (4 languages)
-Coverage: 111 files = 104 contribute edges + 1 package facades (__init__.py) + 6 no imports + 0 unreadable + 0 unsupported extension
+Coverage: 111 files = 104 contribute edges + 1 package facades (__init__.py) + 6 no imports + 0 parse-miss + 0 unreadable + 0 unsupported extension
 ```
 
 `graph warm` takes its time on a cold tree (roughly a minute for hilo-sized

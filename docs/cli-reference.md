@@ -144,6 +144,31 @@ Supported languages (26): Go, Python, TypeScript, Rust, JavaScript,
 Java, C, C++, Ruby, C#, Kotlin, PHP, Swift, Elixir, Haskell, Erlang,
 Scala, Zig, Lua, Dart, Clojure, OCaml, R, Julia, Elm, Nim.
 
+### Coverage accounting, including parse-miss (DF-WARPFS-85)
+
+Every warm ends with a `Coverage:` line whose buckets close the arithmetic
+against the discovered-file count:
+
+```
+Coverage: 817 files = 716 contribute edges + 42 package facades (__init__.py) + 59 no imports + 0 parse-miss + 0 unreadable + 0 unsupported extension
+```
+
+`parse-miss` counts files the grammar could not parse AND that yielded no
+edges — a file we could not read the imports of, which must never be confused
+with a file that declares no imports. Each one is listed below the verdict with
+its reason (`  parse-miss: src/test/resources/Users.kt — syntax errors`), and
+the count is persisted in `.vfs/graph/coverage.json` so `graph stats` reconciles
+its zero-edge arithmetic against it.
+
+A file whose syntax tree is broken but whose imports were still recovered
+contributes normally and is listed as `  parse recovered: <path> — <reason>`.
+Kotlin build templates are the driving case: a `package ${package}.db` header
+is not valid Kotlin and used to make the grammar swallow the entire file, so
+real `import` statements vanished from the graph. Templates are now re-parsed
+with their `${...}` placeholders neutralised (still AST nodes, `ast_exact`),
+falling back to a top-level import line scan (`lexical` provenance) when the
+header breaks in some other way.
+
 ### Removed dependencies are pruned (DF-WARPFS-170)
 
 `edges.jsonl` only ever gained rows, and the DuckDB cache only ever inserted
@@ -274,8 +299,8 @@ accounting `hilo graph warm` prints at the end of every run (persisted in
 `.vfs/graph/coverage.json`). `Total files` is a census of distinct file
 sources in the graph — symbol and dependency nodes are edge sources too, but
 they are not files and are not counted (DF-WARPFS-163); warm's Coverage line
-counts every discovered file — zero-edge files (no imports, package facades)
-never carry an edge source.
+counts every discovered file — zero-edge files (no imports, package facades,
+parse-miss) never carry an edge source.
 Warm prunes sources whose file no longer exists (see *Removed dependencies are
 pruned* above), so a census still ahead of the ledger means the graph predates
 the last warm (`hilo graph warm` fixes it, and a DB that was never warmed at

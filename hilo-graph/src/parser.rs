@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use hilo_metadata::inventory::Edge;
 use tree_sitter::{Node, Parser as TsParser};
 
-use crate::error::{GraphError, GraphResult};
+use crate::error::GraphResult;
 
 /// Languages supported by the multi-language parser.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -127,6 +127,88 @@ pub struct Parser {
     language: Language,
 }
 
+/// Why a source file's syntax tree could not be used directly (DF-WARPFS-85).
+///
+/// Reported per file so a file that contributes nothing is named with a
+/// reason instead of landing silently in the "no imports" bucket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParseMiss {
+    /// The grammar returned a tree, but it carries `ERROR`/missing nodes —
+    /// the bytes are not valid source for this grammar (a build template
+    /// `.kt` whose `package` header holds `${...}` placeholders is the
+    /// canonical case).
+    SyntaxErrors,
+    /// tree-sitter returned no tree at all.
+    NoTree,
+}
+
+impl ParseMiss {
+    /// Stable lowercase tag used in coverage output and the parse cache.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ParseMiss::SyntaxErrors => "syntax errors",
+            ParseMiss::NoTree => "no parse tree",
+        }
+    }
+}
+
+/// How imports were recovered from a file whose own syntax tree was unusable
+/// (DF-WARPFS-85).
+///
+/// Every tier keeps the Kotlin parser from dropping a real `import` statement
+/// because an unrelated part of the file failed to parse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportRecovery {
+    /// The tree carried errors, but its import nodes were still usable.
+    Direct,
+    /// The tree collapsed the whole file into one `ERROR` node. Build templates
+    /// do this from their `${...}` package header, so a placeholder-neutralised
+    /// copy is re-parsed and its import nodes are used.
+    RepairedTemplate,
+    /// No usable tree even after repair (`#parse(...)` directives, unknown
+    /// syntax): top-level `import` lines are scanned lexically.
+    LexicalScan,
+}
+
+impl ImportRecovery {
+    /// Stable lowercase tag used in coverage output and the parse cache.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ImportRecovery::Direct => "direct",
+            ImportRecovery::RepairedTemplate => "repaired template",
+            ImportRecovery::LexicalScan => "lexical scan",
+        }
+    }
+}
+
+/// One file's parse: the edges it declares plus how the parse went.
+///
+/// Returned by [`Parser::parse_imports_detailed`]; [`Parser::parse_imports`]
+/// is the edge-only wrapper for callers that do not need the diagnostics.
+#[derive(Debug, Clone)]
+pub struct ImportParse {
+    /// Edges declared by the file, `rel = "imports"` (plus `tested_by` for
+    /// test files).
+    pub edges: Vec<Edge>,
+    /// `Some` when the file's syntax tree carried errors. Set even when the
+    /// imports were recovered, so a repair is never silent.
+    pub parse_miss: Option<ParseMiss>,
+    /// How the imports were recovered when the tree was directly unusable.
+    /// `None` when the tree parsed cleanly (or yielded no imports at all).
+    pub recovery: Option<ImportRecovery>,
+}
+
+impl ImportParse {
+    /// A parse with no diagnostics: the tree was clean.
+    fn clean(edges: Vec<Edge>) -> Self {
+        ImportParse {
+            edges,
+            parse_miss: None,
+            recovery: None,
+        }
+    }
+}
+
 // ── Language detection ──────────────────────────────────────────────
 
 impl Parser {
@@ -189,17 +271,59 @@ impl Parser {
     /// Each import/include/require declaration produces one [`Edge`] with
     /// `rel = "imports"`. The `from` field is `file_path`, and `to` is the
     /// classified dependency target with a language-appropriate prefix.
+    ///
+    /// Edge-only wrapper over [`Parser::parse_imports_detailed`] for callers
+    /// that do not need the per-file parse diagnostics.
     pub fn parse_imports(&mut self, file_path: &str, source: &str) -> GraphResult<Vec<Edge>> {
+        Ok(self.parse_imports_detailed(file_path, source)?.edges)
+    }
+
+    /// Parse a source file into its edges PLUS the diagnostics that let a
+    /// caller account for a file which produced nothing (DF-WARPFS-85).
+    ///
+    /// `parse_miss` names the files whose syntax tree carried errors, and
+    /// `recovery` records how the imports were still obtained. Before this,
+    /// a build-template file that the grammar collapsed into a single `ERROR`
+    /// node was indistinguishable from a file with no imports at all, so its
+    /// real `import` statements were silently dropped from the graph.
+    pub fn parse_imports_detailed(
+        &mut self,
+        file_path: &str,
+        source: &str,
+    ) -> GraphResult<ImportParse> {
         if self.language == Language::Terraform {
-            return Ok(crate::terraform::parse(file_path, source).edges);
+            return Ok(ImportParse::clean(
+                crate::terraform::parse(file_path, source).edges,
+            ));
         }
-        let tree = self
+        let tree = match self
             .parser
             .as_mut()
             .expect("tree-sitter language parser")
             .parse(source.as_bytes(), None)
-            .ok_or_else(|| GraphError::Other("tree-sitter produced no parse tree".to_string()))?;
+        {
+            Some(tree) => tree,
+            // DF-WARPFS-85: a missing tree used to be a hard error that
+            // aborted the whole warm. It is now a per-file diagnostic, so one
+            // unparseable file cannot cost the rest of the corpus its edges.
+            None => {
+                return Ok(ImportParse {
+                    edges: Vec::new(),
+                    parse_miss: Some(ParseMiss::NoTree),
+                    recovery: None,
+                })
+            }
+        };
 
+        let parse_miss = tree
+            .root_node()
+            .has_error()
+            .then_some(ParseMiss::SyntaxErrors);
+        let mut recovery: Option<ImportRecovery> = None;
+        // A lexically recovered import is a real statement, but the grammar
+        // could not confirm its structure — it enters the graph at the
+        // lexical trust level rather than as ground truth.
+        let mut lexical_only = false;
         let mut paths: Vec<String> = Vec::new();
         match self.language {
             Language::Go => extract_go_imports(tree.root_node(), source.as_bytes(), &mut paths),
@@ -259,6 +383,52 @@ impl Parser {
             Language::Terraform => unreachable!("handled before tree-sitter parsing"),
         }
 
+        // DF-WARPFS-85: a Kotlin build template (`package ${package}.db`) is
+        // not valid Kotlin, and the grammar responds by swallowing the WHOLE
+        // file into one `ERROR` node — including the real imports below the
+        // header. Recover them: first from a placeholder-neutralised copy
+        // (still AST nodes), then — for templates whose header breaks in some
+        // other way — from the source lines themselves.
+        if self.language == Language::Kotlin && paths.is_empty() && parse_miss.is_some() {
+            if let Some(repaired) = neutralise_template_placeholders(source) {
+                if let Some(repaired_tree) = self
+                    .parser
+                    .as_mut()
+                    .expect("tree-sitter language parser")
+                    .parse(repaired.as_bytes(), None)
+                {
+                    extract_kotlin_imports(
+                        repaired_tree.root_node(),
+                        repaired.as_bytes(),
+                        &mut paths,
+                    );
+                }
+            }
+            if !paths.is_empty() {
+                recovery = Some(ImportRecovery::RepairedTemplate);
+            } else {
+                paths = scan_kotlin_import_lines(source);
+                if !paths.is_empty() {
+                    recovery = Some(ImportRecovery::LexicalScan);
+                    lexical_only = true;
+                }
+            }
+        } else if parse_miss.is_some() && !paths.is_empty() {
+            // The tree had errors, yet its import nodes survived: say so
+            // instead of pretending the file parsed cleanly.
+            recovery = Some(ImportRecovery::Direct);
+        }
+
+        // A file the grammar could not repair and that declares no imports
+        // keeps its `parse_miss` diagnostic, so the caller files it under
+        // parse-miss instead of the clean "no imports" bucket. A cleanly
+        // parsed file reports no miss at all.
+        let (provenance, confidence) = if lexical_only {
+            ("lexical", 0.3)
+        } else {
+            ("ast_exact", 1.0)
+        };
+
         // GAP-052: a test file's imports are also coverage edges. Emit
         // `tested_by` (test → target) alongside `imports` for every unique
         // target so `graph untested`, module coverage stats, and impact see
@@ -272,20 +442,24 @@ impl Parser {
                 from: file_path.to_string(),
                 to: path.clone(),
                 rel: "imports".to_string(),
-                provenance: "ast_exact".to_string(),
-                confidence: 1.0,
+                provenance: provenance.to_string(),
+                confidence,
             });
             if is_test && tested_targets.insert(path.clone()) {
                 edges.push(Edge {
                     from: file_path.to_string(),
                     to: path,
                     rel: "tested_by".to_string(),
-                    provenance: "ast_exact".to_string(),
-                    confidence: 1.0,
+                    provenance: provenance.to_string(),
+                    confidence,
                 });
             }
         }
-        Ok(edges)
+        Ok(ImportParse {
+            edges,
+            parse_miss,
+            recovery,
+        })
     }
 }
 
@@ -1028,6 +1202,132 @@ fn extract_csharp_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
 }
 
 // ── Kotlin ─────────────────────────────────────────────────────────
+
+/// Identifier substituted for a build-template `${...}` placeholder so a
+/// template file can still be parsed as Kotlin (DF-WARPFS-85).
+const KOTLIN_TEMPLATE_PLACEHOLDER: &str = "HiloTemplatePlaceholder";
+
+/// Neutralise `${...}` build-template placeholders (`package ${package}.db`)
+/// so the grammar sees valid Kotlin.
+///
+/// Only `${...}` spans are rewritten. In valid Kotlin those appear inside
+/// string templates, where a bare identifier is still a valid expression, so
+/// the rewrite never makes a parseable file unparseable. Returns `None` when
+/// the source carries no placeholder (nothing to repair).
+fn neutralise_template_placeholders(source: &str) -> Option<String> {
+    if !source.contains("${") {
+        return None;
+    }
+    let mut out = String::with_capacity(source.len());
+    let mut rest = source;
+    let mut changed = false;
+    while let Some(start) = rest.find("${") {
+        let Some(close) = rest[start..].find('}') else {
+            break;
+        };
+        out.push_str(&rest[..start]);
+        out.push_str(KOTLIN_TEMPLATE_PLACEHOLDER);
+        rest = &rest[start + close + 1..];
+        changed = true;
+    }
+    out.push_str(rest);
+    changed.then_some(out)
+}
+
+/// Last-resort import recovery for a Kotlin file whose syntax tree is unusable
+/// even after placeholder repair (DF-WARPFS-85).
+///
+/// Kotlin imports are one-per-line top-level declarations, so a line scan is
+/// unambiguous once comments are out of the way. Block comments are peeled
+/// with nesting (Kotlin's block comments nest), line comments and trailing
+/// semicolons are dropped, and `as` aliases are stripped — the same target
+/// shape the AST extractor emits.
+fn scan_kotlin_import_lines(source: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+    for line in strip_kotlin_block_comments(source).lines() {
+        let line = line.trim();
+        // A line comment or a block-comment remnant (`* ...`, `*/`) is not a
+        // declaration.
+        if line.starts_with("//") || line.starts_with('*') || line.starts_with("/*") {
+            continue;
+        }
+        let Some(after_keyword) = line.strip_prefix("import") else {
+            continue;
+        };
+        // `import` must be a whole keyword: `important()` is not an import.
+        if !after_keyword.starts_with(char::is_whitespace) {
+            continue;
+        }
+        let path_part = after_keyword
+            .split("//")
+            .next()
+            .unwrap_or(after_keyword)
+            .trim()
+            .trim_end_matches(';')
+            .trim()
+            .split(" as ")
+            .next()
+            .unwrap_or_default()
+            .trim();
+        if kotlin_import_path_is_plausible(path_part) {
+            paths.push(format!("pkg:{path_part}"));
+        }
+    }
+    paths
+}
+
+/// Does `path` look like a Kotlin import target (dotted identifier, `*`
+/// wildcard, backticked segment)? Guards the lexical scanner against
+/// prose that happens to start with "import".
+fn kotlin_import_path_is_plausible(path: &str) -> bool {
+    !path.is_empty()
+        && path
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '_' | '.' | '*' | '`'))
+        && path
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_alphanumeric() || c == '`')
+}
+
+/// Replace `/* ... */` spans (nesting-aware, Kotlin block comments nest) with
+/// spaces, preserving newlines so line numbers stay aligned.
+fn strip_kotlin_block_comments(source: &str) -> String {
+    let bytes = source.as_bytes();
+    let mut out = String::with_capacity(source.len());
+    let mut depth = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if depth == 0 && bytes[i..].starts_with(b"/*") {
+            depth = 1;
+            out.push_str("  ");
+            i += 2;
+            continue;
+        }
+        if depth > 0 {
+            if bytes[i..].starts_with(b"/*") {
+                depth += 1;
+                out.push_str("  ");
+                i += 2;
+                continue;
+            }
+            if bytes[i..].starts_with(b"*/") {
+                depth -= 1;
+                out.push_str("  ");
+                i += 2;
+                continue;
+            }
+            out.push(if bytes[i] == b'\n' { '\n' } else { ' ' });
+            i += 1;
+            continue;
+        }
+        // Copy one UTF-8 character verbatim.
+        let ch = source[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
 
 fn extract_kotlin_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
     if node.kind() == "import" || node.kind() == "import_header" {
@@ -2685,5 +2985,134 @@ use anyhow::{bail, Context as _};
         assert!(imports.contains(&"pkg:tables".into()));
         assert!(imports.contains(&"std:os".into()));
         assert!(imports.contains(&"std:math".into()));
+    }
+
+    // ── DF-WARPFS-85: Kotlin template imports + parse-miss reporting ──
+
+    /// The reported bug: a maven/velocity-style template header
+    /// (`package ${package}.db`) is not valid Kotlin, and tree-sitter used to
+    /// swallow the WHOLE file into one ERROR node — the real imports below it
+    /// vanished and the file landed in the "no imports" bucket.
+    #[test]
+    fn kotlin_template_package_header_still_yields_imports() {
+        let source = "package ${package}.db\n\n\
+                      import org.jetbrains.exposed.v1.core.Table\n\n\
+                      object Cities : Table(\"cities\") {\n    val id = integer(\"id\")\n}\n";
+        let mut p = Parser::for_language(Language::Kotlin).unwrap();
+        let parsed = p
+            .parse_imports_detailed("src/test/resources/Cities.kt", source)
+            .unwrap();
+
+        let imported: Vec<&Edge> = parsed.edges.iter().filter(|e| e.rel == "imports").collect();
+        assert!(
+            !imported.is_empty(),
+            "a template .kt with a real import must produce an import edge"
+        );
+        assert!(
+            imported
+                .iter()
+                .any(|e| e.to == "pkg:org.jetbrains.exposed.v1.core.Table"),
+            "the declared table import must be an edge target, got: {imported:?}"
+        );
+        // The original source really is unparseable — the recovery is
+        // reported, never silently passed off as a clean parse.
+        assert_eq!(parsed.parse_miss, Some(ParseMiss::SyntaxErrors));
+        assert_eq!(parsed.recovery, Some(ImportRecovery::RepairedTemplate));
+    }
+
+    /// A template that breaks in a way placeholder repair cannot fix still
+    /// yields its imports: Kotlin imports are top-level one-liners, so the
+    /// lexical tier recovers them — and only them (a commented-out import
+    /// stays out).
+    #[test]
+    fn kotlin_template_unknown_directive_imports_recovered_lexically() {
+        let source = "package com.example\n\n\
+                      /* generated table\n\
+                      import org.example.hidden.Ghost\n\
+                      */\n\
+                      #parse(\"header.kt\")\n\
+                      import org.jetbrains.exposed.v1.core.Table as T;\n";
+        let mut p = Parser::for_language(Language::Kotlin).unwrap();
+        let parsed = p
+            .parse_imports_detailed("src/test/resources/Users.kt", source)
+            .unwrap();
+
+        let targets: Vec<&str> = parsed
+            .edges
+            .iter()
+            .filter(|e| e.rel == "imports")
+            .map(|e| e.to.as_str())
+            .collect();
+        assert_eq!(
+            targets,
+            vec!["pkg:org.jetbrains.exposed.v1.core.Table"],
+            "aliased import recovered, commented-out import dropped"
+        );
+        assert_eq!(parsed.parse_miss, Some(ParseMiss::SyntaxErrors));
+        assert_eq!(parsed.recovery, Some(ImportRecovery::LexicalScan));
+        // A lexical recovery is not ground truth: it never claims ast_exact.
+        assert!(parsed.edges.iter().all(|e| e.provenance == "lexical"));
+    }
+
+    /// A file the grammar cannot repair and that declares no imports is a
+    /// parse miss with a reason — not a clean zero-edge file.
+    #[test]
+    fn kotlin_unparseable_file_without_imports_reports_parse_miss() {
+        let source = "###PACKAGE###\n\n@parse directive garbage (({\n";
+        let mut p = Parser::for_language(Language::Kotlin).unwrap();
+        let parsed = p
+            .parse_imports_detailed("src/test/resources/Broken.kt", source)
+            .unwrap();
+        assert!(parsed.edges.is_empty());
+        assert_eq!(parsed.parse_miss, Some(ParseMiss::SyntaxErrors));
+        assert_eq!(parsed.recovery, None);
+        assert_eq!(ParseMiss::SyntaxErrors.as_str(), "syntax errors");
+    }
+
+    /// A clean Kotlin file carries no diagnostic at all, so warm keeps
+    /// classifying it as an ordinary "no imports" file.
+    #[test]
+    fn kotlin_clean_file_reports_no_parse_miss() {
+        let mut p = Parser::for_language(Language::Kotlin).unwrap();
+        let parsed = p
+            .parse_imports_detailed(
+                "src/main/kotlin/App.kt",
+                "package com.example\n\nfun main() {}\n",
+            )
+            .unwrap();
+        assert!(parsed.edges.is_empty());
+        assert_eq!(parsed.parse_miss, None);
+        assert_eq!(parsed.recovery, None);
+    }
+
+    /// Placeholder neutralisation must be a no-op for placeholder-free source
+    /// and must only rewrite the `${...}` spans it finds.
+    #[test]
+    fn kotlin_template_placeholder_neutralisation_is_targeted() {
+        assert_eq!(
+            neutralise_template_placeholders("package com.example\n"),
+            None
+        );
+        assert_eq!(
+            neutralise_template_placeholders("package ${package}.db\n// ${ keep }\n"),
+            Some(format!(
+                "package {KOTLIN_TEMPLATE_PLACEHOLDER}.db\n// {KOTLIN_TEMPLATE_PLACEHOLDER}\n"
+            ))
+        );
+    }
+
+    /// The lexical tier must not invent imports: nested block comments (Kotlin
+    /// nests them), line comments, and non-ASCII text are all skipped.
+    #[test]
+    fn kotlin_lexical_scan_skips_comments_and_handles_utf8() {
+        let source = "/* outer é /* nested */\nimport org.example.Hidden\n*/\n\
+                      // import org.example.LineComment\n\
+                      import org.example.Real as R\n\
+                      fun main() { println(\"é\") }\n\
+                      importantThing()\n";
+        assert_eq!(
+            scan_kotlin_import_lines(source),
+            vec!["pkg:org.example.Real".to_string()]
+        );
     }
 }

@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use anyhow::{Context, Result};
 use hilo_graph::edges;
 use hilo_graph::resolution::{SYMBOL_CACHE_FILE, SYMBOL_CACHE_VERSION};
-use hilo_graph::{GraphDB, ImpactResult, Language, Parser};
+use hilo_graph::{GraphDB, ImpactResult, ImportRecovery, Language, ParseMiss, Parser};
 use hilo_metadata::inventory::{self, Edge};
 use rayon::prelude::*;
 use regex::Regex;
@@ -525,10 +525,18 @@ fn write_symbol_cache_atomic(path: &Path, cache: &PersistedSymbolCache) -> Resul
 enum FileOutcome {
     /// Parsed fine and produced at least one edge.
     Contributes,
+    /// DF-WARPFS-85: produced edges, but only after the file's syntax tree
+    /// failed (Kotlin build templates). Counted as a contributor, named in the
+    /// summary so a repaired parse is never silent.
+    ContributesRecovered { path: String, detail: String },
     /// Zero edges from an `__init__.py` — a package facade, expected.
     PackageFacade,
     /// Zero edges from any other file — no imports found.
     NoImports,
+    /// DF-WARPFS-85: zero edges AND the syntax tree carried errors, so the
+    /// file could not declare what it imports. Named with its reason instead
+    /// of being folded into "no imports".
+    ParseMiss { path: String, reason: String },
     /// `fs::read_to_string` failed (permissions, I/O, non-UTF8).
     UnreadableSource { path: String },
     /// The extension is not a supported source language.
@@ -536,17 +544,88 @@ enum FileOutcome {
 }
 
 impl FileOutcome {
-    /// Classify a successfully parsed file by its edge count and file name.
+    /// Classify a parsed file by its edges, its parse diagnostics and its name.
     /// Cache hits run through the same classifier, so an `__init__.py` served
-    /// from `.parse_cache.json` still counts as a facade.
-    fn from_edges(file: &Path, edges: &[Edge]) -> Self {
+    /// from `.parse_cache.json` still counts as a facade and a cached
+    /// parse-miss still lands in the parse-miss bucket.
+    fn classify(file: &Path, rel: &str, edges: &[Edge], parsed: Option<&ParseDiag>) -> Self {
+        let miss = parsed.and_then(|diag| diag.parse_miss);
         if !edges.is_empty() {
-            return Self::Contributes;
+            return match (miss, parsed.and_then(|diag| diag.recovery)) {
+                (Some(miss), Some(recovery)) => Self::ContributesRecovered {
+                    path: rel.to_string(),
+                    detail: format!("{} ({} recovery)", miss.as_str(), recovery.as_str()),
+                },
+                _ => Self::Contributes,
+            };
+        }
+        if let Some(miss) = miss {
+            // A file we could not parse is not a file that imports nothing:
+            // name it, so a Kotlin template's dropped imports are visible.
+            return Self::ParseMiss {
+                path: rel.to_string(),
+                reason: miss.as_str().to_string(),
+            };
         }
         if file.file_name().and_then(|n| n.to_str()) == Some("__init__.py") {
             return Self::PackageFacade;
         }
         Self::NoImports
+    }
+}
+
+/// DF-WARPFS-85: the parse diagnostics of one file, as recorded in the parse
+/// cache so a warm served entirely from cache reports the same coverage
+/// buckets as the warm that parsed it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct ParseDiag {
+    parse_miss: Option<ParseMiss>,
+    recovery: Option<ImportRecovery>,
+}
+
+impl ParseDiag {
+    /// Rebuild the diagnostics from a `.parse_cache.json` entry. An entry
+    /// without the `parse` field predates DF-WARPFS-85 and carries no
+    /// diagnostics (`None`), which the warm loop treats as "re-parse me".
+    fn from_cache_entry(entry: &serde_json::Value) -> Option<Self> {
+        let parse = entry.get("parse")?;
+        Some(ParseDiag {
+            parse_miss: parse
+                .get("miss")
+                .and_then(|v| v.as_str())
+                .and_then(parse_miss_from_tag),
+            recovery: parse
+                .get("recovery")
+                .and_then(|v| v.as_str())
+                .and_then(import_recovery_from_tag),
+        })
+    }
+
+    /// Serialize into the `parse` field of a `.parse_cache.json` entry.
+    fn cache_value(self) -> serde_json::Value {
+        serde_json::json!({
+            "miss": self.parse_miss.map(|miss| miss.as_str()),
+            "recovery": self.recovery.map(|recovery| recovery.as_str()),
+        })
+    }
+}
+
+/// Inverse of [`ParseMiss::as_str`] for cache reads.
+fn parse_miss_from_tag(tag: &str) -> Option<ParseMiss> {
+    match tag {
+        "syntax errors" => Some(ParseMiss::SyntaxErrors),
+        "no parse tree" => Some(ParseMiss::NoTree),
+        _ => None,
+    }
+}
+
+/// Inverse of [`ImportRecovery::as_str`] for cache reads.
+fn import_recovery_from_tag(tag: &str) -> Option<ImportRecovery> {
+    match tag {
+        "direct" => Some(ImportRecovery::Direct),
+        "repaired template" => Some(ImportRecovery::RepairedTemplate),
+        "lexical scan" => Some(ImportRecovery::LexicalScan),
+        _ => None,
     }
 }
 
@@ -556,14 +635,20 @@ const COVERAGE_PATH_LIST_CAP: usize = 20;
 
 /// End-of-warm accounting (GAP-065): classifies every discovered source file
 /// into exactly one outcome.  The printed verdict line closes the arithmetic
-/// `verdict files = contributes + facades + no_imports + unreadable +
-/// unsupported`, so a deliberate zero-edge file is distinguishable from a file
-/// we failed to read or parse.
+/// `verdict files = contributes + facades + no_imports + parse_miss +
+/// unreadable + unsupported`, so a deliberate zero-edge file is
+/// distinguishable from a file we failed to read or parse.
 #[derive(Debug, Default)]
 struct CoverageReport {
     contributes: usize,
     facades: usize,
     no_imports: usize,
+    /// DF-WARPFS-85: zero-edge files whose syntax tree carried errors.
+    parse_misses: Vec<String>,
+    /// DF-WARPFS-85: contributors whose edges were recovered from a file the
+    /// grammar could not parse directly. Counted in `contributes`; listed so
+    /// the repair is visible without disturbing the arithmetic.
+    recovered: Vec<String>,
     unreadable: Vec<String>,
     unsupported: Vec<String>,
 }
@@ -572,8 +657,15 @@ impl CoverageReport {
     fn record(&mut self, outcome: FileOutcome) {
         match outcome {
             FileOutcome::Contributes => self.contributes += 1,
+            FileOutcome::ContributesRecovered { path, detail } => {
+                self.contributes += 1;
+                self.recovered.push(format!("{path} — {detail}"));
+            }
             FileOutcome::PackageFacade => self.facades += 1,
             FileOutcome::NoImports => self.no_imports += 1,
+            FileOutcome::ParseMiss { path, reason } => {
+                self.parse_misses.push(format!("{path} — {reason}"))
+            }
             FileOutcome::UnreadableSource { path } => self.unreadable.push(path),
             FileOutcome::UnsupportedExtension { path } => self.unsupported.push(path),
         }
@@ -584,15 +676,22 @@ impl CoverageReport {
     fn render(&self) -> String {
         let unreadable_n = self.unreadable.len();
         let unsupported_n = self.unsupported.len();
-        let verdict =
-            self.contributes + self.facades + self.no_imports + unreadable_n + unsupported_n;
+        let parse_miss_n = self.parse_misses.len();
+        let verdict = self.contributes
+            + self.facades
+            + self.no_imports
+            + parse_miss_n
+            + unreadable_n
+            + unsupported_n;
         let mut lines = vec![format!(
-            "Coverage: {verdict} files = {} contribute edges + {} package facades (__init__.py) + {} no imports + {unreadable_n} unreadable + {unsupported_n} unsupported extension",
+            "Coverage: {verdict} files = {} contribute edges + {} package facades (__init__.py) + {} no imports + {parse_miss_n} parse-miss + {unreadable_n} unreadable + {unsupported_n} unsupported extension",
             self.contributes, self.facades, self.no_imports
         )];
         for (label, paths) in [
             ("unreadable source", &self.unreadable),
             ("unsupported extension", &self.unsupported),
+            ("parse-miss", &self.parse_misses),
+            ("parse recovered", &self.recovered),
         ] {
             lines.extend(coverage_path_lines(label, paths));
         }
@@ -664,6 +763,11 @@ fn write_coverage_ledger(
         "contributes": report.contributes,
         "package_facades": report.facades,
         "no_imports": report.no_imports,
+        // DF-WARPFS-85: zero-edge files whose syntax tree carried errors, and
+        // contributors whose edges needed a recovery pass. The former is part
+        // of the zero-edge total; the latter is already inside `contributes`.
+        "parse_miss": report.parse_misses.len(),
+        "parse_recovered": report.recovered.len(),
         "unreadable": report.unreadable.len(),
         "unsupported_extension": report.unsupported.len(),
         "unique_edge_sources": sources,
@@ -936,45 +1040,62 @@ pub fn run_warm_in(
                                 .iter()
                                 .filter_map(|e| serde_json::from_value(e.clone()).ok())
                                 .collect();
-                            // DF-WARPFS-76: an entry written before the parse
-                            // cache carried search vocabulary (symbols + doc
-                            // tokens) is enriched on THIS warm — the only
-                            // writer that may touch the cache — so every later
-                            // query reads nothing at all. Entries that already
-                            // carry both channels stay a pure stat hit.
-                            if entry.get("symbols").is_none() || entry.get("doc").is_none() {
-                                // Oversized blobs are indexable-but-empty by
-                                // contract (both extractors refuse them), so
-                                // they are recorded as empty rather than
-                                // retried on every warm. A file that cannot be
-                                // read right now is left UNrecorded: the entry
-                                // stays a miss, so the next query re-derives
-                                // and the next warm tries again.
-                                let size = file_fingerprint(file).map(|(_, s)| s).unwrap_or(0);
-                                let terms = if size > MAX_SYMBOL_SOURCE_BYTES {
-                                    Some((Vec::new(), Vec::new()))
-                                } else {
-                                    std::fs::read_to_string(file)
-                                        .ok()
-                                        .map(|source| parse_cache_terms(&rel, &source))
-                                };
-                                if let Some((symbols, doc)) = terms {
-                                    let enriched = serde_json::json!({
-                                        "m": file_fingerprint(file).map(|(n, _)| n as u64).unwrap_or(0),
-                                        "s": file_fingerprint(file).map(|(_, s)| s).unwrap_or(0),
-                                        "edges": edges,
-                                        "symbols": symbols,
-                                        "doc": doc,
-                                    });
-                                    new_entries.lock().unwrap().insert(rel.clone(), enriched);
+                            // DF-WARPFS-85: an entry written before the parse
+                            // cache carried parse diagnostics cannot tell a
+                            // parse miss from a clean zero-edge file. Zero-edge
+                            // files are therefore re-parsed ONCE (below); a
+                            // diagnosed entry — clean or not — stays a pure
+                            // stat hit, as does any contributor.
+                            let diag = ParseDiag::from_cache_entry(entry);
+                            if diag.is_some() || !edges.is_empty() {
+                                // DF-WARPFS-76: an entry written before the parse
+                                // cache carried search vocabulary (symbols + doc
+                                // tokens) is enriched on THIS warm — the only
+                                // writer that may touch the cache — so every later
+                                // query reads nothing at all. Entries that already
+                                // carry both channels stay a pure stat hit.
+                                if entry.get("symbols").is_none() || entry.get("doc").is_none() {
+                                    // Oversized blobs are indexable-but-empty by
+                                    // contract (both extractors refuse them), so
+                                    // they are recorded as empty rather than
+                                    // retried on every warm. A file that cannot be
+                                    // read right now is left UNrecorded: the entry
+                                    // stays a miss, so the next query re-derives
+                                    // and the next warm tries again.
+                                    let size = file_fingerprint(file).map(|(_, s)| s).unwrap_or(0);
+                                    let terms = if size > MAX_SYMBOL_SOURCE_BYTES {
+                                        Some((Vec::new(), Vec::new()))
+                                    } else {
+                                        std::fs::read_to_string(file)
+                                            .ok()
+                                            .map(|source| parse_cache_terms(&rel, &source))
+                                    };
+                                    if let Some((symbols, doc)) = terms {
+                                        let mut enriched = serde_json::json!({
+                                            "m": file_fingerprint(file).map(|(n, _)| n as u64).unwrap_or(0),
+                                            "s": file_fingerprint(file).map(|(_, s)| s).unwrap_or(0),
+                                            "edges": edges,
+                                            "symbols": symbols,
+                                            "doc": doc,
+                                        });
+                                        // Never invent a `parse` verdict for an
+                                        // entry that was written before the
+                                        // diagnostics existed.
+                                        if let Some(diag) = diag {
+                                            enriched["parse"] = diag.cache_value();
+                                        }
+                                        new_entries.lock().unwrap().insert(rel.clone(), enriched);
+                                    }
                                 }
+                                cached_files.fetch_add(1, Ordering::Relaxed);
+                                // GAP-065: classify cache hits with the same
+                                // rules as fresh parses (a cached __init__.py
+                                // is still a facade, a cached parse-miss is
+                                // still a parse-miss).
+                                let outcome =
+                                    FileOutcome::classify(file, &rel, &edges, diag.as_ref());
+                                return Ok((edges, outcome));
                             }
-                            cached_files.fetch_add(1, Ordering::Relaxed);
-                            // GAP-065: classify cache hits with the same
-                            // rules as fresh parses (a cached __init__.py is
-                            // still a facade).
-                            let outcome = FileOutcome::from_edges(file, &edges);
-                            return Ok((edges, outcome));
                         }
                     }
                 }
@@ -1001,9 +1122,17 @@ pub fn run_warm_in(
             // with cwd != root used to resolve against the wrong tree and
             // silently yield 0 edges (found by the INV-001 regression test).
             let abs = file.canonicalize().unwrap_or_else(|_| file.clone());
-            let mut edges = parser
-                .parse_imports(&abs.to_string_lossy(), &source)
+            // DF-WARPFS-85: the detailed parse also tells us when the file
+            // could not be parsed, so a file whose imports we could not read
+            // is reported as a parse-miss instead of a clean zero-edge file.
+            let parsed = parser
+                .parse_imports_detailed(&abs.to_string_lossy(), &source)
                 .with_context(|| format!("failed to parse {rel}"))?;
+            let diag = ParseDiag {
+                parse_miss: parsed.parse_miss,
+                recovery: parsed.recovery,
+            };
+            let mut edges = parsed.edges;
             // Edge endpoints are graph-stable REL paths; the absolute parse
             // path leaks into from/to, so strip the root back off.
             for e in edges.iter_mut() {
@@ -1026,9 +1155,10 @@ pub fn run_warm_in(
                 "edges": edges,
                 "symbols": symbols,
                 "doc": doc,
+                "parse": diag.cache_value(),
             });
             new_entries.lock().unwrap().insert(rel.clone(), entry);
-            let outcome = FileOutcome::from_edges(file, &edges);
+            let outcome = FileOutcome::classify(file, &rel, &edges, Some(&diag));
             Ok((edges, outcome))
         })
         .collect();
@@ -1984,11 +2114,25 @@ pub fn run_stats(limit: usize) -> Result<()> {
             let contributes = ledger.get("contributes").and_then(|v| v.as_u64());
             let no_imports = ledger.get("no_imports").and_then(|v| v.as_u64());
             let facades = ledger.get("package_facades").and_then(|v| v.as_u64());
+            // DF-WARPFS-85: a ledger written before the parse-miss bucket has
+            // no such key — its zero-edge files were all "no imports". Absent
+            // reads as 0, which keeps old ledgers printing the old line.
+            let parse_miss = ledger
+                .get("parse_miss")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
             if let (Some(discovered), Some(contributes), Some(no_imports), Some(facades)) =
                 (discovered, contributes, no_imports, facades)
             {
                 let census = stats.total_files.max(0) as u64;
-                let zero_edge = no_imports + facades;
+                let zero_edge = no_imports + facades + parse_miss;
+                // Only name the parse-miss bucket once there is one, so a
+                // corpus that parses cleanly keeps its established line.
+                let parse_miss_clause = if parse_miss > 0 {
+                    format!(" + {parse_miss} parse-miss")
+                } else {
+                    String::new()
+                };
                 if census > contributes {
                     // Census ahead of warm's accounting: the graph still holds
                     // edge sources the latest warm no longer saw as
@@ -1997,18 +2141,18 @@ pub fn run_stats(limit: usize) -> Result<()> {
                     // gone, so after a full warm a residual delta is a
                     // cache-age problem, not a permanently stale inventory.
                     println!(
-                        "File census: {census} files with edges (distinct edge sources) — warm last counted {discovered} discovered files = {contributes} contribute + {zero_edge} zero-edge ({no_imports} no imports + {facades} package facades); {census} > {contributes} means the graph predates the last warm — `hilo graph warm` prunes sources whose file is gone (DF-WARPFS-170)"
+                        "File census: {census} files with edges (distinct edge sources) — warm last counted {discovered} discovered files = {contributes} contribute + {zero_edge} zero-edge ({no_imports} no imports + {facades} package facades{parse_miss_clause}); {census} > {contributes} means the graph predates the last warm — `hilo graph warm` prunes sources whose file is gone (DF-WARPFS-170)"
                     );
                 } else if census < contributes {
                     // Ledger ahead of the graph db (e.g. a warm whose db
                     // write failed): the census is missing rows the latest
                     // warm counted as contributors.
                     println!(
-                        "File census: {census} files with edges (distinct edge sources) — warm last counted {discovered} discovered files = {contributes} contribute + {zero_edge} zero-edge ({no_imports} no imports + {facades} package facades); the census is missing contributors (stale or truncated graph cache — run `hilo graph warm`)"
+                        "File census: {census} files with edges (distinct edge sources) — warm last counted {discovered} discovered files = {contributes} contribute + {zero_edge} zero-edge ({no_imports} no imports + {facades} package facades{parse_miss_clause}); the census is missing contributors (stale or truncated graph cache — run `hilo graph warm`)"
                     );
                 } else {
                     println!(
-                        "File census: {census} files with edges (distinct edge sources) — warm last counted {discovered} discovered files = {contributes} contribute + {zero_edge} zero-edge ({no_imports} no imports + {facades} package facades)"
+                        "File census: {census} files with edges (distinct edge sources) — warm last counted {discovered} discovered files = {contributes} contribute + {zero_edge} zero-edge ({no_imports} no imports + {facades} package facades{parse_miss_clause})"
                     );
                 }
             }
@@ -6023,26 +6167,110 @@ mod tests {
         let plain = Path::new("pkg/constants.py");
 
         assert_eq!(
-            FileOutcome::from_edges(contributing, &[edge_of("pkg/app.py")]),
+            FileOutcome::classify(
+                contributing,
+                "pkg/app.py",
+                &[edge_of("pkg/app.py")],
+                Some(&ParseDiag::default())
+            ),
             FileOutcome::Contributes
         );
         // Zero edges + facade name => package facade (never "no imports").
         assert_eq!(
-            FileOutcome::from_edges(facade, &[]),
+            FileOutcome::classify(facade, "pkg/__init__.py", &[], Some(&ParseDiag::default())),
             FileOutcome::PackageFacade
         );
         // Zero edges + ordinary name => no imports found.
-        assert_eq!(FileOutcome::from_edges(plain, &[]), FileOutcome::NoImports);
+        assert_eq!(
+            FileOutcome::classify(plain, "pkg/constants.py", &[], Some(&ParseDiag::default())),
+            FileOutcome::NoImports
+        );
+        // Zero edges + a parse diagnostic => parse-miss, named with reason.
+        assert_eq!(
+            FileOutcome::classify(
+                plain,
+                "pkg/constants.py",
+                &[],
+                Some(&ParseDiag {
+                    parse_miss: Some(ParseMiss::SyntaxErrors),
+                    recovery: None,
+                })
+            ),
+            FileOutcome::ParseMiss {
+                path: "pkg/constants.py".to_string(),
+                reason: "syntax errors".to_string(),
+            }
+        );
+    }
+
+    /// DF-WARPFS-85: a contributor whose syntax tree was broken is still a
+    /// contributor — and it is named, so a recovered parse never passes for a
+    /// clean one.
+    #[test]
+    fn coverage_classifier_marks_recovered_contributor() {
+        let recovered = FileOutcome::classify(
+            Path::new("src/test/resources/Cities.kt"),
+            "src/test/resources/Cities.kt",
+            &[edge_of("src/test/resources/Cities.kt")],
+            Some(&ParseDiag {
+                parse_miss: Some(ParseMiss::SyntaxErrors),
+                recovery: Some(ImportRecovery::RepairedTemplate),
+            }),
+        );
+        assert_eq!(
+            recovered,
+            FileOutcome::ContributesRecovered {
+                path: "src/test/resources/Cities.kt".to_string(),
+                detail: "syntax errors (repaired template recovery)".to_string(),
+            }
+        );
+
+        let mut report = CoverageReport::default();
+        report.record(FileOutcome::Contributes);
+        report.record(recovered);
+        let rendered = report.render();
+        assert!(
+            rendered.starts_with("Coverage: 2 files = 2 contribute edges"),
+            "recovered files count as contributors: {rendered}"
+        );
+        assert!(
+            rendered.contains("  parse recovered: src/test/resources/Cities.kt — syntax errors"),
+            "the repair must be named: {rendered}"
+        );
+    }
+
+    /// The parse-miss bucket is part of the verdict arithmetic and its files
+    /// are named with the reason.
+    #[test]
+    fn coverage_report_parse_miss_bucket_closes_and_names_files() {
+        let mut report = CoverageReport::default();
+        report.record(FileOutcome::Contributes);
+        report.record(FileOutcome::NoImports);
+        report.record(FileOutcome::ParseMiss {
+            path: "src/test/resources/Broken.kt".to_string(),
+            reason: "syntax errors".to_string(),
+        });
+        let rendered = report.render();
+        let verdict = rendered.lines().next().unwrap();
+        assert_eq!(
+            verdict,
+            "Coverage: 3 files = 1 contribute edges + 0 package facades (__init__.py) \
+             + 1 no imports + 1 parse-miss + 0 unreadable + 0 unsupported extension"
+        );
+        assert!(
+            rendered.contains("  parse-miss: src/test/resources/Broken.kt — syntax errors"),
+            "parse-miss files must be named with their reason: {rendered}"
+        );
     }
 
     #[test]
     fn coverage_report_render_closes_arithmetic_and_caps_paths() {
-        // Zero report: the verdict line still closes (0 = 0+0+0+0+0).
+        // Zero report: the verdict line still closes (0 = 0+0+0+0+0+0).
         let empty = CoverageReport::default();
         assert_eq!(
             empty.render(),
             "Coverage: 0 files = 0 contribute edges + 0 package facades (__init__.py) \
-             + 0 no imports + 0 unreadable + 0 unsupported extension"
+             + 0 no imports + 0 parse-miss + 0 unreadable + 0 unsupported extension"
         );
 
         let mut report = CoverageReport::default();
@@ -6063,7 +6291,7 @@ mod tests {
         assert_eq!(
             verdict,
             "Coverage: 27 files = 1 contribute edges + 1 package facades (__init__.py) \
-             + 1 no imports + 23 unreadable + 1 unsupported extension"
+             + 1 no imports + 0 parse-miss + 23 unreadable + 1 unsupported extension"
         );
         let named: Vec<&str> = rendered
             .lines()
