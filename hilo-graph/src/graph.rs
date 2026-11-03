@@ -52,7 +52,7 @@ pub fn strip_file_prefix(path: &str) -> &str {
 /// agent can self-correct (e.g. drop a `file:` prefix) instead of reading
 /// the message as plain file-not-found.
 pub const UNRESOLVABLE_TARGET_HINT: &str =
-    "Accepted id forms: bare repo-relative path (src/main.rs), sys:<header>, pkg:<crate>";
+    "Accepted id forms: bare repo-relative path (src/main.rs), sys:<header> for system includes, local:<specifier> for project headers and imports (e.g. local:adlist.h), pkg:<crate>";
 
 /// Direction for edge queries: forward (`"from" = ?`) or reverse (`"to" = ?`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4142,10 +4142,12 @@ mod tests {
     #[test]
     fn unresolvable_target_error_teaches_id_forms() {
         // DF-WARPFS-2: the unresolvable-target error must keep the stable
-        // "is not in the graph" contract AND teach the three accepted id
+        // "is not in the graph" contract AND teach the accepted id
         // shapes — a `file:`-prefixed typo must read as "drop the prefix",
         // not as plain file-not-found. Same wording for both entry points
-        // and for the bare and `file:` input forms.
+        // and for the bare and `file:` input forms. DF-WARPFS-80: the hint
+        // must name the `local:` form for C headers (quoted includes are
+        // stored as `local:adlist.h`), not just `sys:`.
         let db = GraphDB::open(":memory:").unwrap();
         for target in ["no/such/file_xyz.rs", "file:no/such/file_xyz.rs"] {
             let impact_msg = db
@@ -4160,6 +4162,8 @@ mod tests {
                 "Accepted id forms",
                 "bare repo-relative path",
                 "sys:<header>",
+                "local:<specifier>",
+                "local:adlist.h",
                 "pkg:<crate>",
             ] {
                 assert!(
@@ -4177,6 +4181,8 @@ mod tests {
                 "Accepted id forms",
                 "bare repo-relative path",
                 "sys:<header>",
+                "local:<specifier>",
+                "local:adlist.h",
                 "pkg:<crate>",
             ] {
                 assert!(

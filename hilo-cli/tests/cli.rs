@@ -1831,6 +1831,8 @@ fn graph_accepts_file_prefixed_path_and_teaches_id_forms() {
             "Accepted id forms",
             "bare repo-relative path",
             "sys:<header>",
+            "local:<specifier>",
+            "local:adlist.h",
             "pkg:<crate>",
         ] {
             assert!(
