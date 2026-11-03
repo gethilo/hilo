@@ -2624,3 +2624,13 @@ tasks:
   status: complete
   created_at: '2026-11-02T18:12:14.029481+00:00'
   completed_at: '2026-11-02T18:50:20.884177+00:00'
+- id: DF-WARPFS-118
+  title: "graph understand DETAIL tier ranking \u2014 final published verification"
+  criteria:
+  - 'PASS: published master implements DF-WARPFS-118; cargo test -p hilo_graph --lib
+    passes; focused DETAIL tests pass; cargo test -p hilo-cli --lib understand_tier_selection
+    passes; cargo fmt --all -- --check and cargo clippy -p hilo_graph --all-targets
+    -- -D warnings pass; CLI supports --tier detail'
+  status: complete
+  created_at: '2026-11-03T04:38:23.468472+00:00'
+  completed_at: '2026-11-03T04:39:06.014770+00:00'
