@@ -1900,6 +1900,41 @@ impl GraphDB {
         Ok(out)
     }
 
+    /// The number of edges incident to each file: imports it carries plus the
+    /// importers that point at it, counted over the whole graph in one scan
+    /// (DF-WARPFS-118).
+    ///
+    /// This is the *structural weight* `graph understand` ranks the DETAIL tier
+    /// by. Deriving it during traversal is not enough: the file that owns a flow
+    /// often sits exactly on the depth boundary (flask's `src/flask/app.py` is
+    /// two hops from the "view" anchors, so it was never expanded and its
+    /// degree read as zero), and a per-file lookup for every boundary file would
+    /// cost two queries per candidate. One `GROUP BY` over `from ∪ to` is a
+    /// single indexed scan of the same table `distinct_files` already reads.
+    ///
+    /// Pseudo-nodes (`pkg:`, `sys:`, `std:`, `external:`, `local:`) are counted
+    /// like any other name — callers that only rank real files simply never look
+    /// them up.
+    pub fn file_degrees(&self) -> GraphResult<HashMap<String, usize>> {
+        self.require_cached_query("file_degrees")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT file, COUNT(*) AS degree FROM (
+                 SELECT \"from\" AS file FROM edges
+                 UNION ALL
+                 SELECT \"to\" AS file FROM edges
+             ) GROUP BY file",
+        )?;
+        let rows = stmt.query_map(params![], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        let mut degrees: HashMap<String, usize> = HashMap::new();
+        for row in rows {
+            let (file, degree) = row?;
+            degrees.insert(file, usize::try_from(degree).unwrap_or(usize::MAX));
+        }
+        Ok(degrees)
+    }
+
     /// Return the distinct source files and distinct dependencies.
     ///
     /// The first element of the tuple is the set of distinct `from` values,

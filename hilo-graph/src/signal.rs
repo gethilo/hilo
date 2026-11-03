@@ -66,6 +66,17 @@ pub enum Tier {
     Detail,
 }
 
+/// Render order of the tiers: DETAIL (the code itself) first, then the spine,
+/// then the orientation map. Files are emitted in this band order so the
+/// formatter can position-order each band without re-ranking it.
+fn tier_band(tier: Tier) -> u8 {
+    match tier {
+        Tier::Detail => 0,
+        Tier::Signature => 1,
+        Tier::Map => 2,
+    }
+}
+
 /// A symbol signature extracted from a source file.
 #[derive(Debug, Clone, Serialize)]
 pub struct SymbolSignature {
@@ -311,9 +322,13 @@ where
     let known_files = graph_file_set(db);
     let anchors = discover_anchors(db, task, opts.seed_limit, symbol_extractor);
 
-    // 2. Traverse the graph from anchors to collect the file set.
+    // 2. Traverse the graph from anchors to collect the file set. The
+    //    structural weight the DETAIL tier ranks by (DF-WARPFS-118) is the
+    //    whole graph's edge census — one scan, because the file that owns a
+    //    flow is often a file the traversal never expands.
     let mut file_scores =
         traverse_and_score(db, &anchors, opts.depth, opts.max_nodes, &known_files);
+    let degrees = db.file_degrees().unwrap_or_default();
 
     // 2b. GAP-101: seed the modules the task's domain object names (and their
     // registration site) so a task like "add a new ORM field type" or
@@ -361,8 +376,17 @@ where
             .then_with(|| a.0.cmp(&b.0))
     });
 
-    // 4. Extract symbols and assign tiers.
-    let signal_files = build_signal_files(&sorted_files, opts, source_reader, &task_tokens)?;
+    // 4. Extract symbols and assign tiers. `anchors` is passed alongside the
+    //    degrees because the DETAIL band has a floor as well as a ranking: the
+    //    best anchor always keeps a DETAIL slot (DF-WARPFS-118).
+    let signal_files = build_signal_files(
+        &sorted_files,
+        opts,
+        source_reader,
+        &task_tokens,
+        &degrees,
+        &anchors,
+    )?;
 
     // 5. Format output text. The no-match path is rendered here rather than
     //    inside `format_output` because the guidance it has to carry — what
@@ -2391,6 +2415,168 @@ const SYMBOL_NAMED: u64 = 4;
 /// `set_fallback_theme`, bat's 5th/6th/7th).
 const SYMBOL_NAMED_WINDOW: usize = 24;
 
+/// Path components that mark documentation-grade example code (DF-WARPFS-118):
+/// a sample app shipped to demonstrate the library, never the library itself.
+const EXAMPLE_PATH_COMPONENTS: [&str; 6] =
+    ["example", "examples", "sample", "samples", "demo", "demos"];
+
+/// Whether `path` lives under an example/sample/demo directory.
+///
+/// A component must match exactly: an example app repeats the library's
+/// vocabulary (`examples/javascript/js_example/views.py` is a whole-word match
+/// for "view") without carrying its behaviour, while `src/exampler.py` is
+/// ordinary source that merely shares a prefix.
+fn is_example_path(path: &str) -> bool {
+    path.split('/')
+        .any(|component| EXAMPLE_PATH_COMPONENTS.contains(&component))
+}
+
+/// Graded match quality of a whole path against every task token: the same
+/// measure [`discover_anchors`] ranks anchors by, reused as the DETAIL
+/// tie-break so two candidates of one class and one degree still order by how
+/// well their path names the task.
+fn path_grade(path: &str, task_tokens: &[String]) -> u64 {
+    let lower = path.to_lowercase();
+    task_tokens
+        .iter()
+        .map(|token| token_match_grade(&lower, token))
+        .sum()
+}
+
+/// What kind of code a DETAIL candidate is, in the order the tier prefers it.
+///
+/// A comprehension pack answers "what runs", so the library's own modules come
+/// first; a test at least *consumes* the real path and names real symbols,
+/// while an example app is a demonstration that repeats the library's
+/// vocabulary without carrying its behaviour (DF-WARPFS-118, where three
+/// `views.py` files — two of them example apps — held every DETAIL slot on
+/// flask while `src/flask/app.py` did not appear at all).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum DetailClass {
+    /// The library/product source itself.
+    Implementation,
+    /// A test/bench/fixture: real consumption, not the mechanism.
+    Test,
+    /// A sample or demo application.
+    Example,
+}
+
+/// Classify a DETAIL candidate.
+///
+/// Test detection is the crate's own [`crate::classify::is_test_file`], so the
+/// tier agrees with coverage links and `tested_by` edges about what a test is;
+/// a path is only an example when an `example`/`sample`/`demo` component says
+/// so — substring matches such as `src/exampler.py` are not demoted.
+fn detail_class(path: &str) -> DetailClass {
+    if is_example_path(path) {
+        DetailClass::Example
+    } else if crate::classify::is_test_file(path) {
+        DetailClass::Test
+    } else {
+        DetailClass::Implementation
+    }
+}
+
+/// Choose the DETAIL band: `limit` positions of `sorted`, in the order they
+/// should render (highest priority first).
+///
+/// The key is lexicographic, so no score can be traded against a class:
+///
+/// 1. [`DetailClass`] — implementation, then tests, then examples;
+/// 2. the file *names the task* (one of its definitions carries a task word,
+///    [`SYMBOL_NAMED`]) — the owner of `wsgi_app`/`finalize_request` beats a
+///    sibling that merely mentions the words in its path;
+/// 3. graph degree — how much of the repository depends on the file;
+/// 4. traversal proximity (`sorted`'s score);
+/// 5. the path's own token grade, then the path (deterministic).
+///
+/// Two floors keep the band honest:
+/// * the **best anchor** always holds a slot, so a question whose
+///   implementation is a hub still names the file its own vocabulary pointed
+///   at — measured by the same key, so an example anchor cannot take the slot
+///   from a real one;
+/// * a `limit` of zero yields an empty band rather than a silent promotion.
+fn detail_ranking(
+    sorted: &[(String, f64, String)],
+    prepared: &[PreparedSource],
+    degrees: &HashMap<String, usize>,
+    anchors: &[String],
+    task_tokens: &[String],
+    limit: usize,
+) -> Vec<usize> {
+    let n = sorted.len();
+    if n == 0 || limit == 0 {
+        return Vec::new();
+    }
+
+    let degree_of = |index: usize| degrees.get(&sorted[index].0).copied().unwrap_or(0);
+    let priority = |index: usize| {
+        (
+            detail_class(&sorted[index].0),
+            !prepared[index].names_the_task,
+            std::cmp::Reverse(degree_of(index)),
+        )
+    };
+
+    let mut ranked: Vec<usize> = (0..n).collect();
+    ranked.sort_by(|&a, &b| {
+        priority(a)
+            .cmp(&priority(b))
+            .then_with(|| {
+                sorted[b]
+                    .1
+                    .partial_cmp(&sorted[a].1)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| {
+                path_grade(&sorted[b].0, task_tokens).cmp(&path_grade(&sorted[a].0, task_tokens))
+            })
+            .then_with(|| sorted[a].0.cmp(&sorted[b].0))
+    });
+    ranked.truncate(limit.min(n));
+
+    // Floor: the best anchor keeps a slot. "Best" is the same priority the band
+    // is ranked by — not the global order, which is alphabetical inside a grade
+    // and would pin `examples/…/views.py` over `src/flask/views.py`.
+    let anchor_positions = || {
+        anchors
+            .iter()
+            .filter_map(|anchor| sorted.iter().position(|(path, _, _)| path == anchor))
+    };
+    let best_anchor = anchor_positions()
+        .filter(|index| detail_class(&sorted[*index].0) == DetailClass::Implementation)
+        .min_by(|a, b| priority(*a).cmp(&priority(*b)))
+        .or_else(|| anchor_positions().min_by(|a, b| priority(*a).cmp(&priority(*b))));
+
+    if let Some(anchor_index) = best_anchor {
+        if !ranked.contains(&anchor_index) {
+            if let Some(last) = ranked.last_mut() {
+                *last = anchor_index;
+            }
+        }
+    }
+
+    ranked
+}
+
+/// Source and symbol facts for one candidate, extracted once before the tier
+/// assignment so the DETAIL ranking can weigh symbol evidence (DF-WARPFS-118).
+///
+/// Source was already read for every file in the result set (GAP-044), so this
+/// is a re-ordering of the work, not an extra read.
+struct PreparedSource {
+    /// Minified-ready raw source, `None` when the file could not be read.
+    source: Option<String>,
+    /// Definitions in source order.
+    symbols: Vec<Symbol>,
+    /// [`symbol_match_grade`] per symbol, parallel to `symbols`.
+    grades: Vec<u64>,
+    /// At least one definition carries a task word as a whole word
+    /// (grade ≥ [`SYMBOL_NAMED`]) — the file's own vocabulary names the
+    /// mechanism, whether or not its path does.
+    names_the_task: bool,
+}
+
 /// Build `SignalFile` entries from sorted file list, extracting symbols
 /// and assigning tiers based on score.
 fn build_signal_files<F>(
@@ -2398,58 +2584,96 @@ fn build_signal_files<F>(
     opts: &SignalOpts,
     source_reader: Option<F>,
     task_tokens: &[String],
+    degrees: &HashMap<String, usize>,
+    anchors: &[String],
 ) -> GraphResult<Vec<SignalFile>>
 where
     F: Fn(&str) -> Option<String>,
 {
     let n = sorted.len();
 
-    // Tier assignment:
-    // - Top `seed_limit` files → Detail (get source)
-    // - Next `seed_limit` files → Signature
-    // - Remaining → Map
-    //
-    // DETAIL is therefore exactly the anchor band: anchors score 1.0 and every
-    // other file enters at ≤0.8 (a 1-hop neighbor), so a file whose PATH does
-    // not literally carry the task's words can never reach Detail no matter how
-    // exactly its SYMBOLS name the mechanism. Measured (DF-WARPFS-35, pinned
-    // Gson corpus, "how does gson serialize null fields"): DETAIL got 2 anchor
-    // files and the mechanism file (`gson/.../Gson.java`) stayed out of the
-    // pack entirely — on Java the import edges resolve to `pkg:` nodes, so
-    // nothing traverses into it (DF-WARPFS-34), and even once that resolves,
-    // a mechanism file matching fewer path words than `seed_limit` competitors
-    // cannot displace an anchor. The fix is promotion by symbol-name match
-    // (the symbols are already extracted below); it is a ranking change, not a
-    // symbol-extraction one.
-    let detail_count = opts.seed_limit.min(n);
-    let signature_count = (opts.seed_limit * 2).min(n);
-
-    let mut files = Vec::with_capacity(n);
-
-    for (i, (path, score, prov)) in sorted.iter().enumerate() {
-        let tier = if opts.resolution == Resolution::Flat || i < detail_count {
-            Tier::Detail
-        } else if i < signature_count {
-            Tier::Signature
-        } else {
-            Tier::Map
-        };
-
-        // Read source for symbol extraction and detail. Source is read for
-        // EVERY tier in the (budget-capped) result set: Map-tier files must
-        // show their symbols too — GAP-044 — they previously printed
-        // '(no symbols extracted)' despite being symbol-rich.
+    // Read source and extract symbols for EVERY tier in the (budget-capped)
+    // result set: Map-tier files must show their symbols too — GAP-044 — they
+    // previously printed '(no symbols extracted)' despite being symbol-rich.
+    // Done before tier assignment because the DETAIL ranking weighs whether a
+    // file's own definitions name the task (DF-WARPFS-118).
+    let mut prepared: Vec<PreparedSource> = Vec::with_capacity(n);
+    for (path, _, _) in sorted.iter() {
         let source = if let Some(ref reader) = source_reader {
             reader(path)
         } else {
             std::fs::read_to_string(path).ok()
         };
-
-        let raw_symbols = if let Some(ref src) = source {
-            extract_symbols(path, src)
-        } else {
-            Vec::new()
+        let symbols = match source {
+            Some(ref src) => extract_symbols(path, src),
+            None => Vec::new(),
         };
+        let grades: Vec<u64> = symbols
+            .iter()
+            .map(|symbol| symbol_match_grade(&symbol.name, task_tokens))
+            .collect();
+        let names_the_task = grades.iter().any(|grade| *grade >= SYMBOL_NAMED);
+        prepared.push(PreparedSource {
+            source,
+            symbols,
+            grades,
+            names_the_task,
+        });
+    }
+
+    // Tier assignment:
+    // - The `seed_limit` highest-priority files → Detail (get source)
+    // - The next `seed_limit` files of the global order → Signature
+    // - Remaining → Map
+    //
+    // DETAIL used to be exactly the anchor band — the first `seed_limit` of the
+    // global order — which made it a literal-match tier: anchors score 1.0 and
+    // every other file enters at ≤0.8, so a file whose PATH carries no task
+    // word could never reach Detail no matter how much of the repository
+    // depended on it. Measured (DF-WARPFS-118, flask at 49943b5, "request flow
+    // WSGI->view->response"): DETAIL was the three files whose path says
+    // "views" — `examples/celery/src/task_app/views.py` (943 chars),
+    // `examples/javascript/js_example/views.py` (423) and `src/flask/views.py`
+    // — while `src/flask/app.py`, the 67 464-char owner of `wsgi_app`,
+    // `full_dispatch_request` and `finalize_request` and the highest-degree
+    // file in the graph (32 edges against the examples' 3 and 2), could not
+    // appear at all. The band is now ranked by [`detail_ranking`] instead: the
+    // sibling DF-WARPFS-35 measurement (Gson's mechanism file stuck outside
+    // DETAIL) is the same defect seen from the symbol side.
+    let detail_positions = detail_ranking(
+        sorted,
+        &prepared,
+        degrees,
+        anchors,
+        task_tokens,
+        opts.seed_limit,
+    );
+    let mut detail_slot = vec![false; n];
+    for index in &detail_positions {
+        if let Some(slot) = detail_slot.get_mut(*index) {
+            *slot = true;
+        }
+    }
+    let mut signature_slots = opts.seed_limit;
+
+    let mut files = Vec::with_capacity(n);
+
+    for (i, (path, score, prov)) in sorted.iter().enumerate() {
+        let tier = if opts.resolution == Resolution::Flat || detail_slot[i] {
+            Tier::Detail
+        } else if signature_slots > 0 {
+            signature_slots -= 1;
+            Tier::Signature
+        } else {
+            Tier::Map
+        };
+
+        let PreparedSource {
+            source,
+            symbols: raw_symbols,
+            grades,
+            names_the_task,
+        } = &prepared[i];
 
         // Symbol allowance, query-aware (GAP-098). The flat `take(8)` in
         // source order had no notion of the question: a definition past the
@@ -2471,15 +2695,14 @@ where
         //   43rd and 45th of 50). The window is what carries the flow steps
         //   between two named ones — gin's `getValue` (tree.go, 20th of 23)
         //   and `Next` (context.go, 9th of 151) carry no task word at all.
-        let mut ranked: Vec<(u64, usize, &Symbol)> = raw_symbols
+        let ranked: Vec<(u64, usize, &Symbol)> = raw_symbols
             .iter()
+            .zip(grades.iter())
             .enumerate()
-            .map(|(i, s)| (symbol_match_grade(&s.name, task_tokens), i, s))
+            .map(|(index, (symbol, grade))| (*grade, index, symbol))
             .collect();
-        ranked.sort_by_key(|(_, index, _)| *index);
 
-        let names_the_task = ranked.iter().any(|(grade, _, _)| *grade >= SYMBOL_NAMED);
-        let window = if names_the_task {
+        let window = if *names_the_task {
             SYMBOL_NAMED_WINDOW
         } else {
             SYMBOL_FLOOR
@@ -2489,7 +2712,7 @@ where
             .take(window)
             .map(|(_, _, symbol)| *symbol)
             .collect();
-        if names_the_task {
+        if *names_the_task {
             selected.extend(
                 ranked
                     .iter()
@@ -2531,6 +2754,34 @@ where
             signal_score: *score,
             detail,
         });
+    }
+
+    // Emit DETAIL first, in DETAIL-rank order: the formatter position-orders
+    // whatever band it is handed, so the ranking has to be the vector's order.
+    // The other two tiers keep the global relevance order they always had.
+    if opts.resolution != Resolution::Flat {
+        let mut detail_rank: HashMap<&str, usize> = HashMap::with_capacity(detail_positions.len());
+        for (position, index) in detail_positions.iter().enumerate() {
+            detail_rank.insert(sorted[*index].0.as_str(), position);
+        }
+        let mut global_rank: HashMap<&str, usize> = HashMap::with_capacity(n);
+        for (position, (path, _, _)) in sorted.iter().enumerate() {
+            global_rank.insert(path.as_str(), position);
+        }
+        let rank_of = |file: &SignalFile| -> (u8, usize, usize) {
+            (
+                tier_band(file.tier),
+                detail_rank
+                    .get(file.path.as_str())
+                    .copied()
+                    .unwrap_or(usize::MAX),
+                global_rank
+                    .get(file.path.as_str())
+                    .copied()
+                    .unwrap_or(usize::MAX),
+            )
+        };
+        files.sort_by_key(|file| rank_of(file));
     }
 
     Ok(files)
@@ -2806,7 +3057,7 @@ fn format_output_with_reserve(
     let mut detail_output = String::from("## DETAIL\n");
     let mut rendered = 0usize;
     let mut skipped: Vec<(&str, usize)> = Vec::new();
-    for sf in &position_ordered {
+    for (rank, sf) in position_ordered.iter().enumerate() {
         if let Some(ref detail) = sf.detail {
             let header = format!(
                 "{} [provenance={}, score={:.2}]\n",
@@ -2815,6 +3066,17 @@ fn format_output_with_reserve(
             let block = format!("{header}{detail}\n\n");
             if append_if_fits(&mut detail_output, &block, detail_budget) {
                 rendered += 1;
+            } else if rank == 0 {
+                // DF-WARPFS-118: the file the ranking put first is the pack's
+                // answer; if it is too large for the tier, render its head
+                // rather than dropping it for the small files that fit.
+                match detail_head(&header, detail, &detail_output, detail_budget) {
+                    Some(head) => {
+                        detail_output.push_str(&head);
+                        rendered += 1;
+                    }
+                    None => skipped.push((&sf.path, block.len())),
+                }
             } else {
                 skipped.push((&sf.path, block.len()));
             }
@@ -2848,6 +3110,78 @@ fn append_if_fits(output: &mut String, item: &str, budget: usize) -> bool {
     }
     output.push_str(item);
     true
+}
+
+/// Share of the DETAIL allocation held back for the candidates *after* the head
+/// slice (DF-WARPFS-118). The head exists so the owner is never dropped; the
+/// reserve is what stops it from consuming the whole tier and leaving a pack
+/// with a single file in it.
+const DETAIL_HEAD_RESERVE_PERCENT: usize = 25;
+
+/// Shortest head worth emitting: below this the slice is a stub, and the
+/// historical "no detail block fits" marker says more than four lines of code.
+const MIN_DETAIL_HEAD_CHARS: usize = 512;
+
+/// Longest truncation marker this module emits, used to size the head slice
+/// conservatively so the tier allocation cannot be overshot.
+const DETAIL_MARKER_RESERVE_CHARS: usize = 64;
+
+/// Render the head of a DETAIL file that cannot fit its allocation whole.
+///
+/// An owning implementation file is frequently larger than the entire DETAIL
+/// tier: flask's `src/flask/app.py` minifies to 67 464 chars against a 14 400
+/// char allocation at the default budget. `append_if_fits` correctly refuses
+/// that block, and before DF-WARPFS-118 the tier then rendered the small
+/// example files that *did* fit — the pack named the mechanism's file and never
+/// showed it. The file the ranking put first is therefore rendered head-first,
+/// at a line boundary, with an explicit truncation marker, and with a quarter
+/// of the allocation (see [`DETAIL_HEAD_RESERVE_PERCENT`]) held back so the
+/// remaining candidates still get their rows.
+///
+/// Returns `None` when the remaining allocation cannot hold a meaningful slice
+/// — the caller then reports the block as skipped, exactly as before.
+fn detail_head(header: &str, detail: &str, emitted: &str, budget: usize) -> Option<String> {
+    let reserve = budget * DETAIL_HEAD_RESERVE_PERCENT / 100;
+    let available = budget
+        .saturating_sub(emitted.len())
+        .saturating_sub(header.len())
+        .saturating_sub(reserve)
+        .saturating_sub(DETAIL_MARKER_RESERVE_CHARS);
+    if available < MIN_DETAIL_HEAD_CHARS {
+        return None;
+    }
+
+    let head = head_at_line_boundary(detail, available);
+    if head.is_empty() {
+        return None;
+    }
+
+    let mut block = String::with_capacity(header.len() + head.len() + DETAIL_MARKER_RESERVE_CHARS);
+    block.push_str(header);
+    block.push_str(head);
+    block.push_str(&format!(
+        "\n… (truncated: {} of {} chars shown)\n\n",
+        head.len(),
+        detail.len()
+    ));
+    Some(block)
+}
+
+/// Longest prefix of `text` that fits `limit` bytes and ends on a line boundary.
+fn head_at_line_boundary(text: &str, limit: usize) -> &str {
+    if text.len() <= limit {
+        return text;
+    }
+    let cut = text
+        .char_indices()
+        .take_while(|(index, _)| *index < limit)
+        .map(|(index, ch)| index + ch.len_utf8())
+        .last()
+        .unwrap_or(0);
+    match text[..cut].rfind('\n') {
+        Some(newline) => &text[..newline],
+        None => &text[..cut],
+    }
 }
 
 /// Truncate at a UTF-8 boundary for the defensive whole-response bound.
@@ -4172,6 +4506,263 @@ mod tests {
         assert_eq!(
             tier_first_body_line(&text, "## DETAIL").trim(),
             "(no files in this tier)"
+        );
+    }
+
+    /// DF-WARPFS-118 corpus: the flow's owner is one hop from the anchors, and
+    /// the anchors are two `views.py` files — one an example app. `app.py`
+    /// carries ten importers, so it is the structural hub of the graph while
+    /// carrying none of the task's path words.
+    fn owning_hub_fixture() -> GraphDB {
+        let db = GraphDB::open(":memory:").unwrap();
+        let mut edges = vec![
+            edge("src/flask/views.py", "src/flask/app.py", "imports"),
+            edge(
+                "examples/demo/app/views.py",
+                "examples/demo/app/helpers.py",
+                "imports",
+            ),
+        ];
+        for i in 0..10 {
+            edges.push(edge(
+                &format!("src/flask/part{i}.py"),
+                "src/flask/app.py",
+                "imports",
+            ));
+        }
+        db.insert_edges(&edges).unwrap();
+        db
+    }
+
+    #[test]
+    fn understand_detail_prefers_the_owning_hub_over_example_anchors() {
+        // The defect: DETAIL was the first `seed_limit` of the global order, and
+        // that order is score-only, so anchors (1.0) filled the band and the
+        // 1-hop owner (0.8) could never enter it — measured on flask as three
+        // `views.py` files in DETAIL and `src/flask/app.py` in MAP only.
+        let db = owning_hub_fixture();
+        let opts = SignalOpts {
+            seed_limit: 2,
+            ..Default::default()
+        };
+        let reader = |path: &str| Some(format!("# {path}\n"));
+        let result = understand_with_source(&db, "views", &opts, Some(reader)).unwrap();
+
+        let find = |path: &str| {
+            result
+                .files
+                .iter()
+                .find(|f| f.path == path)
+                .unwrap_or_else(|| panic!("{path} must be in the result set"))
+        };
+        let owner = find("src/flask/app.py");
+        let example = find("examples/demo/app/views.py");
+        assert!(
+            example.signal_score > owner.signal_score,
+            "premise: the example is an anchor ({}) and the owner a 1-hop neighbour ({})",
+            example.signal_score,
+            owner.signal_score
+        );
+
+        assert_eq!(
+            owner.tier,
+            Tier::Detail,
+            "the task-owning hub must be in DETAIL, not only MAP"
+        );
+        assert_ne!(
+            example.tier,
+            Tier::Detail,
+            "an example app must not take a DETAIL slot from the file that owns the flow"
+        );
+
+        let detail = tier_body(&result.text, "## DETAIL").join("\n");
+        assert!(
+            detail.contains("src/flask/app.py"),
+            "DETAIL must render the owner, got:\n{detail}"
+        );
+        assert!(
+            !detail.contains("examples/demo/app/views.py"),
+            "the example must not crowd the owner out of DETAIL, got:\n{detail}"
+        );
+    }
+
+    #[test]
+    fn understand_detail_keeps_the_best_anchor_when_hubs_dominate() {
+        // The floor: one DETAIL slot, and the hub outranks the anchor on weight.
+        // The anchor still holds the slot, because it is the file the question
+        // named and the tier must not answer with only traversal neighbours.
+        let db = GraphDB::open(":memory:").unwrap();
+        let mut edges = vec![edge("src/views.py", "src/hub.py", "imports")];
+        for i in 0..10 {
+            edges.push(edge(&format!("src/part{i}.py"), "src/hub.py", "imports"));
+        }
+        db.insert_edges(&edges).unwrap();
+
+        let opts = SignalOpts {
+            seed_limit: 1,
+            ..Default::default()
+        };
+        let reader = |_: &str| Some("def view(): pass\n".to_string());
+        let result = understand_with_source(&db, "views", &opts, Some(reader)).unwrap();
+
+        let detail: Vec<&str> = result
+            .files
+            .iter()
+            .filter(|f| f.tier == Tier::Detail)
+            .map(|f| f.path.as_str())
+            .collect();
+        assert_eq!(
+            detail,
+            vec!["src/views.py"],
+            "the best anchor must keep its DETAIL slot (DF-WARPFS-118 floor)"
+        );
+    }
+
+    #[test]
+    fn understand_detail_renders_the_head_of_an_owner_larger_than_the_tier() {
+        // The second half of the defect: promoting the owner is not enough when
+        // the owner is bigger than the whole tier (flask's app.py minifies to
+        // 67 464 chars against a 14 400-char allocation). Skipping it and
+        // rendering the small files that fit reinstates exactly what the
+        // ranking fix removed, so the top-ranked file renders head-first.
+        let db = owning_hub_fixture();
+        let big: String = (0..400)
+            .map(|i| format!("def handler_{i}(request):\n    return request.path\n"))
+            .collect();
+        let reader = move |path: &str| {
+            Some(if path == "src/flask/app.py" {
+                big.clone()
+            } else {
+                "def view(): pass\n".to_string()
+            })
+        };
+        let opts = SignalOpts {
+            seed_limit: 2,
+            ..Default::default()
+        };
+        let result = understand_with_source(&db, "views", &opts, Some(reader)).unwrap();
+
+        let detail = tier_body(&result.text, "## DETAIL").join("\n");
+        assert!(
+            detail.contains("src/flask/app.py [provenance="),
+            "DETAIL must still name the owner, got:\n{detail}"
+        );
+        assert!(
+            detail.contains("truncated:"),
+            "an oversized owner must be truncated, not dropped, got:\n{detail}"
+        );
+        assert!(
+            detail.contains("def handler_0(request)"),
+            "the head must be real source, not a header alone, got:\n{detail}"
+        );
+        assert!(
+            !detail.contains("no detail block fits"),
+            "the tier must not report itself empty when the owner fits partially"
+        );
+        assert!(
+            detail.contains("src/flask/views.py"),
+            "the reserve must leave room for the next candidate, got:\n{detail}"
+        );
+        assert!(
+            result.text.len() <= opts.token_budget * 4,
+            "the head slice must stay inside the budget: {} > {}",
+            result.text.len(),
+            opts.token_budget * 4
+        );
+    }
+
+    /// A [`PreparedSource`] placeholder for ranking tests: only the symbol
+    /// evidence flag participates in the DETAIL key.
+    fn prepared_source(names_the_task: bool) -> PreparedSource {
+        PreparedSource {
+            source: None,
+            symbols: Vec::new(),
+            grades: Vec::new(),
+            names_the_task,
+        }
+    }
+
+    #[test]
+    fn detail_ranking_orders_by_class_then_task_naming_then_degree() {
+        // The key is lexicographic, so each step is checked on its own: a class
+        // beats a hub, symbol evidence beats a path word, and degree breaks the
+        // rest (DF-WARPFS-118).
+        assert_eq!(
+            detail_class("src/flask/app.py"),
+            DetailClass::Implementation
+        );
+        assert_eq!(detail_class("tests/test_request.py"), DetailClass::Test);
+        assert_eq!(
+            detail_class("examples/javascript/js_example/views.py"),
+            DetailClass::Example
+        );
+        assert!(
+            DetailClass::Implementation < DetailClass::Test
+                && DetailClass::Test < DetailClass::Example,
+            "implementation must outrank tests, and tests example apps"
+        );
+
+        // A hub that does not name the task sorts below a sibling that does.
+        let sorted = vec![
+            ("src/flask/app.py".to_string(), 0.8, "ast_exact".to_string()),
+            (
+                "src/flask/views.py".to_string(),
+                1.0,
+                "ast_exact".to_string(),
+            ),
+            (
+                "tests/test_request.py".to_string(),
+                1.0,
+                "ast_exact".to_string(),
+            ),
+            (
+                "examples/demo/views.py".to_string(),
+                1.0,
+                "ast_exact".to_string(),
+            ),
+        ];
+        let prepared = vec![
+            prepared_source(true),
+            prepared_source(true),
+            prepared_source(false),
+            prepared_source(false),
+        ];
+        let mut degrees = HashMap::new();
+        degrees.insert("src/flask/app.py".to_string(), 32);
+        degrees.insert("src/flask/views.py".to_string(), 3);
+        degrees.insert("tests/test_request.py".to_string(), 16);
+        degrees.insert("examples/demo/views.py".to_string(), 2);
+        let tokens = tokenize_task("request flow view");
+
+        let ranked = detail_ranking(
+            &sorted,
+            &prepared,
+            &degrees,
+            &["src/flask/views.py".to_string()],
+            &tokens,
+            3,
+        );
+        let order: Vec<&str> = ranked.iter().map(|i| sorted[*i].0.as_str()).collect();
+        assert_eq!(
+            order,
+            vec![
+                "src/flask/app.py",
+                "src/flask/views.py",
+                "tests/test_request.py"
+            ],
+            "implementation first (the hub naming the task), then the anchor, then the test — \
+             the example app does not reach the band at all"
+        );
+
+        assert!(is_example_path("examples/javascript/js_example/views.py"));
+        assert!(is_example_path("samples/demo/app.py"));
+        assert!(
+            !is_example_path("src/exampler.py"),
+            "a component prefix is not an example directory"
+        );
+        assert!(
+            !is_example_path("tests/fixtures/limiter/sample_0.rs"),
+            "test fixtures are not example apps — only example/sample/demo directories are"
         );
     }
 
