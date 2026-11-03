@@ -368,8 +368,16 @@ DETAIL slot (displacing the weakest ranked candidate), and an oversized owner �
 a block that cannot fit the tier at all — is rendered as a **focused excerpt**:
 the windows around the definitions that name the task, each marked
 `… lines N-M of T …` so the elision and the lines to read next are explicit.
-The tier's members are emitted best-first, because the renderer fits blocks
-greedily and the first slot is the one considered while the budget is unspent.
+The excerpt budget is split evenly across the named definitions, so a file with
+a long named band covers every step of its flow instead of the first few in
+full depth (flask's `app.py` names its WSGI chain across ten definitions spread
+over 600 lines; at a fixed 24-line window the budget covered six and cut the
+rest). The tier's members are emitted best-first, because the renderer fits
+blocks greedily and the first slot is the one considered while the budget is
+unspent.
+
+A caller that wants only one tier asks for it: `hilo graph understand <task>
+--tier detail` prints the DETAIL section alone.
 
 ## Semantic Code Search — `vfs_graph_search`
 

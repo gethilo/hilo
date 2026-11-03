@@ -538,6 +538,14 @@ Output is three tiers — `## MAP` (file → symbols), `## SIGNATURES`
 whitespace-minified source). A tier with nothing to show says
 `(no files in this tier)` instead of printing an empty body.
 
+Print one tier only with `--tier` (`map`, `signatures`, `detail`; `all` is the
+default). The engine always computes all three, so the printed section is
+byte-identical to the one the full answer carried:
+
+```bash
+hilo graph understand "request flow WSGI->view->response" --tier detail
+```
+
 Token budget override (default: 6000):
 
 ```bash
