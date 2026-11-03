@@ -2634,3 +2634,10 @@ tasks:
   status: complete
   created_at: '2026-11-03T04:38:23.468472+00:00'
   completed_at: '2026-11-03T04:39:06.014770+00:00'
+- id: DF-WARPFS-80
+  title: 'C header nodes local: id form advertised in errors'
+  criteria:
+  - 'error message or docs name the local: id form for C headers; hint updates covered
+    by a test assertion'
+  status: in_progress
+  created_at: '2026-11-03T05:40:09.118606+00:00'
