@@ -311,9 +311,15 @@ where
     let known_files = graph_file_set(db);
     let anchors = discover_anchors(db, task, opts.seed_limit, symbol_extractor);
 
-    // 2. Traverse the graph from anchors to collect the file set.
+    // 2. Traverse the graph from anchors to collect the file set. Degrees come
+    //    from the whole graph in one scan (DF-WARPFS-118): the DETAIL tier
+    //    ranks implementation weight by how much of the repository is wired
+    //    through each file, so the owning implementation file can outrank a
+    //    small example that merely carries a task word in its path. A degraded
+    //    graph answers with an empty map and the tier falls back to score order.
     let mut file_scores =
         traverse_and_score(db, &anchors, opts.depth, opts.max_nodes, &known_files);
+    let degrees = db.node_degrees().unwrap_or_default();
 
     // 2b. GAP-101: seed the modules the task's domain object names (and their
     // registration site) so a task like "add a new ORM field type" or
@@ -333,13 +339,7 @@ where
     // the best anchor leads the result.
     let anchor_grades: HashMap<&str, u64> = anchors
         .iter()
-        .map(|a| {
-            let grade = task_tokens
-                .iter()
-                .map(|t| token_match_grade(&a.to_lowercase(), t))
-                .sum();
-            (a.as_str(), grade)
-        })
+        .map(|a| (a.as_str(), path_token_grade(a, &task_tokens)))
         .collect();
     let mut sorted_files: Vec<(String, f64, String)> = file_scores
         .into_iter()
@@ -362,7 +362,8 @@ where
     });
 
     // 4. Extract symbols and assign tiers.
-    let signal_files = build_signal_files(&sorted_files, opts, source_reader, &task_tokens)?;
+    let signal_files =
+        build_signal_files(&sorted_files, opts, source_reader, &task_tokens, &degrees)?;
 
     // 5. Format output text. The no-match path is rendered here rather than
     //    inside `format_output` because the guidance it has to carry — what
@@ -509,6 +510,17 @@ fn token_match_grade(path: &str, token: &str) -> u64 {
         return 2;
     }
     1
+}
+
+/// Total graded match of a whole task against one path — the ranking key the
+/// anchor band is ordered by (GAP-078), shared by anchor discovery, the
+/// global file order, and the DETAIL tier's tie-break.
+fn path_token_grade(path: &str, task_tokens: &[String]) -> u64 {
+    let lower = path.to_lowercase();
+    task_tokens
+        .iter()
+        .map(|t| token_match_grade(&lower, t))
+        .sum()
 }
 
 /// Whether `path` is a graph pseudo-node rather than a filesystem path
@@ -2391,54 +2403,249 @@ const SYMBOL_NAMED: u64 = 4;
 /// `set_fallback_theme`, bat's 5th/6th/7th).
 const SYMBOL_NAMED_WINDOW: usize = 24;
 
+// ───────────────────── DETAIL tier ranking (DF-WARPFS-118) ─────────────────────
+
+/// Share of the response budget the DETAIL tier receives, as a percentage
+/// (`format_output_with_reserve` allocates 15% MAP / 25% SIGNATURES and leaves
+/// the remainder here). The tier assembly reads it to decide, per file,
+/// whether the whole minified source can fit or only a focused excerpt can.
+const DETAIL_BUDGET_PERCENT: usize = 60;
+
+/// Lines covered by one window of a focused excerpt.
+const DETAIL_EXCERPT_WINDOW: usize = 24;
+
+/// Windows a focused excerpt may carry: enough for a flow's steps
+/// (`wsgi_app` → `full_dispatch_request` → `finalize_request`), far short of
+/// a whole 1.6 k-line module.
+const DETAIL_EXCERPT_WINDOWS: usize = 6;
+
+/// Smallest DETAIL allocation (chars) worth excerpting.
+///
+/// Below this the excerpt would be a line or two of an oversized file — less
+/// useful than the tier's existing "nothing fits this budget" marker, which
+/// at least tells the caller what happened and how big the block was.
+const DETAIL_EXCERPT_MIN_CHARS: usize = 2_000;
+
+/// Divisor applied to the DETAIL allocation before an oversized file's excerpt
+/// is sized.
+///
+/// Half: at the default 6000-token budget the tier holds ~14 KB, and the
+/// owner's excerpt must leave room for the next-ranked candidate — one block
+/// consuming the whole tier would swap "the wrong files" for "one file" rather
+/// than fixing the pack.
+const DETAIL_EXCERPT_ALLOCATION_DIVISOR: usize = 2;
+
+/// DETAIL ordering class, best first.
+///
+/// `Implementation` — a real source file outside every excluded prefix and not
+/// test-bearing: the code a change is made in.
+/// `Test` — test-bearing by the crate's own taxonomy ([`crate::classify`]).
+/// A test exercises the implementation; reading it is context, so it never
+/// takes a slot ahead of implementation source that is still competing for one.
+/// `Excluded` — under a MAP-excluded prefix (`examples`, `tests/fixtures`,
+/// `vendor`, … by manifest): a fixture or demo tree, which keeps its DETAIL
+/// band (backward compatible) but never displaces implementation source while
+/// a slot remains for real code.
+/// `Pseudo` — a graph pseudo-node (`pkg:`, `sys:`, `local:` …): it names no
+/// readable file, so a DETAIL slot spent on it renders nothing at all.
+fn detail_class(path: &str, exclude: &[String], is_test: bool) -> u8 {
+    if is_pseudo_node(path) {
+        3
+    } else if is_map_excluded(path, exclude) {
+        2
+    } else if is_test {
+        1
+    } else {
+        0
+    }
+}
+
+/// Structural weight of one candidate: the number of edges that touch the file
+/// anywhere in the graph (0 when the graph carries none — a leaf, or the
+/// degraded-graph fallback).
+fn detail_degree(path: &str, degrees: &HashMap<String, usize>) -> usize {
+    degrees.get(path).copied().unwrap_or(0)
+}
+
+/// Order the DETAIL candidates by implementation weight.
+///
+/// Score alone cannot answer "which file must I actually read?". On flask
+/// (`request flow WSGI->view->response`) three `examples/…/views.py` files tie
+/// with `src/flask/views.py` at `ast_exact` 1.00 because they all carry the
+/// word "view" in their path, while `src/flask/app.py` — the 1.6 k-line file
+/// that owns `wsgi_app`, `full_dispatch_request` and `finalize_request`, that
+/// half the repository imports, and whose path carries no task word at all —
+/// never reaches the tier: it is a 2-hop neighbour, so 0.5, so below every
+/// anchor. The order is therefore, in this order:
+///
+/// 1. **implementation source before excluded fixture/demo trees**, and both
+///    before unreadable pseudo-nodes — an `examples/` view is not the
+///    implementation however exactly its path spells the task;
+/// 2. **files that define the task's own vocabulary** (`names_the_task`: one
+///    of their definitions carries a task word as a whole word, which is how
+///    `wsgi_app` / `dispatch_request` / `finalize_request` announce that
+///    app.py owns the flow) before files that merely sit next to the answer;
+/// 3. **graph degree** — the file the repository is wired through is the file
+///    to read, and this is the only signal that reaches an owner sitting two
+///    hops from the anchors;
+/// 4. traversal score (proximity to the anchors), then the path grade the MAP
+///    is ordered by, then path (deterministic).
+fn detail_ranking(
+    sorted: &[(String, f64, String)],
+    opts: &SignalOpts,
+    task_tokens: &[String],
+    degrees: &HashMap<String, usize>,
+    prepared: &[PreparedFile],
+) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..sorted.len()).collect();
+    order.sort_by(|&ia, &ib| {
+        let (pa, sa, _) = &sorted[ia];
+        let (pb, sb, _) = &sorted[ib];
+        let (class_a, class_b) = (
+            detail_class(pa, &opts.map_exclude_paths, prepared[ia].is_test),
+            detail_class(pb, &opts.map_exclude_paths, prepared[ib].is_test),
+        );
+        class_a
+            .cmp(&class_b)
+            .then_with(|| {
+                let (owned_a, owned_b) = (prepared[ia].names_the_task, prepared[ib].names_the_task);
+                owned_b.cmp(&owned_a)
+            })
+            .then_with(|| detail_degree(pb, degrees).cmp(&detail_degree(pa, degrees)))
+            .then_with(|| sb.partial_cmp(sa).unwrap_or(std::cmp::Ordering::Equal))
+            .then_with(|| {
+                let (ga, gb) = (
+                    path_token_grade(pa, task_tokens),
+                    path_token_grade(pb, task_tokens),
+                );
+                gb.cmp(&ga)
+            })
+            .then_with(|| pa.cmp(pb))
+    });
+    order
+}
+
+/// Index of the file the MAP tier leads with — the answer's own anchor row.
+///
+/// Mirrors `format_output_with_reserve`'s MAP order (score after the depth
+/// adjustment, non-excluded only, path tie-break) so the guarantee below
+/// promotes exactly the row a reader sees first.
+fn top_map_index(sorted: &[(String, f64, String)], opts: &SignalOpts) -> Option<usize> {
+    sorted
+        .iter()
+        .enumerate()
+        .filter(|(_, (path, _, _))| !is_map_excluded(path, &opts.map_exclude_paths))
+        .max_by(|(_, (pa, sa, _)), (_, (pb, sb, _))| {
+            map_position_score(*sa, pa)
+                .partial_cmp(&map_position_score(*sb, pb))
+                .unwrap_or(std::cmp::Ordering::Equal)
+                // `max_by` keeps the LAST maximum, so the path order the
+                // formatter breaks ties with is inverted here to match it.
+                .then_with(|| pb.cmp(pa))
+        })
+        .map(|(index, _)| index)
+}
+
+/// MAP position score: traversal score after the shallow-file adjustment.
+fn map_position_score(score: f64, path: &str) -> f64 {
+    score - map_depth_adjustment(path)
+}
+
+/// Assign the DETAIL tier's slots, best first.
+///
+/// The top `seed_limit` files of [`detail_ranking`] take the tier, with one
+/// guarantee on top of the ranking: the row the MAP tier leads with always
+/// carries its source, displacing the weakest ranked slot when the ranking
+/// alone would leave it out. The anchor a reader sees first is the file they
+/// are being pointed at, so its exact lines cannot be the one thing missing.
+///
+/// The order matters to the caller as much as the membership: the renderer
+/// fits DETAIL blocks greedily, so the first slot is the block that is always
+/// attempted while the whole tier budget is still unspent.
+fn assign_detail_slots(
+    sorted: &[(String, f64, String)],
+    opts: &SignalOpts,
+    task_tokens: &[String],
+    degrees: &HashMap<String, usize>,
+    prepared: &[PreparedFile],
+) -> Vec<usize> {
+    let detail_count = opts.seed_limit.min(sorted.len());
+    if detail_count == 0 {
+        return Vec::new();
+    }
+    let mut order = detail_ranking(sorted, opts, task_tokens, degrees, prepared);
+    order.truncate(detail_count);
+
+    if let Some(top) = top_map_index(sorted, opts) {
+        if !order.contains(&top) {
+            // Not already ranked in: the weakest member steps aside.
+            order.pop();
+            order.push(top);
+        }
+    }
+    order
+}
+
+/// One candidate file after its source has been read and its symbols
+/// extracted, before the tier it lands in has been decided (DF-WARPFS-118).
+struct PreparedFile {
+    /// Key symbols selected for the MAP row, in source order.
+    symbols: Vec<String>,
+    /// Full signatures for the files that reach SIGNATURES or DETAIL.
+    signatures: Vec<SymbolSignature>,
+    /// `(grade, 1-based line)` of every extracted definition: the anchor set a
+    /// focused excerpt builds its windows from.
+    definitions: Vec<(u64, usize)>,
+    /// Whether one of the file's own definitions names the task — the
+    /// ownership signal the DETAIL tier ranks by.
+    names_the_task: bool,
+    /// Whether the file is test-bearing by path, per the crate's own taxonomy
+    /// ([`crate::classify::is_test_file`]). Tests are context for a change, not
+    /// the change: they rank below implementation source in DETAIL.
+    is_test: bool,
+    /// Source text, kept for the DETAIL body.
+    source: Option<String>,
+}
+
 /// Build `SignalFile` entries from sorted file list, extracting symbols
 /// and assigning tiers based on score.
+///
+/// Tier assignment (DF-WARPFS-118):
+/// - the `seed_limit` highest implementation-weight files → DETAIL (get source)
+/// - the next `seed_limit` files of the global relevance order → SIGNATURES
+/// - the rest → MAP
+///
+/// DETAIL used to be "the first `seed_limit` positions of the global order",
+/// which is synonymous with the anchor band: anchors score 1.0 and every other
+/// file enters at ≤0.8. That is also why the flagship pack could omit the code
+/// that runs. On flask (`request flow WSGI->view->response`) three
+/// `examples/…/views.py` files tie with `src/flask/views.py` at 1.00 — they all
+/// carry the word "view" in their path — and fill the tier, while
+/// `src/flask/app.py`, the file that owns `wsgi_app` /
+/// `full_dispatch_request` / `finalize_request` and that the repository imports
+/// everywhere, is a 0.8 neighbour and stays MAP-only. [`assign_detail_slots`]
+/// now ranks the tier by implementation weight instead: graph degree and traversal
+/// proximity decide, implementation source leads fixture trees, and the file
+/// the MAP tier leads with is always given its source block.
 fn build_signal_files<F>(
     sorted: &[(String, f64, String)],
     opts: &SignalOpts,
     source_reader: Option<F>,
     task_tokens: &[String],
+    degrees: &HashMap<String, usize>,
 ) -> GraphResult<Vec<SignalFile>>
 where
     F: Fn(&str) -> Option<String>,
 {
     let n = sorted.len();
 
-    // Tier assignment:
-    // - Top `seed_limit` files → Detail (get source)
-    // - Next `seed_limit` files → Signature
-    // - Remaining → Map
-    //
-    // DETAIL is therefore exactly the anchor band: anchors score 1.0 and every
-    // other file enters at ≤0.8 (a 1-hop neighbor), so a file whose PATH does
-    // not literally carry the task's words can never reach Detail no matter how
-    // exactly its SYMBOLS name the mechanism. Measured (DF-WARPFS-35, pinned
-    // Gson corpus, "how does gson serialize null fields"): DETAIL got 2 anchor
-    // files and the mechanism file (`gson/.../Gson.java`) stayed out of the
-    // pack entirely — on Java the import edges resolve to `pkg:` nodes, so
-    // nothing traverses into it (DF-WARPFS-34), and even once that resolves,
-    // a mechanism file matching fewer path words than `seed_limit` competitors
-    // cannot displace an anchor. The fix is promotion by symbol-name match
-    // (the symbols are already extracted below); it is a ranking change, not a
-    // symbol-extraction one.
-    let detail_count = opts.seed_limit.min(n);
-    let signature_count = (opts.seed_limit * 2).min(n);
-
-    let mut files = Vec::with_capacity(n);
-
-    for (i, (path, score, prov)) in sorted.iter().enumerate() {
-        let tier = if opts.resolution == Resolution::Flat || i < detail_count {
-            Tier::Detail
-        } else if i < signature_count {
-            Tier::Signature
-        } else {
-            Tier::Map
-        };
-
-        // Read source for symbol extraction and detail. Source is read for
-        // EVERY tier in the (budget-capped) result set: Map-tier files must
-        // show their symbols too — GAP-044 — they previously printed
-        // '(no symbols extracted)' despite being symbol-rich.
+    // Pass 1 — read and extract every file. Source is read for EVERY tier in
+    // the (budget-capped) result set: Map-tier files must show their symbols
+    // too — GAP-044 — they previously printed '(no symbols extracted)'
+    // despite being symbol-rich. Extraction precedes tier assignment because
+    // the DETAIL ranking reads the extracted definitions.
+    let mut prepared: Vec<PreparedFile> = Vec::with_capacity(n);
+    for (path, _, _) in sorted {
         let source = if let Some(ref reader) = source_reader {
             reader(path)
         } else {
@@ -2499,32 +2706,88 @@ where
             );
         }
 
-        let symbols: Vec<String> = selected.iter().map(|s| s.name.clone()).collect();
-
-        // Full signatures for SIGNATURES and DETAIL tiers, under the same
-        // selection so the MAP and the spine name the same definitions.
-        let signatures: Vec<SymbolSignature> = if tier == Tier::Signature || tier == Tier::Detail {
-            selected
+        prepared.push(PreparedFile {
+            symbols: selected.iter().map(|s| s.name.clone()).collect(),
+            signatures: selected
                 .iter()
                 .map(|s| SymbolSignature {
                     name: s.name.clone(),
                     line: s.line,
                     signature: s.signature.clone(),
                 })
-                .collect()
-        } else {
-            Vec::new()
-        };
+                .collect(),
+            definitions: ranked
+                .iter()
+                .map(|(grade, _, s)| (*grade, s.line))
+                .collect(),
+            names_the_task,
+            // The crate's own path-level test taxonomy, so "is this a test?"
+            // has one definition in the codebase instead of a second path
+            // heuristic here. Path-level only on purpose: a source file that
+            // defines a helper called `test_client` is not a test.
+            is_test: crate::classify::is_test_file(path),
+            source,
+        });
+    }
 
+    let detail_order: Vec<usize> = if opts.resolution == Resolution::Flat {
+        // Flat is a single-tier dump: every file is DETAIL (unchanged).
+        (0..n).collect()
+    } else {
+        assign_detail_slots(sorted, opts, task_tokens, degrees, &prepared)
+    };
+    let detail_slots: HashSet<usize> = detail_order.iter().copied().collect();
+
+    // SIGNATURES keeps its historical size: the next `seed_limit` files of the
+    // global relevance order that DETAIL did not claim.
+    let mut signature_slots: HashSet<usize> = HashSet::new();
+    for i in (0..n).filter(|i| !detail_slots.contains(i)) {
+        if signature_slots.len() >= opts.seed_limit {
+            break;
+        }
+        signature_slots.insert(i);
+    }
+
+    // Render order: the DETAIL tier's members in rank order, then everything
+    // else in global relevance order. The tier is the one place where order
+    // decides membership as well as placement — the renderer fits blocks
+    // greedily — so the best implementation file must be considered while the
+    // budget is unspent. (The MAP tier sorts itself; nothing else reads this
+    // order for placement.)
+    let mut render_order: Vec<usize> = detail_order.clone();
+    render_order.extend((0..n).filter(|i| !detail_slots.contains(i)));
+
+    // Pass 2 — assign each file its tier and materialise what that tier
+    // renders: symbols always (GAP-044), signatures for the spine, source for
+    // DETAIL.
+    let mut files = Vec::with_capacity(n);
+    for i in render_order {
+        let (path, score, prov) = &sorted[i];
+        let tier = if detail_slots.contains(&i) {
+            Tier::Detail
+        } else if signature_slots.contains(&i) {
+            Tier::Signature
+        } else {
+            Tier::Map
+        };
+        let entry = &prepared[i];
+        let signatures = if tier == Tier::Map {
+            Vec::new()
+        } else {
+            entry.signatures.clone()
+        };
         let detail = if tier == Tier::Detail {
-            source.as_ref().map(|s| minify_whitespace(s))
+            entry
+                .source
+                .as_deref()
+                .map(|s| detail_body(s, &entry.definitions, opts))
         } else {
             None
         };
 
         files.push(SignalFile {
             path: path.clone(),
-            symbols,
+            symbols: entry.symbols.clone(),
             signatures,
             tier,
             provenance: prov.clone(),
@@ -2565,6 +2828,126 @@ fn minify_whitespace(source: &str) -> String {
     }
 
     result.join("\n")
+}
+
+/// The DETAIL body for one file: the whole minified source when it fits the
+/// tier's budget, else a focused excerpt.
+///
+/// A DETAIL block is "the exact lines" of a file, and the file the tier most
+/// needs to carry is often far larger than the tier itself: flask's
+/// `src/flask/app.py` minifies to 67 KB against a 14 KB allocation at the
+/// default 6000-token budget. Rendering it whole cannot fit and the renderer
+/// would silently skip it — the flagship pack then omits the code that runs
+/// while carrying three 1 KB example files. So an oversized candidate is
+/// rendered as the windows around the definitions that name the task, each
+/// window elided-marked with its line range, which is both small enough to fit
+/// and the part of the file the question is actually about.
+///
+/// Budgets below [`DETAIL_EXCERPT_MIN_CHARS`] keep the historical behaviour:
+/// the full block is handed to the renderer, which reports that no block fits
+/// and how large it was.
+fn detail_body(source: &str, definitions: &[(u64, usize)], opts: &SignalOpts) -> String {
+    let minified = minify_whitespace(source);
+    if opts.resolution == Resolution::Flat {
+        // Flat is budget-independent by design (documented on `Resolution`).
+        return minified;
+    }
+    let allocation = opts.token_budget.saturating_mul(4) * DETAIL_BUDGET_PERCENT / 100;
+    if minified.len() <= allocation || allocation < DETAIL_EXCERPT_MIN_CHARS {
+        return minified;
+    }
+    let excerpt_budget = (allocation / DETAIL_EXCERPT_ALLOCATION_DIVISOR)
+        .max(DETAIL_EXCERPT_MIN_CHARS)
+        .min(allocation);
+    focused_excerpt(source, definitions, excerpt_budget).unwrap_or(minified)
+}
+
+/// Windows around the definitions that name the task, sized to `budget_chars`.
+///
+/// Windows are chosen by [`symbol_match_grade`] (best grade first, then source
+/// order) and rendered in file order, so an agent reads the flow in the order
+/// it runs. A file none of whose definitions names the task falls back to its
+/// head — there is no better target without a task word to aim at.
+///
+/// Every window carries its own `… lines N-M of T …` marker: the excerpt is
+/// explicitly partial, so nobody mistakes it for the file's full text, and the
+/// line numbers point at what to read next.
+fn focused_excerpt(
+    source: &str,
+    definitions: &[(u64, usize)],
+    budget_chars: usize,
+) -> Option<String> {
+    let lines: Vec<&str> = source.lines().collect();
+    if lines.is_empty() || budget_chars == 0 {
+        return None;
+    }
+    let last = lines.len() - 1;
+
+    let mut anchors: Vec<(u64, usize)> = definitions
+        .iter()
+        .filter(|(grade, _)| *grade > 0)
+        .map(|(grade, line)| (*grade, line.saturating_sub(1).min(last)))
+        .collect();
+    anchors.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    anchors.truncate(DETAIL_EXCERPT_WINDOWS);
+
+    let mut windows: Vec<(usize, usize)> = if anchors.is_empty() {
+        vec![(0, (DETAIL_EXCERPT_WINDOW - 1).min(last))]
+    } else {
+        anchors
+            .into_iter()
+            .map(|(_, start)| (start, (start + DETAIL_EXCERPT_WINDOW - 1).min(last)))
+            .collect()
+    };
+    windows.sort_unstable();
+    windows.dedup();
+    // Merge overlapping windows so no line is printed twice.
+    let mut merged: Vec<(usize, usize)> = Vec::new();
+    for (start, end) in windows {
+        match merged.last_mut() {
+            Some((_, prev_end)) if start <= *prev_end + 1 => {
+                *prev_end = (*prev_end).max(end);
+            }
+            _ => merged.push((start, end)),
+        }
+    }
+
+    let mut out = String::new();
+    for (start, end) in merged {
+        let mut chunk = format!("… lines {}-{} of {} …\n", start + 1, end + 1, lines.len());
+        for line in &lines[start..=end] {
+            let trimmed = line.trim_end();
+            if trimmed.trim().is_empty() {
+                continue;
+            }
+            chunk.push_str(trimmed);
+            chunk.push('\n');
+        }
+        if out.len() + chunk.len() > budget_chars {
+            if out.is_empty() {
+                // Even the first window overflows: keep the lines that fit.
+                let take = budget_chars.min(chunk.len());
+                let cut = chunk
+                    .char_indices()
+                    .take_while(|(index, _)| *index < take)
+                    .map(|(index, ch)| index + ch.len_utf8())
+                    .last()
+                    .unwrap_or(0);
+                let cut = chunk[..cut].rfind('\n').map(|i| i + 1).unwrap_or(0);
+                if cut > 0 {
+                    out.push_str(&chunk[..cut]);
+                }
+            }
+            break;
+        }
+        out.push_str(&chunk);
+    }
+
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
 }
 
 /// Explicit empty-tier marker.
@@ -3602,21 +3985,37 @@ mod tests {
             "acceptance: no tests/fixtures file may appear in the MAP tier, got {filtered_entries:?}"
         );
 
-        // The filter is tier-local: the machine-readable result keeps every
-        // file (including the crowd) and the implementation's TRAVERSAL
-        // tier is unchanged (tier bands depend on the sorted position, which
-        // the filter does not touch). Anchor-band files still land in
-        // DETAIL, the 1-hop neighbour in SIGNATURES, exactly as without the
-        // filter.
+        // The result set keeps every file (including the crowd) — nothing is
+        // dropped — and the excluded fixtures that still fit the tier keep
+        // their DETAIL source blocks.
+        //
+        // DF-WARPFS-118 supersedes the tier half of this assertion: DETAIL is
+        // now ranked by implementation weight, so the exclusion list reaches
+        // the tier assignment as its first key (implementation source before
+        // fixture trees), and a test-bearing path is demoted on its own. The
+        // implementation therefore takes its DETAIL band with or without the
+        // exclusion list. What REV-WARPFS-6 pins here is unchanged and still
+        // asserted: no file is removed from the result set, the MAP filter
+        // still removes the crowd from the MAP text, and a fixture that
+        // anchors keeps its DETAIL band when nothing better competes for the
+        // slot.
         assert_eq!(filtered.files.len(), 10, "no file may be dropped");
+        assert_eq!(
+            historical_impl_tier,
+            Tier::Detail,
+            "acceptance (DF-WARPFS-118): the implementation outranks the \
+             fixture crowd even without the exclusion list"
+        );
         let impl_file = filtered
             .files
             .iter()
             .find(|f| f.path == "hilo-mcp/src/rate_limiter.rs")
             .expect("implementation must survive in files");
         assert_eq!(
-            impl_file.tier, historical_impl_tier,
-            "the filter must not change the implementation's tier"
+            impl_file.tier,
+            Tier::Detail,
+            "acceptance (DF-WARPFS-118): under the exclusion list the \
+             implementation takes its DETAIL band"
         );
         for path in [
             "tests/fixtures/limiter/rate/mod.rs",
@@ -3629,6 +4028,317 @@ mod tests {
                 .unwrap_or_else(|| panic!("{path} must survive in files"));
             assert_eq!(f.tier, Tier::Detail, "{path} keeps its anchor-band tier");
         }
+    }
+
+    // ─────────── DF-WARPFS-118: DETAIL ranks implementation weight ───────────
+
+    /// DETAIL tier members in render order — the ranking's own order, because
+    /// `build_signal_files` emits the tier best-first.
+    fn detail_paths(result: &SignalResult) -> Vec<String> {
+        result
+            .files
+            .iter()
+            .filter(|f| f.tier == Tier::Detail)
+            .map(|f| f.path.clone())
+            .collect()
+    }
+
+    /// The default exclusion list as `SignalOpts` takes it.
+    fn default_exclusions() -> Vec<String> {
+        MAP_EXCLUDE_PATHS_DEFAULT
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect()
+    }
+
+    #[test]
+    fn understand_detail_promotes_the_owner_over_example_anchors() {
+        // DF-WARPFS-118, at the shape the defect was measured on: on flask,
+        // `request flow WSGI->view->response` put
+        // `examples/celery/src/task_app/views.py`,
+        // `examples/javascript/js_example/views.py` and `src/flask/views.py`
+        // in DETAIL (they all carry the word "view" in their path, so all
+        // three anchor at 1.00) while `src/flask/app.py` — the file that owns
+        // `wsgi_app` / `full_dispatch_request` / `finalize_request`, that the
+        // repository is wired through, and whose path carries none of the
+        // task's words — stayed MAP-only.
+        //
+        // DETAIL used to be "the first `seed_limit` files of the score order",
+        // which is the anchor band, which is the examples. It is now ranked by
+        // implementation weight: implementation source first, then files whose
+        // own definitions name the task, then graph degree.
+        let db = GraphDB::open(":memory:").unwrap();
+        let mut edges = vec![
+            edge(
+                "examples/celery/src/task_app/views.py",
+                "pkg:task_app",
+                "imports",
+            ),
+            edge(
+                "examples/javascript/js_example/views.py",
+                "pkg:js_example",
+                "imports",
+            ),
+            edge("src/flask/views.py", "pkg:flask.globals", "imports"),
+            // The owner imports the view layer and a dozen packages: it is the
+            // hub the tier exists to surface.
+            edge("src/flask/app.py", "src/flask/views.py", "imports"),
+        ];
+        for dep in [
+            "pkg:flask.ctx",
+            "pkg:flask.globals",
+            "pkg:flask.helpers",
+            "pkg:flask.sessions",
+            "pkg:flask.templating",
+            "pkg:flask.wrappers",
+            "pkg:werkzeug.routing",
+            "pkg:werkzeug.wrappers",
+            "pkg:werkzeug.serving",
+            "pkg:werkzeug.exceptions",
+            "pkg:json",
+            "pkg:logging",
+        ] {
+            edges.push(edge("src/flask/app.py", dep, "imports"));
+        }
+        // Seven more implementation files depend on the view layer, filling
+        // the eight DETAIL slots with implementation source.
+        for i in 0..7 {
+            edges.push(edge(
+                &format!("src/flask/mod{i}.py"),
+                "src/flask/views.py",
+                "imports",
+            ));
+        }
+        db.insert_edges(&edges).unwrap();
+
+        let reader = |path: &str| -> Option<String> {
+            let name = if path == "src/flask/app.py" {
+                // The flow the task asks about, defined where nothing else
+                // about the file can reach it.
+                "def wsgi_app(self, environ):\n    pass\n\n\
+                 def full_dispatch_request(self):\n    pass\n\n\
+                 def finalize_request(self, rv):\n    return rv\n"
+            } else {
+                "def handler():\n    pass\n"
+            };
+            Some(name.to_string())
+        };
+
+        let opts = SignalOpts {
+            map_exclude_paths: default_exclusions(),
+            ..Default::default()
+        };
+        let result =
+            understand_with_source(&db, "request flow view response", &opts, Some(reader)).unwrap();
+        let detail = detail_paths(&result);
+
+        assert_eq!(
+            detail.first().map(String::as_str),
+            Some("src/flask/app.py"),
+            "the owning implementation file must lead DETAIL, got {detail:?}"
+        );
+        assert!(
+            !detail.iter().any(|p| p.starts_with("examples/")),
+            "example trees must not take DETAIL slots while implementation \
+             source competes for them, got {detail:?}"
+        );
+        assert!(
+            result.text.contains("src/flask/app.py [provenance="),
+            "the owner must render its DETAIL block, got:\n{}",
+            result.text
+        );
+        // The path-matched implementation anchor keeps a slot; only the
+        // examples are demoted.
+        assert!(
+            detail.iter().any(|p| p == "src/flask/views.py"),
+            "the implementation anchor must keep its DETAIL band, got {detail:?}"
+        );
+    }
+
+    #[test]
+    fn understand_detail_ranks_by_graph_degree_not_path_grade() {
+        // DF-WARPFS-118 criterion 3: ranking considers graph degree, not just
+        // how exactly the path spells the task. Both files anchor at 1.00; the
+        // alphabetically-first one spells the token exactly (grade 4), the
+        // other only carries it as a prefix (grade 2). Score cannot separate
+        // them and the historical tie-break handed the tier to the weaker
+        // file. Degree can: the file the repository is wired through leads.
+        let db = GraphDB::open(":memory:").unwrap();
+        let mut edges = vec![edge("alpha/limiter.rs", "pkg:alpha", "imports")];
+        for dep in [
+            "pkg:one",
+            "pkg:two",
+            "pkg:three",
+            "pkg:four",
+            "pkg:five",
+            "pkg:six",
+        ] {
+            edges.push(edge("beta/limiter_impl.rs", dep, "imports"));
+        }
+        db.insert_edges(&edges).unwrap();
+
+        let result = understand(&db, "limiter", &SignalOpts::default()).unwrap();
+        let detail = detail_paths(&result);
+
+        assert_eq!(
+            detail.first().map(String::as_str),
+            Some("beta/limiter_impl.rs"),
+            "the hub must lead the tier over the better path match, got {detail:?}"
+        );
+        assert!(
+            detail.iter().any(|p| p == "alpha/limiter.rs"),
+            "the path-matched anchor keeps its slot, got {detail:?}"
+        );
+    }
+
+    #[test]
+    fn understand_detail_demotes_test_files_behind_implementation() {
+        // Criterion 2's other half: a test suite is a hub too — on requests,
+        // `tests/test_requests.py` imports the whole package and defines
+        // dozens of functions whose names carry the task words, so a
+        // degree-first ranking put it ahead of `src/requests/sessions.py`, the
+        // file that owns `Session.request`. Test-bearing paths are their own
+        // class: they hold a DETAIL slot when one is left, never one ahead of
+        // implementation source.
+        let db = GraphDB::open(":memory:").unwrap();
+        let mut edges = vec![edge("src/app/views.py", "pkg:app", "imports")];
+        for dep in [
+            "pkg:one",
+            "pkg:two",
+            "pkg:three",
+            "pkg:four",
+            "pkg:five",
+            "pkg:six",
+        ] {
+            edges.push(edge("tests/test_views.py", dep, "imports"));
+        }
+        db.insert_edges(&edges).unwrap();
+
+        let result = understand(&db, "views handling", &SignalOpts::default()).unwrap();
+        let detail = detail_paths(&result);
+
+        assert_eq!(
+            detail.first().map(String::as_str),
+            Some("src/app/views.py"),
+            "implementation source must lead the tier over the larger test \
+             hub, got {detail:?}"
+        );
+        assert!(
+            detail.iter().any(|p| p == "tests/test_views.py"),
+            "the test file keeps a DETAIL slot when one is left, got {detail:?}"
+        );
+    }
+
+    #[test]
+    fn understand_detail_guarantees_the_top_map_anchor() {
+        // The brief's guarantee: the row the MAP tier leads with always carries
+        // its source. Here the anchor names the task and scores 1.00 but
+        // carries a single edge, while eight neighbour files are hubs that
+        // outrank it on degree — the guarantee puts the anchor in the tier and
+        // the weakest hub steps aside.
+        let db = GraphDB::open(":memory:").unwrap();
+        let mut edges = vec![edge("src/auth/middleware.rs", "pkg:auth", "imports")];
+        for i in 0..8 {
+            let path = format!("src/core/mod{i}.rs");
+            edges.push(edge(&path, "src/auth/middleware.rs", "imports"));
+            for dep in ["pkg:one", "pkg:two", "pkg:three", "pkg:four", "pkg:five"] {
+                edges.push(edge(&path, dep, "imports"));
+            }
+        }
+        db.insert_edges(&edges).unwrap();
+
+        let result = understand(&db, "auth middleware", &SignalOpts::default()).unwrap();
+        let detail = detail_paths(&result);
+        let top_map = result
+            .text
+            .split("## MAP")
+            .nth(1)
+            .and_then(|rest| rest.split("## SIGNATURES").next())
+            .expect("MAP tier must exist")
+            .lines()
+            .find(|l| l.contains("→"))
+            .expect("MAP must render a row")
+            .split(" →")
+            .next()
+            .unwrap()
+            .to_string();
+
+        assert_eq!(
+            top_map, "src/auth/middleware.rs",
+            "premise: the anchor leads the MAP tier, got {top_map:?}"
+        );
+        assert!(
+            detail.iter().any(|p| p == "src/auth/middleware.rs"),
+            "the top MAP anchor must be in DETAIL even when hubs outrank it, \
+             got {detail:?}"
+        );
+    }
+
+    #[test]
+    fn understand_detail_excerpts_an_oversized_owner() {
+        // A DETAIL block is the file's exact lines, and the file the tier most
+        // needs to carry is routinely larger than the whole tier: flask's
+        // app.py minifies to 67 KB against a 14 KB allocation. Dropping it
+        // leaves the pack without the code that runs; excerpting it keeps the
+        // definitions that name the task and says exactly which lines were
+        // elided.
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[edge(
+            "src/core/request_flow.rs",
+            "src/core/lib.rs",
+            "imports",
+        )])
+        .unwrap();
+
+        let mut source = String::new();
+        for i in 0..1_200 {
+            if i == 1_150 {
+                source.push_str("pub fn handle_request_flow() -> u8 {\n    7\n}\n");
+            } else {
+                source.push_str(&format!("// filler line {i} keeps the file large\n"));
+            }
+        }
+        let source_len = source.len();
+        let reader = move |path: &str| -> Option<String> {
+            (path == "src/core/request_flow.rs").then(|| source.clone())
+        };
+
+        let opts = SignalOpts {
+            token_budget: 3_000,
+            ..Default::default()
+        };
+        let result = understand_with_source(&db, "request flow", &opts, Some(reader)).unwrap();
+        let file = result
+            .files
+            .iter()
+            .find(|f| f.path == "src/core/request_flow.rs")
+            .expect("the oversized owner must be in the result set");
+        assert_eq!(file.tier, Tier::Detail, "the owner must reach DETAIL");
+        let detail = file.detail.as_deref().expect("DETAIL must carry source");
+
+        assert!(
+            detail.len() < source_len,
+            "an oversized block must be excerpted, got {} chars of {source_len}",
+            detail.len()
+        );
+        assert!(
+            detail.contains("… lines "),
+            "the excerpt must mark its elided windows, got:\n{detail}"
+        );
+        assert!(
+            detail.contains("handle_request_flow"),
+            "the excerpt must reach the definition that names the task, got:\n{detail}"
+        );
+        assert!(
+            !detail.contains("filler line 0 "),
+            "the excerpt must not be the head of the file, got:\n{detail}"
+        );
+        assert!(
+            result
+                .text
+                .contains("src/core/request_flow.rs [provenance="),
+            "the excerpt must render inside the DETAIL tier"
+        );
     }
 
     #[test]

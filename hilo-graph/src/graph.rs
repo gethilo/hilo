@@ -1927,6 +1927,40 @@ impl GraphDB {
         Ok((froms, tos))
     }
 
+    /// Number of edges that touch each node, in one scan of the edge table.
+    ///
+    /// The signal engine's DETAIL tier ranks implementation weight by this
+    /// (DF-WARPFS-118): a file's degree is how much of the repository is wired
+    /// through it — the one structural fact path-token matching cannot see, and
+    /// the only one that reaches an owning implementation file whose path
+    /// carries none of the task's words. Pseudo-node endpoints (`pkg:`, `sys:`)
+    /// are counted too: a file that imports thirty packages is, structurally, a
+    /// hub, and that is exactly the measurement wanted here.
+    ///
+    /// Degraded (jsonl-only) graphs return an empty map: the caller falls back
+    /// to score order rather than paying a full replay of the edge log for a
+    /// ranking hint.
+    pub fn node_degrees(&self) -> GraphResult<HashMap<String, usize>> {
+        let mut degrees: HashMap<String, usize> = HashMap::new();
+        if self.degraded {
+            return Ok(degrees);
+        }
+        let mut stmt = self.conn.prepare(
+            "SELECT node, COUNT(*) FROM (SELECT \"from\" AS node FROM edges \
+             UNION ALL SELECT \"to\" AS node FROM edges) GROUP BY node",
+        )?;
+        let rows = stmt.query_map(params![], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        for row in rows {
+            let (node, count) = row?;
+            if count > 0 {
+                degrees.insert(node, count as usize);
+            }
+        }
+        Ok(degrees)
+    }
+
     /// The `(from, to, rel)` triples of every edge whose `rel` is in `rels`,
     /// sorted by `(from, to, rel)` for determinism (GAP-081-P3: the
     /// edge-aware search pass reads exactly the service-dimension edges).

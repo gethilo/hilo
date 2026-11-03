@@ -301,10 +301,11 @@ Two path-aware levers apply to the MAP tier only:
    (`tests/fixtures`, `examples`, `vendor` by default) does not render in the
    MAP tier **at all**. The MAP is the agent's orientation budget; sample
    corpora have high symbol density and low relevance, so they are filtered
-   from it. The filter is tier-local: the file stays in the machine-readable
-   `files` list, keeps its traversal-order tier assignment, and an
-   anchor-band fixture still gets its full DETAIL source block. If every
-   matched file is filtered, the MAP prints an explicit empty-tier marker.
+   from it. The file stays in the machine-readable `files` list, and an
+   anchor-band fixture still gets its full DETAIL source block when no
+   implementation source competes for the slot (the DETAIL ranking below uses
+   the same prefix list as its first key). If every matched file is filtered,
+   the MAP prints an explicit empty-tier marker.
 2. **Path depth weighting** — the remaining files re-order by signal score
    minus a bounded depth demotion: a file more than 4 components below the
    repo root loses `0.02` per extra component, capped at `0.1`. Of two
@@ -337,6 +338,38 @@ covers both `tests/fixtures/…` and (in a Cargo workspace)
 `…/tests/fixtures.rs`. It also does **not** touch `tests/test_*.py` or
 `test/…` trees — those keep ranking normally (the wave11 recall corpora
 depend on this).
+
+### DETAIL Ranking Heuristic (DF-WARPFS-118)
+
+DETAIL is the tier that carries the code an agent must read, so it is ranked by
+*implementation weight*, not by how exactly a path spells the task. Ranking by
+`ast_exact` score alone made the tier the anchor band, and an anchor band is
+whichever files happen to carry the task's words in their path: on flask
+(`request flow WSGI->view->response`) three `examples/…/views.py` files tied
+with `src/flask/views.py` at 1.00 and filled DETAIL, while
+`src/flask/app.py` — the 1.6 k-line owner of `wsgi_app`,
+`full_dispatch_request` and `finalize_request` — stayed MAP-only.
+
+The order is, in this order:
+
+1. **implementation source before excluded paths**, and both before graph
+   pseudo-nodes (`pkg:`/`sys:`/`local:`), which name no readable file;
+2. **files whose own definitions name the task** (a definition carrying a task
+   word as a whole word — `wsgi_app`, `dispatch_request`, `finalize_request`)
+   before files that merely sit next to the answer;
+3. **graph degree** — the number of edges the file carries, measured over the
+   whole graph in one pass. This is what reaches an owner sitting two hops from
+   the anchors, and what separates a repository hub from a demo leaf;
+4. traversal score (proximity), then the path grade the MAP is ordered by, then
+   path.
+
+Two guarantees ride on top: the row the MAP tier leads with always takes a
+DETAIL slot (displacing the weakest ranked candidate), and an oversized owner —
+a block that cannot fit the tier at all — is rendered as a **focused excerpt**:
+the windows around the definitions that name the task, each marked
+`… lines N-M of T …` so the elision and the lines to read next are explicit.
+The tier's members are emitted best-first, because the renderer fits blocks
+greedily and the first slot is the one considered while the budget is unspent.
 
 ## Semantic Code Search — `vfs_graph_search`
 
