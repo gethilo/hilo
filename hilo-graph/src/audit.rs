@@ -272,6 +272,10 @@ pub struct AuditOptions {
     /// COV-2 links read from disk. A link whose `target` equals a symbol's
     /// name or defining file marks that symbol linked.
     pub coverage_links: Vec<CoverageLink>,
+    /// GAP-121: root the reachability closure at THIS one declared entrypoint
+    /// (repo-relative path) instead of at every entrypoint the classifier
+    /// finds. `None` keeps the historical all-entrypoints rule.
+    pub entry_override: Option<String>,
 }
 
 impl Default for AuditOptions {
@@ -279,6 +283,7 @@ impl Default for AuditOptions {
         AuditOptions {
             max_evidence: 10,
             coverage_links: Vec::new(),
+            entry_override: None,
         }
     }
 }
@@ -301,6 +306,11 @@ pub struct AuditReport {
     pub symbols: Vec<SymbolAudit>,
     /// The rules the pass ran under, in prose.
     pub rules: Vec<String>,
+    /// GAP-121: set only when an explicit `--from <entrypoint>` named a file
+    /// that is not in the corpus. Guarantees a typo cannot masquerade as
+    /// "everything is unreachable".
+    #[serde(default)]
+    pub entry_override_missing: Option<String>,
 }
 
 impl AuditReport {
@@ -505,12 +515,32 @@ pub fn audit(files: &[(Language, String, String)], root: &str, opts: &AuditOptio
     }
 
     // ── 3. File reachability: forward closure from the entrypoints ────────
+    //
+    // GAP-121: `entry_override` roots the closure at ONE named entrypoint, so
+    // `graph reachable --from <file>` answers "what can be reached from HERE"
+    // instead of "what can be reached from anything the classifier calls an
+    // entrypoint". An override that names no file in the corpus is reported as
+    // an unknown entrypoint by the caller (the report's `entrypoints.files`
+    // is empty, and `entry_override_missing` names it) rather than silently
+    // producing an all-unreachable report that looks like a real finding.
     let mut reachable_file = vec![false; n];
     let mut stack: Vec<usize> = Vec::new();
-    for i in 0..n {
-        if is_entry[i] {
-            reachable_file[i] = true;
-            stack.push(i);
+    let mut entry_override_missing: Option<String> = None;
+    match opts.entry_override.as_deref() {
+        Some(requested) => match file_index.get(requested) {
+            Some(&i) => {
+                reachable_file[i] = true;
+                stack.push(i);
+            }
+            None => entry_override_missing = Some(requested.to_string()),
+        },
+        None => {
+            for i in 0..n {
+                if is_entry[i] {
+                    reachable_file[i] = true;
+                    stack.push(i);
+                }
+            }
         }
     }
     while let Some(a) = stack.pop() {
@@ -523,10 +553,13 @@ pub fn audit(files: &[(Language, String, String)], root: &str, opts: &AuditOptio
     }
 
     // ── 4. Bucket every symbol ────────────────────────────────────────────
-    let entrypoint_files: Vec<String> = (0..n)
-        .filter(|&i| is_entry[i])
-        .map(|i| files[i].1.clone())
-        .collect();
+    let entrypoint_files: Vec<String> = match opts.entry_override.as_deref() {
+        Some(requested) if entry_override_missing.is_none() => vec![requested.to_string()],
+        _ => (0..n)
+            .filter(|&i| is_entry[i])
+            .map(|i| files[i].1.clone())
+            .collect(),
+    };
 
     for idx in 0..symbols.len() {
         let own_file = symbols[idx].file.clone();
@@ -661,6 +694,7 @@ pub fn audit(files: &[(Language, String, String)], root: &str, opts: &AuditOptio
         unknown,
         census,
         symbols,
+        entry_override_missing,
         rules: vec![
             "public function: Rust bare `pub fn`, Go exported func/method (leading uppercase), Python `def`/`async def` not starting with `_`, TypeScript/JavaScript declarations inside an `export`".into(),
             "declared entrypoint: `classify_file` role == `entrypoint` (code-derived, no hand list)".into(),
@@ -895,6 +929,186 @@ fn identifier_counts(source: &str) -> BTreeMap<&str, usize> {
         }
     }
     counts
+}
+
+// ─────────────────────────── function-level coverage ────────────────────────
+
+/// One public function's test-link state.
+///
+/// GAP-121: this is the fact the file-level `tested_by` edge cannot express.
+/// `covered` is true only when some TEST file names this symbol.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SymbolCoverage {
+    pub name: String,
+    pub file: String,
+    pub line: usize,
+    /// A test file names this symbol.
+    pub covered: bool,
+    /// The test files naming it, sorted (evidence, never a score).
+    pub covered_by: Vec<String>,
+}
+
+/// Every public function defined in one file, with how many carry a test
+/// reference.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileCoverage {
+    /// Repo-relative, `/`-separated path of the defining file.
+    pub file: String,
+    pub total: usize,
+    pub covered: usize,
+    /// The functions with NO test reference — the report's reason for
+    /// existing. Empty means fully covered.
+    pub uncovered: Vec<PubSymbol>,
+    /// The same facts, one row per function (definition order).
+    pub symbols: Vec<SymbolCoverage>,
+}
+
+impl FileCoverage {
+    /// True when at least one function lacks a test reference.
+    pub fn is_partial_or_uncovered(&self) -> bool {
+        !self.uncovered.is_empty()
+    }
+}
+
+/// The rule string every function-granularity output carries, so a reader can
+/// disagree with the definition instead of guessing it.
+pub const FUNCTION_COVERAGE_RULE: &str = "function covered: at least one TEST file (classify::is_test_file rules) names the function's bare identifier OUTSIDE its import/use/package declarations (an unused import is not a test); a function is reported uncovered only when NO test file anywhere in the corpus names it. File-level `tested_by` edges are NOT consulted — treating them as function coverage is the GAP-121 false positive. Not counted: references from the defining file itself (an in-file `#[cfg(test)] mod tests` block), and non-public functions";
+
+/// True for a source line that only DECLARES a dependency (an import), never
+/// exercises one.
+///
+/// GAP-121: `import { used } from './lib'` names `used` but proves nothing
+/// about it, so counting the whole file text would let an unused import
+/// masquerade as a test. Every other line is kept — including call sites,
+/// assertions, and comments — which stays deliberately over-approximate in the
+/// direction that cannot invent a false "uncovered".
+fn is_import_declaration_line(line: &str) -> bool {
+    let t = line.trim_start();
+    if t.is_empty() {
+        return false;
+    }
+    t.starts_with("import ")
+        || t.starts_with("import\"")
+        || t.starts_with("import '")
+        || t.starts_with("import(")
+        || t.starts_with("from ")
+        || t.starts_with("use ")
+        || t.starts_with("pub use ")
+        || t.starts_with("mod ")
+        || t.starts_with("package ")
+        || t.starts_with("#include")
+        || t.starts_with("require ")
+        || t.starts_with("extern crate")
+        || (t.starts_with("const ") && t.contains("require("))
+}
+
+/// The corpus languages that have NO public-function extractor, sorted.
+///
+/// GAP-121 honesty rule: a function-granularity report must never let "no
+/// rows" read as "everything is covered". A caller prints these language names
+/// beside its result so the gap between "proven covered" and "not modelled" is
+/// visible.
+pub fn languages_without_extractor(files: &[(Language, String, String)]) -> Vec<String> {
+    let mut langs: BTreeSet<String> = BTreeSet::new();
+    for (lang, rel, _) in files {
+        if classify::is_test_file(rel) || AUDIT_LANGUAGES.contains(lang) {
+            continue;
+        }
+        langs.insert(language_name(*lang).to_string());
+    }
+    langs.into_iter().collect()
+}
+
+/// The identifiers a TEST file references outside its import declarations.
+fn test_reference_identifiers(source: &str) -> BTreeSet<String> {
+    let body: String = source
+        .lines()
+        .filter(|line| !is_import_declaration_line(line))
+        .collect::<Vec<_>>()
+        .join("\n");
+    identifier_counts(&body)
+        .into_keys()
+        .map(str::to_string)
+        .collect()
+}
+
+/// Derive function-level coverage for a corpus.
+///
+/// This is the symbol-granularity sibling of [`audit`]: same corpus walk, same
+/// public-function extractors, but the question is the one GAP-121 needs —
+/// "does a TEST name this FUNCTION", not "does a test file exist for this
+/// file".
+///
+/// Returns one row per file that defines at least one public function,
+/// sorted by path. Test files and generated files define no audited symbol
+/// (same rule as [`audit`]), and languages without a public-function
+/// extractor produce no rows — callers surface that separately through
+/// [`UnknownReport`] semantics rather than silently reporting "covered".
+pub fn function_coverage(files: &[(Language, String, String)]) -> Vec<FileCoverage> {
+    // Identifier sets of every TEST file: the only evidence that counts.
+    // Import/use lines are stripped first — an unused import is not a test.
+    let mut test_identifiers: Vec<(usize, BTreeSet<String>)> = Vec::new();
+    for (i, (_, rel, src)) in files.iter().enumerate() {
+        if classify::is_test_file(rel) {
+            test_identifiers.push((i, test_reference_identifiers(src)));
+        }
+    }
+
+    let mut out: Vec<FileCoverage> = Vec::new();
+    for (i, (lang, rel, src)) in files.iter().enumerate() {
+        if classify::is_test_file(rel) {
+            continue;
+        }
+        let role = classify::classify_file(*lang, rel, src)
+            .map(|c| c.role)
+            .unwrap_or_default();
+        if role == "generated" {
+            continue;
+        }
+        if !AUDIT_LANGUAGES.contains(lang) {
+            continue;
+        }
+        let defs = extract_public_functions(*lang, src);
+        if defs.is_empty() {
+            continue;
+        }
+        let mut symbols: Vec<SymbolCoverage> = Vec::with_capacity(defs.len());
+        for (name, line) in defs {
+            let mut covered_by: Vec<String> = test_identifiers
+                .iter()
+                .filter(|(idx, idents)| *idx != i && idents.contains(&name))
+                .map(|(idx, _)| files[*idx].1.clone())
+                .collect();
+            covered_by.sort();
+            covered_by.dedup();
+            symbols.push(SymbolCoverage {
+                covered: !covered_by.is_empty(),
+                name,
+                file: rel.clone(),
+                line,
+                covered_by,
+            });
+        }
+        let uncovered: Vec<PubSymbol> = symbols
+            .iter()
+            .filter(|s| !s.covered)
+            .map(|s| PubSymbol {
+                name: s.name.clone(),
+                file: s.file.clone(),
+                line: s.line,
+            })
+            .collect();
+        let covered = symbols.iter().filter(|s| s.covered).count();
+        out.push(FileCoverage {
+            file: rel.clone(),
+            total: symbols.len(),
+            covered,
+            uncovered,
+            symbols,
+        });
+    }
+    out.sort_by(|a, b| a.file.cmp(&b.file));
+    out
 }
 
 #[cfg(test)]

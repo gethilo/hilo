@@ -11,7 +11,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use duckdb::{params, AccessMode, Config as DuckDbConfig, Connection};
 use hilo_core::manifest::{DuckDbPerf, Manifest};
-use hilo_metadata::inventory::Edge;
+use hilo_metadata::inventory::{Edge, GRANULARITY_FILE};
 
 use crate::error::{GraphError, GraphResult};
 use crate::impact::{self, ImpactFile};
@@ -195,7 +195,8 @@ pub fn ensure_schema(conn: &Connection) -> GraphResult<()> {
             \"to\" TEXT NOT NULL,\
             rel TEXT NOT NULL,\
             provenance TEXT NOT NULL DEFAULT 'ast_exact',\
-            confidence REAL NOT NULL DEFAULT 1.0\
+            confidence REAL NOT NULL DEFAULT 1.0,\
+            granularity TEXT NOT NULL DEFAULT 'file'\
          )",
         params![],
     )?;
@@ -218,11 +219,14 @@ pub fn ensure_schema(conn: &Connection) -> GraphResult<()> {
 
 /// Check for and apply schema migrations for the `edges` table.
 ///
-/// Currently handles one migration:
+/// Currently handles two migrations:
 /// - v0.1 (3-column) → v0.2 (5-column): add `provenance` and `confidence`.
+/// - v0.2 (5-column) → GAP-121 (6-column): add `granularity`, backfilled to
+///   `'file'` — the meaning every pre-GAP-121 row had.
 ///
-/// Uses `pragma_table_info('edges')` to check column existence. If
-/// `provenance` is missing, both columns are added with ALTER TABLE.
+/// Uses `pragma_table_info('edges')` to check column existence, so each step
+/// is independent and re-entrant: a database that already has some of the
+/// columns gets only the ones it lacks.
 fn migrate_schema(conn: &Connection) -> GraphResult<()> {
     // Check if 'provenance' column exists.
     let has_provenance: bool = {
@@ -255,6 +259,27 @@ fn migrate_schema(conn: &Connection) -> GraphResult<()> {
         )?;
     }
 
+    // GAP-121: the `granularity` dimension. Every row written before this
+    // column existed was file-level, so the backfill value is 'file' — the
+    // historical meaning, never a symbol claim.
+    let has_granularity: bool = {
+        let mut stmt = conn.prepare(
+            "SELECT count(*) FROM pragma_table_info('edges') WHERE name = 'granularity'",
+        )?;
+        let count: i64 = stmt.query_row(params![], |row| row.get(0))?;
+        count > 0
+    };
+    if !has_granularity {
+        conn.execute(
+            "ALTER TABLE edges ADD COLUMN granularity TEXT DEFAULT 'file'",
+            params![],
+        )?;
+        conn.execute(
+            "UPDATE edges SET granularity = 'file' WHERE granularity IS NULL",
+            params![],
+        )?;
+    }
+
     Ok(())
 }
 
@@ -271,7 +296,7 @@ pub const RECONCILE_CHUNK_ROWS: usize = 2_048;
 const READ_BLOCK_BYTES: usize = 64 * 1024;
 
 const INSERT_EDGE_SQL: &str =
-    "INSERT OR IGNORE INTO edges (\"from\", \"to\", rel, provenance, confidence) VALUES (?, ?, ?, ?, ?)";
+    "INSERT OR IGNORE INTO edges (\"from\", \"to\", rel, provenance, confidence, granularity) VALUES (?, ?, ?, ?, ?, ?)";
 
 /// Delete one edge by its `(from, to, rel, provenance)` identity — the same
 /// key the unique index and the append dedupe use (DF-WARPFS-170). The cache
@@ -316,7 +341,8 @@ fn insert_edge_chunk(conn: &Connection, chunk: &[Edge]) -> GraphResult<()> {
                 edge.to,
                 edge.rel,
                 edge.provenance,
-                edge.confidence
+                edge.confidence,
+                edge.granularity
             ])?;
         }
         Ok(())
@@ -932,7 +958,8 @@ fn insert_edge_chunk_until(
                 edge.to,
                 edge.rel,
                 edge.provenance,
-                edge.confidence
+                edge.confidence,
+                edge.granularity
             ])?;
             inserted += 1;
             *committed = *offset;
@@ -2116,7 +2143,7 @@ impl GraphDB {
             {
                 (
                         format!(
-                            "SELECT \"from\", \"to\", rel, provenance, confidence FROM edges WHERE {column} = ? AND rel = ?"
+                            "SELECT \"from\", \"to\", rel, provenance, confidence, granularity FROM edges WHERE {column} = ? AND rel = ?"
                         ),
                         vec![
                             Box::new(target.clone()),
@@ -2126,7 +2153,7 @@ impl GraphDB {
             } else {
                 (
                         format!(
-                            "SELECT \"from\", \"to\", rel, provenance, confidence FROM edges WHERE {column} = ?"
+                            "SELECT \"from\", \"to\", rel, provenance, confidence, granularity FROM edges WHERE {column} = ?"
                         ),
                         vec![Box::new(target.clone())],
                     )
@@ -2142,6 +2169,9 @@ impl GraphDB {
                     rel: row.get::<_, String>(2)?,
                     provenance: row.get::<_, String>(3)?,
                     confidence: row.get::<_, f64>(4)?,
+                    granularity: row
+                        .get::<_, Option<String>>(5)?
+                        .unwrap_or_else(|| GRANULARITY_FILE.to_string()),
                 })
             })?;
             for row in rows {
@@ -2168,14 +2198,14 @@ impl GraphDB {
                     let (sql, params_vec): (String, Vec<Box<dyn duckdb::ToSql>>) =
                         if let Some(rel) = rel_filter {
                             (
-                                "SELECT \"from\", \"to\", rel, provenance, confidence \
+                                "SELECT \"from\", \"to\", rel, provenance, confidence, granularity \
                                  FROM edges WHERE \"to\" = ? AND rel = ?"
                                     .to_string(),
                                 vec![Box::new(node), Box::new(rel.to_string())],
                             )
                         } else {
                             (
-                                "SELECT \"from\", \"to\", rel, provenance, confidence \
+                                "SELECT \"from\", \"to\", rel, provenance, confidence, granularity \
                                  FROM edges WHERE \"to\" = ?"
                                     .to_string(),
                                 vec![Box::new(node)],
@@ -2191,6 +2221,9 @@ impl GraphDB {
                             rel: row.get::<_, String>(2)?,
                             provenance: row.get::<_, String>(3)?,
                             confidence: row.get::<_, f64>(4)?,
+                            granularity: row
+                                .get::<_, Option<String>>(5)?
+                                .unwrap_or_else(|| GRANULARITY_FILE.to_string()),
                         })
                     })?;
                     for row in rows {
@@ -4237,7 +4270,7 @@ mod tests {
         let edges = vec![Edge::new("x.go", "y.go", "imports")];
         insert_edges_into(&conn, &edges).unwrap();
 
-        // Table exists with all 5 columns.
+        // Table exists with all 6 columns (GAP-121 added `granularity`).
         let col_count: i64 = conn
             .query_row(
                 "SELECT count(*) FROM pragma_table_info('edges')",
@@ -4245,7 +4278,18 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(col_count, 5, "edges table should have 5 columns");
+        assert_eq!(col_count, 6, "edges table should have 6 columns");
+
+        // ... and a plain Edge::new row lands as a `file`-granularity claim,
+        // so the historical meaning is what a default insert carries.
+        let granularity: String = conn
+            .query_row(
+                "SELECT granularity FROM edges WHERE \"from\" = 'x.go'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(granularity, GRANULARITY_FILE);
 
         // Data is queryable.
         let to_val: String = conn
@@ -4256,6 +4300,49 @@ mod tests {
             )
             .unwrap();
         assert_eq!(to_val, "y.go");
+    }
+
+    /// GAP-121: a cache written before the `granularity` column existed must
+    /// gain it in place, with every old row reading as `file` — never as a
+    /// symbol claim.
+    #[test]
+    fn migrate_schema_adds_granularity_to_a_five_column_cache() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE edges (\
+                \"from\" TEXT NOT NULL,\
+                \"to\" TEXT NOT NULL,\
+                rel TEXT NOT NULL,\
+                provenance TEXT NOT NULL DEFAULT 'ast_exact',\
+                confidence REAL NOT NULL DEFAULT 1.0\
+             )",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO edges (\"from\", \"to\", rel, provenance, confidence) \
+             VALUES ('tests/a_test.rs', 'src/a.rs', 'tested_by', 'heuristic', 0.8)",
+            params![],
+        )
+        .unwrap();
+
+        ensure_schema(&conn).unwrap();
+
+        let granularity: String = conn
+            .query_row("SELECT granularity FROM edges", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(
+            granularity, GRANULARITY_FILE,
+            "a pre-GAP-121 row is a file-level claim"
+        );
+        // The unique index still works after the ALTER (idempotent insert).
+        let cols: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('edges')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(cols, 6);
     }
 
     #[test]

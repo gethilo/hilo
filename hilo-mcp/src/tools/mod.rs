@@ -898,6 +898,7 @@ fn graph_audit(arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
     let opts = hilo_graph::audit::AuditOptions {
         max_evidence: 10,
         coverage_links,
+        ..Default::default()
     };
     let report = hilo_graph::audit::audit(&corpus, &root.to_string_lossy(), &opts);
     Ok(serde_json::to_value(report)?)

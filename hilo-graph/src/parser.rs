@@ -444,6 +444,7 @@ impl Parser {
                 rel: "imports".to_string(),
                 provenance: provenance.to_string(),
                 confidence,
+                granularity: "file".to_string(),
             });
             if is_test && tested_targets.insert(path.clone()) {
                 edges.push(Edge {
@@ -452,6 +453,7 @@ impl Parser {
                     rel: "tested_by".to_string(),
                     provenance: provenance.to_string(),
                     confidence,
+                    granularity: "file".to_string(),
                 });
             }
         }

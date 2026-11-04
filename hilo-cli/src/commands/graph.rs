@@ -1633,13 +1633,38 @@ pub fn run_related(path: &str, relation: Option<&str>, direction: Option<&str>) 
         } else {
             String::new()
         };
+        // GAP-121: the granularity is printed beside the confidence on EVERY
+        // row, so `conf=1.00` can never be read as symbol-level proof. A
+        // `tested_by` row is `granularity=file` unless the endpoint names one
+        // definition (`sym:` node) — "a test file exists" is a file claim.
         println!(
-            "{}  →  {}  ({})  [{} conf={:.2}]{}",
-            edge.from, edge.to, edge.rel, edge.provenance, edge.confidence, label
+            "{}  →  {}  ({})  [{} conf={:.2} granularity={}]{}{}",
+            edge.from,
+            edge.to,
+            edge.rel,
+            edge.provenance,
+            edge.confidence,
+            edge.granularity,
+            file_level_caveat(edge),
+            label
         );
     }
 
     Ok(())
+}
+
+/// The honesty caveat printed after a file-level coverage edge (GAP-121).
+///
+/// A `tested_by`/`tests` row at `granularity=file` with `confidence=1.0` says
+/// only "a test FILE exists that targets this file". Printing that unchanged
+/// next to `conf=1.00` is exactly the false green GAP-121 reported, so the row
+/// carries its own scope.
+fn file_level_caveat(edge: &Edge) -> &'static str {
+    if matches!(edge.rel.as_str(), "tested_by" | "tests") && !edge.is_symbol_granularity() {
+        " (file-level: proves a test file targets this file, NOT that any function is exercised)"
+    } else {
+        ""
+    }
 }
 
 /// Compute transitive impact: find all files that depend on `path`, directly
@@ -2264,6 +2289,7 @@ fn discover_test_associations(source_files: &[PathBuf], cwd: &Path) -> Vec<Edge>
                     rel: "tested_by".to_string(),
                     provenance: "heuristic".to_string(),
                     confidence: 0.8,
+                    granularity: "file".to_string(),
                 });
             }
         }
@@ -2280,6 +2306,7 @@ fn discover_test_associations(source_files: &[PathBuf], cwd: &Path) -> Vec<Edge>
                     rel: "tests".to_string(),
                     provenance: "heuristic".to_string(),
                     confidence: 0.8,
+                    granularity: "file".to_string(),
                 });
             }
         }
@@ -2565,6 +2592,7 @@ fn discover_conformance_edges(source_files: &[PathBuf], cwd: &Path) -> Vec<Edge>
                     rel: hilo_graph::IMPLEMENTS_REL.to_string(),
                     provenance: hilo_graph::CONFORMANCE_PROVENANCE.to_string(),
                     confidence: hilo_graph::CONFORMANCE_CONFIDENCE,
+                    granularity: "file".to_string(),
                 });
                 edges.push(Edge {
                     from: site.file.clone(),
@@ -2572,6 +2600,7 @@ fn discover_conformance_edges(source_files: &[PathBuf], cwd: &Path) -> Vec<Edge>
                     rel: "conformance_of".to_string(),
                     provenance: hilo_graph::CONFORMANCE_PROVENANCE.to_string(),
                     confidence: hilo_graph::CONFORMANCE_CONFIDENCE,
+                    granularity: "file".to_string(),
                 });
             }
             hilo_graph::SiteKind::Consumes => {
@@ -2581,6 +2610,7 @@ fn discover_conformance_edges(source_files: &[PathBuf], cwd: &Path) -> Vec<Edge>
                     rel: hilo_graph::CONSUMES_REL.to_string(),
                     provenance: hilo_graph::CONFORMANCE_PROVENANCE.to_string(),
                     confidence: hilo_graph::CONFORMANCE_CONFIDENCE,
+                    granularity: "file".to_string(),
                 });
             }
         }
@@ -2622,6 +2652,7 @@ fn discover_service_calls(source_files: &[PathBuf], cwd: &Path) -> Vec<Edge> {
             rel: SERVICE_CALL_REL.to_string(),
             provenance: SERVICE_CALL_PROVENANCE.to_string(),
             confidence: 1.0,
+            granularity: "file".to_string(),
         })
         .collect()
 }
@@ -2979,6 +3010,7 @@ fn discover_service_contracts(
             rel: SERVICE_CONTRACT_REL.to_string(),
             provenance: SERVICE_CONTRACT_PROVENANCE.to_string(),
             confidence: 1.0,
+            granularity: "file".to_string(),
         })
         .collect()
 }
@@ -3409,6 +3441,7 @@ fn generate_extension_edges(
                     rel: ext.relation.clone(),
                     provenance: "heuristic".to_string(),
                     confidence: 0.5,
+                    granularity: "file".to_string(),
                 });
             }
         }
@@ -3790,12 +3823,31 @@ fn unknown_module_error(module_name: &str) -> anyhow::Error {
     )
 }
 
-/// `hilo graph untested` — list source files with no test coverage.
+/// `hilo graph untested [--granularity file|function] [--json]` — source
+/// files (or public FUNCTIONS) with no test coverage.
 ///
-/// Queries all files that have `imports` edges but no `tested_by` edges —
-/// neither on the file itself nor on the `pkg:` node it resolves to.
-/// See `GraphDB::untested_files_at`.
-pub fn run_untested() -> Result<()> {
+/// `file` (the default, and the historical behaviour) queries all files that
+/// have `imports` edges but no `tested_by` edges — neither on the file itself
+/// nor on the `pkg:` node it resolves to. See `GraphDB::untested_files_at`.
+///
+/// `function` (GAP-121) answers a different question from the same corpus:
+/// which public functions does NO test file name. It deliberately does not
+/// read `tested_by` at all — a file-level `tested_by ... conf=1.00` edge means
+/// only "a test file exists", and treating that as function coverage is the
+/// false positive this granularity exists to remove. Symbol facts are derived
+/// from the sources, so this mode needs no warm and can never answer from a
+/// stale cache.
+pub fn run_untested(granularity: Option<&str>, json: bool) -> Result<()> {
+    match granularity.unwrap_or("file") {
+        "file" => run_untested_files(json),
+        "function" => run_untested_functions(json),
+        other => anyhow::bail!("unknown granularity '{other}' (expected `file` or `function`)"),
+    }
+}
+
+/// The historical file-level answer. Output is byte-identical to what this
+/// command printed before GAP-121; `--json` is additive.
+fn run_untested_files(json: bool) -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
     require_completed_warm(&cwd)?;
     let Some(graph_db) = resolve_graph_db_path(&cwd) else {
@@ -3810,6 +3862,18 @@ pub fn run_untested() -> Result<()> {
         .untested_files_at(&cwd)
         .context("failed to query untested files")?;
 
+    if json {
+        let doc = serde_json::json!({
+            "granularity": "file",
+            "rule": "a source file is untested when it has `imports` edges and no `tested_by` edge targets it (directly, or via its resolved pkg:/local: node); test and bench files are excluded",
+            "count": files.len(),
+            "files": files,
+            "confidence_note": "file-level only: an absent row means no test TARGETS this file; a present coverage fact at this granularity says nothing about individual functions — use --granularity function for that",
+        });
+        println!("{}", serde_json::to_string_pretty(&doc)?);
+        return Ok(());
+    }
+
     if files.is_empty() {
         println!("All files have test coverage.");
         return Ok(());
@@ -3821,6 +3885,191 @@ pub fn run_untested() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// `graph untested --granularity function` — files whose public functions
+/// carry no test reference, with the uncovered function names.
+///
+/// Reads the corpus (sources), not the edge cache: the fact being reported is
+/// per-symbol and the graph stores no symbol rows today, so deriving it here
+/// keeps the answer honest and impossible to answer from a stale `tested_by`
+/// row. Files whose every public function is named by a test are NOT listed.
+fn run_untested_functions(json: bool) -> Result<()> {
+    let cwd = std::env::current_dir().context("failed to determine the current directory")?;
+    let root = resolve_project_root_for_symbol_queries(&cwd);
+    let corpus = hilo_graph::audit::collect_corpus(&root);
+    if corpus.is_empty() {
+        anyhow::bail!(
+            "no source files found under {} — nothing to derive function coverage from",
+            root.display()
+        );
+    }
+
+    let coverage = hilo_graph::audit::function_coverage(&corpus);
+    let unknown_languages = hilo_graph::audit::languages_without_extractor(&corpus);
+    let partial: Vec<&hilo_graph::audit::FileCoverage> = coverage
+        .iter()
+        .filter(|fc| fc.is_partial_or_uncovered())
+        .collect();
+    let uncovered_symbols: usize = partial.iter().map(|fc| fc.uncovered.len()).sum();
+
+    if json {
+        let files: Vec<serde_json::Value> = partial
+            .iter()
+            .map(|fc| {
+                serde_json::json!({
+                    "file": fc.file,
+                    "granularity": "symbol",
+                    "total": fc.total,
+                    "covered": fc.covered,
+                    "uncovered": fc.uncovered,
+                    "symbols": fc.symbols,
+                })
+            })
+            .collect();
+        let doc = serde_json::json!({
+            "granularity": "function",
+            "root": root.to_string_lossy(),
+            "rule": hilo_graph::audit::FUNCTION_COVERAGE_RULE,
+            "scanned_files": corpus.len(),
+            "files_with_uncovered": partial.len(),
+            "uncovered_symbols": uncovered_symbols,
+            "unknown_languages": unknown_languages,
+            "files": files,
+        });
+        println!("{}", serde_json::to_string_pretty(&doc)?);
+        return Ok(());
+    }
+
+    if partial.is_empty() {
+        println!("Every public function has a test reference (function granularity).");
+        print_unknown_language_note(&unknown_languages);
+        return Ok(());
+    }
+
+    println!(
+        "{} file(s) with uncovered public function(s) at function granularity ({} function(s)):",
+        partial.len(),
+        uncovered_symbols
+    );
+    for fc in partial {
+        println!("  {} ({}/{} covered)", fc.file, fc.covered, fc.total);
+        for sym in &fc.uncovered {
+            println!("    {}  {}:{}", sym.name, sym.file, sym.line);
+        }
+    }
+    print_unknown_language_note(&unknown_languages);
+    println!();
+    println!("rule: {}", hilo_graph::audit::FUNCTION_COVERAGE_RULE);
+
+    Ok(())
+}
+
+/// Say which languages were NOT modelled, so an empty or partial report can
+/// never read as blanket coverage.
+fn print_unknown_language_note(unknown: &[String]) {
+    if unknown.is_empty() {
+        return;
+    }
+    println!();
+    println!(
+        "note: no public-function extractor for {} — files in those languages are NOT \
+         reported here and are neither proven covered nor proven uncovered",
+        unknown.join(", ")
+    );
+}
+
+/// `graph reachable --from <entrypoint>` — public functions with no static
+/// call path from the named entrypoint.
+///
+/// GAP-121: the file-level answer ("is this file reachable?") is nearly always
+/// yes in Go/TS because a package import makes every file in it reachable, so
+/// the composition-root gap — a function nothing ever calls — is invisible.
+/// This reports the SYMBOL answer, rooted at exactly the file named by
+/// `--from`.
+pub fn run_reachable(from: &str, json: bool) -> Result<()> {
+    let cwd = std::env::current_dir().context("failed to determine the current directory")?;
+    let root = resolve_project_root_for_symbol_queries(&cwd);
+
+    // Accept an absolute path, or a path relative to the invocation CWD, and
+    // normalise it to the repo-relative form the corpus uses.
+    let requested = normalize_subject(&root, from)?;
+    let corpus = hilo_graph::audit::collect_corpus(&root);
+    if corpus.is_empty() {
+        anyhow::bail!(
+            "no source files found under {} — nothing to trace reachability through",
+            root.display()
+        );
+    }
+
+    let opts = hilo_graph::audit::AuditOptions {
+        entry_override: Some(requested.clone()),
+        ..Default::default()
+    };
+    let report = hilo_graph::audit::audit(&corpus, &root.to_string_lossy(), &opts);
+    if let Some(missing) = &report.entry_override_missing {
+        anyhow::bail!(
+            "'{missing}' is not a source file in {} — no reachability can be rooted there (nothing is reported as unreachable from a file that does not exist)",
+            root.display()
+        );
+    }
+
+    let reachable: Vec<&hilo_graph::audit::SymbolAudit> =
+        report.symbols.iter().filter(|s| s.reachable).collect();
+    let unreachable: Vec<&hilo_graph::audit::SymbolAudit> =
+        report.symbols.iter().filter(|s| !s.reachable).collect();
+
+    if json {
+        let row = |s: &hilo_graph::audit::SymbolAudit| {
+            serde_json::json!({
+                "name": s.name,
+                "file": s.file,
+                "line": s.line,
+                "granularity": "symbol",
+                "reachable": s.reachable,
+                "referenced_by": s.referenced_by,
+                "tested_by": s.tested_by,
+            })
+        };
+        let doc = serde_json::json!({
+            "entrypoint": requested,
+            "granularity": "symbol",
+            "rule": "a public function is reachable from the entrypoint when the entrypoint's file, or any file reachable from it by naming a public symbol or a module stem, names it (or its defining file IS the entrypoint)",
+            "reachable": reachable.iter().map(|s| row(s)).collect::<Vec<_>>(),
+            "unreachable": unreachable.iter().map(|s| row(s)).collect::<Vec<_>>(),
+        });
+        println!("{}", serde_json::to_string_pretty(&doc)?);
+        return Ok(());
+    }
+
+    println!(
+        "reachable from {requested}: {} public function(s) reachable, {} with no static path",
+        reachable.len(),
+        unreachable.len()
+    );
+    for s in &reachable {
+        println!("  reachable    {}  {}:{}", s.name, s.file, s.line);
+    }
+    for s in &unreachable {
+        println!("  unreachable  {}  {}:{}", s.name, s.file, s.line);
+    }
+
+    Ok(())
+}
+
+/// The project root symbol queries scan: the nearest ancestor holding `.vfs`
+/// or `.git`, else the CWD itself.
+///
+/// Symbol facts come from sources, so an un-`init`-ed tree is answerable; the
+/// walk only exists so a query run from a subdirectory reports repo-relative
+/// paths consistent with the graph's.
+fn resolve_project_root_for_symbol_queries(cwd: &std::path::Path) -> std::path::PathBuf {
+    for ancestor in cwd.ancestors() {
+        if ancestor.join(".vfs").is_dir() || ancestor.join(".git").exists() {
+            return ancestor.to_path_buf();
+        }
+    }
+    cwd.to_path_buf()
 }
 
 /// `hilo graph rule-check <name>` — execute a named rule against the graph.
@@ -5723,6 +5972,7 @@ mod tests {
             rel: "imports".to_string(),
             provenance: "manual".to_string(),
             confidence: 1.0,
+            granularity: "file".to_string(),
         })
         .unwrap();
         std::fs::write(&edges, format!("{sentinel}\n")).unwrap();
@@ -6108,6 +6358,7 @@ mod tests {
             rel: "imports".to_string(),
             provenance: "ast_exact".to_string(),
             confidence: 1.0,
+            granularity: "file".to_string(),
         }
     }
 

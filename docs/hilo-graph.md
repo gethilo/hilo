@@ -67,6 +67,24 @@ The core dependency-graph engine. Builds a knowledge graph from source code usin
 | `extract_doc_tokens(path, source) -> Vec<String>` | Comment/docstring vocabulary of a source file (search's documentation channel) |
 | `default_doc_extractor(root) -> impl Fn(&str) -> Vec<String>` | Default documentation source (reads files under `root`) |
 | `content_tokens(text) -> Vec<String>` | Candidate query tokens with function words removed |
+| `audit::function_coverage(files) -> Vec<FileCoverage>` | `GAP-121`: per-file public functions and whether any TEST file names each one — the function-granularity sibling of `audit()` |
+| `audit::audit(files, root, opts) -> AuditReport` | COV-5 symbol audit; `opts.entry_override` roots reachability at ONE named entrypoint (`graph reachable --from`) |
+
+## Edge granularity (GAP-121)
+
+Every edge carries a `granularity`: `file` (the historical meaning of every row
+written before this dimension existed) or `symbol` (an endpoint names a single
+definition, by the `sym:<file>::<name>` node convention). File-level rows omit
+the key on disk, so `edges.jsonl` bytes are unchanged for them; the DuckDB
+`edges` table carries the column with a `file` default and migrates old
+databases in place.
+
+The dimension exists because `confidence` alone was ambiguous: a
+`tested_by` edge at `conf=1.00` means "a test FILE targets this file", which is
+not evidence about any function. Consumers that need a per-symbol claim read
+`audit::function_coverage` (or `graph untested --granularity function`), which
+derives the fact from sources and never treats a file-level `tested_by` row as
+function coverage.
 
 ## Search ranking
 

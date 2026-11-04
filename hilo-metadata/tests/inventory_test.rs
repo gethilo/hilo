@@ -52,6 +52,7 @@ fn test_append_edge_single() {
         rel: "imports".to_string(),
         provenance: "ast_exact".to_string(),
         confidence: 1.0,
+        granularity: "file".to_string(),
     };
 
     inventory::append_edge(&edges_path, &edge).expect("append edge");
@@ -77,6 +78,7 @@ fn test_append_edges_bulk() {
             rel: "imports".into(),
             provenance: "ast_exact".into(),
             confidence: 1.0,
+            granularity: "file".to_string(),
         },
         Edge {
             from: "b.go".into(),
@@ -84,6 +86,7 @@ fn test_append_edges_bulk() {
             rel: "calls".into(),
             provenance: "ast_exact".into(),
             confidence: 1.0,
+            granularity: "file".to_string(),
         },
         Edge {
             from: "c.go".into(),
@@ -91,6 +94,7 @@ fn test_append_edges_bulk() {
             rel: "uses".into(),
             provenance: "ast_exact".into(),
             confidence: 1.0,
+            granularity: "file".to_string(),
         },
     ];
 
@@ -121,6 +125,7 @@ fn test_append_edges_creates_parent_dir() {
         rel: "r".into(),
         provenance: "ast_exact".into(),
         confidence: 1.0,
+        granularity: "file".to_string(),
     };
 
     inventory::append_edge(&edges_path, &edge).expect("append with parent creation");
@@ -140,6 +145,7 @@ fn test_append_edges_appends_not_overwrites() {
             rel: "r".into(),
             provenance: "ast_exact".into(),
             confidence: 1.0,
+            granularity: "file".to_string(),
         },
     )
     .expect("first append");
@@ -152,6 +158,7 @@ fn test_append_edges_appends_not_overwrites() {
             rel: "r".into(),
             provenance: "ast_exact".into(),
             confidence: 1.0,
+            granularity: "file".to_string(),
         },
     )
     .expect("second append");
@@ -252,6 +259,7 @@ fn test_edge_to_jsonl_format() {
         rel: "imports".into(),
         provenance: "ast_exact".into(),
         confidence: 1.0,
+        granularity: "file".to_string(),
     };
 
     let jsonl = inventory::edge_to_jsonl(&edge).expect("serialize edge");
@@ -276,6 +284,7 @@ fn test_append_multiple_edges_then_verify_order() {
             rel: "a".into(),
             provenance: "ast_exact".into(),
             confidence: 1.0,
+            granularity: "file".to_string(),
         },
         Edge {
             from: "2".into(),
@@ -283,6 +292,7 @@ fn test_append_multiple_edges_then_verify_order() {
             rel: "b".into(),
             provenance: "ast_exact".into(),
             confidence: 1.0,
+            granularity: "file".to_string(),
         },
     ];
     let batch2 = vec![Edge {
@@ -291,6 +301,7 @@ fn test_append_multiple_edges_then_verify_order() {
         rel: "c".into(),
         provenance: "ast_exact".into(),
         confidence: 1.0,
+        granularity: "file".to_string(),
     }];
 
     inventory::append_edges(&edges_path, &batch1).expect("batch 1");
