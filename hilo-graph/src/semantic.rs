@@ -3478,6 +3478,7 @@ mod tests {
                 rel: "service_call".to_string(),
                 provenance: "grpc_ast".to_string(),
                 confidence: 1.0,
+                granularity: "file".to_string(),
             },
             // Caller -> declaring contract (phase 2a).
             Edge {
@@ -3486,6 +3487,7 @@ mod tests {
                 rel: "service_contract".to_string(),
                 provenance: "grpc_proto".to_string(),
                 confidence: 1.0,
+                granularity: "file".to_string(),
             },
             // An unrelated import edge: proves the pass is SCOPED to the
             // service rels and never lifts arbitrary edge endpoints.

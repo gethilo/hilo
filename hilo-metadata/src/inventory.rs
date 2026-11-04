@@ -93,9 +93,10 @@ fn with_edges_lock<T>(
 ///
 /// ## Backward compatibility
 ///
-/// The `provenance` and `confidence` fields default to `AstExact` / `1.0`
-/// when missing from JSON (old `edges.jsonl` files without provenance). This
-/// is handled via `#[serde(default)]` on both fields.
+/// The `provenance`, `confidence` and `granularity` fields default to
+/// `"ast_exact"` / `1.0` / `"file"` when missing from JSON (old
+/// `edges.jsonl` files written before those fields existed). This is
+/// handled via `#[serde(default)]` on each field.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct Edge {
     pub from: String,
@@ -111,6 +112,25 @@ pub struct Edge {
     /// Defaults to `1.0` when missing (backward compat with old JSONL).
     #[serde(default = "default_confidence")]
     pub confidence: f64,
+    /// The granularity this edge was established at: `"file"` (the `from`
+    /// and `to` name FILES or file-like pseudo-nodes) or `"symbol"` (an
+    /// endpoint names a single function/method definition).
+    ///
+    /// GAP-121: `confidence = 1.0` on a `file`-granularity `tested_by` edge
+    /// means only "a test file exists that imports/targets this file" — it is
+    /// NOT proof that any specific function is exercised. Carrying the
+    /// granularity on the row makes that impossible to mistake: a consumer
+    /// can only claim symbol-level certainty from a `symbol` row.
+    ///
+    /// Defaults to `"file"` when missing, so every pre-GAP-121 row keeps its
+    /// exact historical meaning, and rows that ARE file-level serialize
+    /// without the field (`skip_serializing_if`) — the on-disk JSONL for a
+    /// file-level edge is byte-identical to what earlier versions wrote.
+    #[serde(
+        default = "default_granularity",
+        skip_serializing_if = "granularity_is_file"
+    )]
+    pub granularity: String,
 }
 
 /// Default provenance string for old edges without the field.
@@ -123,8 +143,27 @@ fn default_confidence() -> f64 {
     1.0
 }
 
+/// The granularity tag for file-level edges — the historical meaning of every
+/// edge written before GAP-121 introduced the dimension.
+pub const GRANULARITY_FILE: &str = "file";
+
+/// The granularity tag for symbol-level edges (a function/method endpoint).
+pub const GRANULARITY_SYMBOL: &str = "symbol";
+
+/// Default granularity for old rows: every pre-GAP-121 edge was file-level.
+fn default_granularity() -> String {
+    GRANULARITY_FILE.to_string()
+}
+
+/// `skip_serializing_if` predicate: file-level rows carry no granularity key,
+/// so their JSONL bytes are unchanged from earlier releases.
+fn granularity_is_file(granularity: &str) -> bool {
+    granularity == GRANULARITY_FILE
+}
+
 impl Edge {
-    /// Create a new edge with `ast_exact` provenance and `1.0` confidence.
+    /// Create a new edge with `ast_exact` provenance, `1.0` confidence and
+    /// `file` granularity.
     ///
     /// This is the standard constructor for edges extracted directly from
     /// the AST (the most common case).
@@ -135,6 +174,7 @@ impl Edge {
             rel: rel.into(),
             provenance: "ast_exact".to_string(),
             confidence: 1.0,
+            granularity: GRANULARITY_FILE.to_string(),
         }
     }
 
@@ -152,7 +192,35 @@ impl Edge {
             rel: rel.into(),
             provenance: provenance.into(),
             confidence,
+            granularity: GRANULARITY_FILE.to_string(),
         }
+    }
+
+    /// Create a SYMBOL-granularity edge (GAP-121).
+    ///
+    /// `to` names a single definition, by the `sym:<file>::<name>` node
+    /// convention. Any consumer can therefore see, on the row itself, that
+    /// the claim is about one symbol rather than a whole file.
+    pub fn symbol(
+        from: impl Into<String>,
+        to: impl Into<String>,
+        rel: impl Into<String>,
+        provenance: impl Into<String>,
+        confidence: f64,
+    ) -> Self {
+        Edge {
+            from: from.into(),
+            to: to.into(),
+            rel: rel.into(),
+            provenance: provenance.into(),
+            confidence,
+            granularity: GRANULARITY_SYMBOL.to_string(),
+        }
+    }
+
+    /// Whether this edge is a symbol-granularity claim.
+    pub fn is_symbol_granularity(&self) -> bool {
+        self.granularity == GRANULARITY_SYMBOL
     }
 }
 
@@ -604,6 +672,7 @@ mod tests {
             rel: "imports".into(),
             provenance: "ast_exact".into(),
             confidence: 1.0,
+            granularity: "file".to_string(),
         };
         assert_eq!(
             append_edges_deduped(&path, std::slice::from_ref(&edge)).unwrap(),
@@ -627,6 +696,7 @@ mod tests {
             rel: "imports".into(),
             provenance: "ast_exact".into(),
             confidence: 1.0,
+            granularity: "file".to_string(),
         };
         let n = append_edges_deduped(&path, &[edge.clone(), edge.clone(), edge]).unwrap();
         assert_eq!(n, 1, "one identity, one row");
@@ -646,6 +716,7 @@ mod tests {
             rel: "imports".into(),
             provenance: "ast_exact".into(),
             confidence: 1.0,
+            granularity: "file".to_string(),
         };
         let tests = Edge {
             from: "tests/test_a.py".into(),
@@ -653,6 +724,7 @@ mod tests {
             rel: "tests".into(),
             provenance: "heuristic".into(),
             confidence: 0.8,
+            granularity: "file".to_string(),
         };
         let n = append_edges_deduped(&path, &[imports, tests]).unwrap();
         assert_eq!(n, 2, "distinct (rel, provenance) => distinct edges");
@@ -672,6 +744,7 @@ mod tests {
             rel: rel.into(),
             provenance: prov.into(),
             confidence: 1.0,
+            granularity: "file".to_string(),
         };
         append_edges(&path, &[e("a.py", "b.py", "imports", "ast_exact")]).unwrap();
         append_edges(&path, &[e("a.py", "b.py", "imports", "ast_exact")]).unwrap();
@@ -715,6 +788,7 @@ mod tests {
             rel: "imports".into(),
             provenance: "ast_exact".into(),
             confidence: 1.0,
+            granularity: "file".to_string(),
         };
         append_edges(&path, &[e.clone(), e]).unwrap();
         let mut contents = std::fs::read_to_string(&path).unwrap();
@@ -740,6 +814,7 @@ mod tests {
             rel: rel.into(),
             provenance: prov.into(),
             confidence: 1.0,
+            granularity: "file".to_string(),
         }
     }
 

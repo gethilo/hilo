@@ -1229,6 +1229,7 @@ mod tests {
                 rel: "imports".into(),
                 provenance: "ast_exact".into(),
                 confidence: 1.0,
+                granularity: "file".to_string(),
             }],
         )
         .unwrap();
@@ -1708,6 +1709,7 @@ mod tests {
             rel: "imports".into(),
             provenance: "ast_exact".into(),
             confidence: 1.0,
+            granularity: "file".to_string(),
         });
         HaskellConfigFamily {
             _dir: dir,

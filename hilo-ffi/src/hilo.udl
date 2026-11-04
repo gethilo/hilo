@@ -24,6 +24,9 @@ dictionary GraphEdge {
     string rel;
     string? provenance;
     f64? confidence;
+    // GAP-121: "file" or "symbol". A consumer must not read
+    // confidence = 1.0 as symbol-level proof without it.
+    string? granularity;
 };
 
 dictionary GraphRelatedResult {

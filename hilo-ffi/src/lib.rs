@@ -53,6 +53,9 @@ pub struct GraphEdge {
     pub rel: String,
     pub provenance: Option<String>,
     pub confidence: Option<f64>,
+    /// GAP-121: `"file"` or `"symbol"`. A consumer must not read
+    /// `confidence: Some(1.0)` as symbol-level proof without it.
+    pub granularity: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -318,6 +321,7 @@ impl HiloHandle {
                 rel: e.rel,
                 provenance: Some(e.provenance),
                 confidence: Some(e.confidence),
+                granularity: Some(e.granularity),
             })
             .collect();
         Ok(GraphRelatedResult {
@@ -588,6 +592,7 @@ mod tests {
             rel: "imports".into(),
             provenance: "test".into(),
             confidence: 1.0,
+            granularity: "file".to_string(),
         }])
         .unwrap();
         drop(db);
@@ -790,6 +795,7 @@ mod tests {
             rel: "imports".into(),
             provenance: "test".into(),
             confidence: 1.0,
+            granularity: "file".to_string(),
         }])
         .unwrap();
         drop(db);
@@ -847,6 +853,7 @@ mod tests {
             rel: "imports".into(),
             provenance: "test".into(),
             confidence: 1.0,
+            granularity: "file".to_string(),
         }])
         .unwrap();
         drop(db);

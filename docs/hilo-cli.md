@@ -17,7 +17,8 @@ The `hilo` binary — entrypoint for all Hilo operations. Built with clap.
 | `hilo graph stats` | Aggregate graph statistics |
 | `hilo graph warm [--language <lang>] [--changed]` | Pre-parse all files into DuckDB cache |
 | `hilo graph module <name>` | All edges for a module |
-| `hilo graph untested` | Files with no test coverage edges |
+| `hilo graph untested [--granularity file\|function] [--json]` | Files with no test coverage edges (`file`, the default) or public FUNCTIONS with no test reference, named individually (`function`, GAP-121) |
+| `hilo graph reachable --from <entrypoint> [--json]` | Public functions with no static call path from the named entrypoint — the SYMBOL answer file reachability cannot give (GAP-121) |
 | `hilo graph understand <TASK> [--budget <N>]` | Multi-resolution harmonic context output for a natural-language task |
 | `hilo graph search <QUERY> [--limit <N>]` | Deterministic semantic code search (TF-IDF + BM25) |
 | `hilo graph rule-list` | List all rules defined in the manifest |

@@ -38,6 +38,7 @@ pub fn run(json: bool, path: Option<String>) -> Result<()> {
     let opts = AuditOptions {
         max_evidence: 10,
         coverage_links,
+        ..Default::default()
     };
     let report = audit::audit(&corpus, &root_str, &opts);
 

@@ -1775,6 +1775,7 @@ mod tests {
                 rel: "imports".into(),
                 provenance: "ast_exact".into(),
                 confidence: 1.0,
+                granularity: "file".to_string(),
             };
             hilo_graph::insert_edges_into(&guard, &[edge])
                 .expect("per-event connection must support the write-through insert");

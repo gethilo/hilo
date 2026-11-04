@@ -671,6 +671,61 @@ List source files with no test coverage.
 hilo graph untested
 ```
 
+**Granularity (GAP-121).** By default the answer is FILE-level: a source file
+is listed when no `tested_by` edge targets it. That says nothing about
+individual functions — a file whose test file exercises one of its two
+functions is omitted, which is a confident green over an untested function.
+`--granularity function` asks the symbol question instead and names the
+uncovered functions:
+
+```bash
+hilo graph untested --granularity function
+hilo graph untested --granularity function --json
+```
+
+```
+1 file(s) with uncovered public function(s) at function granularity (1 function(s)):
+  src/lib.ts (1/2 covered)
+    neverCalled  src/lib.ts:10
+```
+
+The function rule is stated in the output: a function is covered when at least
+one test file names it OUTSIDE its import/use declarations (an unused import is
+not a test), and the file-level `tested_by` edges are not consulted. The
+function view reads sources, so it needs no `graph warm` and cannot answer from
+a stale cache.
+
+`graph related` prints the granularity on every row, so a file-level claim can
+never be read as symbol-level proof:
+
+```
+src/lib.test.ts  →  local:./lib  (tested_by)  [ast_exact conf=1.00 granularity=file] (file-level: proves a test file targets this file, NOT that any function is exercised)
+```
+
+### `reachable`
+
+Public functions with no static call path from a named entrypoint.
+
+```bash
+hilo graph reachable --from src/main.ts
+hilo graph reachable --from src/main.ts --json
+```
+
+File reachability is almost always true in Go and TypeScript — importing a
+package makes every file in it "reachable" — so a composition-root gap (a
+function nothing ever calls) is invisible at file granularity. This roots the
+same reference closure at exactly the file named by `--from` and reports the
+SYMBOL answer:
+
+```
+reachable from src/main.ts: 1 public function(s) reachable, 1 with no static path
+  reachable    used  src/lib.ts:4
+  unreachable  neverCalled  src/lib.ts:10
+```
+
+A `--from` that names no source file is an error naming the path — never a
+report where everything is silently unreachable.
+
 ### `rule-list`
 
 List all rules defined in the manifest.
@@ -696,8 +751,10 @@ rules:
 ```
 
 The query runs against `.vfs/graph/graph.db`, which exposes the `edges`
-table only (`"from"`, `"to"`, `rel`, `provenance`, `confidence` — `from`/`to`
-are reserved words and need double quotes; the quoting rules and the full
+table only (`"from"`, `"to"`, `rel`, `provenance`, `confidence`, `granularity`
+— `from`/`to` are reserved words and need double quotes; `granularity` is
+`file` for every pre-GAP-121 row and `symbol` for a row whose endpoint names one
+definition; the quoting rules and the full
 error behavior are documented in `docs/hilo-ffi.md`, "Manifest `rules`
 schema"). There is no `files` table. Malformed SQL fails with
 `rule <name> failed: SQL parse error ...`, never a panic.

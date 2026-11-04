@@ -725,6 +725,7 @@ fn test_graph_untested_populated() {
             rel: "imports".into(),
             provenance: "ast_exact".into(),
             confidence: 1.0,
+            granularity: "file".to_string(),
         },
         Edge {
             from: "src/auth.go".into(),
@@ -732,6 +733,7 @@ fn test_graph_untested_populated() {
             rel: "imports".into(),
             provenance: "ast_exact".into(),
             confidence: 1.0,
+            granularity: "file".to_string(),
         },
         Edge {
             from: "src/auth_test.go".into(),
@@ -739,6 +741,7 @@ fn test_graph_untested_populated() {
             rel: "tested_by".into(),
             provenance: "heuristic".into(),
             confidence: 0.8,
+            granularity: "file".to_string(),
         },
     ])
     .unwrap();
@@ -796,6 +799,7 @@ fn test_graph_module_populated() {
             rel: "imports".into(),
             provenance: "ast_exact".into(),
             confidence: 1.0,
+            granularity: "file".to_string(),
         },
         Edge {
             from: "src/auth/session.go".into(),
@@ -803,6 +807,7 @@ fn test_graph_module_populated() {
             rel: "imports".into(),
             provenance: "ast_exact".into(),
             confidence: 1.0,
+            granularity: "file".to_string(),
         },
         Edge {
             from: "src/auth/login_test.go".into(),
@@ -810,6 +815,7 @@ fn test_graph_module_populated() {
             rel: "tested_by".into(),
             provenance: "heuristic".into(),
             confidence: 0.8,
+            granularity: "file".to_string(),
         },
         Edge {
             from: "src/main/server.go".into(),
@@ -817,6 +823,7 @@ fn test_graph_module_populated() {
             rel: "imports".into(),
             provenance: "ast_exact".into(),
             confidence: 1.0,
+            granularity: "file".to_string(),
         },
     ])
     .unwrap();
@@ -895,6 +902,7 @@ fn test_graph_search_finds_zero_edge_symbol_from_warm_parse_cache() {
             rel: "imports".into(),
             provenance: "ast_exact".into(),
             confidence: 1.0,
+            granularity: "file".to_string(),
         }])
         .unwrap();
     }
@@ -1726,6 +1734,7 @@ fn test_graph_related_resolves_nodes_and_keeps_valid_empty_results() {
             rel: "imports".into(),
             provenance: "ast_exact".into(),
             confidence: 1.0,
+            granularity: "file".to_string(),
         },
         Edge {
             from: "src/gap062_test.rs".into(),
@@ -1733,6 +1742,7 @@ fn test_graph_related_resolves_nodes_and_keeps_valid_empty_results() {
             rel: "tested_by".into(),
             provenance: "heuristic".into(),
             confidence: 0.8,
+            granularity: "file".to_string(),
         },
     ])
     .unwrap();

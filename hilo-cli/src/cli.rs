@@ -199,7 +199,24 @@ enum GraphCommand {
     /// Per-module statistics and test coverage.
     Module(ModuleArgs),
     /// List source files with no test coverage.
-    Untested,
+    ///
+    /// Default (`--granularity file`) is the historical FILE-level answer:
+    /// a source file is listed when no `tested_by` edge targets it (directly
+    /// or through its `pkg:`/`local:` node).
+    ///
+    /// `--granularity function` answers the GAP-121 question instead: which
+    /// public FUNCTIONS have no test that names them. A file whose sibling
+    /// test file exists but exercises only some of its functions is listed
+    /// here with the uncovered function names — the fact a file-level
+    /// `tested_by ... conf=1.00` edge structurally cannot express.
+    Untested(UntestedArgs),
+    /// List public functions with no static call path from an entrypoint.
+    ///
+    /// GAP-121: file reachability is almost always true in Go/TS because a
+    /// package import makes every file in it "reachable". This asks the
+    /// SYMBOL question instead: which declared functions does nothing on a
+    /// path from `--from` name.
+    Reachable(ReachableArgs),
     /// List all rules defined in the manifest.
     RuleList,
     /// Execute a named rule query against the dependency graph.
@@ -381,6 +398,35 @@ struct WarmArgs {
     /// Without this flag `graph warm` refuses to walk the home directory.
     #[arg(long)]
     allow_home: bool,
+}
+
+/// `graph untested` flags (GAP-121).
+#[derive(clap::Args)]
+struct UntestedArgs {
+    /// Coverage granularity: `file` (default, the historical behaviour) or
+    /// `function` (list files whose public functions have no test
+    /// reference, with the uncovered function names).
+    #[arg(long, value_parser = ["file", "function"])]
+    granularity: Option<String>,
+
+    /// Print the result as JSON (locked shape; adds `granularity` and the
+    /// coverage rule to the document).
+    #[arg(long)]
+    json: bool,
+}
+
+/// `graph reachable` flags (GAP-121).
+#[derive(clap::Args)]
+struct ReachableArgs {
+    /// The entrypoint file (repo-relative or absolute) the call path must
+    /// start from. Only symbols this file can statically reach are reported
+    /// reachable.
+    #[arg(long = "from")]
+    from: String,
+
+    /// Print the result as JSON.
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(clap::Args)]
@@ -678,7 +724,12 @@ pub fn run() -> anyhow::Result<()> {
             graph::run_search(&args.query, args.limit, args.no_symbols)
         }
         Commands::Graph(GraphCommand::Module(args)) => graph::run_module(&args.prefix),
-        Commands::Graph(GraphCommand::Untested) => graph::run_untested(),
+        Commands::Graph(GraphCommand::Untested(args)) => {
+            graph::run_untested(args.granularity.as_deref(), args.json)
+        }
+        Commands::Graph(GraphCommand::Reachable(args)) => {
+            graph::run_reachable(&args.from, args.json)
+        }
         Commands::Graph(GraphCommand::RuleList) => graph::run_rule_list(),
         Commands::Graph(GraphCommand::RuleCheck(args)) => graph::run_rule_check(&args.name),
         Commands::Graph(GraphCommand::Clean) => graph::run_clean(),

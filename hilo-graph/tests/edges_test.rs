@@ -12,6 +12,7 @@ fn edge(from: &str, to: &str, rel: &str) -> Edge {
         rel: rel.to_string(),
         provenance: "ast_exact".to_string(),
         confidence: 1.0,
+        granularity: "file".to_string(),
     }
 }
 

@@ -15,6 +15,7 @@ fn edge_chain(n: usize) -> Vec<Edge> {
             rel: "imports".into(),
             provenance: "ast_exact".to_string(),
             confidence: 1.0,
+            granularity: "file".to_string(),
         })
         .collect()
 }
@@ -28,6 +29,7 @@ fn edge_star(n: usize) -> Vec<Edge> {
             rel: "imports".into(),
             provenance: "ast_exact".to_string(),
             confidence: 1.0,
+            granularity: "file".to_string(),
         })
         .collect()
 }

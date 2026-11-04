@@ -16,6 +16,7 @@ fn edge_chain(n: usize) -> Vec<Edge> {
             rel: "imports".into(),
             provenance: "ast_exact".to_string(),
             confidence: 1.0,
+            granularity: "file".to_string(),
         })
         .collect()
 }
@@ -228,6 +229,7 @@ fn bench_extract_symbols_rust(c: &mut Criterion) {
         rel: "imports".into(),
         provenance: "ast_exact".to_string(),
         confidence: 1.0,
+        granularity: "file".to_string(),
     }];
     db.insert_edges(&edges).unwrap();
     let opts = SignalOpts {
