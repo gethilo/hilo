@@ -1721,6 +1721,16 @@ pub fn run_impact(path: &str, max_depth: u32, format: Option<&str>, external: bo
     // DF-WARPFS-133: an absolute path OUTSIDE the root now errors here
     // instead of silently answering "No dependents found".
     let path = normalize_subject(&project_root, path)?;
+
+    // DF-WARPFS-168: the same guard `graph related` carries — a same-HEAD
+    // tracked or untracked source addition is invisible to the cached graph,
+    // so `graph impact` would answer from an older source set at exit 0 with
+    // no signal. Warn (fail-open outside Git / with a corrupt ledger) before
+    // the cache hit so a wiring/blast-radius check cannot be mistaken for the
+    // current tree.
+    if let Some(reason) = hilo_graph::freshness::check_query_staleness(&project_root) {
+        eprintln!("warning: graph is out of date — {reason}");
+    }
     // A bare subject that is neither a real file nor an existing graph node is
     // eligible for exact symbol-owner resolution. Existing path/pkg/sys forms
     // stay on their historical path unchanged; ambiguity is returned by the
@@ -3657,6 +3667,19 @@ pub fn run_understand(task: &str, budget: Option<usize>, tier: Option<&str>) -> 
     Ok(())
 }
 
+/// REV-WARPFS-12: classify a search hit as a non-file graph node.
+///
+/// The semantic index contains `pkg:`, `type:`, `iface:` and `sys:` nodes
+/// alongside real file paths. They are legitimate hits (a crate or trait name
+/// is often what the caller meant) but they are not openable files, so the
+/// CLI labels them instead of printing them bare.
+fn search_node_kind(path: &str) -> Option<&'static str> {
+    ["pkg", "type", "iface", "sys"].into_iter().find(|kind| {
+        path.strip_prefix(kind)
+            .is_some_and(|rest| rest.starts_with(':'))
+    })
+}
+
 /// `hilo graph search <query>` — deterministic semantic code search.
 ///
 /// Uses TF-IDF + BM25 + Reciprocal Rank Fusion over all graph nodes.
@@ -3722,7 +3745,17 @@ pub fn run_search(query: &str, limit: Option<usize>, no_symbols: bool) -> Result
         // GAP-081-P3: provenance prints unmodified, so an edge-aware hit
         // renders its marker directly, e.g.
         // `0.0200  src/checkoutservice/main.go  [edge:service_call]`.
-        println!("{:.4}  {}  [{}]", r.score, r.file_path, r.provenance);
+        // REV-WARPFS-12: the index also holds non-file nodes (`pkg:`, `type:`,
+        // `iface:`, `sys:`), which used to print as if they were files an agent
+        // could open. Label the kind explicitly so a node row is never mistaken
+        // for a path.
+        match search_node_kind(&r.file_path) {
+            Some(kind) => println!(
+                "{:.4}  {}  [{}] [node:{}]",
+                r.score, r.file_path, r.provenance, kind
+            ),
+            None => println!("{:.4}  {}  [{}]", r.score, r.file_path, r.provenance),
+        }
         if !r.symbols.is_empty() {
             println!("         symbols: {}", r.symbols.join(", "));
         }
@@ -4219,6 +4252,21 @@ fn clean_graph_dir(cwd: &Path) -> Result<usize> {
 mod tests {
     use super::*;
     use std::fs;
+
+    // REV-WARPFS-12: a search hit that is a graph node must be distinguishable
+    // from a real file path, so an agent never tries to open `pkg:serde`.
+    #[test]
+    fn search_node_kind_labels_pseudo_nodes_only() {
+        assert_eq!(search_node_kind("pkg:serde"), Some("pkg"));
+        assert_eq!(search_node_kind("type:Connection"), Some("type"));
+        assert_eq!(search_node_kind("iface:Store"), Some("iface"));
+        assert_eq!(search_node_kind("sys:metacall"), Some("sys"));
+        assert_eq!(search_node_kind("src/main.rs"), None);
+        assert_eq!(search_node_kind("hilo-cli/src/commands/graph.rs"), None);
+        // A real file whose NAME merely starts with a kind word stays a file.
+        assert_eq!(search_node_kind("pkg_helpers.py"), None);
+        assert_eq!(search_node_kind("types/index.ts"), None);
+    }
     use tempfile::TempDir;
 
     /// Block until the wall clock is at least one second past `mtime`, so a
