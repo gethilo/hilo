@@ -567,12 +567,22 @@ fn live_fingerprint(path: &std::path::Path) -> Option<(u64, u64)> {
 }
 
 /// Pseudo-nodes are import STRINGS, not openable documents (GAP-091).
+///
+/// REV-WARPFS-12: return the KIND as well, so a consumer that renders a search
+/// hit (the CLI) can label a node row instead of printing it as if it were a
+/// path an agent could open. One classifier, used by both the indexer and the
+/// renderer, so the two can never drift.
+pub fn pseudo_node_kind(path: &str) -> Option<&'static str> {
+    const KINDS: [&str; 7] = ["pkg", "local", "sys", "std", "external", "type", "iface"];
+    KINDS.into_iter().find(|kind| {
+        path.strip_prefix(kind)
+            .is_some_and(|rest| rest.starts_with(':'))
+    })
+}
+
+/// Pseudo-nodes are import STRINGS, not openable documents (GAP-091).
 fn is_pseudo_node_prefix(path: &str) -> bool {
-    path.starts_with("pkg:")
-        || path.starts_with("local:")
-        || path.starts_with("sys:")
-        || path.starts_with("std:")
-        || path.starts_with("external:")
+    pseudo_node_kind(path).is_some()
 }
 
 /// A cached entry still describes the live file: same mtime, same size.
@@ -1689,6 +1699,37 @@ mod tests {
 
     fn edge(from: &str, to: &str, rel: &str) -> Edge {
         Edge::new(from, to, rel)
+    }
+
+    /// REV-WARPFS-12: every pseudo-node prefix the indexer emits must be
+    /// recognised by the ONE classifier the CLI also renders with, so a node
+    /// row can never be printed as an openable path.
+    #[test]
+    fn pseudo_node_kind_covers_every_index_prefix() {
+        for path in [
+            "pkg:hilo_graph::ImpactResult",
+            "local:./thing",
+            "sys:metacall",
+            "std:collections",
+            "external:serde",
+            "type:Connection",
+            "iface:Store",
+        ] {
+            assert!(
+                is_pseudo_node_prefix(path),
+                "{path} must be treated as a node, not a path"
+            );
+            assert!(pseudo_node_kind(path).is_some());
+        }
+        for path in [
+            "src/main.rs",
+            "hilo-graph/src/semantic.rs",
+            "pkg.lock",
+            "types.ts",
+        ] {
+            assert!(!is_pseudo_node_prefix(path), "{path} is a real path");
+            assert_eq!(pseudo_node_kind(path), None);
+        }
     }
 
     // ── GAP-116: intent-to-owner retrieval ───────────────────────────────
