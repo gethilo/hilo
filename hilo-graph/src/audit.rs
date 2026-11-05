@@ -429,17 +429,28 @@ pub fn audit(files: &[(Language, String, String)], root: &str, opts: &AuditOptio
             .or_insert_with(|| (0, 0, extractor_rule(*lang)));
         census.0 += 1;
 
+        // DF-WARPFS-164: decide extractor support BEFORE the test/generated
+        // skip. Skipping first meant a corpus whose only files in an
+        // unsupported language were tests still recorded that language in the
+        // census but never in `unknown_files`, so the audit claimed "every
+        // source file … nothing was left unaudited" while its own census named
+        // a language with no extractor. A test file defines no audited symbol,
+        // but the language still must not be advertised as audited.
+        let has_extractor = AUDIT_LANGUAGES.contains(lang);
+        if !has_extractor {
+            unsupported_langs.insert(language_name(*lang).to_string());
+        }
+
         // Test files are the LINK SOURCE, not the audited surface; generated
         // files are not hand-written surface either. Both stay in the corpus
-        // (they can reference symbols) but define no audited symbol and, when
-        // their language has no extractor, are not counted as `unknown` noise
-        // either — the census still names the language.
+        // (they can reference symbols) but define no audited symbol and are not
+        // counted as `unknown` NOISE either — the census still names the
+        // language, and `unsupported_langs` above still records it.
         if is_test[i] || role == "generated" {
             continue;
         }
 
-        if !AUDIT_LANGUAGES.contains(lang) {
-            unsupported_langs.insert(language_name(*lang).to_string());
+        if !has_extractor {
             unknown_files.push(rel.clone());
             continue;
         }
@@ -649,9 +660,16 @@ pub fn audit(files: &[(Language, String, String)], root: &str, opts: &AuditOptio
         .join(", ");
     let unknown = UnknownReport {
         count: unknown_files.len(),
-        rule: if unknown_files.is_empty() {
+        rule: if unknown_files.is_empty() && unknown_langs.is_empty() {
             format!(
                 "every source file in the corpus is in a language with a public-function extractor ({supported_list}); nothing was left unaudited"
+            )
+        } else if unknown_files.is_empty() {
+            // DF-WARPFS-164: the census names a language we cannot read, but no
+            // NON-test file was in it. Still not "everything was audited".
+            format!(
+                "no audited (non-test, non-generated) source file was left unaudited, but the corpus contains test/generated file(s) in {} — a language with no public-function extractor — so that surface is NOT audited; supported languages: {supported_list}",
+                unknown_langs.join(", ")
             )
         } else {
             format!(
@@ -1131,6 +1149,49 @@ mod tests {
             .into_iter()
             .map(|(n, _)| n)
             .collect()
+    }
+
+    /// DF-WARPFS-164: a test file in a language with no extractor must not let
+    /// the audit claim "nothing was left unaudited". The census sees the
+    /// language, so the report must admit it cannot read that surface.
+    #[test]
+    fn unsupported_language_test_files_are_not_claimed_as_audited() {
+        let files = corpus(&[
+            ("src/lib.rs", "pub fn used() {}\nfn main() { used(); }\n"),
+            // A Ruby test file: ruby has NO public-function extractor, and
+            // `is_test_file` skips it before symbol extraction.
+            ("tests/widget_test.rb", "require 'widget'\n"),
+        ]);
+        let report = audit(&files, "/repo", &AuditOptions::default());
+        assert!(
+            report.unknown.languages.iter().any(|l| l == "ruby"),
+            "ruby must be named as an unsupported language: {:?}",
+            report.unknown.languages
+        );
+        assert!(
+            !report.unknown.rule.contains("nothing was left unaudited"),
+            "must not claim full coverage: {}",
+            report.unknown.rule
+        );
+        assert!(
+            report.unknown.rule.contains("NOT audited"),
+            "must state the surface is not audited: {}",
+            report.unknown.rule
+        );
+    }
+
+    /// The positive control: a corpus entirely in extractor languages keeps the
+    /// full-coverage claim.
+    #[test]
+    fn supported_only_corpus_keeps_full_coverage_claim() {
+        let files = corpus(&[("src/lib.rs", "pub fn used() {}\nfn main() { used(); }\n")]);
+        let report = audit(&files, "/repo", &AuditOptions::default());
+        assert!(
+            report.unknown.rule.contains("nothing was left unaudited"),
+            "supported-only corpus should still claim coverage: {}",
+            report.unknown.rule
+        );
+        assert!(report.unknown.languages.is_empty());
     }
 
     /// AC4: a fixture with one of each lands exactly one symbol in each bucket.
