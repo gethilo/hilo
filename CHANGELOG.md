@@ -4,6 +4,8 @@ All notable changes to Hilo are documented in this file.
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-11-08
+
 ### Added
 
 - **Git-aware graph staleness detection** (DF-WARPFS-83). The post-merge
@@ -167,8 +169,6 @@ All notable changes to Hilo are documented in this file.
   carried is unchanged in substance but is now an explicit opt-in for the
   hosts that need it: `CARGO_BUILD_JOBS=1 cargo build --release` on a ≤4GB
   box, documented in README → *Low-memory builders (≤4GB RAM)*.
-
-## [0.4.0] — 2026-10-04
 
 ### Fixed
 
