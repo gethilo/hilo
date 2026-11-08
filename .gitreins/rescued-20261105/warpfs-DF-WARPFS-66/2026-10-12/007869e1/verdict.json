@@ -1,0 +1,39 @@
+{
+  "task_id": "df-warpfs-66-sync-hook",
+  "task_title": "DF-WARPFS-66: reentrant S3 sync hook initialization",
+  "task_criteria": [
+    "On the merged implementation, hilo mount --triggers with an S3 mounts.yaml must not panic; the backend sync hook must enable with its log line, and regression coverage must exercise the runtime-context failure path."
+  ],
+  "passed": true,
+  "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-66",
+  "branch": "wt/DF-WARPFS-66",
+  "commit": "c6183e2d8d38a08beb5013862bea822a498a5448",
+  "items": [],
+  "stages": {},
+  "summary": "Judge Result: df-warpfs-66-sync-hook\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-10-12T20:47:44.840484",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-10-12T20:47:44.883847+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 7739,
+        "truncated": false,
+        "source": "git show c6183e2d8d38"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 34234,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "df-warpfs-66-sync-hook"
+  }
+}

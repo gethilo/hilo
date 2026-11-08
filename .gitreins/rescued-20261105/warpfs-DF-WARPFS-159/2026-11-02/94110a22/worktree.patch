@@ -1,0 +1,17 @@
+diff --git a/.gitreins/tasks.yaml b/.gitreins/tasks.yaml
+index 62e19bd3..58292509 100644
+--- a/.gitreins/tasks.yaml
++++ b/.gitreins/tasks.yaml
+@@ -2613,3 +2613,12 @@ tasks:
+   status: complete
+   created_at: '2026-11-02T12:26:37.566290+00:00'
+   completed_at: '2026-11-02T13:19:07.606563+00:00'
++- id: DF-WARPFS-159
++  title: Foreign-repository coverage chain must fail honestly
++  criteria:
++  - On the published commit, coverage-links, test-classes, and rollup refuse a foreign
++    repository with a named self-only scope limitation; focused regression tests pass
++    and self behavior remains green.
++  status: complete
++  created_at: '2026-11-02T17:24:12.317249+00:00'
++  completed_at: '2026-11-02T17:24:14.710934+00:00'

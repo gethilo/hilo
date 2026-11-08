@@ -1,0 +1,39 @@
+{
+  "task_id": "DF-WARPFS-159",
+  "task_title": "Foreign-repository coverage chain must fail honestly",
+  "task_criteria": [
+    "On the published commit, coverage-links, test-classes, and rollup refuse a foreign repository with a named self-only scope limitation; focused regression tests pass and self behavior remains green."
+  ],
+  "passed": true,
+  "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-159",
+  "branch": "wt/DF-WARPFS-159",
+  "commit": "5fa0ca14b8dcb68e286f4e094a22b725e42f7609",
+  "items": [],
+  "stages": {},
+  "summary": "Judge Result: DF-WARPFS-159\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-11-02T17:28:24.861585",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-11-02T17:28:24.885549+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 24999,
+        "truncated": false,
+        "source": "git show 5fa0ca14b8dc"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 727,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "DF-WARPFS-159"
+  }
+}

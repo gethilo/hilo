@@ -1,0 +1,192 @@
+commit c6183e2d8d38a08beb5013862bea822a498a5448
+Author:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+AuthorDate: Mon Oct 12 15:32:13 2026 -0500
+Commit:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+CommitDate: Mon Oct 12 15:32:13 2026 -0500
+
+    fix: make S3 sync hook initialization runtime-safe
+    
+    Co-authored-by: Alexis Okuwa <wojonstech@gmail.com>
+---
+ hilo-backends/src/s3.rs        | 68 +++++++++++++++++++++++++++++++++++++-----
+ hilo-triggers/src/sync_hook.rs | 67 +++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 128 insertions(+), 7 deletions(-)
+
+diff --git a/hilo-backends/src/s3.rs b/hilo-backends/src/s3.rs
+index cca416aa..ec82782d 100644
+--- a/hilo-backends/src/s3.rs
++++ b/hilo-backends/src/s3.rs
+@@ -1102,6 +1102,45 @@ impl std::fmt::Debug for S3Driver {
+     }
+ }
+ 
++fn build_runtime_and_client(
++    endpoint: S3Endpoint,
++    region: String,
++    cache_dir: PathBuf,
++) -> Result<(tokio::runtime::Runtime, S3Client), crate::backend::BackendError> {
++    let build = move || {
++        let runtime = tokio::runtime::Builder::new_current_thread()
++            .enable_all()
++            .build()
++            .map_err(|e| crate::backend::BackendError::BucketError(e.to_string()))?;
++        let client = runtime.block_on(S3Client::with_endpoint(
++            &endpoint, &region, &cache_dir, 0, true,
++        ))?;
++        Ok((runtime, client))
++    };
++
++    // `Runtime::block_on` panics when called from any Tokio runtime thread.
++    // Build on a plain OS thread in that case; the returned runtime is moved
++    // back to the synchronous driver and remains the owner of Backend calls.
++    if tokio::runtime::Handle::try_current().is_ok() {
++        std::thread::Builder::new()
++            .name("hilo-s3-driver-init".into())
++            .spawn(build)
++            .map_err(|e| {
++                crate::backend::BackendError::BucketError(format!(
++                    "failed to spawn S3 client initialization thread: {e}"
++                ))
++            })?
++            .join()
++            .map_err(|_| {
++                crate::backend::BackendError::BucketError(
++                    "S3 client initialization thread panicked".into(),
++                )
++            })?
++    } else {
++        build()
++    }
++}
++
+ impl S3Driver {
+     pub fn new(cfg: &crate::backend::BackendConfig) -> Result<Self, crate::backend::BackendError> {
+         let bucket = cfg.bucket.clone().ok_or_else(|| {
+@@ -1110,10 +1149,6 @@ impl S3Driver {
+         let region = cfg.region.clone().unwrap_or_else(|| "us-east-1".into());
+         let prefix = cfg.prefix.clone().unwrap_or_default();
+         let cache_dir = std::env::temp_dir().join(format!("hilo-s3driver-{}", cfg.name));
+-        let runtime = tokio::runtime::Builder::new_current_thread()
+-            .enable_all()
+-            .build()
+-            .map_err(|e| crate::backend::BackendError::BucketError(e.to_string()))?;
+         // DF-WARPFS-12: an explicit config endpoint beats AWS_ENDPOINT_URL;
+         // without one, resolve from the environment and DISCLOSE what was
+         // resolved (default-chain = the operator's ambient AWS config).
+@@ -1122,9 +1157,7 @@ impl S3Driver {
+             _ => S3Endpoint::from_env(),
+         };
+         let endpoint_display = endpoint.display().to_string();
+-        let client = runtime.block_on(S3Client::with_endpoint(
+-            &endpoint, &region, &cache_dir, 0, true,
+-        ))?;
++        let (runtime, client) = build_runtime_and_client(endpoint, region, cache_dir)?;
+         Ok(Self {
+             runtime,
+             client,
+@@ -1303,6 +1336,27 @@ mod s3driver_tests {
+         assert_eq!(strip_prefix_key("other/x.txt", "workspace"), "other/x.txt");
+     }
+ 
++    #[tokio::test(flavor = "current_thread")]
++    async fn s3driver_new_does_not_enter_nested_runtime() {
++        let cfg = crate::backend::BackendConfig {
++            kind: crate::backend::BackendKind::S3,
++            name: "runtime-context-test".into(),
++            bucket: Some("test-bucket".into()),
++            endpoint: Some("http://127.0.0.1:1".into()),
++            ..Default::default()
++        };
++
++        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| S3Driver::new(&cfg)));
++        assert!(
++            result.is_ok(),
++            "S3Driver::new must not panic inside a Tokio runtime"
++        );
++        let driver = result
++            .unwrap()
++            .expect("explicit endpoint client construction should not require network access");
++        assert_eq!(driver.endpoint(), "http://127.0.0.1:1");
++    }
++
+     /// Live round-trip, gated on AWS env (spec §15). Skips when
+     /// AWS_ACCESS_KEY_ID or AWS_TEST_BUCKET are absent.
+     #[test]
+diff --git a/hilo-triggers/src/sync_hook.rs b/hilo-triggers/src/sync_hook.rs
+index 31090694..66068760 100644
+--- a/hilo-triggers/src/sync_hook.rs
++++ b/hilo-triggers/src/sync_hook.rs
+@@ -381,6 +381,73 @@ mod tests {
+         .unwrap()
+     }
+ 
++    fn write_s3_mount(ws: &Path, bucket: Option<&str>) {
++        let entry = MountEntry {
++            name: "s3-test".into(),
++            kind: "s3".into(),
++            bucket: bucket.map(str::to_owned),
++            prefix: None,
++            region: Some("us-east-1".into()),
++            endpoint: Some("http://127.0.0.1:1".into()),
++            remote: None,
++            tool: Some("native".into()),
++            mode: Some("mirror".into()),
++            ignore_file: None,
++            poll_secs: Some(60),
++            no_default_ignores: None,
++            at: None,
++        };
++        std::fs::create_dir_all(ws.join(".vfs/backends")).unwrap();
++        std::fs::write(
++            ws.join(".vfs/backends/mounts.yaml"),
++            serde_yaml::to_string(&vec![entry]).unwrap(),
++        )
++        .unwrap();
++    }
++
++    #[tokio::test(flavor = "current_thread")]
++    async fn s3_mount_hook_constructs_inside_tokio_runtime() {
++        let ws = tempfile::TempDir::new().unwrap();
++        write_s3_mount(ws.path(), Some("test-bucket"));
++
++        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
++            SyncHook::new(SyncHookConfig {
++                workspace_root: ws.path().to_path_buf(),
++                mounts_yaml: ws.path().join(".vfs/backends/mounts.yaml"),
++                debounce_ms: DEFAULT_DEBOUNCE_MS,
++                settle_ms: DEFAULT_SETTLE_MS,
++                poll_secs: DEFAULT_POLL_SECS,
++            })
++        }));
++        assert!(
++            result.is_ok(),
++            "SyncHook::new must not panic while the trigger runtime is active"
++        );
++        let hook = result
++            .unwrap()
++            .expect("S3 mount should construct without network access");
++        assert_eq!(hook.mount_count(), 1);
++    }
++
++    #[tokio::test(flavor = "current_thread")]
++    async fn s3_mount_hook_reports_backend_configuration_error() {
++        let ws = tempfile::TempDir::new().unwrap();
++        write_s3_mount(ws.path(), None);
++
++        let result = SyncHook::new(SyncHookConfig {
++            workspace_root: ws.path().to_path_buf(),
++            mounts_yaml: ws.path().join(".vfs/backends/mounts.yaml"),
++            debounce_ms: DEFAULT_DEBOUNCE_MS,
++            settle_ms: DEFAULT_SETTLE_MS,
++            poll_secs: DEFAULT_POLL_SECS,
++        });
++        let error = result.expect_err("invalid S3 configuration must disable the hook");
++        assert!(
++            error.to_string().contains("S3Driver needs `bucket`"),
++            "backend error should preserve its configuration detail: {error}"
++        );
++    }
++
+     #[test]
+     fn record_event_marks_dirty_and_skips_ignored() {
+         let (ws, _backend) = test_workspace();

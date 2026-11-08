@@ -1,0 +1,75 @@
+{
+  "task_id": "DF-WARPFS-158",
+  "task_title": "Fix graph understand budget enforcement and empty DETAIL tier",
+  "task_criteria": [
+    "On the delivered DF-WARPFS-158 source tree, harmonic graph understand output including MAP, SIGNATURES, DETAIL, and any footer is bounded by token_budget*4 for normal budgets; budget 1000 is strictly shorter than 6000; DETAIL considers later candidates after an oversized block; when none fit, output names a skipped path and block size; focused formatter tests pass."
+  ],
+  "passed": true,
+  "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-158",
+  "branch": "wt/DF-WARPFS-158",
+  "commit": "e998e2ec6f7aa994a5ded94410375551c5cd70de",
+  "items": [],
+  "stages": {
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 On the delivered DF-WARPFS-158 source tree, harmonic graph understand output including MAP, SIGNATURES, DETAIL, and any footer is bounded by token_budget*4 for normal budgets; budget 1000 is strictly shorter than 6000; DETAIL considers later candidates after an oversized block; when none fit, output names a skipped path and block size; focused formatter tests pass.: Fresh run: `cd hilo-graph && cargo test --lib signal::tests::understand_` -> \"test result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 529 filtered out; finished in 3.16s\" (exit 0), including understand_harmonic_output_stays_within_total_budget (asserts text.len() <= budget*4 at 1000/6000/40000), understand_budget_1000_is_strictly_smaller_than_6000, understand_detail_tier_names_a_budget_too_small_for_one_block (asserts \"(no files in this tier\" + \"no detail block fits\"), understand_budget_split_is_observable_in_detail_blocks (200->0 blocks, 6000->>0, 40000->strictly more). Code: hilo-graph/src/signal.rs:373 budget_chars = token_budget*4; :390-397 footer length reserved then truncate_to_budget; :2719-2727 tier split 15/25/60 of available; :2806-2835 DETAIL loop uses append_if_fits per block and pushes non-fitting candidates to `skipped` instead of breaking (later candidates still considered), and when rendered==0 emits \"no detail block fits the {detail_budget}-char budget; skipped {path} ({size} chars)\"; :2841 truncate_to_budget(output, available) bounds the whole response (MAP+SIGNATURES+DETAIL+footer). CLI uses the same core: hilo-cli/src/commands/graph.rs:3330 and :4404 call hilo_graph::signal::understand_with_symbols, which delegates to understand_with_source_and_symbols (signal.rs:256-273).\nBudget enforcement, monotonicity, DETAIL skip-not-break with skipped-path/size reporting, and the focused formatter tests all verified by a fresh passing test run and code inspection.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 On the delivered DF-WARPFS-158 source tree, harmonic graph understand output including MAP, SIGNATURES, DETAIL, and any footer is bounded by token_budget*4 for normal budgets; budget 1000 is strictly shorter than 6000; DETAIL considers later candidates after an oversized block; when none fit, output names a skipped path and block size; focused formatter tests pass.: Fresh run: `cd hilo-graph && cargo test --lib signal::tests::understand_` -> \"test result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 529 filtered out; finished in 3.16s\" (exit 0), including understand_harmonic_output_stays_within_total_budget (asserts text.len() <= budget*4 at 1000/6000/40000), understand_budget_1000_is_strictly_smaller_than_6000, understand_detail_tier_names_a_budget_too_small_for_one_block (asserts \"(no files in this tier\" + \"no detail block fits\"), understand_budget_split_is_observable_in_detail_blocks (200->0 blocks, 6000->>0, 40000->strictly more). Code: hilo-graph/src/signal.rs:373 budget_chars = token_budget*4; :390-397 footer length reserved then truncate_to_budget; :2719-2727 tier split 15/25/60 of available; :2806-2835 DETAIL loop uses append_if_fits per block and pushes non-fitting candidates to `skipped` instead of breaking (later candidates still considered), and when rendered==0 emits \"no detail block fits the {detail_budget}-char budget; skipped {path} ({size} chars)\"; :2841 truncate_to_budget(output, available) bounds the whole response (MAP+SIGNATURES+DETAIL+footer). CLI uses the same core: hilo-cli/src/commands/graph.rs:3330 and :4404 call hilo_graph::signal::understand_with_symbols, which delegates to understand_with_source_and_symbols (signal.rs:256-273).\nBudget enforcement, monotonicity, DETAIL skip-not-break with skipped-path/size reporting, and the focused formatter tests all verified by a fresh passing test run and code inspection.",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "On the delivered DF-WARPFS-158 source tree, harmonic graph understand output including MAP, SIGNATURES, DETAIL, and any footer is bounded by token_budget*4 for normal budgets; budget 1000 is strictly shorter than 6000; DETAIL considers later candidates after an oversized block; when none fit, output names a skipped path and block size; focused formatter tests pass.",
+                "status": "PASS",
+                "detail": "Fresh run: `cd hilo-graph && cargo test --lib signal::tests::understand_` -> \"test result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 529 filtered out; finished in 3.16s\" (exit 0), including understand_harmonic_output_stays_within_total_budget (asserts text.len() <= budget*4 at 1000/6000/40000), understand_budget_1000_is_strictly_smaller_than_6000, understand_detail_tier_names_a_budget_too_small_for_one_block (asserts \"(no files in this tier\" + \"no detail block fits\"), understand_budget_split_is_observable_in_detail_blocks (200->0 blocks, 6000->>0, 40000->strictly more). Code: hilo-graph/src/signal.rs:373 budget_chars = token_budget*4; :390-397 footer length reserved then truncate_to_budget; :2719-2727 tier split 15/25/60 of available; :2806-2835 DETAIL loop uses append_if_fits per block and pushes non-fitting candidates to `skipped` instead of breaking (later candidates still considered), and when rendered==0 emits \"no detail block fits the {detail_budget}-char budget; skipped {path} ({size} chars)\"; :2841 truncate_to_budget(output, available) bounds the whole response (MAP+SIGNATURES+DETAIL+footer). CLI uses the same core: hilo-cli/src/commands/graph.rs:3330 and :4404 call hilo_graph::signal::understand_with_symbols, which delegates to understand_with_source_and_symbols (signal.rs:256-273).",
+                "resolution_probability": 0.11
+              }
+            ],
+            "summary": "Budget enforcement, monotonicity, DETAIL skip-not-break with skipped-path/size reporting, and the focused formatter tests all verified by a fresh passing test run and code inspection.",
+            "provenance": {
+              "model": "deepseek-v4-flash",
+              "base_url_source": "GITREINS_LLM_BASE_URL",
+              "api_key_source": "GITREINS_LLM_API_KEY"
+            }
+          }
+        }
+      ],
+      "model": "deepseek-v4-flash",
+      "base_url_source": "GITREINS_LLM_BASE_URL",
+      "api_key_source": "GITREINS_LLM_API_KEY"
+    }
+  },
+  "summary": "Judge Result: DF-WARPFS-158\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 On the delivered DF-WARPFS-158 source tree, harmonic graph understand output including MAP, SIGNATURES, DETAIL, and any footer is bounded by token_budget*4 for normal budgets; budget 1000 is strictly shorter than 6000; DETAIL considers later candidates after an oversized block; when none fit, output names a skipped path and block size; focused formatter tests pass.: Fresh run: `cd hilo-graph && cargo test --lib signal::tests::understand_` -> \"test result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 529 filtered out; finished in 3.16s\" (exit 0), including understand_harmonic_output_stays_within_total_budget (asserts text.len() <= budget*4 at 1000/6000/40000), understand_budget_1000_is_strictly_smaller_than_6000, understand_detail_tier_names_a_budget_too_small_for_one_block (asserts \"(no files in this tier\" + \"no detail block fits\"), understand_budget_split_is_observable_in_detail_blocks (200->0 blocks, 6000->>0, 40000->strictly more). Code: hilo-graph/src/signal.rs:373 budget_chars = token_budget*4; :390-397 footer length reserved then truncate_to_budget; :2719-2727 tier split 15/25/60 of available; :2806-2835 DETAIL loop uses append_if_fits per block and pushes non-fitting candidates to `skipped` instead of breaking (later candidates still considered), and when rendered==0 emits \"no detail block fits the {detail_budget}-char budget; skipped {path} ({size} chars)\"; :2841 truncate_to_budget(output, available) bounds the whole response (MAP+SIGNATURES+DETAIL+footer). CLI uses the same core: hilo-cli/src/commands/graph.rs:3330 and :4404 call hilo_graph::signal::understand_with_symbols, which delegates to understand_with_source_and_symbols (signal.rs:256-273).\nBudget enforcement, monotonicity, DETAIL skip-not-break with skipped-path/size reporting, and the focused formatter tests all verified by a fresh passing test run and code inspection.\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-11-01T07:18:41.028285",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-11-01T07:18:41.078036+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 17008,
+        "truncated": false,
+        "source": "git show e998e2ec6f7a"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 916,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "DF-WARPFS-158"
+  }
+}

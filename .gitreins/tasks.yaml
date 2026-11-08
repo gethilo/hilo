@@ -2642,3 +2642,23 @@ tasks:
   status: complete
   created_at: '2026-11-03T05:40:09.118606+00:00'
   completed_at: '2026-11-03T06:32:40.351208+00:00'
+- id: DF-WARPFS-85
+  title: Kotlin parser drops template .kt imports
+  criteria:
+  - 'PASS: both template files contribute their import edges (impact = 176/176 ==
+    grep) and warm''s coverage line accounts for every excluded/unparsed file by path'
+  status: in_progress
+  created_at: '2026-11-03T07:52:30.274446+00:00'
+- id: PERF-015
+  title: 'Hoist local: spec resolver to one build per BFS traversal'
+  criteria:
+  - 'PASS: one local: reverse index per traversal - instrumented eprintln counter
+    inside LocalSpecResolver::from_edges prints at most 1 build for one hilo graph
+    understand invocation (HEAD a002ddb2 measured 245), counter not shipped. PASS:
+    same-command A/B on same corpus reports patched mean <= 0.75s vs baseline 1.432s
+    and stdout byte-identical for 3 task strings. PASS: no new staleness window -
+    index built per traversal, never stored on GraphDB or process-global. PASS: related()
+    keeps public signature and historical behavior when no index supplied; cargo test
+    -p hilo_graph --lib and scripts/rust-lint.sh green.'
+  status: in_progress
+  created_at: '2026-11-04T05:55:47.356580+00:00'

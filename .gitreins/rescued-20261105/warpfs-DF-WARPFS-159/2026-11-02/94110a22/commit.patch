@@ -1,0 +1,481 @@
+commit 5fa0ca14b8dcb68e286f4e094a22b725e42f7609
+Author:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+AuthorDate: Mon Nov 2 12:12:23 2026 -0500
+Commit:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+CommitDate: Mon Nov 2 12:12:23 2026 -0500
+
+    fix(graph): scope-gate coverage-links, test-classes and rollup to the Hilo repo itself (Addresses DF-WARPFS-159)
+    
+    The COV chain (graph surfaces -> coverage-links -> test-classes -> rollup)
+    models the Hilo repository itself only (GAP-112). On a warmed foreign tree the
+    downstream commands used to fail on a missing .vfs/graph artifact and point
+    the user at `hilo graph surfaces` — a command that refuses on that very tree.
+    Each downstream run() now takes the shared require_self_scope precondition
+    before reading any artifact and refuses with the self-only limitation named;
+    planted foreign artifacts are never touched. Completes the prior surfaces.rs
+    work (helper + shared scope fixtures), fixing the helper's non-Display Path
+    format; the two cli.rs fixtures that exercise downstream COV logic through
+    the compiled binary now plant the GAP-112 self markers; docs/cli-reference.md
+    documents the shared gate.
+    
+    ch:trace row=DF-WARPFS-159 spec=docs/traceability-doctrine.md#marker wave=none:serial-worker test=hilo-cli/src/commands/coverage_links.rs::tests::warmed_foreign_repo_gets_the_named_scope_error_and_no_artifact_writes+hilo-cli/src/commands/test_classes.rs::tests::warmed_foreign_repo_gets_the_named_scope_error_and_no_artifact_writes+hilo-cli/src/commands/rollup.rs::tests::warmed_foreign_repo_gets_the_named_scope_error_and_no_artifact_writes doc=docs/cli-reference.md#scope evidence=none:worker-only witness=none:no-live-foreign-repo-witness verdict=none:foreman-judge-pending commit=none:self-sha memory=none:not-saved
+    
+    Co-authored-by: Alexis Okuwa <wojonstech@gmail.com>
+---
+ docs/cli-reference.md                   |   7 ++
+ hilo-cli/src/commands/coverage_links.rs |  47 +++++++++++
+ hilo-cli/src/commands/rollup.rs         |  56 ++++++++++++-
+ hilo-cli/src/commands/surfaces.rs       | 138 +++++++++++++++++++++++++++++---
+ hilo-cli/src/commands/test_classes.rs   |  52 ++++++++++++
+ hilo-cli/tests/cli.rs                   |  26 ++++++
+ 6 files changed, 313 insertions(+), 13 deletions(-)
+
+diff --git a/docs/cli-reference.md b/docs/cli-reference.md
+index e50d9369..600a0c4b 100644
+--- a/docs/cli-reference.md
++++ b/docs/cli-reference.md
+@@ -743,6 +743,13 @@ The classification walks up from the current directory (like `cargo` finding
+ `Cargo.toml`), so a run inside a Hilo subdirectory still reads as `self`; it
+ stops at the first repository root that is not Hilo, so a foreign checkout
+ nested under a Hilo tree reads as `foreign`.
++
++The rest of the COV chain shares this gate: `graph coverage-links`,
++`graph test-classes`, and `graph rollup` model the Hilo repository itself
++only, so on a foreign tree each refuses up front with that limitation named —
++never the missing-artifact instruction that would send the user to
++`graph surfaces`, a command that refuses on this very tree.
++
+ ### `test-classes`
+ 
+ Report the test-class taxonomy: how many tests of each **class** exist and,
+diff --git a/hilo-cli/src/commands/coverage_links.rs b/hilo-cli/src/commands/coverage_links.rs
+index 604a90ed..0f431c36 100644
+--- a/hilo-cli/src/commands/coverage_links.rs
++++ b/hilo-cli/src/commands/coverage_links.rs
+@@ -488,6 +488,11 @@ fn ensure_surface_known(
+ 
+ pub fn run(json: bool, surface: Option<&str>, unlinked_only: bool) -> anyhow::Result<()> {
+     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
++    // DF-WARPFS-159: the COV chain is self-hosted-only. Refuse HERE on a
++    // foreign tree, naming that limitation, before any artifact check can
++    // send the user to `hilo graph surfaces` — a command that refuses on
++    // this very tree.
++    crate::commands::surfaces::require_self_scope(&cwd, "graph coverage-links")?;
+ 
+     let surfaces_path = cwd.join(".vfs").join("graph").join("surfaces.jsonl");
+     if !surfaces_path.exists() {
+@@ -859,4 +864,46 @@ mod tests {
+             "error must name the filter and say 'unknown surface': {msg}"
+         );
+     }
++
++    /// DF-WARPFS-159 regression: on a WARMed foreign repo (its own `.git` plus
++    /// planted COV artifacts) `graph coverage-links` must refuse at the scope
++    /// precondition with the self-only limitation NAMED — not the
++    /// missing-artifact instruction that would send the user to `hilo graph
++    /// surfaces`, a command that refuses on this very tree — and must leave
++    /// every planted artifact byte-identical (no foreign writes, no new
++    /// artifacts). Unit-level: this exercises the exact `run` path the CLI
++    /// dispatches (cli.rs `coverage_links::run`), not an external process.
++    #[test]
++    fn warmed_foreign_repo_gets_the_named_scope_error_and_no_artifact_writes() {
++        let foreign = crate::commands::surfaces::scope_fixtures::warmed_foreign_repo();
++        let before = crate::commands::surfaces::scope_fixtures::snapshot_tree(foreign.path());
++
++        // `run` reads the process CWD (the CLI contract), so switch into the
++        // foreign repo for the call and restore it on every exit path — the
++        // discipline the cwd-touching graph.rs suites document. The lock
++        // serializes the COV scope tests against each other: the cwd is
++        // process-global and the harness runs tests on parallel threads.
++        let _guard = crate::commands::surfaces::scope_fixtures::cwd_lock();
++        let prev_cwd = std::env::current_dir().unwrap();
++        std::env::set_current_dir(foreign.path()).unwrap();
++        let result = run(false, None, false);
++        std::env::set_current_dir(prev_cwd).unwrap();
++        drop(_guard);
++
++        let err = result.expect_err("a warmed foreign repo must be refused");
++        let msg = format!("{err:#}");
++        assert!(msg.contains("graph coverage-links"), "{msg}");
++        assert!(msg.contains("Hilo repository itself only"), "{msg}");
++        assert!(msg.contains("scope: foreign"), "{msg}");
++        assert!(
++            !msg.contains("run `hilo graph surfaces` first"),
++            "the foreign refusal must not instruct the user to run a command \
++             that refuses on this very tree: {msg}"
++        );
++        assert_eq!(
++            before,
++            crate::commands::surfaces::scope_fixtures::snapshot_tree(foreign.path()),
++            "planted foreign artifacts must be neither modified nor extended"
++        );
++    }
+ }
+diff --git a/hilo-cli/src/commands/rollup.rs b/hilo-cli/src/commands/rollup.rs
+index 5fc70629..824136af 100644
+--- a/hilo-cli/src/commands/rollup.rs
++++ b/hilo-cli/src/commands/rollup.rs
+@@ -27,6 +27,15 @@ const NAME_LIST_CAP: usize = 20;
+ 
+ /// `hilo graph rollup [--by feature|crate|module] [--json] [--group <name>]`
+ pub fn run(json: bool, by: &str, group: Option<&str>) -> Result<()> {
++    let cwd = std::env::current_dir().context("failed to determine the current directory")?;
++    // DF-WARPFS-159: the COV chain is self-hosted-only. Refuse HERE on a
++    // foreign tree, naming that limitation, before any artifact check can
++    // send the user to `hilo graph surfaces` — a command that refuses on
++    // this very tree. (Rollup must refuse even though it tolerates absent
++    // COV artifacts on a self tree — the artifacts' absence is never what
++    // saves a foreign tree from a confident wrong answer.)
++    crate::commands::surfaces::require_self_scope(&cwd, "graph rollup")?;
++
+     // A `--by` typo is a usage error, so it fails before any artifact is read.
+     let by = GroupBy::parse(by).ok_or_else(|| {
+         let valid = GroupBy::ALL
+@@ -37,7 +46,6 @@ pub fn run(json: bool, by: &str, group: Option<&str>) -> Result<()> {
+         anyhow::anyhow!("unknown grouping dimension '{by}'. Valid dimensions: {valid}")
+     })?;
+ 
+-    let cwd = std::env::current_dir().context("failed to determine the current directory")?;
+     let graph_dir = cwd.join(".vfs").join("graph");
+ 
+     let surfaces = read_surfaces(&graph_dir.join("surfaces.jsonl"))?;
+@@ -305,4 +313,50 @@ mod tests {
+         };
+         assert_eq!(row.source.as_str(), "crate");
+     }
++
++    /// DF-WARPFS-159 regression: on a WARMed foreign repo (its own `.git` plus
++    /// planted COV artifacts) `graph rollup` must refuse at the scope
++    /// precondition with the self-only limitation NAMED — not the
++    /// missing-artifact instruction that would send the user to `hilo graph
++    /// surfaces`, a command that refuses on this very tree — and must leave
++    /// every planted artifact byte-identical (no foreign writes, no new
++    /// artifacts). This matters MORE for rollup than for its siblings: it
++    /// tolerates absent COV artifacts on a self tree (a named-absence state),
++    /// so on a foreign tree only the scope precondition stands between the
++    /// user and a confident empty answer. Unit-level: this exercises the
++    /// exact `run` path the CLI dispatches (cli.rs `rollup::run`), not an
++    /// external process.
++    #[test]
++    fn warmed_foreign_repo_gets_the_named_scope_error_and_no_artifact_writes() {
++        let foreign = crate::commands::surfaces::scope_fixtures::warmed_foreign_repo();
++        let before = crate::commands::surfaces::scope_fixtures::snapshot_tree(foreign.path());
++
++        // `run` reads the process CWD (the CLI contract), so switch into the
++        // foreign repo for the call and restore it on every exit path — the
++        // discipline the cwd-touching graph.rs suites document. The lock
++        // serializes the COV scope tests against each other: the cwd is
++        // process-global and the harness runs tests on parallel threads.
++        let _guard = crate::commands::surfaces::scope_fixtures::cwd_lock();
++        let prev_cwd = std::env::current_dir().unwrap();
++        std::env::set_current_dir(foreign.path()).unwrap();
++        let result = run(false, "crate", None);
++        std::env::set_current_dir(prev_cwd).unwrap();
++        drop(_guard);
++
++        let err = result.expect_err("a warmed foreign repo must be refused");
++        let msg = format!("{err:#}");
++        assert!(msg.contains("graph rollup"), "{msg}");
++        assert!(msg.contains("Hilo repository itself only"), "{msg}");
++        assert!(msg.contains("scope: foreign"), "{msg}");
++        assert!(
++            !msg.contains("run `hilo graph surfaces` first"),
++            "the foreign refusal must not instruct the user to run a command \
++             that refuses on this very tree: {msg}"
++        );
++        assert_eq!(
++            before,
++            crate::commands::surfaces::scope_fixtures::snapshot_tree(foreign.path()),
++            "planted foreign artifacts must be neither modified nor extended"
++        );
++    }
+ }
+diff --git a/hilo-cli/src/commands/surfaces.rs b/hilo-cli/src/commands/surfaces.rs
+index 58f2ab89..baadfeaf 100644
+--- a/hilo-cli/src/commands/surfaces.rs
++++ b/hilo-cli/src/commands/surfaces.rs
+@@ -82,6 +82,29 @@ pub fn detect_scope(start: &Path) -> SurfaceScope {
+     SurfaceScope::Foreign
+ }
+ 
++/// The COV chain (`graph surfaces` → `coverage-links` → `test-classes` →
++/// `rollup`) models the Hilo repository itself only — the same GAP-112 scope
++/// decision [`detect_scope`] makes for the surface inventory. A foreign tree
++/// gets no COV inventory at all, so every downstream COV command must refuse
++/// HERE, with that scope limitation named, instead of failing later on a
++/// missing `.vfs/graph/` artifact and pointing the user at `hilo graph
++/// surfaces` — a command that refuses on this very tree (DF-WARPFS-159).
++///
++/// `command` is the refusing command's own name (`graph coverage-links`,
++/// `graph test-classes`, `graph rollup`); it appears in the error so the
++/// caller knows which invocation was out of scope.
++pub(crate) fn require_self_scope(root: &Path, command: &str) -> Result<()> {
++    if detect_scope(root).is_self() {
++        return Ok(());
++    }
++    anyhow::bail!(
++        "{command} is part of the COV coverage model, which is available for the Hilo \
++         repository itself only — {} is not a Hilo workspace (scope: foreign), and \
++         no COV inventory is derived for foreign repositories",
++        root.display()
++    )
++}
++
+ /// The empty, self-only inventory a foreign repository gets (GAP-112).
+ fn foreign_inventory() -> SurfaceInventory {
+     SurfaceInventory {
+@@ -639,9 +662,87 @@ fn parse_pub_use_stmt(stmt: &str, names: &mut BTreeSet<String>) {
+     }
+ }
+ 
++/// Shared scope fixtures for the COV-chain regression tests (DF-WARPFS-159):
++/// the downstream commands (`coverage-links`, `test-classes`, `rollup`) test
++/// their foreign refusal against these same trees, so the fixtures live in
++/// one place.
++#[cfg(test)]
++pub(crate) mod scope_fixtures {
++    use std::path::Path;
++    use tempfile::TempDir;
++
++    /// A throwaway tree carrying every Hilo workspace marker so it classifies
++    /// as `self` without being the real repository.
++    pub(crate) fn hilo_marker_tree() -> TempDir {
++        let dir = tempfile::tempdir().expect("tempdir");
++        for marker in super::SELF_MARKERS {
++            let path = dir.path().join(marker);
++            std::fs::create_dir_all(path.parent().unwrap()).expect("create marker dir");
++            std::fs::write(&path, "").expect("write marker");
++        }
++        dir
++    }
++
++    /// A "warmed" foreign repo: its own `.git` (which stops the walk-up, so
++    /// the classification is foreign regardless of where the tempdir lands),
++    /// a `.vfs/graph/` tree with warm's artifacts, and planted COV-1/COV-2
++    /// inventories — proving the scope precondition fires before any artifact
++    /// is read, and that nothing in a foreign tree is written or modified.
++    pub(crate) fn warmed_foreign_repo() -> TempDir {
++        let dir = tempfile::tempdir().expect("tempdir");
++        std::fs::create_dir_all(dir.path().join(".git")).expect("create .git");
++        std::fs::create_dir_all(dir.path().join(".vfs/graph")).expect("create graph dir");
++        std::fs::write(dir.path().join(".vfs/graph/edges.jsonl"), "").expect("write edges");
++        std::fs::write(dir.path().join(".vfs/graph/surfaces.jsonl"), "").expect("write surfaces");
++        std::fs::write(dir.path().join(".vfs/graph/coverage_links.jsonl"), "")
++            .expect("write links");
++        dir
++    }
++
++    /// Serializes the cwd-switching COV scope tests: the downstream `run`
++    /// functions read the PROCESS cwd (the CLI contract), the harness runs
++    /// tests on parallel threads, and the cwd is process-global — so every
++    /// test that switches it holds this lock across the switch window.
++    /// Poison-tolerant: one panicked test must not cascade into its peers.
++    pub(crate) fn cwd_lock() -> std::sync::MutexGuard<'static, ()> {
++        static CWD_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
++        CWD_LOCK
++            .get_or_init(|| std::sync::Mutex::new(()))
++            .lock()
++            .unwrap_or_else(|poisoned| poisoned.into_inner())
++    }
++
++    /// Recursive (repo-relative path, bytes) snapshot of every FILE under
++    /// `dir`, sorted. The COV scope tests compare snapshots taken before and
++    /// after a command runs to prove a foreign tree is neither modified nor
++    /// extended — no planted artifact touched, no new artifact created.
++    pub(crate) fn snapshot_tree(dir: &Path) -> Vec<(String, Vec<u8>)> {
++        fn walk(dir: &Path, rel: &Path, out: &mut Vec<(String, Vec<u8>)>) {
++            let Ok(entries) = std::fs::read_dir(dir) else {
++                return;
++            };
++            for entry in entries.flatten() {
++                let name = entry.file_name();
++                let entry_rel = rel.join(&*name);
++                let path = dir.join(&*name);
++                if path.is_dir() {
++                    walk(&path, &entry_rel, out);
++                } else if let Ok(bytes) = std::fs::read(&path) {
++                    out.push((entry_rel.to_string_lossy().replace('\\', "/"), bytes));
++                }
++            }
++        }
++        let mut out = Vec::new();
++        walk(dir, Path::new(""), &mut out);
++        out.sort();
++        out
++    }
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++    use scope_fixtures::hilo_marker_tree;
+ 
+     /// The workspace root: `CARGO_MANIFEST_DIR` is `…/hilo-cli`, whose parent
+     /// is the workspace root. Lets the tests enumerate the REAL repo sources.
+@@ -767,18 +868,6 @@ mod tests {
+ 
+     // ─────────────── scope: Hilo-self vs foreign (GAP-112) ───────────────
+ 
+-    /// Build a throwaway tree carrying every Hilo workspace marker so it
+-    /// classifies as `self` without being the real repository.
+-    fn hilo_marker_tree() -> tempfile::TempDir {
+-        let dir = tempfile::tempdir().expect("tempdir");
+-        for marker in SELF_MARKERS {
+-            let path = dir.path().join(marker);
+-            std::fs::create_dir_all(path.parent().unwrap()).expect("create marker dir");
+-            std::fs::write(&path, "").expect("write marker");
+-        }
+-        dir
+-    }
+-
+     #[test]
+     fn detect_scope_classifies_the_hilo_repo_and_a_foreign_tree() {
+         // Self: the real repository root.
+@@ -893,4 +982,29 @@ mod tests {
+             );
+         }
+     }
++
++    // ─────────── DF-WARPFS-159: the shared COV scope precondition ───────────
++
++    #[test]
++    fn require_self_scope_admits_the_hilo_repo_and_names_the_foreign_limitation() {
++        // Self: the real repository is in scope.
++        require_self_scope(repo_root(), "graph test-classes")
++            .expect("the Hilo repo itself is in scope for the COV chain");
++
++        // Foreign: a tree of its own (its own .git stops the walk-up) is
++        // refused with the self-only limitation NAMED — never a
++        // missing-artifact hint pointing at a command that refuses here too.
++        let foreign = scope_fixtures::warmed_foreign_repo();
++        let err = require_self_scope(foreign.path(), "graph test-classes")
++            .expect_err("a foreign repo must be refused");
++        let msg = format!("{err:#}");
++        assert!(msg.contains("graph test-classes"), "{msg}");
++        assert!(msg.contains("Hilo repository itself only"), "{msg}");
++        assert!(msg.contains("scope: foreign"), "{msg}");
++        assert!(
++            !msg.contains("run `hilo graph surfaces` first"),
++            "the foreign error must not instruct the user to run a command \
++             that refuses on this very tree: {msg}"
++        );
++    }
+ }
+diff --git a/hilo-cli/src/commands/test_classes.rs b/hilo-cli/src/commands/test_classes.rs
+index 6f41b183..070c5119 100644
+--- a/hilo-cli/src/commands/test_classes.rs
++++ b/hilo-cli/src/commands/test_classes.rs
+@@ -21,6 +21,11 @@ use hilo_graph::test_classes::{derive, enumerate, TestClassReport};
+ /// Run the command in the process's current directory.
+ pub fn run(json: bool) -> Result<()> {
+     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
++    // DF-WARPFS-159: the COV chain is self-hosted-only. Refuse HERE on a
++    // foreign tree, naming that limitation, before any artifact check can
++    // send the user to `hilo graph surfaces` — a command that refuses on
++    // this very tree.
++    crate::commands::surfaces::require_self_scope(&cwd, "graph test-classes")?;
+     let graph_dir = cwd.join(".vfs").join("graph");
+ 
+     let surfaces = read_surfaces(&graph_dir.join("surfaces.jsonl"))?;
+@@ -154,3 +159,50 @@ fn print_text(report: &TestClassReport) {
+ fn short_id(id: &str) -> String {
+     id.chars().take(12).collect()
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    /// DF-WARPFS-159 regression: on a WARMed foreign repo (its own `.git` plus
++    /// planted COV artifacts) `graph test-classes` must refuse at the scope
++    /// precondition with the self-only limitation NAMED — not the
++    /// missing-artifact instruction that would send the user to `hilo graph
++    /// surfaces`, a command that refuses on this very tree — and must leave
++    /// every planted artifact byte-identical (no foreign writes, no new
++    /// artifacts). Unit-level: this exercises the exact `run` path the CLI
++    /// dispatches (cli.rs `test_classes::run`), not an external process.
++    #[test]
++    fn warmed_foreign_repo_gets_the_named_scope_error_and_no_artifact_writes() {
++        let foreign = crate::commands::surfaces::scope_fixtures::warmed_foreign_repo();
++        let before = crate::commands::surfaces::scope_fixtures::snapshot_tree(foreign.path());
++
++        // `run` reads the process CWD (the CLI contract), so switch into the
++        // foreign repo for the call and restore it on every exit path — the
++        // discipline the cwd-touching graph.rs suites document. The lock
++        // serializes the COV scope tests against each other: the cwd is
++        // process-global and the harness runs tests on parallel threads.
++        let _guard = crate::commands::surfaces::scope_fixtures::cwd_lock();
++        let prev_cwd = std::env::current_dir().unwrap();
++        std::env::set_current_dir(foreign.path()).unwrap();
++        let result = run(false);
++        std::env::set_current_dir(prev_cwd).unwrap();
++        drop(_guard);
++
++        let err = result.expect_err("a warmed foreign repo must be refused");
++        let msg = format!("{err:#}");
++        assert!(msg.contains("graph test-classes"), "{msg}");
++        assert!(msg.contains("Hilo repository itself only"), "{msg}");
++        assert!(msg.contains("scope: foreign"), "{msg}");
++        assert!(
++            !msg.contains("run `hilo graph surfaces` first"),
++            "the foreign refusal must not instruct the user to run a command \
++             that refuses on this very tree: {msg}"
++        );
++        assert_eq!(
++            before,
++            crate::commands::surfaces::scope_fixtures::snapshot_tree(foreign.path()),
++            "planted foreign artifacts must be neither modified nor extended"
++        );
++    }
++}
+diff --git a/hilo-cli/tests/cli.rs b/hilo-cli/tests/cli.rs
+index 2d5bb22b..1260ef2c 100644
+--- a/hilo-cli/tests/cli.rs
++++ b/hilo-cli/tests/cli.rs
+@@ -168,6 +168,25 @@ fn run_hilo_ok(dir: &std::path::Path, args: &[&str]) -> String {
+     String::from_utf8_lossy(&output.stdout).into_owned()
+ }
+ 
++/// Plant the three Hilo workspace markers in `dir` so `detect_scope` (GAP-112)
++/// classifies it as `self`. The COV chain's downstream commands are
++/// self-hosted-only (DF-WARPFS-159): tests that exercise their downstream
++/// logic through the compiled binary opt their fixture into the self class
++/// this way. The foreign-refusal contract itself is covered by the unit
++/// tests in the command modules.
++fn plant_hilo_markers(dir: &std::path::Path) {
++    for marker in [
++        "hilo-cli/src/cli.rs",
++        "hilo-mcp/src/tools/mod.rs",
++        "hilo-graph/src/lib.rs",
++    ] {
++        let path = dir.join(marker);
++        fs::create_dir_all(path.parent().expect("marker path has a parent"))
++            .expect("failed to create marker dir");
++        fs::write(&path, "").expect("failed to write marker");
++    }
++}
++
+ // ─────────────────────── init ───────────────────────
+ 
+ #[test]
+@@ -4246,6 +4265,9 @@ fn graph_impact_from_subdirectory_matches_root_run() {
+ #[test]
+ fn graph_test_classes_reports_totals_and_flags_class_gap_surfaces() {
+     let dir = unique_tempdir("test-classes");
++    // The COV chain is self-hosted-only (DF-WARPFS-159); this fixture tests
++    // the downstream taxonomy, so it must classify as self (GAP-112).
++    plant_hilo_markers(&dir);
+     let graph = dir.join(".vfs").join("graph");
+     fs::create_dir_all(&graph).expect("failed to create .vfs/graph");
+     fs::create_dir_all(dir.join("src")).expect("failed to create src");
+@@ -4379,6 +4401,10 @@ fn graph_test_classes_reports_totals_and_flags_class_gap_surfaces() {
+ #[test]
+ fn graph_test_classes_names_the_missing_prerequisite() {
+     let dir = unique_tempdir("test-classes-missing");
++    // The COV chain is self-hosted-only (DF-WARPFS-159); this fixture tests
++    // the missing-input naming BEHIND the scope gate, so it must classify as
++    // self (GAP-112) — otherwise the scope refusal fires first.
++    plant_hilo_markers(&dir);
+     // No .vfs/graph at all: surfaces.jsonl is the first missing input.
+     let out = run_hilo_with_retry(hilo_cmd().args(["graph", "test-classes"]).current_dir(&dir));
+     assert!(!out.status.success(), "must fail without surfaces.jsonl");

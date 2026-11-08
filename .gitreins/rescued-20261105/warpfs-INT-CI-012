@@ -1,0 +1,2350 @@
+tasks:
+- id: xattr-prefix-idempotency
+  title: "Xattr prefix idempotency \u2014 regression guard"
+  criteria:
+  - full_name('feature') returns 'user.vfs.feature'
+  - "full_name('user.vfs.feature') returns 'user.vfs.feature' (idempotent \u2014 no\
+    \ doubling)"
+  - set_vfs_xattr with prefix, get_vfs_xattr without prefix returns same value
+  - 'list_vfs_xattrs after set with prefix returns exactly one attr: ''user.vfs.feature'''
+  - At least 10 regression tests in xattr.rs covering set/get roundtrip with mixed
+    prefixes
+  - 'All regression tests explicitly test the bug case: ''user.vfs.user.vfs.feature''
+    MUST NOT appear'
+  status: complete
+  created_at: '2026-06-24T03:00:00+00:00'
+  completed_at: '2026-06-24T05:25:37.433092+00:00'
+- id: xattr-fuse-roundtrip
+  title: "Xattr through FUSE mount \u2014 end-to-end"
+  criteria:
+  - hilo meta --set feature --value foo stores as user.vfs.feature (single prefix)
+  - getfattr -n user.vfs.feature <mount/file> returns 'foo'
+  - 'hilo meta <mount/file> returns ''feature: foo'' (was broken with triple-prefix)'
+  - hilo meta --set user.vfs.feature --value bar stores identically (idempotent)
+  - getfattr -d <mount/file> lists user.vfs.feature exactly once
+  - Untagged files return 'No such attribute' via getfattr, not empty string
+  status: complete
+  created_at: '2026-06-24T03:00:00+00:00'
+  completed_at: '2026-06-26T20:42:36.835209+00:00'
+- id: graph-dedup
+  title: "Graph deduplication \u2014 re-discover must not double edges"
+  criteria:
+  - Running hilo graph discover twice on same project produces identical edge count
+  - append_edges_deduped filters by (from, to, rel) tuple before append
+  - DuckDB loaded from edges.jsonl has no duplicate rows after re-discover
+  - 'graph stats: total_edges equals unique edge count, no duplicates'
+  - Existing unique edges preserved when new edges added (only new ones appended)
+  status: complete
+  created_at: '2026-06-24T03:00:00+00:00'
+  completed_at: '2026-06-26T20:42:45.272129+00:00'
+- id: graph-reverse-queries
+  title: "Reverse graph queries \u2014 imported_by, tested_by, tests"
+  criteria:
+  - hilo graph related pkg:serde --relation imported_by returns all files importing
+    serde
+  - hilo graph related <test_file> --relation tests returns the source file it tests
+  - hilo graph related <source_file> --relation tested_by returns its test files
+  - GraphDB::related() accepts direction parameter (forward/reverse) with rel filter
+  - 'Cross-language test detection: *_test.go, test_*.py, *.test.ts, *_test.rs, *Test.java
+    all mapped'
+  status: complete
+  created_at: '2026-06-24T03:00:00+00:00'
+  completed_at: '2026-06-26T20:42:53.502273+00:00'
+- id: graph-db-path
+  title: "DuckDB path consistency \u2014 graph.db vs graph.duckdb"
+  criteria:
+  - GRAPH_DB_PATH constant used in exactly one place, shared by graph and MCP crates
+  - graph discover writes to .vfs/graph/graph.db
+  - MCP vfs_graph_stats opens .vfs/graph/graph.db without symlink workaround
+  - No manual symlink required after fresh init + discover for MCP tools to work
+  - Both graph and MCP crates reference the same constant, not hardcoded strings
+  status: complete
+  created_at: '2026-06-24T03:00:00+00:00'
+  completed_at: '2026-06-26T20:43:06.810394+00:00'
+- id: fuse-readdir
+  title: "FUSE readdir \u2014 ls must not hang on any directory"
+  criteria:
+  - ls <mount>/ returns directory listing under 3 seconds
+  - ls <mount>/src/ lists subdirectory contents under 3 seconds
+  - Root directory children detected correctly (Path::new('file').parent() = Some('')
+    handled)
+  - cat <mount>/<file> returns correct file content
+  - FUSE daemon starts, serves requests, unmounts cleanly without zombie processes
+  - "readdir offset handling works \u2014 '.' and '..' entries returned, children\
+    \ follow correctly"
+  status: complete
+  created_at: '2026-06-24T03:00:00+00:00'
+  completed_at: '2026-06-26T20:43:15.052356+00:00'
+- id: fuse-permissions
+  title: "FUSE permission enforcement \u2014 manifest-driven mode bits"
+  criteria:
+  - Permission mode 0444 applied to protected paths (read-only enforcement)
+  - Permission mode 0644 applied to workspace files
+  - Read attempt on read-only S3 mount returns EACCES
+  - FUSE config respects allow_other flag from manifest
+  - auto_unmount cleans up on daemon exit
+  status: complete
+  created_at: '2026-06-24T03:00:00+00:00'
+  completed_at: '2026-06-26T20:43:23.090311+00:00'
+- id: mcp-tool-registry
+  title: "MCP server \u2014 8 tools registered and functional"
+  criteria:
+  - 'tools/list returns exactly 8 tools: vfs_get_metadata, vfs_graph_related, vfs_graph_stats,
+    vfs_graph_impact, vfs_rule_list, vfs_rule_check, vfs_list_directory, vfs_resolve_path'
+  - vfs_graph_stats returns nonzero total_edges, unique_files, unique_dependencies
+    after discover
+  - vfs_get_metadata with valid path returns xattrs; nonexistent path returns error
+  - vfs_graph_impact with max_depth returns transitive dependents
+  - vfs_rule_check('stale-files') returns results or structured error if no manifest
+  - vfs_list_directory returns virtual directory entries with name, type, backend,
+    size
+  - vfs_resolve_path returns real_path, backend, cached, sync_status
+  status: complete
+  created_at: '2026-06-24T03:00:00+00:00'
+  completed_at: '2026-06-26T20:43:31.131272+00:00'
+- id: mcp-graph-consistency
+  title: MCP graph tools match CLI output exactly
+  criteria:
+  - vfs_graph_stats returns same total_edges as hilo graph stats CLI
+  - vfs_graph_related(path, imports) returns same edges as hilo graph related --relation
+    imports
+  - MCP server loads graph from same DuckDB file as CLI (no separate instance)
+  - MCP server works after graph discover without restart
+  status: complete
+  created_at: '2026-06-24T03:00:00+00:00'
+  completed_at: '2026-06-26T20:43:41.851075+00:00'
+- id: integration-full-pipeline
+  title: "Full pipeline \u2014 init \u2192 tag \u2192 discover \u2192 mount \u2192\
+    \ query"
+  criteria:
+  - hilo init creates complete .vfs/ structure with all subdirectories
+  - hilo meta --set works with and without user.vfs. prefix (idempotent)
+  - hilo graph discover produces edges.jsonl with correct (from, to, rel) tuples
+  - FUSE mount exposes files with correct content and xattrs
+  - hilo meta on FUSE mount returns correct values (no prefix bugs)
+  - getfattr on FUSE mount returns correct values (no prefix bugs)
+  - MCP tools query the same graph data visible through CLI and FUSE
+  - Full pipeline completes without panics or hangs
+  status: complete
+  created_at: '2026-06-24T03:00:00+00:00'
+  completed_at: '2026-06-26T20:43:50.092055+00:00'
+- id: regression-test-coverage
+  title: "Regression test coverage \u2014 bugs found must have tests"
+  criteria:
+  - 'xattr prefix doubling: 10+ tests in hilo_metadata covering mixed-prefix roundtrip'
+  - 'FUSE readdir root children: test validates Path(''file'').parent() = Some('''')
+    case'
+  - 'Graph dedup: test validates discover idempotency (same edge count on re-run)'
+  - 'DuckDB path: test validates MCP and CLI agree on database file location'
+  - All tests are in the crate they test (not integration-only) for fast feedback
+  status: complete
+  created_at: '2026-06-24T03:00:00+00:00'
+  completed_at: '2026-06-26T20:43:58.331483+00:00'
+- id: jit-lazy-queries
+  title: "JIT/lazy query architecture \u2014 remove batch-first gate"
+  criteria:
+  - "hilo graph related src/main.rs works on fresh hilo init \u2014 no discover required"
+  - 'First query on any file: parse on-the-fly, cache in DuckDB, return results'
+  - 'Second query on same file: instant cache hit, no re-parse'
+  - hilo graph discover still exists as hilo graph warm (Discover as hidden alias)
+  - hilo graph impact parses only needed files, not entire codebase
+  - "hilo graph stats reflects cache \u2014 returns 0 on fresh init (not an error)"
+  - MCP vfs_graph_related triggers lazy parse on miss
+  - "cargo test --workspace \u2014 all existing + 5+ new lazy parse tests pass"
+  - cargo build --workspace clean, clippy clean, fmt clean
+  status: complete
+  created_at: '2026-06-28T23:35:08.859237+00:00'
+  completed_at: '2026-06-28T23:49:51.545258+00:00'
+- id: jit-001-write-through-cache-sync
+  title: Write-through DuckDB cache sync in parse-and-diff trigger
+  criteria:
+  - "parse-and-diff trigger in hilo-triggers/src/engine.rs inserts new edges into\
+    \ the DuckDB graph cache (INSERT OR IGNORE) immediately after appending them to\
+    \ edges.jsonl \u2014 write path and read path are linked"
+  - raw trigger duckdb::Connection has edges table schema ensured (CREATE TABLE IF
+    NOT EXISTS + unique index) before insert, since mount.rs opens it without GraphDB::open
+  - new hilo-graph public helper (insert_edges_into / ensure_schema) reuses the existing
+    schema/insert logic without duplicating SQL
+  - 'unit test proves: edge appended to edges.jsonl by parse-and-diff path is immediately
+    queryable from the DuckDB connection'
+  - cargo check --workspace passes
+  - cargo test --workspace passes (530+ tests, no regressions)
+  - cargo fmt --all clean
+  - cargo clippy --workspace -- -D warnings clean
+  status: complete
+  created_at: '2026-08-01T13:44:22.702999+00:00'
+  completed_at: '2026-08-01T13:45:40.695390+00:00'
+- id: jit-002-read-through-cache-reconciliation
+  title: Read-through cache reconciliation on graph queries
+  criteria:
+  - "GraphDB::open on an on-disk DB reconciles the DuckDB cache from the sibling edges.jsonl\
+    \ (read-through) \u2014 edges appended by any write path (git hooks, manual edits)\
+    \ become queryable after the next open"
+  - 'Reconciliation is incremental: only missing edges are inserted (INSERT OR IGNORE
+    + unique index), not a full rebuild'
+  - "Missing edges.jsonl file returns Ok(0) \u2014 safe no-op for fresh projects,\
+    \ not an error"
+  - Malformed and blank lines in edges.jsonl are skipped without aborting the reconcile
+  - "Reconcile is idempotent \u2014 calling twice inserts no duplicate rows"
+  - ':memory: connections skip reconciliation (no sibling file exists for in-memory
+    DBs)'
+  - Public helper reconcile_edges_from_jsonl is exported from hilo-graph lib.rs
+  - cargo check --workspace passes
+  - cargo test --workspace passes (535+ tests, no regressions)
+  - cargo fmt --all clean
+  - cargo clippy --workspace -- -D warnings clean
+  status: complete
+  created_at: '2026-08-01T17:56:59.268357+00:00'
+  completed_at: '2026-08-01T17:57:03.041646+00:00'
+- id: gap-005-docs-drift
+  title: 'Docs drift: graph discover -> warm in docs/ and specs/'
+  criteria:
+  - grep -r 'graph discover' docs/ specs/ returns zero hits
+  - Every hilo graph command in docs matches 'hilo graph --help' output
+  status: complete
+  created_at: '2026-08-07T14:34:39.017046+00:00'
+  completed_at: '2026-08-07T14:34:43.586556+00:00'
+- id: gap-006-source-rename
+  title: Graph discover/warm rename completed at source level
+  criteria:
+  - hilo-cli/src/commands/graph.rs rule-check error says 'Run hilo graph warm first'
+  - rg 'graph discover' hilo-cli/src/ docs/ specs/ returns zero hits excluding prose
+    matches of the noun 'graph discovery', OR hilo graph --help visibly lists both
+    warm and discover
+  - CHANGELOG.md alias claim reflects hidden alias for backward compatibility
+  - hilo graph discover still works as backward-compat alias
+  status: complete
+  created_at: '2026-08-07T14:34:39.289765+00:00'
+  completed_at: '2026-08-07T14:37:01.465576+00:00'
+- id: gap-018-graph-clean
+  title: "hilo graph clean subcommand \u2014 purge stale graph cache"
+  criteria:
+  - hilo graph --help lists clean as a subcommand
+  - After hilo graph clean, .vfs/graph/edges.jsonl, .vfs/graph/graph.db and .vfs/graph/.last_warm
+    no longer exist
+  - After clean + hilo graph warm, hilo graph untested reports zero warpfs-* phantom
+    files
+  - Unit test clean_removes_graph_cache passes in cargo test -p hilo-cli
+  status: complete
+  created_at: '2026-08-10T21:23:05.593159+00:00'
+  completed_at: '2026-08-10T21:28:17.438462+00:00'
+- id: gap-025-backend-mount-types
+  title: "Backend mount type wiring \u2014 git/local CLI support"
+  criteria:
+  - hilo backend mount --type local --at <existing-dir> exits 0 and prints 'mounted
+    local' (no 'unknown backend type')
+  - hilo backend mount --type git without --url exits non-zero with a clear '--url
+    is required' message
+  - hilo backend mount --type git --url <valid-url> uses hilo_backends::git::GitBackend::mount
+  - hilo backend mount --type local uses hilo_backends::local::LocalBackend::mount
+  - grep -c 'git, remote, local' README.md docs/ = 0 (no unimplemented backend advertised)
+  status: complete
+  created_at: '2026-08-12T02:09:01.633904+00:00'
+  completed_at: '2026-08-12T02:09:06.753464+00:00'
+- id: gap-027-mount-daemon
+  title: hilo mount --daemon background mode
+  criteria:
+  - hilo mount --help shows the --daemon flag
+  - hilo mount <dir> --daemon returns immediately (exit 0, no blocking)
+  - the mount persists in the background (mountpoint active, session leader)
+  - fusermount -u <dir> unmounts cleanly and the daemon process exits
+  status: complete
+  created_at: '2026-08-12T11:43:22.846860+00:00'
+  completed_at: '2026-08-12T11:43:25.451595+00:00'
+- id: gap-029-git-mount-errors
+  title: "Git backend mount error wrapping \u2014 clear message + non-zero exit"
+  criteria:
+  - target/release/hilo backend mount --type git --url https://github.com/gethilo/this-repo-does-not-exist-xyz
+    --at /v prints a human-readable error with an actionable hint and does NOT duplicate
+    the raw libgit2 message
+  - the same bad-URL mount exits with code 1 (non-zero)
+  - hilo-cli/src/commands/backend.rs wraps GitBackend::mount errors via map_err with
+    a hint mentioning the URL and credentials
+  status: complete
+  created_at: '2026-08-12T21:34:14.833470+00:00'
+  completed_at: '2026-08-16T05:16:25.496314+00:00'
+- id: gap-039-impact-unknown-path
+  title: 'GAP-039: hilo graph impact fails loudly on unknown paths'
+  criteria:
+  - '`hilo graph impact ''no-such-file.rs''; echo $?` prints an error containing ''not
+    in the graph'' and exits non-zero'
+  - '`hilo graph impact ''no-such-file.rs'' --format json; echo $?` also errors with
+    ''not in the graph'' and exits non-zero'
+  - '`hilo graph impact <existing-file>` still returns ''No dependents found'' with
+    exit 0 for a real file with no dependents (JIT path preserved)'
+  - '`hilo graph impact ''pkg:<symbol-in-graph>''` still returns dependents (symbol
+    node query form preserved)'
+  - cargo check --workspace passes and hilo-graph tests include impact_or_parse_unknown_path_errors_not_empty_silence
+  status: complete
+  created_at: '2026-08-13T17:41:38.516893+00:00'
+  completed_at: '2026-08-13T17:57:28.108181+00:00'
+- id: gap-035-rust-use-brace-groups
+  title: 'GAP-035: Rust multi-name use statements expand to per-symbol edges (no pkg:{
+    garbage)'
+  criteria:
+  - '`grep -c ''pkg:{'' .vfs/graph/edges.jsonl` == 0 after `hilo graph warm` on a
+    repo with multi-name use statements (warpfs itself has 97; ripgrep had 27 garbage
+    edges before the fix)'
+  - '`cargo test -p hilo-graph --lib parser::tests::rust_use_brace_groups_expand_per_symbol`
+    passes (bare/prefixed/nested groups expand per symbol; aliases stripped; self
+    resolves to parent path; no pkg:{ targets)'
+  - '`cargo test -p hilo-graph --lib parser::tests::rust_pub_use_visibility_and_alias_stripped`
+    passes (pub/pub(crate)/pub(super) use stripped; no pub/crate/self leaks)'
+  - cargo check --workspace passes and cargo fmt --all --check exits 0
+  status: complete
+  created_at: '2026-08-14T13:22:18.683632+00:00'
+  completed_at: '2026-08-14T13:23:39.653249+00:00'
+- id: gap-034-file-level-pkg-resolution
+  title: 'GAP-034: file-level impact/related queries resolve to pkg nodes (resolution
+    layer)'
+  criteria:
+  - '`/home/kara/warpfs/target/release/hilo graph impact crates/globset/src/lib.rs`
+    run in /tmp/ripgrep lists >=1 dependent (was ''No dependents found'' before the
+    fix)'
+  - '`/home/kara/warpfs/target/release/hilo graph related crates/globset/src/lib.rs
+    --direction reverse` run in /tmp/ripgrep returns the incoming pkg:globset edge
+    (was ''No incoming edges'')'
+  - '`/home/kara/warpfs/target/release/hilo graph impact ''pkg:globset''` run in /tmp/ripgrep
+    still returns the same dependent(s) (symbol-node queries preserved)'
+  - MCP vfs_graph_impact on crates/globset/src/lib.rs (hilo serve --mcp, /tmp/ripgrep)
+    returns dependents with total >= 1
+  - '`cargo test -p hilo_graph --lib` passes including resolution::tests (5) and impact::tests::impact_on_crate_root_resolves_pkg_dependents
+    (new)'
+  - cargo check --workspace passes and cargo fmt --all --check exits 0
+  status: complete
+  created_at: '2026-08-14T14:12:40.772346+00:00'
+  completed_at: '2026-08-14T14:21:02.375916+00:00'
+- id: gap-036-classify-tests-benches
+  title: 'GAP-036: depth-agnostic test/bench classification + untested exclusion'
+  criteria:
+  - "hilo-graph/src/classify.rs is_test_file() matches files under top-level tests/\
+    \ and benches/ dirs (no leading slash required) AND nested crates/*/tests/ and\
+    \ crates/*/benches/ \u2014 via depth-agnostic path-component check (test/tests/benches/__tests__)"
+  - "hilo-graph/src/graph.rs untested_files() excludes files matching is_test_file()\
+    \ \u2014 test/bench files are not listed as untested"
+  - 'On BurntSushi/ripgrep: hilo classify tags >=10 of the 19 test/bench files as
+    test (expected 19/19)'
+  - 'On BurntSushi/ripgrep: hilo graph untested does not list any file classified
+    as test'
+  status: complete
+  created_at: '2026-08-15T01:26:59.294108+00:00'
+  completed_at: '2026-08-15T01:27:03.604816+00:00'
+- id: gap-037-rust-reexport-symbols
+  title: 'GAP-037: pub use re-exports extracted as symbols (understand MAP + search)'
+  criteria:
+  - 'On BurntSushi/ripgrep: `hilo graph understand crates/globset/src/lib.rs` map
+    lists Glob, GlobBuilder, GlobMatcher as symbols (pub use re-exports, was missing)'
+  - '`hilo graph search GlobSetBuilder` returns symbol GlobSetBuilder (pkg:globset::GlobSetBuilder
+    top hit)'
+  - '`cargo test -p hilo_graph --lib signal::tests::extract_symbols_rust_pub_use_reexports`
+    passes (list/alias/self/wildcard/nested-module/private-use assertions)'
+  - cargo check --workspace passes and cargo fmt --all --check exits 0
+  status: complete
+  created_at: '2026-08-15T11:33:33.333357+00:00'
+  completed_at: '2026-08-15T11:33:37.260488+00:00'
+- id: gap-038-stats-dedup-pkg-filter
+  title: 'GAP-038: stats dedup note + malformed pkg:{ excluded from stats/search'
+  criteria:
+  - 'On BurntSushi/ripgrep: `hilo graph stats` output shows both counts or a dedup
+    note (e.g. "Total edges: 492 distinct / 562 raw (edges.jsonl)")'
+  - '`hilo graph search <normal term>` returns no rows starting with pkg:{'
+  - '`cargo test -p hilo_graph --lib semantic::tests::search_excludes_malformed_pkg_pseudo_nodes`
+    passes (valid pkg: nodes still searchable)'
+  - cargo check --workspace passes and cargo fmt --all --check exits 0
+  status: complete
+  created_at: '2026-08-15T11:33:33.484398+00:00'
+  completed_at: '2026-08-15T11:35:38.263558+00:00'
+- id: gap-040-meta-error-prefix
+  title: 'GAP-040: hilo meta --set error message shows exactly one user.vfs. prefix'
+  criteria:
+  - target/release/hilo meta --set user.vfs.feature --value probe /etc/hostname 2>&1
+    | grep -c 'user.vfs.user.vfs' == 0
+  - target/release/hilo meta --set user.vfs.feature --value probe /etc/hostname 2>&1
+    | grep -o 'user.vfs.' | wc -l == 1
+  - grep -c 'user.vfs.{name}' hilo-cli/src/commands/meta.rs == 0
+  status: complete
+  created_at: '2026-08-15T17:02:34.333099+00:00'
+  completed_at: '2026-08-15T17:02:39.024290+00:00'
+- id: gap-038-stats-dedup-note-always
+  title: 'GAP-038 reopen: hilo graph stats ALWAYS shows distinct/raw dedup note'
+  criteria:
+  - target/release/hilo graph stats | grep -c 'distinct / .* raw (edges.jsonl)' ==
+    1
+  - target/release/hilo graph search glob | grep -c 'pkg:{' == 0
+  - grep -c 'Some(raw) if raw as i64 != stats.total_edges' hilo-cli/src/commands/graph.rs
+    == 0
+  status: complete
+  created_at: '2026-08-15T17:02:34.466237+00:00'
+  completed_at: '2026-08-15T17:03:26.410524+00:00'
+- id: gap-041-metadata-keys-schema
+  title: 'GAP-041: declare optional keys filter in vfs_get_metadata input_schema +
+    docs'
+  criteria:
+  - hilo-mcp/src/tools/mod.rs vfs_get_metadata input_schema declares keys (array of
+    strings, optional) AND docs/mcp-tools.md documents the keys filter with an example
+    AND cargo check --workspace PASS AND hilo-mcp tests pass
+  status: complete
+  created_at: '2026-08-17T05:37:44.290123+00:00'
+  completed_at: '2026-08-17T05:46:29.405807+00:00'
+- id: gap-042-version-bump
+  title: Bump workspace version 0.2.0 to 0.3.0 + CHANGELOG heading
+  criteria:
+  - 'PASS: ./target/release/hilo --version reports a version newer than 0.2.0 that
+    matches a CHANGELOG entry'
+  status: complete
+  created_at: '2026-08-17T11:01:39.675229+00:00'
+  completed_at: '2026-08-17T11:14:06.132058+00:00'
+- id: int-ci-002-verify
+  title: Verify INT-CI-002 rerun passed and close as environmental
+  criteria:
+  - 'Verification closure for INT-CI-002: (1) gh api repos/gethilo/hilo/actions/runs?head_sha=b9a396e
+    shows run 31999155382 with conclusion=success (the rerun kicked 2026-08-17 ~11:00Z
+    passed; original failure was runner ''No space left on device'' in post-job steps,
+    all substantive steps had passed). (2) The board row INT-CI-002 in .coding-hermes/board/tasks.jsonl
+    is flipped to status=complete with a summary noting the rerun passed. (3) The
+    tick''s audit event records the CI-health verification.'
+  status: complete
+  created_at: '2026-08-17T23:34:03.643889+00:00'
+  completed_at: '2026-08-17T23:34:50.028575+00:00'
+- id: gap-046-cli-ref-examples
+  title: 'GAP-046: docs/cli-reference.md graph examples use repo-real paths'
+  criteria:
+  - 'docs/cli-reference.md no longer contains corpus paths: grep -c ''sys:metacall''
+    == 0, grep -c ''sys:gtest'' == 0, grep -c ''sys:some-header'' == 0, grep -c ''src/login.go''
+    == 0, grep -c ''rule-check stale-files'' == 0; repo-real examples present: grep
+    -c ''hilo graph impact hilo-graph/src/lib.rs'' >= 3; every documented graph command
+    runs: target/release/hilo graph impact hilo-graph/src/lib.rs --max-depth 1 exits
+    0, target/release/hilo graph related hilo-cli/src/main.rs exits 0, target/release/hilo
+    graph impact hilo-graph/src/lib.rs --format json exits 0'
+  status: complete
+  created_at: '2026-08-19T11:30:40.062281+00:00'
+  completed_at: '2026-08-19T11:37:10.496651+00:00'
+- id: gap-043-intra-crate-edges
+  title: 'GAP-043: intra-crate import edges resolve to file paths'
+  criteria:
+  - 'Criterion: (1) cargo test -p hilo_graph passes including new module-resolution
+    tests; (2) cargo check --workspace passes; (3) from repo root, ''hilo graph impact
+    hilo-cli/src/commands/init.rs'' lists hilo-cli/src/main.rs (or commands/mod.rs)
+    as a dependent; (4) grep -c ''"to":"hilo-cli/'' .vfs/graph/edges.jsonl >= 1; (5)
+    ''hilo graph stats'' orphan list does not contain hilo-cli/src/commands/init.rs'
+  status: complete
+  created_at: '2026-08-19T23:19:44.881011+00:00'
+  completed_at: '2026-08-19T23:29:12.128099+00:00'
+- id: INT-CI-003
+  title: 'CI red: RUSTFLAGS=-D warnings test build fails on unused variable main in
+    hilo-graph/src/parser.rs:1659 (GAP-043 tempdir test)'
+  criteria:
+  - grep -c 'let _main = write_rust_crate' hilo-graph/src/parser.rs >= 1 AND grep
+    -c 'let main = write_rust_crate(dir.path(), "mod commands' hilo-graph/src/parser.rs
+    == 0 AND RUSTFLAGS='-D warnings' cargo test --workspace --no-run exits 0
+  status: complete
+  created_at: '2026-08-20T05:53:10.616978+00:00'
+  completed_at: '2026-08-20T05:53:16.898790+00:00'
+- id: gap-044-map-tier-symbols
+  title: 'GAP-044: Map-tier files must show real symbols in understand MAP'
+  criteria:
+  - hilo graph understand manifest (via target/release/hilo) shows real fn/struct
+    symbols for hilo-core/src/workspace.rs and worktree.rs rows; '(no symbols extracted)'
+    remains only for genuinely symbol-free files; RUSTFLAGS='-D warnings' cargo test
+    --workspace --no-run exits 0
+  status: complete
+  created_at: '2026-08-20T12:50:28.575742+00:00'
+  completed_at: '2026-08-20T13:05:47.309628+00:00'
+- id: gap-045-related-pkg-filter
+  title: 'GAP-045: label pkg: pseudo-nodes in hilo graph related output'
+  criteria:
+  - hilo graph related hilo-cli/src/main.rs prints pkg:* targets labeled as external
+    packages (or filtered), never bare pkg:* strings
+  status: complete
+  created_at: '2026-08-20T13:20:24.053932+00:00'
+  completed_at: '2026-08-20T13:29:47.351441+00:00'
+- id: gap-047-doc-pkg-underscore
+  title: SKILL.md lines 63/66 use wrong package name -p hilo-graph
+  criteria:
+  - cargo test -p hilo_graph --test determinism_test exits 0 and runs tests; grep
+    -c 'cargo test -p hilo-graph' SKILL.md == 0
+  status: complete
+  created_at: '2026-08-22T10:42:13.768259+00:00'
+  completed_at: '2026-08-22T10:46:19.872615+00:00'
+- id: gap-048-blast-radius-member-resolution
+  title: 'GAP-048: pkg member-prefix resolution in impact BFS'
+  criteria:
+  - hilo graph impact serde/src/lib.rs and hilo graph impact 'pkg:serde' (release
+    binary, workdir /tmp/dogfood-warpfs/serde, corpus 208 files/749 edges) each return
+    >=140 dependents; cargo test -p hilo_graph --lib impact tests pass; cargo check
+    --workspace passes
+  status: complete
+  created_at: '2026-08-23T22:28:10.796979+00:00'
+  completed_at: '2026-08-24T04:53:58.571932+00:00'
+- id: gap-051-skill-pkg-name
+  title: 'GAP-051: SKILL.md build command uses the real package name -p hilo-cli'
+  criteria:
+  - 'SKILL.md contains no -p hilo_cli or -p hilo-graph references: grep -c ''cargo
+    build --release -p hilo_cli'' SKILL.md == 0 AND grep -c ''\-p hilo_cli'' SKILL.md
+    == 0 AND grep -c ''cargo build --release -p hilo-cli'' SKILL.md >= 1 AND cargo
+    check -p hilo-cli exits 0'
+  status: complete
+  created_at: '2026-08-24T07:10:28.936388+00:00'
+  completed_at: '2026-08-24T07:14:29.760582+00:00'
+- id: gap-049-role-heuristics
+  title: 'GAP-049 classify role heuristics: crate roots -> library, build.rs -> build'
+  criteria:
+  - 'grep -c ''role: "build"'' hilo-graph/src/classify.rs >= 1 AND grep -c ''lib.rs''
+    hilo-graph/src/classify.rs >= 1 AND cargo check --workspace exits 0'
+  status: complete
+  created_at: '2026-08-24T07:52:51.570164+00:00'
+  completed_at: '2026-08-24T07:55:03.825422+00:00'
+- id: gap-050-mcp-stdout-tracing
+  title: Route hilo serve --mcp tracing output to stderr
+  criteria:
+  - 'MCP stdio server must emit zero non-JSON-RPC bytes on stdout: a naive JSON-RPC
+    client (readline, no skipping) completes initialize -> tools/list -> tools/call
+    with zero non-JSON-RPC bytes on stdout'
+  status: complete
+  created_at: '2026-08-24T08:27:37.916321+00:00'
+  completed_at: '2026-08-24T08:34:10.083694+00:00'
+- id: gap-053-understand-map-symbols
+  title: "understand MAP symbol formatting \u2014 one symbol per line, no doubled\
+    \ commas"
+  criteria:
+  - understand MAP on serde_core/src/de/mod.rs renders each symbol on its own line
+    with no doubled commas AND grep -c ',,' on the understand MAP output == 0 AND
+    cargo check --workspace exits 0 AND cargo test -p hilo_graph --lib signal passes
+  status: complete
+  created_at: '2026-08-24T08:48:38.856387+00:00'
+  completed_at: '2026-08-24T09:10:14.144723+00:00'
+- id: gap-052-tested-by-edges
+  title: Emit tested_by edges from test files' imports (GAP-052)
+  criteria:
+  - grep -c 'tested_by' hilo-graph/src/parser.rs >= 1 AND grep -c 'parse_imports_emits_tested_by'
+    hilo-graph/src/parser.rs >= 1 AND grep -c 'tested_by' /tmp/dogfood-warpfs/serde/.vfs/graph/edges.jsonl
+    > 0
+  status: complete
+  created_at: '2026-08-24T09:50:15.322567+00:00'
+  completed_at: '2026-08-24T10:05:42.257745+00:00'
+- id: gap-054-stale-open-markers
+  title: SKILL.md stale open markers for closed gaps
+  criteria:
+  - "grep -c 'GAP-048, P0 \u2014 open' SKILL.md == 0 AND grep -c 'GAP-050, P2 \u2014\
+    \ open' SKILL.md == 0 AND grep -c 'GAP-052, P2 \u2014 open' SKILL.md == 0 AND\
+    \ grep -c 'fixed 2026-08-24' SKILL.md >= 3 AND cargo check --workspace exits 0"
+  status: complete
+  created_at: '2026-08-25T04:49:11.409852+00:00'
+  completed_at: '2026-08-25T05:03:38.308583+00:00'
+- id: gap-055-s3-workspace-sync
+  title: S3-backed workspace sync engine (GAP-055)
+  criteria:
+  - cargo check --workspace exits 0 AND cargo test -p hilo_backends sync passes AND
+    hilo workspace sync --help shows --bucket/--prefix/--at/--ignore AND docs/ignore-file.md
+    exists describing the git-ignore-style upstream ignore format shared by S3/GDrive/OneDrive/Dropbox
+    backends AND a live sync against an S3-compatible endpoint uploads non-ignored
+    files and skips ignored ones
+  status: complete
+  created_at: '2026-08-26T16:44:54.400927+00:00'
+  completed_at: '2026-08-26T16:59:48.366227+00:00'
+- id: gap-055-ignore-check-cli
+  title: 'GAP-055 slice: hilo ignore check CLI + backend compatibility matrix doc'
+  criteria:
+  - hilo ignore check <PATH> prints ignored:true and the matching rule for a path
+    matched by .hiloignore (and ignored:false with rule (none) for unmatched paths);
+    IgnoreMatcher exposes a decision API returning the last-matching rule source;
+    cargo test -p hilo_backends passes; cargo test -p hilo_cli passes; cargo check
+    --workspace exits 0; docs/backend-compatibility-matrix.md exists with the 9-column
+    backend x capability table
+  status: complete
+  created_at: '2026-08-26T17:07:28.348253+00:00'
+  completed_at: '2026-08-26T17:16:12.457489+00:00'
+- id: gap-056-ephemeral-engine
+  title: "Ephemeral engine + workspace ephemeral/wipe CLIs (spec \xA75/\xA79)"
+  criteria:
+  - 'hilo-backends/src/ephemeral.rs exists with EphemeralMatcher struct (grep -c ''pub
+    struct EphemeralMatcher'' >= 1) AND builtin catalog contains node_modules and
+    .vfs/graph (grep -c ''node_modules'' hilo-backends/src/ephemeral.rs >= 1 AND grep
+    -c ''.vfs/graph'' >= 1) AND cargo test -p hilo_backends --lib ephemeral exits
+    0 AND cargo test -p hilo_cli --test cli workspace_ephemeral exits 0 AND cargo
+    test -p hilo_cli --test cli workspace_wipe exits 0 AND live: hilo workspace ephemeral
+    lists target/ artifacts as TSV in a scratch dir AND hilo workspace wipe --apply
+    deletes only ephemeral files and prints freed bytes'
+  status: complete
+  created_at: '2026-08-26T17:25:32.726179+00:00'
+  completed_at: '2026-08-26T17:35:53.355180+00:00'
+- id: gap-055-backend-abstraction
+  title: "GAP-055 \xA76: Backend trait + S3Driver/ExternalToolDriver/LocalDriver +\
+    \ registry"
+  criteria:
+  - "Backend trait and drivers exist in hilo-backends (backend.rs/external.rs/s3.rs/local\
+    \ additions); BackendRegistry register/get/from_config work; ExternalToolDriver\
+    \ builds exact rclone/s3sync/gdrive commands per spec \xA76.1 with HILO_TOOL_TIMEOUT_SECS\
+    \ 30s default and ToolMissing on absent binary; LocalDriver + MockBackend pass\
+    \ identical contract tests; cargo check --workspace and cargo test -p hilo_backends\
+    \ pass"
+  status: complete
+  created_at: '2026-08-26T17:42:25.489248+00:00'
+  completed_at: '2026-08-26T17:56:08.641901+00:00'
+- id: gap-055-sync-planner
+  title: "GAP-055 slice 4: spec \xA77 trait-based sync planner"
+  criteria:
+  - cargo test -p hilo_backends planner tests pass (plan excludes ignored+ephemeral
+    with skipped_* counts; push transfers new/changed only; delete propagation when
+    local gone + not ignored; pull never deletes local; LWW remote-newer -> pull,
+    local-newer -> push, equal -> push on Push / pull on Pull; conflicts.jsonl appended
+    per LWW resolution; partial failure stops with SyncError::TransferFailed(key)
+    and idempotent re-run completes) AND cargo check --workspace exits 0 AND grep
+    -c 'pub fn plan_sync' hilo-backends/src/planner.rs >= 1 AND grep -c 'pub fn execute_sync'
+    hilo-backends/src/planner.rs >= 1 AND grep -c 'pub fn record_conflict' hilo-backends/src/planner.rs
+    >= 1
+  status: complete
+  created_at: '2026-08-26T18:12:05.853675+00:00'
+  completed_at: '2026-08-26T18:23:49.536430+00:00'
+- id: gap-055-ignore-builtin-nested
+  title: "GAP-055 \xA74 ignore engine: builtin defaults + nested .hiloignore + no_defaults\
+    \ + source attribution"
+  criteria:
+  - "IgnoreMatcher::load(root, extra, no_defaults) applies builtin defaults (spec\
+    \ \xA74.2), root .hiloignore, optional extra file, and discovers nested .hiloignore\
+    \ files; decisions attribute IgnoreSource (Builtin/RootFile/NestedFile); hilo\
+    \ ignore check prints source and honors --no-default-ignores; new unit tests cover\
+    \ builtin override, nested scoping, nearest-file-wins, negation-under-excluded-dir,\
+    \ matches(rel,is_dir) dir-only semantics; cargo test -p hilo_backends and -p hilo-cli\
+    \ pass"
+  status: complete
+  created_at: '2026-08-26T19:20:53.906472+00:00'
+  completed_at: '2026-08-26T19:26:44.618733+00:00'
+- id: gap-055-backend-sync-setup-cli
+  title: "GAP-055 \xA79 CLI remainder: hilo backend mount extensions + backend sync\
+    \ + backend setup"
+  criteria:
+  - grep -c 'Sync(SyncArgs)' hilo-cli/src/commands/backend.rs >= 1 AND grep -c 'Setup(SetupArgs)'
+    hilo-cli/src/commands/backend.rs >= 1 AND grep -c 'BackendCommand::Sync' hilo-cli/src/main.rs
+    >= 1 AND grep -c 'BackendCommand::Setup' hilo-cli/src/main.rs >= 1 AND cargo check
+    --workspace exits 0 AND cargo test -p hilo_cli --test cli backend_sync_local exits
+    0
+  status: complete
+  created_at: '2026-08-26T19:54:23.311953+00:00'
+  completed_at: '2026-08-26T20:07:15.954617+00:00'
+- id: gap-055-mcp-surface
+  title: "GAP-055 \xA710 MCP 15->17"
+  criteria:
+  - 'grep -c ''vfs_workspace_ephemeral'' hilo-mcp/src/tools/mod.rs >= 2 AND grep -c
+    ''vfs_workspace_wipe'' hilo-mcp/src/tools/mod.rs >= 2 AND grep -c ''name: "vfs_''
+    hilo-mcp/src/tools/mod.rs == 17 AND cargo test -p hilo_mcp exits 0 AND docs/mcp-tools.md
+    lists both new tools AND live hilo serve --mcp tools/list shows 17 vfs_* tools'
+  status: complete
+  created_at: '2026-08-26T20:13:38.133319+00:00'
+  completed_at: '2026-08-26T20:41:00.606970+00:00'
+- id: gap-055-triggers-sync-hook
+  title: "GAP-055 \xA77.1 hilo-triggers sync hook"
+  criteria:
+  - grep -c 'pub fn record_event' hilo-triggers/src/sync_hook.rs >= 1 AND grep -c
+    'flush_dirty' hilo-triggers/src/sync_hook.rs >= 1 AND cargo test -p hilo_triggers
+    passes AND cargo check --workspace exits 0
+  status: complete
+  created_at: '2026-08-26T20:51:42.168989+00:00'
+  completed_at: '2026-08-26T21:07:12.180367+00:00'
+- id: gap-055-stream-placeholders
+  title: "GAP-055 slice 9: \xA78 stream placeholder engine"
+  criteria:
+  - hilo-backends/src/stream.rs exists and exports StreamPlacer with plan_placeholders/create_placeholders/materialize
+    (grep -c 'pub fn plan_placeholders' hilo-backends/src/stream.rs >= 1); lib.rs
+    re-exports stream (grep -c 'pub mod stream' hilo-backends/src/lib.rs >= 1); cargo
+    test -p hilo_backends --lib stream exits 0; placeholders skip ignored and ephemeral
+    keys and carry user.vfs.remote + user.vfs.materialized xattrs (grep -c 'XATTR_MATERIALIZED'
+    hilo-backends/src/stream.rs >= 1)
+  status: complete
+  created_at: '2026-08-26T21:26:20.098140+00:00'
+  completed_at: '2026-08-26T21:34:36.283089+00:00'
+- id: gap-055-fuse-stream-wiring
+  title: "GAP-055 slice 10 \u2014 \xA78.2-8.5 stream FUSE wiring"
+  criteria:
+  - 'hilo-fuse Hilo gains optional StreamState: getattr reports remote size for unmaterialized
+    placeholders (remote_size in hilo-fuse/src/stream.rs, count>=1); open materializes
+    placeholders via backend.get + sets user.vfs.materialized=true; write handler
+    writes through (fn write in hilo-fuse/src/ops.rs, count>=1); with_stream constructor
+    exists (count>=1); planner skips unmaterialized placeholders (never push; skipped_placeholders
+    field count>=1); hilo mount wires stream/mirror from mounts.yaml; cargo check
+    --workspace exits 0; cargo test -p hilo_fuse --lib exits 0; cargo test -p hilo_backends
+    --lib exits 0'
+  status: complete
+  created_at: '2026-08-26T21:47:49.966202+00:00'
+  completed_at: '2026-08-26T22:10:30.609510+00:00'
+- id: gap-055-close
+  title: "GAP-055 board AC closure \u2014 backend-backed workspace feature complete"
+  criteria:
+  - docs/backend-compatibility-matrix.md exists (grep -c 'Stream mode' >= 5); hilo-backends
+    S3 + external-tool drivers landed (grep -c 'ExternalToolDriver' hilo-backends/src/lib.rs
+    >= 1); ignore-aware inotify sync hook landed (grep -c 'sync_hook' hilo-triggers/src/engine.rs
+    >= 1); stream FUSE wiring landed (grep -c 'with_stream' hilo-fuse/src/ops.rs >=
+    1); cargo check --workspace exits 0; cargo test -p hilo_fuse --lib exits 0
+  status: complete
+  created_at: '2026-08-26T22:13:16.879282+00:00'
+  completed_at: '2026-08-26T22:13:20.437853+00:00'
+- id: gap-056-e2e-ephemeral-loop
+  title: 'GAP-056 E2E: ephemeral classification full-loop integration test'
+  criteria:
+  - "hilo-cli/tests/cli.rs gains an integration test running the spec \xA715 E2E scenario:\
+    \ (1) hilo init in a scratch workspace; (2) write src/main.rs (persistent) + target/artifact.bin\
+    \ (ephemeral by builtin catalog); (3) write .vfs/backends/mounts.yaml with a local\
+    \ backend; (4) hilo backend sync --push asserts main.rs is upstream and artifact.bin\
+    \ is NOT upstream, stdout contains 'skipped ephemeral'; (5) hilo workspace wipe\
+    \ --ephemeral dry-run lists 'would remove\\ttarget/artifact.bin' and not src/main.rs;\
+    \ (6) wipe --apply removes artifact.bin, keeps main.rs, prints 'removed\\ttarget/artifact.bin'\
+    \ and 'freed 64 bytes across 1 file(s)'; (7) rewrite artifact.bin then hilo workspace\
+    \ ephemeral lists it again (regenerable verified); (8) hilo graph warm creates\
+    \ .vfs/graph, wipe --apply removes .vfs/graph/edges.jsonl (ephemeral catalog),\
+    \ then 'hilo graph clean && hilo graph warm' both exit 0 and .vfs/graph is recreated\
+    \ (rebuild path verified). cargo test -p hilo_cli --test cli <new_test> passes;\
+    \ RUSTFLAGS='-D warnings' cargo test --workspace --no-run exits 0."
+  status: complete
+  created_at: '2026-08-26T23:20:11.158583+00:00'
+  completed_at: '2026-08-26T23:27:12.289043+00:00'
+- id: gitleaks-allowlist-narrow
+  title: Narrow .gitleaks.toml allowlist
+  criteria:
+  - "gitleaks detect --config .gitleaks.toml scans all 477 commits clean with allowlist\
+    \ paths limited to .git/, .gitreins/, .gitreins/history/, target/, and .*\\.log$\
+    \ \u2014 no specs/, docs/, or .*\\.md$ entries"
+  status: complete
+  created_at: '2026-08-27T11:53:34.850642+00:00'
+  completed_at: '2026-08-27T11:59:08.536869+00:00'
+- id: PERF-005
+  title: Protect graph warm from unsafe roots and dependency trees
+  criteria:
+  - 'Default graph discovery prunes go/pkg/mod, vendor, node_modules, venv, .venv,
+    site-packages, target, .cache, .rustup, and .npm while an explicit manifest override
+    can re-include a default-excluded path; hilo init and hilo graph warm refuse to
+    run when the effective project root is HOME unless --allow-home is explicitly
+    supplied; focused regression tests plus cargo check --workspace, cargo fmt --all
+    --check, cargo clippy --workspace -- -D warnings, and cargo test -p hilo_graph
+    pass; operational acceptance is verified separately by the foreman: /home/kara/.vfs
+    safely removed, 9router-sync workdir is /home/kara/9router, and no scheduler project
+    uses / or /home/kara as workdir.'
+  status: complete
+  created_at: '2026-09-11T00:31:57.250568+00:00'
+  completed_at: '2026-09-11T05:03:43.539684+00:00'
+- id: gap-057-go-file-pkg-resolution
+  title: 'GAP-057: Go file to package resolution in query-time layer'
+  criteria:
+  - 'hilo graph impact <go-file> on a Go module repo lists dependents via derived
+    pkg:<module>/<dir> node (non-empty for an imported package); hilo graph related
+    --direction reverse <go-file> resolves likewise; unit tests: tempdir go.mod fixture
+    resolves .go file to pkg:<module>/<dir>, file outside module resolves None, symbol
+    nodes (pkg:/std:) never resolve; cargo test -p hilo-graph green; cargo clippy
+    -D warnings green'
+  status: complete
+  created_at: '2026-09-11T10:59:29.206247+00:00'
+  completed_at: '2026-09-11T12:18:10.074242+00:00'
+- id: INT-GITREINS-001
+  title: Make GitReins guard and Tier 2 judge complete reliably on WarpFS
+  criteria:
+  - .gitreins/config.yaml scopes the guard test command to the fast hilo_graph crate
+    and sets numeric test_timeout/hook_timeout values so the tests leg completes rather
+    than timing out.
+  - Evaluator and CLI pipeline tier2 caps are both configured, structurally scoped
+    to changed files, and max_output_tokens does not exceed the DeepSeek provider
+    limit of 393216.
+  - python3 ~/.hermes/scripts/check-gitreins-judge.py . exits 0 with PASS.
+  - gitreins guard exits 0 with its tests leg passing, not timing out.
+  status: complete
+  created_at: '2026-09-11T20:31:08.239465+00:00'
+  completed_at: '2026-09-11T20:31:13.465828+00:00'
+- id: GAP-059
+  title: graph related must fail loudly on unknown paths like impact (consistency)
+  criteria:
+  - 'hilo graph related on a path that is neither in the graph nor on disk exits non-zero
+    with a message containing ''is not in the graph'' (repro: hilo graph related zzz/qqq/nonexistent_xyz.go,
+    and --direction reverse)'
+  - 'hilo graph related still exits 0 and lists edges for a path that IS in the graph
+    or exists on disk, and pkg:/sys: symbol nodes in the graph still answer without
+    a false error'
+  - a new unit test in hilo-graph/src/graph.rs covers the unknown-path error path
+    and cargo test -p hilo_graph --lib is green
+  - cargo fmt --all --check reports no diff
+  status: complete
+  created_at: '2026-09-11T21:15:39.593436+00:00'
+  completed_at: '2026-09-11T21:41:58.395983+00:00'
+- id: CI-002
+  title: Fix Rust clippy collapsible_if failure on master
+  criteria:
+  - 'Collapse only the nested unknown-path guard in hilo-graph/src/graph.rs while
+    preserving pkg:/sys: exemptions and the exact error behavior; cargo fmt --all
+    --check, cargo clippy --workspace -- -D warnings, and existing hilo_graph tests
+    must pass'
+  status: complete
+  created_at: '2026-09-12T11:03:12.501538+00:00'
+  completed_at: '2026-09-12T11:28:58.832826+00:00'
+- id: GAP-064
+  title: Add Python file-to-package graph resolution
+  criteria:
+  - PkgResolver maps Python files in regular package trees to matching pkg:module
+    nodes, and regression tests prove both impact and reverse related queries return
+    package importers for a FastAPI-shaped fixture while preserving Rust/Go behavior;
+    cargo fmt --all --check, cargo clippy --workspace -- -D warnings, and warning-strict
+    workspace tests pass.
+  status: complete
+  created_at: '2026-09-12T16:51:15.171454+00:00'
+  completed_at: '2026-09-12T17:18:57.289161+00:00'
+- id: GAP-066
+  title: graph untested/module ignore pkg-resolved tested_by edges (GAP-066)
+  criteria:
+  - 'Coverage consumers resolve file->pkg nodes. In a Python corpus where tests/test_routing.py
+    emits tested_by -> pkg:fastapi.routing: (a) `hilo graph untested` does NOT list
+    fastapi/routing.py while still listing the genuinely uncovered importer app/main.py
+    (its pkg node pkg:app.main is no tested_by target); (b) `hilo graph module fastapi`
+    reports test_coverage_pct 100.0 (was 0.0) with Files 1; (c) file-level tested_by
+    behavior for Rust/Go paths is unchanged and the hilo_graph + hilo_mcp test suites
+    pass; (d) no canonical edge format change (no new edge rel, parser emission untouched).'
+  status: complete
+  created_at: '2026-09-12T18:31:16.647757+00:00'
+  completed_at: '2026-09-12T19:23:24.958271+00:00'
+- id: GAP-062
+  title: MCP vfs_graph_related rejects unknown paths
+  criteria:
+  - vfs_graph_related returns JSON-RPC -32603 with an is-not-in-graph message for
+    a path absent from disk and graph, while exact and normalized-prefix paths for
+    existing graph nodes still return their related edges; cargo test -p hilo_mcp
+    passes
+  status: complete
+  created_at: '2026-09-12T19:52:59.476192+00:00'
+  completed_at: '2026-09-12T20:43:21.245273+00:00'
+- id: GAP-067
+  title: hilo meta --set rejects '=' in attr and echoes final key=value
+  criteria:
+  - cargo test -p hilo-cli passes; hilo meta file --set role=core errors with usage;
+    --set role --value core writes user.vfs.role=core and prints it
+  status: complete
+  created_at: '2026-09-13T03:43:59.925848+00:00'
+  completed_at: '2026-09-17T03:26:13.820781+00:00'
+- id: GAP-058
+  title: Report graph-warm exclusions by category
+  criteria:
+  - graph warm prints excluded counts by category, preserves manifest include_paths
+    overrides, documents override discovery in --help, and regression tests pass
+  status: complete
+  created_at: '2026-09-13T11:50:32.830292+00:00'
+  completed_at: '2026-09-13T12:55:22.552017+00:00'
+- id: INT-CI-004
+  title: Fix flaky MCP graph stats test isolation
+  criteria:
+  - Default-parallel hilo_mcp mcp_test passes 50 consecutive runs; graph empty/populated
+    tests cannot observe each other; cargo fmt/check/clippy -D warnings and GitReins
+    Tier 1 pass
+  status: complete
+  created_at: '2026-09-13T20:04:40.068869+00:00'
+  completed_at: '2026-09-13T21:13:46.353114+00:00'
+- id: GAP-070
+  title: Repair graph clean-to-warm cache invalidation
+  criteria:
+  - hilo graph clean removes or invalidates .vfs/graph/.parse_cache.json so an immediate
+    hilo graph warm rebuilds edges.jsonl and graph.db instead of reusing stale cached
+    parse results; add regression coverage for the full clean -> warm -> non-empty
+    stats path; keep clean idempotent and cargo fmt/check/tests green.
+  status: complete
+  created_at: '2026-09-14T04:05:29.118803+00:00'
+  completed_at: '2026-09-14T04:22:00.585640+00:00'
+- id: GAP-069
+  title: 'TS/JS file-form impact and related resolve local: specifier nodes to the
+    real file'
+  criteria:
+  - '1) hilo-graph/src/resolution.rs gains a query-time local: reverse-resolution
+    layer: for edges with to=local:<spec>, the spec is resolved against the importing
+    file''s directory with TS/JS extension and index probing, indexed as target file
+    -> set of local: node names. 2) compute_impact (hilo-graph/src/impact.rs) seeds
+    the BFS with that family so ''hilo graph impact <file>.ts'' and MCP vfs_graph_impact
+    return the importers instead of an empty dependents list. 3) GraphDB::related
+    Reverse direction also matches the resolved local: family. 4) New unit tests in
+    resolution.rs plus an integration test in hilo-graph/tests/impact_test.rs modeled
+    on test_impact_python_file_query_returns_package_importers prove 3 importer directories
+    using ./x, ../dir/x and ./dir/x all resolve to one target file at depth 1 while
+    decoys do not, and the tests were proved RED before the fix. 5) parser.rs and
+    the canonical edges.jsonl format are untouched (git diff --stat -- hilo-graph/src/parser.rs
+    empty) and all previously passing hilo_graph tests still pass.'
+  status: complete
+  created_at: '2026-09-14T12:02:02.838574+00:00'
+  completed_at: '2026-09-14T14:21:34.819366+00:00'
+- id: GAP-071
+  title: Coverage consumers honour local:-targeted tested_by edges (TS/JS)
+  criteria:
+  - hilo graph untested and hilo graph module count a TS/JS file as covered when a
+    spec file emits tested_by -> local:<spec> resolving to that file; cross-directory
+    decoy isolation holds; Rust rule (i) only and Python/Go rule (ii) unchanged; new
+    tests proved RED before the fix; cargo fmt --check, RUSTFLAGS=-D warnings cargo
+    check --workspace, clippy --all-targets -- -D warnings, cargo test -p hilo_graph
+    and -p hilo_mcp all green.
+  status: complete
+  created_at: '2026-09-15T04:04:13.707442+00:00'
+  completed_at: '2026-09-15T06:35:42.563520+00:00'
+- id: GAP-072
+  title: graph search labels hits with resolved repo-relative file paths (GAP-072)
+  criteria:
+  - 'hilo graph search on a TS/JS graph returns repo-relative FILE paths for hits
+    that are currently raw local: pseudo-nodes (e.g. packages/vite/src/node/server/pluginContainer.ts,
+    never ''local:../pluginContainer'')'
+  - 'a local: node that resolves to exactly one file becomes that file path; a node
+    resolving to several files expands deterministically to one result per file; a
+    node that resolves to no file is excluded from results'
+  - the MCP tool vfs_graph_search returns the same resolved path form (shared library
+    seam, verified by test or live probe)
+  - cargo test -p hilo_graph --lib passes with new tests; cargo clippy --workspace
+    --all-targets -- -D warnings and cargo fmt --all are clean; search determinism
+    test still passes
+  status: complete
+  created_at: '2026-09-15T12:17:14.313244+00:00'
+  completed_at: '2026-09-15T13:32:11.650973+00:00'
+- id: GAP-076
+  title: Python relative-import edges (pkg:.x / pkg:..x) resolve to their defining
+    file in impact/related
+  criteria:
+  - '1) nodes_for/impact resolves pkg:.<mod> and pkg:..<mod> edges to the defining
+    .py file, so file-form impact lists relative-import dependents. 2) New unit test
+    + integration test prove N importers of one module inside one package are all
+    listed at depth 1. 3) Live flask corpus check: hilo graph impact src/flask/helpers.py
+    and src/flask/config.py return their grep-verified importers, not ''No dependents
+    found''. 4) cargo test -p hilo_graph --lib, cargo test -p hilo-graph, cargo test
+    -p hilo-cli green; cargo clippy -p hilo-graph --all-targets -- -D warnings green.'
+  status: complete
+  created_at: '2026-09-15T19:55:55.379373+00:00'
+  completed_at: '2026-09-15T21:09:11.163402+00:00'
+- id: GAP-082
+  title: Resolve files inside PEP 420 namespace packages to their dotted module (GAP-082)
+  criteria:
+  - 'On a freshly warmed copy of the flask corpus (/tmp/bakeoff/flask copied to /tmp/gap082-flask),
+    ''hilo graph impact src/flask/sansio/app.py'' lists at least one dependent at
+    depth 1 (baseline: ''No dependents found''; src/flask/app.py expected) while the
+    control ''hilo graph impact src/flask/config.py'' still lists dependents; ''cargo
+    test -p hilo_graph'' is green including new PEP 420 unit tests (namespace dir
+    under a regular package resolves to Some(dotted chain), a plain dir with no regular
+    package ancestor still resolves to None) and ''cargo clippy -p hilo_graph --all-targets
+    -- -D warnings'' plus ''cargo fmt --all --check'' are clean; re-warming the corpus
+    after the change removes zero edges versus the pre-change baseline (additivity)
+    and the added-edge count is reported.'
+  status: complete
+  created_at: '2026-09-16T02:30:14.545588+00:00'
+  completed_at: '2026-09-16T03:39:48.220737+00:00'
+- id: GAP-078
+  title: Order understand MAP by relevance and grade anchor match quality
+  criteria:
+  - '''hilo graph understand "fix a bug in session handling"'' on a warm flask graph
+    renders src/flask/sessions.py within the first 3 MAP entries and above every examples/*
+    file'
+  - MAP tier is ordered by signal score descending then path (anchors lead), not alphabetically;
+    SIGNATURES/DETAIL keep their existing order
+  - 'anchor scoring grades match quality: whole path-component match outranks prefix
+    outranks incidental substring, so src/flask/sessions.py outranks src/flask/debughelpers.py
+    for the flask task'
+  - a new regression test in the repo fails on the pre-change code and passes after;
+    cargo test -p hilo_graph --lib passes in full
+  - cargo test -p hilo_graph --test determinism_test passes (byte-identical output
+    for identical input) and cargo clippy -p hilo_graph --all-targets -- -D warnings
+    is clean
+  status: complete
+  created_at: '2026-09-16T10:26:49.104131+00:00'
+  completed_at: '2026-09-16T11:04:07.529336+00:00'
+- id: GAP-075
+  title: Fix empty TS/JS symbol names in graph understand MAP
+  criteria:
+  - '''hilo graph understand "fix router middleware stack"'' on a freshly-warmed copy
+    of the express corpus (/tmp/bakeoff/express copied to scratch, .vfs/graph cleared)
+    renders a real identifier for every MAP entry of every .js/.ts file - no empty
+    bullets and no stray brace/bracket tokens such as ''- }'''
+  - 'A new regression test in hilo-graph proves per-node-kind name extraction for
+    TS/JS: function_declaration, class_declaration, method_definition, interface_declaration,
+    type_alias_declaration, plus ''export const x = () => {}'' arrow/variable declarations,
+    all wrapped in export_statement; the test fails on the pre-change extractor and
+    passes after'
+  - cargo test -p hilo_graph --lib passes in full (no pre-existing test weakened or
+    deleted), cargo test -p hilo_graph --test determinism_test passes, cargo clippy
+    -p hilo_graph --all-targets -- -D warnings is clean and cargo fmt --all --check
+    is clean
+  - 'The emitted edge set is unchanged by the fix (query-time only): re-warming a
+    cleared express scratch copy yields ADDED 0 / REMOVED 0 against the pre-change
+    baseline, and ''hilo graph impact''/''related'' answers are identical before and
+    after'
+  status: complete
+  created_at: '2026-09-17T00:00:20.332798+00:00'
+  completed_at: '2026-09-17T00:45:25.150346+00:00'
+- id: gap-065-warm-coverage-accounting
+  title: 'GAP-065: graph warm must account for every discovered file (no silent zero-edge/read-failure
+    losses)'
+  criteria:
+  - cargo fmt --all --check exits 0; cargo clippy --workspace -- -D warnings exits
+    0; cargo build -p hilo-cli exits 0
+  - hilo graph warm prints a coverage summary where the number of files that contributed
+    >=1 edge plus every named zero-edge category (package facade __init__.py, no imports
+    found, unreadable source, unsupported extension) sums exactly to the number of
+    parsed files; verified live on a fresh copy of the corpus
+  - a discovered source file that cannot be read (chmod 000) is named in the output
+    under an unreadable category instead of being silently treated as a zero-edge
+    file; covered by an automated test
+  - the GAP-058 pruned-tree exclusion categories still print in the same warm output
+    (regression preserved, test present)
+  - edges.jsonl for the corpus is edge-set identical before vs after the change (ADDED
+    0 / REMOVED 0) - reporting-only change with no graph-semantics delta
+  - cargo test -p hilo_cli and cargo test -p hilo_graph --lib exit 0 with new tests
+    covering the zero-edge classification
+  status: complete
+  created_at: '2026-09-17T01:42:03.663807+00:00'
+  completed_at: '2026-09-17T02:45:30.504909+00:00'
+- id: INT-GITREINS-002
+  title: Enforce Rust Clippy in GitReins guards
+  criteria:
+  - Repository guard configuration must select and execute Rust Clippy with warnings
+    denied; no cppcheck timeout or silent static-analysis success. Preserve secrets
+    and existing test coverage. Add a regression check proving Rust lint failure propagates
+    to a nonzero guard result. Clean repository guard, scoped Rust check, fmt and
+    tests must pass.
+  status: complete
+  created_at: '2026-09-17T04:13:08.930597+00:00'
+  completed_at: '2026-09-17T04:39:12.023379+00:00'
+- id: GAP-063
+  title: hilo CLI must not panic with exit 101 when stdout closes early (SIGPIPE)
+  criteria:
+  - Restore default SIGPIPE disposition at CLI start (unix-gated, libc already a dep)
+    so early-closing consumers (head/true/supervisors) never produce a Rust panic;
+    live repro in a warmed corpus 5/5 runs of 'hilo graph stats | true' and '| head
+    -1' show no panicked/Broken pipe on stderr and rc in {0,141} (never 101); regression
+    test in hilo-cli/tests/cli.rs; cargo check --workspace, fmt, scripts/rust-lint.sh
+    green
+  status: complete
+  created_at: '2026-09-17T06:01:49.879971+00:00'
+  completed_at: '2026-09-17T06:45:36.055471+00:00'
+- id: BOARD-HYGIENE-001
+  title: Reconcile duplicate WarpFS board tasks without losing provenance
+  criteria:
+  - boardctl validate exits 0 with no duplicate task IDs or invalid status errors;
+    legacy event warnings may remain.
+  - Completed GAP-067 GAP-077 GAP-079 GAP-080 retain verified completion evidence
+    and are not pending; distinct QA findings sharing an old ID remain individually
+    represented rather than blindly collapsed.
+  - Original duplicate rows and reconciliation mapping are preserved in an audit artifact;
+    existing events remain byte-identical as a prefix; unrelated task rows remain
+    unchanged except documented malformed field corrections.
+  - Character-array reasoning is restored to readable text; malformed guard/CI fields
+    and status done are normalized conservatively while original evidence is retained.
+  - A repeatable verification script checks uniqueness, allowed statuses, provenance
+    and preservation against the pre-change snapshot; snapshot is git commit 71b333f.
+  status: complete
+  created_at: '2026-09-17T07:36:08.106842+00:00'
+  completed_at: '2026-09-17T07:54:04.451747+00:00'
+- id: QA-WARPFS-2-2
+  title: 'Board text-integrity: repair over-escaped rows + detect the class in the
+    reconciliation verifier'
+  criteria:
+  - '1) .coding-hermes/board/tasks.jsonl: the 4 rows with over-escaped string fields
+    (QA-WARPFS-1 detail+review_notes, QA-WARPFS-2 detail+review_notes, QA-WARPFS-1-2
+    detail, QA-WARPFS-3-4 detail+review_notes) have exactly one backslash-escaping
+    level removed; decoded values equal the pre-repair values with one level un-escaped;
+    row count still 129; every row parses with python json.loads and jq; only those
+    4 lines differ (git diff shows 4 changed lines). 2) scripts/verify_board_reconciliation.py
+    gains an over-escaped-text detection check that reports 0 findings on the repaired
+    board and exactly those 4 rows when run against the de9374c revision content.
+    3) scripts/tests/test_board_reconciliation.py gains regression tests: synthetic
+    over-escaped row is flagged; real repaired board is clean; existing 25 tests still
+    pass. 4) Evidence (before/after parse counts, jq counts, affected ids/fields,
+    exact commands) is in the commit body; commit carries the Co-authored-by trailer;
+    work pushed to origin/master.'
+  status: complete
+  created_at: '2026-09-17T08:16:55.469410+00:00'
+  completed_at: '2026-09-17T08:30:39.942631+00:00'
+- id: QA-WARPFS-2-2-R2
+  title: Verifier live mode accepts artifact-documented reidentification when closing
+    a reidentified row
+  criteria:
+  - '1) verify_board_reconciliation.py: a pending->complete flip is accepted as documented
+    only when the reconciliation artifact''s reidentified_rows maps the base row (original_line+original_id)
+    to the live row id, the live row is complete with the same title and a non-empty
+    completion marker; flips without the artifact entry, with a different title, or
+    without completion evidence are still reported. 2) 4 new regression tests cover
+    the real case plus the three negatives; all pre-existing tests untouched and green
+    (39 total). 3) python3 scripts/verify_board_reconciliation.py --quiet and --live
+    --quiet both exit 0 with 27 checks passed. 4) Commit carries the Co-authored-by
+    trailer and is pushed to origin/master with 0 unpushed.'
+  status: complete
+  created_at: '2026-09-17T08:34:04.548024+00:00'
+  completed_at: '2026-09-17T08:45:50.741439+00:00'
+- id: GAP-081
+  title: 'Phase 1: emit service_call edges for Go gRPC client/server call sites so
+    impact/search see cross-service dependencies'
+  criteria:
+  - '1) New pass in hilo-cli/src/commands/graph.rs (mirroring discover_test_associations)
+    scans discovered non-generated .go files: a file that calls pb.New<Svc>ServiceClient(
+    is a caller, a file that calls pb.Register<Svc>Server( is a provider; emit Edge{from:
+    caller rel, to: provider rel, rel: ''service_call'', stable provenance, confidence
+    1.0}. Files containing the protoc-gen-go generated marker (e.g. ''Code generated
+    by protoc-gen-go'') must NEVER be a service_call endpoint, and function-definition
+    lines (''func New...Client('' / ''func Register...Server('') must not count as
+    call sites.'
+  - '2) LIVE acceptance on a fresh copy of /tmp/bakeoff/microservices-demo warmed
+    with the new binary: edges.jsonl contains exactly these 5 service_call pairs -
+    src/frontend/rpc.go -> src/productcatalogservice/server.go, src/frontend/rpc.go
+    -> src/shippingservice/main.go, src/frontend/handlers.go -> src/checkoutservice/main.go,
+    src/checkoutservice/main.go -> src/productcatalogservice/server.go, src/checkoutservice/main.go
+    -> src/shippingservice/main.go - and no service_call endpoint path contains /genproto/.'
+  - '3) LIVE acceptance: in that warmed corpus, ''hilo graph impact src/productcatalogservice/server.go''
+    lists src/frontend/rpc.go and src/checkoutservice/main.go as dependents (pre-change
+    baseline printed ''No dependents found'').'
+  - '4) Additivity: the pass adds ONLY service_call edges. On the same corpus the
+    imports/tested_by edge sets are unchanged versus the pre-change baseline recorded
+    by the foreman (393 imports / 33 tested_by / 4 tests raw lines, stats 424 distinct
+    / 59 files).'
+  - '5) The service-call pass must NOT be skipped by the full-parse-cache-hit early
+    return in run_warm_in: warming a corpus that already has a fully valid parse cache
+    but no service_call lines in edges.jsonl must restore those lines; second warm
+    adds zero duplicate lines (append_edges_deduped idempotence).'
+  - 6) A regression test warms a tempdir fixture (provider file with a Register call
+    site, two caller files with New...Client call sites, plus a generated *_grpc.pb.go
+    decoy that defines both anchor forms) and asserts the exact expected service_call
+    edge set; the worker reports the falsification run (removing the generated-file
+    exclusion or the pass must make the test fail).
+  - '7) Gates green: cargo check --workspace exit 0; cargo fmt --all --check clean;
+    bash scripts/rust-lint.sh exit 0; RUSTFLAGS=''-D warnings'' cargo test --workspace
+    --no-run exit 0; cargo test -p hilo_graph --lib green; cargo test -p hilo_cli
+    green. Exactly ONE commit by the worker (git rev-list --count c4fe3b6..HEAD ==
+    1), its message contains ''Addresses GAP-081'' and the ''Co-authored-by: Alexis
+    Okuwa <wojonstech@gmail.com>'' trailer, author identity unchanged (totalwindupflightsystems).
+    The worker does not push; the FOREMAN pushes after the gates pass (tick doctrine),
+    so the accepted end state is origin/master == HEAD with git rev-list --count origin/master..HEAD
+    == 0. This criterion supersedes an earlier wording that required ''no push'' in
+    the repo state at judge time - that wording contradicted the mandatory foreman
+    push and failed a correct implementation (verdict 61551f68).'
+  status: complete
+  created_at: '2026-09-18T02:15:27.420324+00:00'
+  completed_at: '2026-09-18T02:15:31.727415+00:00'
+- id: GAP-081-P2
+  title: service_contract edges from proto service declarations + contract anchors
+    queryable via impact/related
+  criteria:
+  - AC1 hilo-cli/src/commands/graph.rs defines SERVICE_CONTRACT_REL="service_contract"
+    and SERVICE_CONTRACT_PROVENANCE="grpc_proto" and a discover_service_contracts
+    pass wired into run_warm_in whose PERF-002 fast-path guard covers the new dimension
+  - AC2 the pass locates *.proto files with the same pruning semantics as collect_source_files,
+    ignores commented-out service declarations, emits one service_contract edge per
+    (caller file, declaring proto file) pair and emits nothing for a service with
+    no caller
+  - AC3 new unit tests exist in hilo-cli graph.rs tests mod and hilo-graph graph.rs
+    tests mod; cargo test -p hilo-cli and cargo test -p hilo_graph --lib exit 0
+  - 'AC4 live on a fresh scratch copy of /tmp/bakeoff/microservices-demo: grep -c
+    service_contract .vfs/graph/edges.jsonl > 0 and hilo graph impact protos/demo.proto
+    exits 0 listing the Go caller files (src/checkoutservice/main.go, src/frontend/rpc.go)
+    with no PERF-004 error'
+  - 'AC5 additivity: REMOVED == 0 versus the pre-phase-1 430-edge baseline and the
+    ADDED count is reported'
+  - 'AC6 idempotence: a second hilo graph warm on the same warmed corpus adds 0 lines
+    to edges.jsonl'
+  - 'AC7 PERF-004 preserved: hilo graph impact README.md still exits 1 with the unchanged
+    not-an-indexable-source-file error'
+  - 'AC8 only hilo-cli/src/commands/graph.rs and hilo-graph/src/graph.rs are modified:
+    no Cargo.toml/Cargo.lock, no board or .gitreins changes'
+  - AC9 the work is committed in this repo (git log shows the new commit and its hash
+    is reported)
+  status: complete
+  created_at: '2026-09-18T04:55:20.656680+00:00'
+  completed_at: '2026-09-18T05:43:04.124915+00:00'
+- id: GAP-081-P4
+  title: 'service_contract phase 2b: non-Go gRPC client anchors link callers to the
+    contract'
+  criteria:
+  - 'AC1 hilo-cli/src/commands/graph.rs records non-Go gRPC client anchors into the
+    SAME ServiceCallSites.callers map that phase 1 and phase 2a consume: Python <Name>ServiceStub(
+    , Java <Name>ServiceGrpc.newBlockingStub( / .newStub( , C#/TS/JS new <Name>ServiceClient(
+    each record the calling file as a caller of <Name>Service'
+  - 'AC2 generated protoc/gRPC stub files are excluded in every scanned language:
+    on a fresh copy of /tmp/bakeoff/microservices-demo the pass never records src/emailservice/demo_pb2_grpc.py
+    or src/recommendationservice/demo_pb2_grpc.py as a caller of any service, although
+    those files declare <X>ServiceStub for every service in the proto'
+  - AC3 hilo graph impact protos/demo.proto exits 0 and lists the non-Go callers src/recommendationservice/client.py,
+    src/emailservice/email_client.py, src/adservice/src/main/java/hipstershop/AdServiceClient.java
+    and src/cartservice/tests/CartServiceTests.cs as service_contract dependents
+  - 'AC4 additivity: REMOVED == 0 against the pre-change baseline (449 lines / 14
+    service_contract / 3 lines targeting protos/demo.proto, captured in /tmp/wfp4-base)
+    and the ADDED count is reported'
+  - 'AC5 idempotence: a second hilo graph warm on the same warmed corpus appends 0
+    lines to edges.jsonl'
+  - AC6 new unit tests in the existing mod tests of hilo-cli/src/commands/graph.rs
+    cover each language anchor form, the generated-file exclusion and no-caller-no-edge;
+    cargo test -p hilo-cli and cargo test -p hilo_graph --lib exit 0
+  - 'AC7 only hilo-cli/src/commands/graph.rs is modified: no Cargo.toml, no Cargo.lock,
+    no board or .gitreins changes by the worker'
+  - AC8 the work is committed in this repo and the commit hash is reported
+  status: complete
+  created_at: '2026-09-18T06:38:44.840156+00:00'
+  completed_at: '2026-09-18T07:18:23.527925+00:00'
+- id: GAP-081-P5
+  title: 'GAP-081 phase 2c: .mjs/.cjs files are discovered as JS source files and
+    their New<Name>ServiceClient( anchors reach service_call/service_contract; C#
+    <auto-generated> banner excludes generated C# stubs'
+  criteria:
+  - cargo test -p hilo_graph --lib passes and includes new unit tests asserting Language::from_extension("mjs")==Some(JavaScript)
+    and ==Some(JavaScript) for cjs
+  - cargo test -p hilo-cli passes with new graph.rs unit tests covering a .mjs New<Name>ServiceClient(
+    anchor, a <auto-generated>-bannered C# stub excluded, and a hand-written C# caller
+    still counted
+  - 'Additivity gate on a scratch copy of /tmp/bakeoff/vitest and /tmp/bakeoff/microservices-demo:
+    (from,to,rel) triples REMOVED == 0, ADDED reported'
+  - cargo fmt --all --check clean, cargo clippy -p hilo_graph -p hilo-cli --all-targets
+    -- -D warnings clean, RUSTFLAGS=-D warnings cargo test --workspace --no-run exits
+    0
+  status: complete
+  created_at: '2026-09-18T07:29:23.923072+00:00'
+  completed_at: '2026-09-18T08:30:20.621311+00:00'
+- id: GAP-083
+  title: graph related/impact must label crate-level (pkg:*) dependents instead of
+    presenting them as file-level dependents
+  criteria:
+  - 'For a file with zero file-level incoming edges, ''hilo graph related <file> --direction
+    reverse'' prints a summary line naming 0 direct (file-level) dependents before
+    any pkg: row'
+  - Every emitted related row either names the queried path or is explicitly labelled
+    crate-level (pkg:<crate>) in the text output, and every impact row is labelled
+    scope=file or scope=crate in text and --format json
+  - '''hilo graph impact <file> --format json'' depth-1 entries are all true file-level
+    importers (cross-checked against the fresh-warm edges of the queried file)'
+  - 'No regression: file-level rows of ''hilo graph related hilo-graph/src/duckdb.rs
+    --direction reverse'' are byte-identical to the pre-change output, and ''hilo
+    graph impact hilo-graph/src/duckdb.rs --format json'' keeps the same file-level
+    depth-1 set'
+  status: complete
+  created_at: '2026-09-18T09:05:32.721904+00:00'
+  completed_at: '2026-09-18T09:57:18.144973+00:00'
+- id: GAP-084
+  title: graph understand must not print literal template placeholders as content
+    and every tier must be labelled empty or carry real entries
+  criteria:
+  - 'hilo graph understand <task> (default harmonic resolution) output contains zero
+    literal template placeholder lines: no line starting with ''<file>'' , no line
+    equal to ''- <key symbols, one per line>'' or ''<source (whitespace-minified)>''
+    , no line matching ''^<file>:<line>'''
+  - Every '##' section either carries at least one real entry or its tier-body states
+    explicitly that the tier is empty; a section is never a header followed only by
+    scaffolding or nothing
+  - 'Budget semantics are pinned by a test: on a fixture graph, graph understand byte
+    size is non-decreasing in --budget and --budget 200 differs from --budget 40000
+    in harmonic mode; --resolution flat behaviour (budget-independent today) is either
+    made budget-aware or stated in the flag''s help text and covered by the same test
+    file'
+  - 'No data regression: for a fixed fixture the real entry lines of MAP/SIGNATURES/DETAIL
+    are unchanged apart from the removed scaffolding; cargo test -p hilo_graph --lib
+    and cargo test -p hilo-cli stay green, cargo fmt --all --check and cargo clippy
+    -p hilo_graph -p hilo-cli --all-targets -- -D warnings clean'
+  status: complete
+  created_at: '2026-09-18T10:01:28.373543+00:00'
+  completed_at: '2026-09-18T11:23:57.771835+00:00'
+- id: GAP-086
+  title: graph warm and MCP project preconditions
+  criteria:
+  - graph warm without init fails clearly or initializes completely; MCP from non-project
+    cwd fails clearly; cache artifacts are ignored; focused and workspace gates pass
+  status: complete
+  created_at: '2026-09-18T11:35:07.641669+00:00'
+  completed_at: '2026-09-18T11:58:57.469175+00:00'
+- id: GAP-060
+  title: Refresh documented performance claims and examples
+  criteria:
+  - 'docs/performance.md and README.md record the verified containerd-scale warm/query
+    measurements and a full-path pkg: example; existing claims are corrected without
+    code changes; documentation remains internally consistent and cargo fmt/check
+    are unaffected'
+  status: complete
+  created_at: '2026-09-18T12:53:15.978692+00:00'
+  completed_at: '2026-09-18T12:56:28.808115+00:00'
+- id: GAP-085
+  title: graph module must fail loudly on an unknown prefix
+  criteria:
+  - 'Unknown prefix fails loudly: the built binary with ''graph module no/such/dir''
+    exits non-zero and the error text contains the prefix, from any cwd, warm or unwarmed'
+  - 'Known prefix unaffected: ''graph module hilo-graph/src'' in the repo still exits
+    0 and prints Files and Edges counts greater than zero'
+  - 'Real-but-uncovered prefix is honest: when the prefix is an existing directory
+    with zero graph files the command exits 0 and prints the exact phrase No files
+    in the graph under plus the prefix'
+  - 'Unit coverage: a hilo-cli unit test asserts both the unknown-prefix error and
+    the empty-but-real-prefix outcome, and the tests pass'
+  - 'Gates: cargo fmt --all --check clean; cargo test -p hilo-cli green; cargo test
+    -p hilo_graph --lib green'
+  status: complete
+  created_at: '2026-09-18T13:22:28.274665+00:00'
+  completed_at: '2026-09-18T14:08:01.151782+00:00'
+- id: GAP-088
+  title: MCP and CLI surface documentation drift
+  criteria:
+  - All four documented MCP/CLI contracts match the shipped server and CLI, with regression
+    coverage for the tool count/help text; docs tests pass.
+  status: complete
+  created_at: '2026-09-18T14:28:29.141570+00:00'
+  completed_at: '2026-09-18T14:52:25.431853+00:00'
+- id: GAP-068
+  title: Correct README install requirements wording
+  criteria:
+  - README accurately distinguishes runtime libfuse3 from optional mount-only development
+    headers and documents the core build prerequisites without unsupported claims
+  status: complete
+  created_at: '2026-09-18T15:34:33.585972+00:00'
+  completed_at: '2026-09-18T15:38:58.683899+00:00'
+- id: INT-GITREINS-003
+  title: Rust LSP guard leg must fail closed
+  criteria:
+  - 'A broken or absent rust-analyzer can no longer produce a green guard: with a
+    stub rust-analyzer that fails to initialize the real ''gitreins guard'' FAILs
+    (negative control), with rust-analyzer absent the enforcing script exits non-zero
+    naming the remedy, and with a working rust-analyzer the gate passes and prints
+    an explicit rust-analyzer line. Clippy -D warnings and the hilo_graph lib suite
+    stay enforced; AGENTS.md and the rust-lint.sh header document the real guard legs.'
+  status: complete
+  created_at: '2026-09-18T18:01:51.435096+00:00'
+  completed_at: '2026-09-18T19:00:09.494567+00:00'
+- id: BOARD-VERIFY-002
+  title: Live board header reconciliation
+  criteria:
+  - Live mode accepts documented header mutations while preserving identity and rejecting
+    loss or unauthorized changes; default mode remains strict; regression tests pass.
+  status: complete
+  created_at: '2026-09-19T07:07:56.517546+00:00'
+  completed_at: '2026-09-19T07:23:49.154263+00:00'
+- id: DF-WARPFS-2
+  title: id-form UX on graph impact/related
+  criteria:
+  - hilo graph impact/related accept file:-prefixed repo-relative paths equivalently
+    to bare paths, OR reject them with an error that names the three accepted id shapes
+    (bare path, sys:, pkg:); unresolvable-target errors distinguish file-not-found
+    from id-form-hint; regression tests cover both
+  status: complete
+  created_at: '2026-09-20T01:11:41.582202+00:00'
+  completed_at: '2026-09-20T02:24:04.606566+00:00'
+- id: GAP-090
+  title: MCP tool-count drift in CONTRIBUTING.md is unguarded
+  criteria:
+  - CONTRIBUTING.md states the real MCP tool count (17) and an additive regression
+    test in hilo-cli/tests/cli.rs fails when any live top-level doc names a count
+    that disagrees with hilo_mcp::tools::list_tools().len(); cargo fmt --check clean,
+    cargo clippy --workspace --all-targets -- -D warnings clean, cargo test -p hilo-cli
+    --test cli green
+  status: complete
+  created_at: '2026-09-20T03:51:20.162015+00:00'
+  completed_at: '2026-09-20T04:11:11.800339+00:00'
+- id: DF-WARPFS-18
+  title: Flaky hilo_graph lib test blocks Tier-1 guard (CWD-global-state)
+  criteria:
+  - 'cargo test -p hilo_graph --lib passes 10 consecutive runs with no set_current_dir-dependent
+    failures; the two CWD-mutating semantic.rs tests (search_with_symbols_finds_defining_file_by_exact_symbol,
+    search_without_symbols_keeps_path_only_behavior) no longer mutate or depend on
+    process-global CWD (root passed explicitly); RED proof: tests find their fixture
+    file with process CWD held in an unrelated directory; cargo fmt --check clean;
+    cargo clippy -p hilo_graph --all-targets -- -D warnings clean'
+  status: complete
+  created_at: '2026-09-20T05:58:25.920318+00:00'
+  completed_at: '2026-09-20T06:53:43.355235+00:00'
+- id: DF-WARPFS-9
+  title: backend mount plain form registers nothing (legacy print placeholder)
+  criteria:
+  - On a fresh hilo init workspace, hilo backend mount --type s3 --bucket B --at /x
+    either exits non-zero writing nothing, or exits 0 with .vfs/backends/mounts.yaml
+    containing the mount; regression test asserts mounts.yaml exists after the PLAIN
+    documented form
+  status: complete
+  created_at: '2026-09-20T09:20:17.589044+00:00'
+  completed_at: '2026-09-20T09:47:46.955003+00:00'
+- id: df-warpfs-10-s3-head-404
+  title: S3 HEAD 404 on an absent key must mean not-found, not abort the sync (DF-WARPFS-10)
+  criteria:
+  - 'All must hold: (1) cargo test -p hilo_backends --lib head_failure runs 4 tests
+    and passes, specifically head_failure_404_status_is_absent, head_failure_typed_not_found_is_absent,
+    head_failure_notfound_code_is_absent and the negative head_failure_real_error_is_not_absent
+    (500/403/AccessDenied/301 stay errors); (2) in hilo-backends/src/s3.rs, head_object_meta
+    AND head_object_last_modified both delegate to head_error_is_not_found(&e) and
+    neither contains a format!()-Display substring match on NotFound (the only surviving
+    such pattern is in delete_object, which is out of scope); (3) the fix layer checks
+    the raw HTTP status 404 first, then the typed HeadObjectError::is_not_found(),
+    then the wire code == NotFound; (4) the committed working tree contains the pure
+    decision fn head_failure_means_absent(status, typed_not_found, code) so the classification
+    is testable without a live endpoint; (5) commit 464f025 exists on origin/master
+    with only hilo-backends/src/s3.rs changed; (6) cargo fmt --all --check exits 0
+    and cargo clippy --workspace --all-targets -- -D warnings exits 0. Note: the commit
+    message records a live falsifiable repro against a moto endpoint (OLD exit 1 with
+    the service error, FIXED exit 0 with 2 transferred) that required a locally-run
+    emulator; do not fail the criterion on endpoint reachability, judge conditions
+    1-6 in the working tree.'
+  status: complete
+  created_at: '2026-09-20T12:23:12.101336+00:00'
+  completed_at: '2026-09-20T12:23:15.610508+00:00'
+- id: GAP-092
+  title: 'DuckDB reconcile: bound memory via chunked replay + apply manifest memory_limit/threads'
+  criteria:
+  - '1) reconcile_edges_from_jsonl and insert_edges_into commit in bounded chunks
+    (constant chunk size, COMMIT between chunks), not one transaction per file; stale
+    ''batches of 512'' docstring corrected. 2) GraphDB::open applies manifest performance.duckdb.memory_limit
+    + threads (discovering root/.vfs/manifest.yaml from the db path); missing/malformed
+    manifest falls back to built-in defaults (512MB/4) gracefully. 3) Unit tests prove
+    knobs visible via current_setting after open, defaults with no manifest, chunked
+    reconcile of 5003 lines (dupes+malformed) is correct, idempotent, stamp written
+    only after full replay. 4) Live measurement in commit body: 155K-edge cold reconcile
+    peak RSS under 1.5GB (was 18.8GB observed), 20K under 800MB (was 2945MB), cold/warm
+    ratio under 20x (was 56x). 5) Gates green (fmt, clippy -D warnings, test -p hilo_graph
+    --lib, test -p hilo-cli); exactly ONE commit ''Addresses GAP-092'' with Co-authored-by:
+    Alexis Okuwa trailer; only hilo-graph/hilo-core files; no push.'
+  status: complete
+  created_at: '2026-09-21T01:09:28.056615+00:00'
+  completed_at: '2026-09-21T02:29:31.832949+00:00'
+- id: qa-warpfs-12-minio-quay
+  title: docker-compose minio image pullable on clean machine
+  criteria:
+  - docker-compose.yml references an image that pulls without auth, and docker compose
+    up -d reaches healthy state
+  status: complete
+  created_at: '2026-09-21T12:27:59.381266+00:00'
+  completed_at: '2026-09-21T13:11:51.092162+00:00'
+- id: warpfs-gap093-ceiling
+  title: Memory ceiling enforced for graph replay (GAP-093)
+  criteria:
+  - 'hilo graph on a corpus whose edges.jsonl exceeds the configured DuckDB memory_limit
+    must not grow unbounded or die: replay is skipped at the watermark, ONE stderr
+    warning names the limit and the spill behavior, GraphDB::is_degraded() reports
+    the state, and the reconcile stamp is NOT written (a skipped replay must not claim
+    success). Verified by cargo test -p hilo_graph --lib (260 passed) and the degrade/control
+    regression pair.'
+  status: complete
+  created_at: '2026-09-21T13:51:08.513222+00:00'
+  completed_at: '2026-09-21T14:38:55.038206+00:00'
+- id: warpfs-gap095-spill
+  title: 'Spill to JSONL at the ceiling: queries stay correct (GAP-095)'
+  criteria:
+  - 'On a degraded (replay-skipped) connection graph.db may be empty/partial, so no
+    query may return a silently empty or short answer: impact streams the canonical
+    edges.jsonl and returns the same dependents as the DuckDB cache (regression test
+    asserts cache COUNT(*) == 0 while impact still returns the expected dependents),
+    and remaining cache-only APIs fail loud with a named error instead of an empty
+    result.'
+  status: complete
+  created_at: '2026-09-21T13:51:08.729841+00:00'
+  completed_at: '2026-09-21T14:29:17.190133+00:00'
+- id: warpfs-release001
+  title: "Cut v0.3.0 \u2014 first formal release"
+  criteria:
+  - git ls-remote --tags origin lists v0.3.0; gh release view v0.3.0 --repo gethilo/hilo
+    returns a Release object; CHANGELOG.md carries a [0.3.0] section dated 2026-09-21
+    containing the workspace-sync entries with an empty [Unreleased] re-opened above
+    it; hilo --version prints 0.3.0
+  status: complete
+  created_at: '2026-09-21T23:41:09.297571+00:00'
+  completed_at: '2026-09-22T00:07:02.605479+00:00'
+- id: df-warpfs-19-22-git-local-doors-and-plugin-validation
+  title: 'P0 DF-WARPFS-19: dead git/local backend mount doors removed honestly + P1
+    DF-WARPFS-22: plugin loader validates wasm magic and persists'
+  criteria:
+  - 'AC1: in a tempdir hilo workspace, ''hilo backend mount --type git --url file:///tmp/x.git
+    --at code'' exits non-zero, stderr contains ''unknown backend type: git'', stdout
+    contains no ''mounted'', and .vfs/backends/mounts.yaml is not created; same for
+    --type local. AC2: CLI help and docs no longer advertise git/local backend types
+    (main.rs + docs/cli-reference.md say ''Manage virtual backends (S3, gdrive, onedrive,
+    dropbox, external)''). AC3: ''hilo plugin load <non-wasm>'' exits non-zero with
+    an error naming the wasm magic check, and .vfs/plugins/ stays empty. AC4: ''hilo
+    plugin load <valid minimal wasm>'' exits 0, persists the plugin into .vfs/plugins/,
+    and ''hilo plugin list'' shows it; a bare module reports 0 hooks (no fabricated
+    metadata). AC5: cargo test -p hilo-cli --test cli passes; cargo test -p hilo-plugins
+    passes; cargo clippy --workspace --all-targets -- -D warnings passes. AC6: two
+    commits exist, one ''Addresses DF-WARPFS-19'', one ''Addresses DF-WARPFS-22''.'
+  status: complete
+  created_at: '2026-09-22T20:02:36.293653+00:00'
+  completed_at: '2026-09-22T21:13:25.888178+00:00'
+- id: gap-096-mcp-first-use-reconcile
+  title: MCP graph tools answer empty graph on fresh corpus instead of reconciling
+    edges.jsonl
+  criteria:
+  - On a corpus with edges.jsonl but no graph.db, vfs_graph_stats via 'hilo serve
+    --mcp' returns total_edges>0 (reconciled from edges.jsonl, matching the CLI on
+    the same corpus), not total_edges=0; the same no-data scratch (neither file present)
+    still returns the all-zeros object; cargo check -p hilo_mcp and cargo test -p
+    hilo_mcp exit 0
+  status: complete
+  created_at: '2026-09-22T23:42:04.189942+00:00'
+  completed_at: '2026-09-22T23:55:51.580160+00:00'
+- id: GAP-100
+  title: "graph search ranks test files above implementations \u2014 demote test/spec/fixture\
+    \ paths in ranking"
+  criteria:
+  - On the express corpus (/tmp/bakeoff5/express), the query 'res json' must rank
+    lib/response.js (the implementation) at or above every test/*.js hit, verified
+    live via the release binary; existing search behavior tests still pass
+  status: complete
+  created_at: '2026-09-23T00:38:54.795246+00:00'
+  completed_at: '2026-09-23T01:26:29.533493+00:00'
+- id: gap-100-rework-member-assignment
+  title: JS member-assignment definitions into the symbol index (GAP-100 rework)
+  criteria:
+  - 'AC1: cd /tmp/bakeoff5/express && /home/kara/warpfs/target/release/hilo graph
+    search ''res json'' --limit 500 ranks lib/response.js at or above every test/*.js
+    hit (live release-binary check). AC2: cargo test -p hilo_graph --lib passes including
+    search_real_extractor_finds_member_assignment_definition_above_tests which exercises
+    the REAL default symbol extractor (not a stub) on a fixture containing res.json
+    = function json(obj){}. AC3: ''response json'' probe still ranks lib/response.js
+    first AND two identical ''res json'' runs produce byte-identical output (determinism).
+    AC4: cargo clippy -p hilo_graph --all-targets -- -D warnings exit 0 and cargo
+    fmt --all --check clean.'
+  status: complete
+  created_at: '2026-09-23T02:37:58.641511+00:00'
+  completed_at: '2026-09-23T03:08:36.722642+00:00'
+- id: df-warpfs-20-stale-premise
+  title: 'DF-WARPFS-20 premise dead: default-form s3 mount persists at HEAD'
+  criteria:
+  - 'At /home/kara/warpfs HEAD: (1) file /tmp/dfw20/.vfs/backends/mounts.yaml exists
+    and contains both ''type: s3'' and ''bucket: testbucket'' proving the plain mount
+    form persisted; (2) cargo test -p hilo-cli --test cli backend_mount_plain_form
+    passes; (3) fix commit c62f0b6 is an ancestor of v0.3.0 (git merge-base --is-ancestor
+    c62f0b6 v0.3.0 exits 0); (4) board row DF-WARPFS-20 has status complete in .coding-hermes/board/tasks.jsonl'
+  status: complete
+  created_at: '2026-09-23T03:36:08.778169+00:00'
+  completed_at: '2026-09-23T03:37:29.703763+00:00'
+- id: df-warpfs-21-stale-audit
+  title: 'DF-WARPFS-21 premise dead: all four flagged fixes are in v0.3.0'
+  criteria:
+  - 'At /home/kara/warpfs HEAD: (1) commits c62f0b6, 464f025, 072b5b3, 3376340 are
+    ALL ancestors of tag v0.3.0 (git merge-base --is-ancestor exits 0 for each); (2)
+    grep -c backend_mount_plain_form_registers_mount in hilo-cli/tests/cli.rs is >=
+    1; (3) grep -c head_failure_means_absent in hilo-backends/src/s3.rs is >= 1; (4)
+    hilo serve --mcp initialize reports serverInfo version 0.3.1-dev (not 0.2.0);
+    (5) board row DF-WARPFS-21 has status complete in .coding-hermes/board/tasks.jsonl'
+  status: complete
+  created_at: '2026-09-23T03:36:23.301174+00:00'
+  completed_at: '2026-09-23T03:37:47.403369+00:00'
+- id: DF-WARPFS-33
+  title: 'concurrency: graph query commands open graph.db read-write'
+  criteria:
+  - 8 concurrent hilo graph stats/impact invocations all exit 0 without 'Conflicting
+    lock'
+  status: complete
+  created_at: '2026-09-23T14:07:49.337891+00:00'
+  completed_at: '2026-09-23T23:04:57.640149+00:00'
+- id: DF-WARPFS-34
+  title: Java file-form id resolution missing
+  criteria:
+  - impact gson/src/main/java/com/google/gson/Gson.java returns same 112 dependents
+    as pkg form; no longer orphan in stats
+  status: complete
+  created_at: '2026-09-23T14:07:49.747676+00:00'
+  completed_at: '2026-09-23T21:59:14.107329+00:00'
+- id: DF-WARPFS-28
+  title: 'triggers: mount --triggers loads 0 triggers on stock init'
+  criteria:
+  - fresh hilo init project + mount --triggers shows 9 triggers active or loud disable
+    warning
+  status: complete
+  created_at: '2026-09-23T14:07:50.156864+00:00'
+  completed_at: '2026-09-23T23:04:58.051271+00:00'
+- id: DF-WARPFS-34b
+  title: Java file-form id resolution + a committed surface test proving file form
+    == pkg form importer set
+  criteria:
+  - 'On the gson corpus the Java parser emits pkg:<FQCN> edges for imports, so a .java
+    file must resolve to its pkg:com.google.gson.Gson node. (1) FILE FORM RESOLVES:
+    hilo graph impact <path>.java returns the SAME importer SET as hilo graph impact
+    pkg:com.google.gson.Gson -- the file query reaches it one hop deeper (depth 2,
+    scope=crate, via=pkg:com.google.gson.Gson) because the file->pkg hop consumes
+    a depth level by design (GAP-083, hilo-graph/src/impact.rs crate_rows_respect_max_depth_budget),
+    so comparing counts at the SAME --max-depth is NOT the contract; the sets at the
+    default depth must be equal once the pkg form''s self-row is excluded. Verified
+    live 2026-09-23 on /tmp/wf11/gson-corpus (hilo init + graph warm, 211 files/3734
+    edges) with the merged master binary: file form 93 rows vs pkg form 94 where the
+    extra pkg row is Gson.java itself; the 85 depth-2 rows equal grep -rl ''import
+    com.google.gson.Gson;'' src/ = 85. (2) COMMITTED SURFACE TEST: hilo-graph/src/impact.rs
+    contains the test java_file_form_impact_matches_pkg_form_set, which calls the
+    public compute_impact on a Java fixture and asserts the file-form set equals the
+    pkg-form set; it FAILS (file form []) when resolution.rs is reverted to the pre-fix
+    commit 6761693 and passes on the fix -- RED proof recorded in commit eea690a.
+    (3) NO FALSE ORPHAN: hilo graph stats no longer lists gson/src/main/java/com/google/gson/Gson.java
+    or GsonBuilder.java under Orphans (live: 0 occurrences of each; before the fix
+    both were listed). (4) SUITES: cargo test -p hilo_graph --lib = 291 passed / 0
+    failed under RUSTFLAGS=-D warnings.'
+  status: complete
+  created_at: '2026-09-23T22:36:13.765035+00:00'
+  completed_at: '2026-09-23T22:36:21.654940+00:00'
+- id: DF-WARPFS-32
+  title: "triggers mount leaks after unmount \u2014 daemon keeps running, holds graph.db\
+    \ lock"
+  criteria:
+  - fusermount3 -u returns 0 but daemon keeps running and holds graph.db lock; within
+    5s of unmount the mount process is gone and hilo graph stats succeeds, on 3/3
+    attempts
+  status: complete
+  created_at: '2026-09-23T23:07:54.992909+00:00'
+  completed_at: '2026-09-23T23:49:29.067246+00:00'
+- id: DF-WARPFS-30
+  title: trigger engine graph database lock
+  criteria:
+  - Mount with --triggers must not hold graph.db in a way that makes graph stats/warm
+    fail or silently disables a second mount; add regression coverage and preserve
+    trigger behavior.
+  status: complete
+  created_at: '2026-09-24T03:44:42.905182+00:00'
+  completed_at: '2026-09-24T04:16:16.398803+00:00'
+- id: DF-WARPFS-41
+  title: vfs_list_directory silent-empty on populated dirs
+  criteria:
+  - 'AC1: vfs_list_directory on a populated local directory (relative and absolute
+    path) returns non-empty entries via live MCP probe. AC2: nonexistent path returns
+    an error (non-zero JSON-RPC error or isError), not silent empty. AC3: file path
+    (not a dir) returns an error, not silent empty. AC4: cargo test -p hilo_mcp green;
+    clippy -D warnings green.'
+  status: complete
+  created_at: '2026-09-24T08:52:52.950952+00:00'
+  completed_at: '2026-09-24T09:07:09.772776+00:00'
+- id: df-warpfs-38-rj
+  title: hilo init installs managed .gitignore block (DF-WARPFS-38, re-judge on commit
+    71fc782)
+  criteria:
+  - 'Verify in the working tree at commit 71fc782: grep -c ''ensure_gitignore_entries''
+    hilo-cli/src/commands/init.rs is >= 2 AND grep -c ''HILO_MANAGED_IGNORE_HEADER''
+    hilo-cli/src/commands/init.rs is >= 3 AND grep -c ''init_installs_gitignore_block''
+    hilo-cli/src/commands/init.rs is >= 1 AND grep -c ''DF-WARPFS-38'' docs/inventory-policy.md
+    is >= 1 AND grep -c ''edges.jsonl'' docs/inventory-policy.md is >= 1 AND cargo
+    test -p hilo-cli --bin hilo runs with 104 passed including commands::init::tests::init_installs_gitignore_block
+    and commands::init::tests::init_gitignore_idempotent_and_preserves_existing; no
+    changes beyond the two files in commit 71fc782'
+  status: complete
+  created_at: '2026-09-24T11:01:22.782711+00:00'
+  completed_at: '2026-09-24T11:01:29.284438+00:00'
+- id: GAP-097
+  title: graph stats component roster
+  criteria:
+  - 'stats output contains a Components section listing top-level components with
+    file counts, excluding pkg:/sys:/std: pseudo-nodes; cargo check --workspace exit
+    0; cargo test -p hilo_graph --lib exit 0; cargo test -p hilo-cli --test cli exit
+    0'
+  status: complete
+  created_at: '2026-09-24T11:43:44.955257+00:00'
+  completed_at: '2026-09-24T13:14:16.344631+00:00'
+- id: DF-WARPFS-40
+  title: FFI docs name cdylib and rename step
+  criteria:
+  - docs/hilo-ffi.md and hilo-ffi/README.md each contain libhilo_ffi, libuniffi_hilo,
+    and a cp rename step; cargo check -p hilo_ffi exit 0
+  status: complete
+  created_at: '2026-09-24T11:43:45.259848+00:00'
+  completed_at: '2026-09-24T12:30:03.341034+00:00'
+- id: gap-099-entry-symbols
+  title: Symbol-level entrypoint reporting in classify
+  criteria:
+  - 'hilo classify --dry-run lists entry symbols: gin corpus names New/Default/Run
+    (all >=1), flask names the Flask class, repo self-check names main for hilo-cli/src/main.rs;
+    >=1 new unit test; cargo check --workspace exit 0; cargo test -p hilo_graph --lib
+    green; fmt clean; non-entrypoint output byte-identical'
+  status: complete
+  created_at: '2026-09-24T16:02:51.911522+00:00'
+  completed_at: '2026-09-24T19:25:40.093623+00:00'
+- id: df-warpfs-24-s3-error-context
+  title: Typed S3 sync error codes with bucket/endpoint context
+  criteria:
+  - New unit test proves SDK-error mapping preserves service error code; new test
+    proves sync-failure error string includes bucket name; cargo check --workspace
+    0; cargo test -p hilo_backends green; fmt clean; success paths unchanged
+  status: complete
+  created_at: '2026-09-24T16:02:52.348490+00:00'
+  completed_at: '2026-09-24T16:14:13.550581+00:00'
+- id: df-warpfs-25-vendored-openssl
+  title: Non-root install fallback via opt-in vendored-openssl
+  criteria:
+  - cargo check -p hilo-cli --features vendored-openssl exits 0 (compiles OpenSSL
+    from source); README vendored-openssl >=2 hits + docker fallback line; getting-started
+    cross-ref >=1 hit; plain cargo check -p hilo-cli exit 0; fmt clean
+  status: complete
+  created_at: '2026-09-24T16:02:52.776358+00:00'
+  completed_at: '2026-09-24T19:44:39.649809+00:00'
+- id: df-warpfs-45-tsx-triggers
+  title: DF-WARPFS-45 default trigger watch list missing tsx/jsx/mjs/cjs
+  criteria:
+  - default_triggers() in hilo-cli/src/commands/mount.rs includes *.tsx, *.jsx, *.mjs
+    and *.cjs alongside the existing 9 extensions; a committed unit test asserts all
+    13 watch patterns are present; cargo test -p hilo-cli green; live default-trigger
+    listing shows the tsx/jsx patterns.
+  status: complete
+  created_at: '2026-09-24T22:28:27.374501+00:00'
+  completed_at: '2026-09-24T23:43:01.555752+00:00'
+- id: df-warpfs-46-docs-guides-links
+  title: DF-WARPFS-46 docs landing links 404 on Pages
+  criteria:
+  - 'AC1: grep -cE ''href="(getting-started|graph-engine|mcp-tools|cli-reference|architecture)"''
+    docs/index.html == 0. AC2: grep -cE ''href="[a-z-]+[.]md"'' docs/index.html >=
+    7. AC3: docs/getting-started.md no longer claims clang+CMake required (grep ''clang''
+    shows ''not required''); README claim unchanged. AC4: live Pages all five .md
+    targets return 200 (verified 2026-09-24: getting-started.md, graph-engine.md,
+    mcp-tools.md, cli-reference.md, architecture.md). Commit b6e2c53 on master.'
+  status: complete
+  created_at: '2026-09-24T22:34:22.522405+00:00'
+  completed_at: '2026-09-24T22:35:04.930021+00:00'
+- id: df-warpfs-47-delete-fabricated-dashboard
+  title: DF-WARPFS-47 delete stale fabricated dashboard.html
+  criteria:
+  - 'AC1: docs/dashboard.html absent from master (git log --diff-filter=D -- docs/dashboard.html
+    shows the deletion commit). AC2: grep -rn ''dashboard.html'' docs/dogfood/diagnostics.md
+    shows the deleted-2026-09-24 record, not a live ''is a snapshot that lies'' present-tense
+    issue. AC3: no navigation reference remains (grep dashboard across docs/index.html
+    docs/index.md README.md = 0 hits). AC4: deletion commit 865b3d0 on master and
+    pushed (origin/master contains it).'
+  status: complete
+  created_at: '2026-09-24T22:39:36.485728+00:00'
+  completed_at: '2026-09-24T22:39:42.216869+00:00'
+- id: gap-102-search-recall-fix
+  title: 'GAP-102: index ALL file symbols for search recall (drop take(8) truncation);
+    GAP-103 invariants land with it'
+  criteria:
+  - 'The take(8) symbol truncation is gone from TfIdfIndex::build_with_symbols in
+    hilo-graph/src/semantic.rs: every symbol token enters the TF-IDF/BM25 term map;
+    only the BM25 doc-length contribution stays capped at the take(8) budget (doc_lens_capped:
+    path tokens + first-8-symbols token counts), so GAP-100 rankings hold by construction'
+  - 'Live on /tmp/bakeoff5/flask (READ-ONLY corpus, release binary from the fix branch):
+    hilo graph search url_for returns >= 5 results and names src/flask/helpers.py;
+    search flash returns results including src/flask/helpers.py. PREMISE DELTA documented:
+    helpers.py in the TOP 3 is not required - the corpus defines url_for in TWO files
+    (src/flask/app.py:1105 Scaffold method AND src/flask/helpers.py:200 module function),
+    both were invisible pre-fix (pre-fix binary returned 0 results naming helpers.py),
+    and app.py legitimately outranks helpers.py post-fix. Recall (present in results)
+    is the fixed defect'
+  - 'GAP-100 preserved: on /tmp/bakeoff5/express, hilo graph search ''res json'' ranks
+    lib/response.js #1'
+  - cargo test -p hilo_graph --lib fully green (313 passed, 0 failed) including the
+    new regression test search_real_extractor_finds_symbol_beyond_eight_ast_order
+    whose defining symbol sits beyond the first 8 AST-order symbols
+  - 'Work merged to master: fix 3acd6b8 + tests f05d69a, merge c7e0c60; cargo fmt
+    --all --check clean; RUSTFLAGS=-D warnings test compile exit 0'
+  status: complete
+  created_at: '2026-09-25T04:51:21.445397+00:00'
+  completed_at: '2026-09-25T04:51:45.921186+00:00'
+- id: gap-103-regression-invariants
+  title: 'GAP-103: regression tests for the search symbol-cap recall collapse (R1-R4)'
+  criteria:
+  - 'The four GAP-103 invariant tests exist in hilo-graph/src/semantic.rs mod tests:
+    gap103_r1_every_symbol_in_a_file_is_searchable (recall floor over EVERY parsed
+    symbol, oracle = parser''s own symbol table via default_symbol_extractor), gap103_r2_indexed_symbol_terms_match_parsed_symbols
+    (no silent drop + capped doc-len pinned to the take(8) budget so GAP-100 is locked),
+    gap103_r3_scores_monotonic_within_partition (descending scores WITHIN each demotion
+    partition; cross-partition drop documented as intentional GAP-100 demotion, not
+    a merge bug), gap103_r4_recall_floor_defining_file_in_top_results (fixed query-to-file
+    battery: url_for and flash must name src/flask/helpers.py within the top 3)'
+  - 'All four gap103 tests pass in cargo test -p hilo_graph --lib: 313 passed, 0 failed,
+    on the merged master tree'
+  - 'Work merged to master: tests f05d69a, merge c7e0c60; cargo fmt --all --check
+    clean; RUSTFLAGS=-D warnings test compile exit 0'
+  status: complete
+  created_at: '2026-09-25T04:51:38.439606+00:00'
+  completed_at: '2026-09-25T04:56:29.804651+00:00'
+- id: df-warpfs-55-impact-cwd-anchor
+  title: 'DF-WARPFS-55: impact pkg-expansion CWD-anchored, silently wrong'
+  criteria:
+  - "In worktree wt/DF-WARPFS-55: (1) impact on a repo-relative path resolves pkg-mediated\
+    \ dependents via the graph root, not process CWD \u2014 unit + CLI-subprocess\
+    \ regression tests prove a different-CWD run returns the same dependents/node\
+    \ as the root run; (2) cargo test -p hilo_graph --lib green; (3) fmt clean, RUSTFLAGS='-D\
+    \ warnings' compile exit 0; (4) diff confined to hilo-graph/ and hilo-cli/; (5)\
+    \ commit with co-author trailer"
+  status: complete
+  created_at: '2026-09-25T07:02:10.074246+00:00'
+  completed_at: '2026-09-25T13:04:36.540766+00:00'
+- id: DF-WARPFS-58
+  title: plugin load self-copy truncates plugin to 0 bytes
+  criteria:
+  - 'AC: loading a plugin from a path inside .vfs/plugins leaves the file byte-identical
+    (grep-free live check: write payload, hilo plugin load .vfs/plugins/x.wasm, cmp
+    with original bytes) AND plugin list still discovers it; companion AC: load from
+    outside .vfs/plugins still persists an intact copy; regression tests plugin_load_from_plugins_dir_does_not_truncate
+    + plugin_load_from_outside_still_persists_intact_copy pass in hilo-cli --test
+    cli; cargo check -p hilo-cli exit 0; cargo clippy -p hilo-cli --all-targets --
+    -D warnings exit 0'
+  status: complete
+  created_at: '2026-09-25T11:10:03.445315+00:00'
+  completed_at: '2026-09-25T11:10:19.411180+00:00'
+- id: df-warpfs-61-graph-cache-self-heal
+  title: Graph cache self-heals from edges.jsonl (DF-61/DF-64)
+  criteria:
+  - 'When graph.db is missing or emptied while edges.jsonl and the reconcile stamp
+    are fresh, hilo must self-heal: (1) GraphDB::open verifies the db holds at least
+    the stamped row count and full-replays from edges.jsonl on mismatch (v3 stamp
+    carries rows; v2 stamps verified in place and upgraded without mass replay); (2)
+    a read-only open that fails verification falls back to read-write and heals; (3)
+    warm''s full-cache-hit fast path is skipped when graph.db is missing or the stamp
+    is unverifiable, so warm exits having actually rebuilt the db; (4) new unit tests
+    cover heal-from-missing-db, heal-from-empty-db, v2 upgrade, malformed-only jsonl
+    no-loop; (5) workspace gates green: fmt, clippy -D warnings, cargo test -p hilo_graph
+    --lib, hilo-cli cli suite'
+  status: complete
+  created_at: '2026-09-25T17:46:16.115136+00:00'
+  completed_at: '2026-09-25T18:17:18.409788+00:00'
+- id: df-warpfs-36-java-classify-roles
+  title: Java public API misclassified (DF-WARPFS-36)
+  criteria:
+  - 'On the gson corpus: gson/src/main/java/com/google/gson/Gson.java and GsonBuilder.java
+    classify role=library (not unknown); metrics benchmark files classify role=benchmark
+    (not entrypoint); existing tests pass; unit tests cover public-final-class, public-interface,
+    and benchmark-dir rules'
+  status: complete
+  created_at: '2026-09-25T21:55:27.078284+00:00'
+  completed_at: '2026-09-25T22:05:11.317416+00:00'
+- id: df-warpfs-39-coverage-surface-agreement
+  title: 'DF-WARPFS-39: coverage surfaces must agree on one definition; residual =
+    FFI tested_pct documented as proxy'
+  criteria:
+  - 'On gson at HEAD: graph module gson/src/main/java, graph untested and FFI vfs_graph_stats
+    agree with no 0.0%-vs-58% contradiction; spot-checked covered file (JsonReader
+    via JsonReaderTest) excluded from untested; FFI tested_pct semantics documented
+    as an import/emit-derived proxy (not test-suite coverage) in hilo-ffi/src/lib.rs
+    GraphStats doc + docs/hilo-ffi.md'
+  status: complete
+  created_at: '2026-09-25T23:57:03.306353+00:00'
+  completed_at: '2026-09-26T00:03:30.344630+00:00'
+- id: df-warpfs-43-stats-census-reconcile
+  title: graph stats reconciles its file census with warm's coverage ledger (DF-WARPFS-43)
+  criteria:
+  - "Commit 047b2b9 is on master with 'Addresses DF-WARPFS-43' in the subject. hilo-cli/src/commands/graph.rs\
+    \ contains write_coverage_ledger persisting .vfs/graph/coverage.json on both warm\
+    \ return paths (fresh write and full-cache hit), run_stats prints a 'File census:'\
+    \ reconcile line naming the edge-census vs discovered-file definitions, clean_graph_dir\
+    \ purges coverage.json, and a missing ledger degrades to the pre-ledger output.\
+    \ Tests: stats_file_census_counts_distinct_edge_sources and stats_file_census_is_raw_distinct_sources\
+    \ pass in hilo_graph; graph_stats_reconciles_census_against_warm_ledger and graph_stats_without_ledger_prints_no_census_block\
+    \ pass in hilo-cli. Live: on /home/kara/hermes-canopy, target/release/hilo graph\
+    \ stats prints 'File census: 687 files with edges (distinct edge sources) \u2014\
+    \ warm last counted 726 discovered files = 680 contribute' and /home/kara/.cargo/bin/cargo\
+    \ test -p hilo_graph --lib exits 0."
+  status: complete
+  created_at: '2026-09-26T02:26:54.341912+00:00'
+  completed_at: '2026-09-26T02:26:54.890218+00:00'
+- id: GAP-098
+  title: 'P2 \u2014  does not surface the named symbols of a flow on some repos: 1/4
+    key flow symbols on flask and gin (bat 4/4, express 3/3, vitest 3/3); capability
+    is at parity with scc, not ahead'
+  criteria:
+  - "when the task names a flow (request path, pipeline, chain), bias ranking toward\
+    \ the call-chain spine \u2014 the functions that actually hand off to each other\
+    \ \u2014 over generic lexical neighbours"
+  status: complete
+  created_at: '2026-09-27T04:01:57.389086+00:00'
+  completed_at: '2026-09-27T04:24:10.848356+00:00'
+- id: README-DOCS-WAVE
+  title: 'README docs wave: backend mount example form, Testing+Known gaps sections,
+    Rust toolchain claim'
+  criteria:
+  - 'README-1: no README example implies hilo backend mount <type> <path>; every backend
+    mount example uses --type and --at. README-2: a Testing heading documents real
+    Makefile targets (test, check, fmt, clippy, test-integration) and a Known gaps
+    heading states plugin hooks and manifest permission rules are not enforced, citing
+    docs/hilo-plugins.md and docs/hilo-permissions.md. README-3: no unqualified 1.80+
+    claim remains in README.md and the badge agrees with the Requirements bullet and
+    with CI tracking stable.'
+  status: complete
+  created_at: '2026-09-28T20:13:21.926833+00:00'
+  completed_at: '2026-10-12T02:39:22.772886+00:00'
+- id: CLI-DOCS-WAVE
+  title: 'CLI docs wave: hilo-cli.md type list, --endpoint, init hook skip, empty-graph
+    stats'
+  criteria:
+  - 'DOC-3: grep -c "S3, git, local" docs/hilo-cli.md is 0 and every --type value
+    in hilo-cli.md backend rows appears in hilo backend mount --help. DOC-4: grep
+    -c endpoint docs/cli-reference.md is at least 3 including a flag example and the
+    hilo-cli.md backend mount row lists --endpoint. GAP-106: the hilo init section
+    of docs/cli-reference.md notes hook installation is skipped without a git repository
+    and mentions the warning. GAP-107: the graph stats section of docs/cli-reference.md
+    shows the empty-graph output.'
+  status: complete
+  created_at: '2026-09-28T20:13:23.857393+00:00'
+  completed_at: '2026-10-12T02:41:52.660349+00:00'
+- id: SKILL-DOCS-WAVE
+  title: SKILL.md MCP tools table completes to all 17 registered vfs_ tools
+  criteria:
+  - 'DOC-5: grep -c vfs_workspace_ephemeral SKILL.md is at least 1 and grep -c vfs_workspace_wipe
+    SKILL.md is at least 1, and the SKILL.md MCP tools table row count equals the
+    count of name: "vfs_ entries in hilo-mcp/src/tools/mod.rs.'
+  status: complete
+  created_at: '2026-09-28T20:13:24.815561+00:00'
+  completed_at: '2026-10-12T02:34:24.263856+00:00'
+- id: README-2
+  title: Add test suite documentation to README
+  criteria:
+  - README.md contains a 'Testing' or 'Development' section that documents how to
+    run tests (cargo test, make test, or similar)
+  status: complete
+  created_at: '2026-09-29T00:25:56.857009+00:00'
+  completed_at: '2026-09-29T00:37:48.748342+00:00'
+- id: README-3
+  title: Verify or correct Rust version claim in README
+  criteria:
+  - README.md badge and Requirements section either match the actual rust-version
+    in Cargo.toml or are corrected to reflect reality
+  status: complete
+  created_at: '2026-09-29T00:25:57.441341+00:00'
+  completed_at: '2026-09-29T00:37:49.867611+00:00'
+- id: DOCS-GAP-001
+  title: docs wave DOCS-GAP-001
+  criteria:
+  - Row pass_criteria greps pass at HEAD; full tier-1 guard PASS
+  status: complete
+  created_at: '2026-09-29T11:47:47.707524+00:00'
+  completed_at: '2026-09-29T11:47:48.256764+00:00'
+- id: DOCS-GAP-002
+  title: docs wave DOCS-GAP-002
+  criteria:
+  - Row pass_criteria greps pass at HEAD; full tier-1 guard PASS
+  status: complete
+  created_at: '2026-09-29T11:47:48.798259+00:00'
+  completed_at: '2026-09-29T11:47:49.366974+00:00'
+- id: DOCS-GAP-003
+  title: docs wave DOCS-GAP-003
+  criteria:
+  - Row pass_criteria greps pass at HEAD; full tier-1 guard PASS
+  status: complete
+  created_at: '2026-09-29T11:47:49.859197+00:00'
+  completed_at: '2026-09-29T11:47:50.464113+00:00'
+- id: DOCS-GAP-008
+  title: docs wave DOCS-GAP-008
+  criteria:
+  - Row pass_criteria greps pass at HEAD; full tier-1 guard PASS
+  status: complete
+  created_at: '2026-09-29T11:47:50.999390+00:00'
+  completed_at: '2026-09-29T11:47:51.649332+00:00'
+- id: DOCS-GAP-009
+  title: docs wave DOCS-GAP-009
+  criteria:
+  - Row pass_criteria greps pass at HEAD; full tier-1 guard PASS
+  status: complete
+  created_at: '2026-09-29T11:47:52.170588+00:00'
+  completed_at: '2026-09-29T11:47:52.781959+00:00'
+- id: DOCS-GAP-010
+  title: docs wave DOCS-GAP-010
+  criteria:
+  - Row pass_criteria greps pass at HEAD; full tier-1 guard PASS
+  status: complete
+  created_at: '2026-09-29T11:47:53.281862+00:00'
+  completed_at: '2026-09-29T11:47:53.857928+00:00'
+- id: DF-WARPFS-35
+  title: Java symbol pack noise
+  criteria:
+  - hilo graph understand on a Java corpus emits only real identifier symbols (no
+    '@Override'/'context)'/brace fragments); regression test in hilo_graph
+  status: complete
+  created_at: '2026-09-29T18:21:57.729386+00:00'
+  completed_at: '2026-09-29T20:10:17.554451+00:00'
+- id: REV-WARPFS-2
+  title: impact depth semantics docs
+  criteria:
+  - 'docs/cli-reference.md + --help explain impact --max-depth semantics (file->pkg:
+    chain needs depth>=2) and family expansion over-count; every command in the docs
+    section runs verbatim'
+  status: complete
+  created_at: '2026-09-29T18:21:58.481461+00:00'
+  completed_at: '2026-09-29T20:34:49.325103+00:00'
+- id: GAP-109
+  title: 'graph stats: back component enumeration with directory inventory'
+  criteria:
+  - graph stats A1 output names non-code top-level dirs (docs, examples, packaging,
+    deploy manifests) for the bake-off corpora; component enumeration comes from directory
+    inventory not just parsed source; cargo clippy -D warnings + cargo test -p hilo_graph
+    --lib pass
+  status: complete
+  created_at: '2026-09-30T10:50:26.673681+00:00'
+  completed_at: '2026-09-30T12:24:23.445678+00:00'
+- id: DOCS-GAP-005
+  title: "spec \xA73.1 Key Crates table matches Cargo.lock"
+  criteria:
+  - "every crate+version row in spec \xA73.1 matches Cargo.lock (fuser 0.15, petgraph\
+    \ 0.6, no rmcp row, aws-sdk named); libfuse sentence no longer contradicts README\
+    \ Requirements"
+  status: complete
+  created_at: '2026-09-30T16:56:50.651093+00:00'
+  completed_at: '2026-09-30T17:08:22.923819+00:00'
+- id: REV-WARPFS-1
+  title: 'Shippable release artifact: Makefile strip target + README note'
+  criteria:
+  - Makefile gains a release/dist target producing a stripped target/release/hilo
+    under ~120MB; default profile stays debug=1 strip=none (PERF-006 intact); README
+    documents the shippable-artifact path; clippy+tests green
+  status: complete
+  created_at: '2026-09-30T18:41:23.068431+00:00'
+- id: QA-WARPFS-18
+  title: gap094 wall-clock test headroom
+  criteria:
+  - hilo-cli gap094 resident-reconcile wall-clock bound scales with a measured baseline
+    and keeps a hard ceiling; cargo test -p hilo-cli --test gap094_resident_reconcile
+    passes
+  status: complete
+  created_at: '2026-10-02T05:39:23.395989+00:00'
+  completed_at: '2026-10-02T05:39:38.847313+00:00'
+- id: QA-WARPFS-20
+  title: gap094 budget overshoot bound
+  criteria:
+  - hilo_graph gap094_budget_stops_inside_a_chunk_not_at_the_chunk_end scales its
+    bound with a measured baseline under a hard ceiling and passes deterministically;
+    rust-lint.sh gate green
+  status: complete
+  created_at: '2026-10-02T05:39:23.640773+00:00'
+  completed_at: '2026-10-02T06:16:00.717124+00:00'
+- id: GAP-110
+  title: stats components include project dot directories
+  criteria:
+  - hilo graph stats on the hilo repo names docs/, examples/, .gitreins/ among components;
+    .git/.vfs excluded; hilo_graph lib tests pass
+  status: complete
+  created_at: '2026-10-03T12:31:23.255177+00:00'
+  completed_at: '2026-10-03T13:16:41.151258+00:00'
+- id: DOCS-GAP-006
+  title: spec install section builds from source
+  criteria:
+  - specs/warpfs-spec.md section 3 has no cargo install primary path; source-build
+    commands match README; no contradicting install text
+  status: complete
+  created_at: '2026-10-03T12:31:23.719083+00:00'
+  completed_at: '2026-10-03T13:16:42.547883+00:00'
+- id: DF-WARPFS-96
+  title: init gitignores the DuckDB cache
+  criteria:
+  - hilo init installs .vfs/graph/graph.db* wildcard; git check-ignore rejects graph.db
+    and sidecars, accepts manifest.yaml and edges.jsonl; full gate green
+  status: complete
+  created_at: '2026-10-03T12:31:24.221854+00:00'
+  completed_at: '2026-10-03T13:16:47.272709+00:00'
+- id: DF-WARPFS-79
+  title: Heal zero-byte graph.db like a missing one
+  criteria:
+  - 'PASS: on a redis-scale corpus, a 0-byte graph.db heals on the next open (or via
+    documented graph warm) with no manual rm, and the fix''s existing deleted-file
+    test still passes'
+  status: complete
+  created_at: '2026-10-03T17:19:15.838388+00:00'
+  completed_at: '2026-10-12T02:50:56.426653+00:00'
+- id: GAP-119
+  title: Terraform/HCL infrastructure-as-code graph support
+  criteria:
+  - hilo graph warm indexes .tf/.tf.json files and emits typed terraform edges; cargo
+    test -p hilo_graph --lib green on the merged tree
+  status: complete
+  created_at: '2026-10-08T05:57:00.829809+00:00'
+  completed_at: '2026-10-08T06:03:24.073644+00:00'
+- id: DF-WARPFS-37
+  title: 'Java tested_by edges exist but graph module reports Tests: 0.0%'
+  criteria:
+  - 'On a repo with Java tested_by edges targeting pkg: nodes, hilo graph module reports
+    non-zero test coverage: java files whose pkg: node is a tested_by target count
+    as covered; add/extend unit tests in hilo-graph covering java pkg-node coverage;
+    cargo check -p hilo_graph, clippy, fmt, and cargo test -p hilo_graph --lib all
+    pass'
+  status: complete
+  created_at: '2026-10-08T04:06:21.368788+00:00'
+  completed_at: '2026-10-08T05:03:00.689360+00:00'
+- id: DF-WARPFS-113
+  title: coverage-links --surface errors on unknown surface
+  criteria:
+  - hilo graph coverage-links --surface does-not-exist-xyz exits nonzero with an unknown-surface
+    error on a warmed repo; a known surface with zero links keeps rc=0 empty-output
+    behavior; cargo test -p hilo_cli green on merged tree
+  status: complete
+  created_at: '2026-10-08T06:13:58.681579+00:00'
+  completed_at: '2026-10-08T07:04:05.268817+00:00'
+- id: DOCS-GAP-007
+  title: "Fix spec \xA717 Agent Experience xattr drift"
+  criteria:
+  - "spec \xA717 documents only real xattrs or implements missing writers"
+  status: complete
+  created_at: '2026-10-10T01:21:48.670724+00:00'
+  completed_at: '2026-10-10T01:24:51.985611+00:00'
+- id: DOCS-GAP-004
+  title: "Fix spec \xA713/\xA74 backend drift"
+  criteria:
+  - "spec \xA713 lists only implemented mount types (s3|gdrive|onedrive|dropbox|external);\
+    \ git/local marked not-implemented"
+  status: complete
+  created_at: '2026-10-10T01:22:40.527357+00:00'
+  completed_at: '2026-10-10T01:30:49.223712+00:00'
+- id: DF-WARPFS-115
+  title: 'mount: validate mount point before printing success banner'
+  criteria:
+  - hilo mount on a nonexistent mount point exits non-zero with a message naming the
+    missing path; the success banner never prints on a failed mount; a valid mount
+    still works
+  status: complete
+  created_at: '2026-10-10T02:31:04.673149+00:00'
+  completed_at: '2026-10-10T02:39:42.629661+00:00'
+- id: DF-WARPFS-128
+  title: workspace manifest ref:<branch> never mounts (worktree.rs branch-ref resolution)
+  criteria:
+  - Branch refs (not just tags/HEAD) resolve and mount on fresh clone; failed clone
+    leaves no empty worktree dir; guard green
+  status: complete
+  created_at: '2026-10-10T06:25:19.583845+00:00'
+  completed_at: '2026-10-10T07:07:09.101986+00:00'
+- id: DF-WARPFS-121
+  title: 'backend sync dies on rclone ''unknown flag: --json'''
+  criteria:
+  - rclone listing uses a supported machine-readable form; parse covered by tests;
+    no lsf --json remains; guard green
+  status: complete
+  created_at: '2026-10-10T06:25:20.128032+00:00'
+  completed_at: '2026-10-10T07:20:33.429099+00:00'
+- id: DF-WARPFS-133
+  title: graph related absolute path silent-empty
+  criteria:
+  - Absolute-path graph related/impact lookups resolve against project root with tests;
+    outside-root errors non-zero; relative behavior unchanged
+  status: complete
+  created_at: '2026-10-10T10:01:20.766349+00:00'
+  completed_at: '2026-10-10T11:04:54.258310+00:00'
+- id: DF-WARPFS-129
+  title: "workspace mount writable:true is inert \u2014 FUSE options hardcode RO"
+  criteria:
+  - 'workspace mount with writable: true mounts read-write (kernel accepts writes
+    through the mount); writable: false/default stays RO; mount-option selection has
+    a unit test; guard (scripts/rust-lint.sh) green'
+  status: complete
+  created_at: '2026-10-10T15:29:18.908151+00:00'
+  completed_at: '2026-10-10T15:57:55.297582+00:00'
+- id: GAP-118
+  title: Wave 11 re-evaluation after GAP-098/101/116/117 fixes
+  criteria:
+  - Run 42-core + 6-surface Wave 11 case set against pinned SHAs, generate HTML report
+    with per-case ranks/recalls, scorable denominators, regressions vs baseline; attach
+    raw outputs
+  status: complete
+  created_at: '2026-10-11T04:17:34.552651+00:00'
+  completed_at: '2026-10-12T02:58:34.117545+00:00'
+- id: DF-WARPFS-138
+  title: 'workspace mount: implement write/create/setattr write-through for writable:true
+    mounts'
+  criteria:
+  - 'hilo-fuse/src/workspace_mount.rs implements write-through: write() resolves the
+    inode to its real backing path and calls FileExt::write_at after the permission
+    + writable checks (grep -q ''write_at'' hilo-fuse/src/workspace_mount.rs), and
+    the function no longer ends in an unconditional reply.error(EACCES)'
+  - both fn create and fn setattr are implemented in hilo-fuse/src/workspace_mount.rs
+    (grep -E 'fn (create|setattr)' matches two functions)
+  - cargo test -p hilo_fuse exits 0 and includes new tests proving a write into a
+    writable:true mount lands the expected bytes on the backing file, a write into
+    a writable:false mount is refused with EACCES, create() materializes the file
+    on the backing path, and setattr() with size truncates the backing file
+  - cargo clippy -p hilo_fuse --all-targets -- -D warnings exits 0, and the pre-existing
+    tests all_read_only_keeps_ro_option and any_writable_mount_drops_ro_option still
+    pass unchanged
+  status: complete
+  created_at: '2026-10-10T17:46:04.001251+00:00'
+  completed_at: '2026-10-10T18:48:14.298537+00:00'
+- id: GAP-120
+  title: Commit .hiloignore to exclude target-local from graph
+  criteria:
+  - 'Verify: (1) .hiloignore exists and contains ''target-local/'', (2) edges.jsonl
+    line count drops after re-warm, (3) git log shows the commit'
+  status: complete
+  created_at: '2026-10-12T04:15:13.721632+00:00'
+  completed_at: '2026-10-12T04:18:41.160183+00:00'
+- id: DF-WARPFS-134
+  title: hilo mount --daemon discards stderr (trigger logs dead)
+  criteria:
+  - With --daemon, child stderr goes to a persistent log file (flag or sensible default),
+    parent banner prints the path; unit test covers the redirect; cargo check + clippy
+    pass
+  status: complete
+  created_at: '2026-10-13T10:46:44.903140+00:00'
+  completed_at: '2026-10-14T06:17:01.385644+00:00'
+- id: DF-WARPFS-75
+  title: "C/C++: header files are never edge SOURCES \u2014 zero header\u2192header\
+    \ include edges"
+  criteria:
+  - on the redis corpus, impact local:rax.h returns 4 (grep truth) and a transitive
+    server.h query includes a .c file that reaches server.h only via another header
+  status: complete
+  created_at: '2026-10-14T04:50:09.921854+00:00'
+  completed_at: '2026-10-25T18:17:51.593542+00:00'
+- id: DF-WARPFS-95-rejudge
+  title: Re-judge landed DF-WARPFS-95 sidecar commit
+  criteria:
+  - 'AC: commit 73dc811e contains hilo-metadata/src/sidecar.rs, hilo-cli meta sidecar
+    wiring, hilo-cli/tests/dfwarpfs95_meta_sidecar.rs with 15 tests, docs update;
+    cargo test -p hilo_metadata --lib = 30 passed; integration = 5 passed; RUSTFLAGS=-D
+    warnings cargo test --workspace --no-run exit 0; commit is origin/master HEAD'
+  status: complete
+  created_at: '2026-10-14T10:12:59.660406+00:00'
+  completed_at: '2026-10-14T10:13:00.581349+00:00'
+- id: DF-WARPFS-144
+  title: 'hilo mount <mount_point> [source]: explicit backing source, not CWD'
+  criteria:
+  - "AC1: hilo mount /mnt /src --daemon serves /src (probe file visible through mount);\
+    \ AC2: hilo mount /mnt /missing errors 'does not exist \u2014 mount refused' before\
+    \ any banner; AC3: no-source invocation keeps CWD behavior; AC4: trigger engine\
+    \ watch_dir = served source (DF-WARPFS-145); AC5: resolve_source unit tests pass;\
+    \ AC6: cargo clippy -p hilo-cli --all-targets -D warnings + fmt + RUSTFLAGS=-D\
+    \ warnings test compile pass"
+  status: complete
+  created_at: '2026-10-14T14:01:28.223530+00:00'
+  completed_at: '2026-10-14T15:30:51.550197+00:00'
+- id: DF-WARPFS-101-R2
+  title: graph search release-build measurement - re-judge with evidence recorded
+  criteria:
+  - 'Verify in the working tree: board row DF-WARPFS-101 in .coding-hermes/board/tasks.jsonl
+    carries foreman_note with wall times 0.08s/0.04s/0.04s (3x warm) for ''hilo graph
+    search fn main --limit 5'' on the repo graph (286 files/3013 distinct edges),
+    measured on target/release/hilo built this tick; foreman_note records the verdict
+    (debug-only cost, no regression); target/release/hilo exists (1.43GB release binary)'
+  status: complete
+  created_at: '2026-10-15T00:22:49.447151+00:00'
+  completed_at: '2026-10-15T00:22:53.653084+00:00'
+- id: DF-WARPFS-146
+  title: FFI vfs_graph_impact/vfs_graph_related NotFound for real file with pkg-only
+    edges
+  criteria:
+  - 'vfs_graph_impact and vfs_graph_related on an existing on-disk file whose only
+    graph edges are pkg: pseudo-node endpoints return an honest empty result instead
+    of NotFound; subjects that are neither in the graph nor on disk still NotFound;
+    unit test locks the parity with CLI graceful behavior'
+  status: complete
+  created_at: '2026-10-15T03:11:17.524272+00:00'
+  completed_at: '2026-10-15T13:04:19.174007+00:00'
+- id: REV-WARPFS-3
+  title: HTTP transport and /health endpoint
+  criteria:
+  - hilo serve --http serves GET /health returning 200 with {"status":"ok","version":"0.4.0"};
+    hilo-cli/tests/integration.rs passes; cargo clippy -p hilo-cli -p hilo_mcp --all-targets
+    -- -D warnings exits 0
+  status: complete
+  created_at: '2026-10-16T08:57:03.565598+00:00'
+  completed_at: '2026-10-16T08:57:20.025446+00:00'
+- id: REV-WARPFS-8
+  title: edges.jsonl exact-duplicate dedup
+  criteria:
+  - hilo-metadata append path skips exact-duplicate (from,to,rel,provenance) edge
+    rows; hilo-graph/tests/edges_dedup_test.rs passes 4 tests; hilo_metadata lib tests
+    pass
+  status: complete
+  created_at: '2026-10-16T08:57:04.126974+00:00'
+  completed_at: '2026-10-16T09:22:21.624054+00:00'
+- id: REV-WARPFS-5
+  title: MCP rate limiter backpressure, metrics endpoint, config validation
+  criteria:
+  - GET /metrics over the HTTP transport returns 200 with rate/queue_depth/rejected;
+    responses carry warning:high queue depth above 80% bucket consumption and never
+    in unlimited mode; performance.rate_limit_rps rejects negatives naming the field;
+    hilo-mcp rate_limiter_backpressure tests pass
+  status: complete
+  created_at: '2026-10-16T08:57:13.210776+00:00'
+  completed_at: '2026-10-16T09:36:56.705958+00:00'
+- id: REV-WARPFS-6
+  title: understand MAP fixture demotion
+  criteria:
+  - hilo_graph signal MAP demotes files under graph.map_exclude_paths (defaults tests/fixtures,
+    examples, vendor) while DETAIL keeps every file; hilo_graph lib tests pass; cargo
+    check --workspace exits 0
+  status: complete
+  created_at: '2026-10-16T08:57:13.462406+00:00'
+  completed_at: '2026-10-16T10:02:01.843979+00:00'
+- id: DF-WARPFS-77
+  title: 'Wire manifest sandbox block into mount: parse to FuseConfig, bwrap-verify,
+    loud warning when ignored'
+  criteria:
+  - 'AC1: mount with manifest sandbox enabled:true+bwrap installed launches bwrap-wrapped
+    agent process, network blocked (curl fails), pgrep bwrap>0. AC2: sandbox block
+    absent => behavior unchanged, exit 0. AC3: sandbox block present but bwrap unavailable
+    => loud warning line mentions ''sandbox'' + ''not found'', mount proceeds. AC4:
+    cargo clippy --workspace --all-targets -- -D warnings PASS; cargo test -p hilo-cli
+    -p hilo-fuse -p hilo-core PASS'
+  status: complete
+  created_at: '2026-10-16T15:54:54.032990+00:00'
+  completed_at: '2026-10-16T17:45:51.798288+00:00'
+- id: DF-WARPFS-77-REWORK
+  title: 'Post-rework judge: sandbox exec production surface (fixes verdict 207d981c
+    AC1 gap)'
+  criteria:
+  - "DF-WARPFS-77-REWORK post-rework verification (commit f7826092 on master, CI green).\
+    \ AC1: `hilo sandbox exec --source <ws-with-manifest-sandbox-enabled:true> --\
+    \ sh -c 'echo inside-sandbox'` prints 'inside-sandbox' exit 0 through BubblewrapExecutor::run_inherit\
+    \ (bwrap-wrapped; pgrep -c bwrap >= 1 during a long exec); with isolate_network:true\
+    \ a curl inside the exec FAILS to reach the network (curl rc != 0). AC1d: exit\
+    \ status propagates \u2014 `hilo sandbox exec -- sh -c 'exit 7'` exits 7. AC2:\
+    \ manifest WITHOUT sandbox block -> `hilo mount <mnt> <src>` proceeds unsandboxed,\
+    \ exit 0, zero sandbox warnings. AC3: manifest WITH enabled sandbox block + bwrap\
+    \ unavailable (PATH without bwrap) -> loud stderr warning containing 'sandbox'\
+    \ AND 'not found', and `hilo mount <mnt> <src>` still proceeds (exit 0 / mounted\
+    \ banner). AC4: gates green on the merged tree: cargo clippy --workspace --all-targets\
+    \ -- -D warnings exit 0; cargo test -p hilo-cli --lib = 173 passed 0 failed (run\
+    \ with GIT_CONFIG_GLOBAL=/dev/null; the hooks::tests contamination from the global\
+    \ core.hooksPath is pre-existing on the parent commit and unrelated to this change);\
+    \ cargo test -p hilo_fuse -p hilo_core all green (58 + 108 passed). AC5: docs/cli-reference.md\
+    \ documents 'hilo sandbox exec' with the agent-shell model + isolate_network note;\
+    \ docs/hilo-cli.md CLI table gains the exec row."
+  status: complete
+  created_at: '2026-10-16T18:07:49.166572+00:00'
+  completed_at: '2026-10-16T18:07:53.907379+00:00'
+- id: DF-WARPFS-142
+  title: "Document build memory requirements and provide low-memory build recipe for\
+    \ \u22644GB agents"
+  criteria:
+  - README documents minimum build memory; low-memory build recipe (reduced parallelism
+    or split duckdb TU) works on 4GB agent; cc-rs build failures name their likely
+    cause (OOM hint); cargo test -p hilo_graph passes
+  status: complete
+  created_at: '2026-10-18T03:25:17.179671+00:00'
+  completed_at: '2026-10-18T03:50:31.345398+00:00'
+- id: QA-WARPFS-024
+  title: '[QA][P1] Fix 3 hilo-cli S3-plan tests failing on credential-less clean machines'
+  criteria:
+  - '1.  exits with 0 failures
+
+    2. No new AWS credential requirements introduced in plan-only paths
+
+    3. Existing tests that require credentials continue to work when creds are available'
+  status: complete
+  created_at: '2026-10-21T11:55:41.214190+00:00'
+  completed_at: '2026-10-21T16:50:08.632807+00:00'
+- id: DF-WARPFS-78
+  title: "Ruby file\u2192package resolution for impact/related"
+  criteria:
+  - 'file-form impact/related returns dependents for Ruby files (sidekiq corpus: lib/sidekiq/api.rb
+    shows 21 dependents); stats no longer lists resolved files as orphans; cargo test
+    -p hilo_graph --lib PASS'
+  status: in_progress
+  created_at: '2026-10-22T00:23:51.749192+00:00'
+- id: DF-WARPFS-49
+  title: fix workspace mount writable flag
+  criteria:
+  - cargo test -p hilo_fuse --lib passes with new writable-mount tests; touch through
+    a writable:true workspace mount exits 0; touch through a writable:false mount
+    fails with EROFS/EACCES; mount log line matches actual mode
+  status: complete
+  created_at: '2026-10-22T02:39:45.075834+00:00'
+  completed_at: '2026-10-22T03:41:02.622806+00:00'
+- id: QA-WARPFS-024-VERIFY
+  title: Verify QA-WARPFS-024 credential-less acceptance at HEAD (named target hilo-cli/tests/cli.rs)
+  criteria:
+  - "env -u AWS_PROFILE -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN\
+    \ -u AWS_ENDPOINT_URL cargo test -p hilo-cli --test cli exits 0 and its summary\
+    \ line reads \"test result: ok\" with 0 failed; the three named tests backend_sync_plan_line_prints_mounted_endpoint_and_bucket,\
+    \ workspace_sync_prints_explicit_endpoint_in_plan_header and workspace_sync_accepts_direction_flags\
+    \ each appear as ok \u2014 proving QA-WARPFS-024 acceptance at HEAD 771d32b5 (fix\
+    \ e5afc4f7 plus the DF-WARPFS-165 residual fix)"
+  status: complete
+  created_at: '2026-10-22T17:44:50.398587+00:00'
+  completed_at: '2026-10-22T17:46:37.557745+00:00'
+- id: INT-CI-011
+  title: Close stale CI-red tracking row after exact-head green run
+  criteria:
+  - 'CI acceptance is satisfied: gh run view 39832207611 --repo gethilo/hilo shows
+    headSha 0c46f71ba6d046f47e27c0e503c320dcc8a12899, conclusion success, and Build
+    & Test (stable) success; preserve a trace marker bound to the verified head and
+    evidence run.'
+  status: in_progress
+  created_at: '2026-10-22T22:57:08.925397+00:00'
+- id: DF-WARPFS-162
+  title: hilo init hooks safety
+  criteria:
+  - AC1 outside core.hooksPath refuses without mutation and names path; AC2 inside
+    path installs; AC3 existing hooks get byte-identical backup; AC4 hooks tests and
+    clippy pass
+  status: complete
+  created_at: '2026-10-23T08:07:07.066367+00:00'
+  completed_at: '2026-10-23T08:51:38.954715+00:00'
+- id: DF-WARPFS-166
+  title: MCP rate-limit replies preserve JSON-RPC ids
+  criteria:
+  - Rate-limited id-bearing MCP requests echo their request id; regression and live
+    stdio/client acceptance pass.
+  status: complete
+  created_at: '2026-10-24T23:43:59.840491+00:00'
+  completed_at: '2026-10-24T23:44:00.756417+00:00'
+- id: DF-WARPFS-64-R2
+  title: Require warm before graph queries
+  criteria:
+  - 'Fresh initialized tree without graph warm: impact, untested, stats, and module
+    must either fail naming graph warm or explicitly identify incomplete corpus; after
+    warm, full corpus answers; add regression tests.'
+  status: complete
+  created_at: '2026-10-26T11:38:26.105527+00:00'
+  completed_at: '2026-10-26T13:48:52.847785+00:00'
