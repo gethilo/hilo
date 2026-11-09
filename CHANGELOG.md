@@ -4,7 +4,7 @@ All notable changes to Hilo are documented in this file.
 
 ## [Unreleased]
 
-## [0.4.0] — 2026-11-08
+## [0.4.0] — 2026-11-09
 
 ### Added
 
@@ -226,12 +226,36 @@ All notable changes to Hilo are documented in this file.
   report honest `0 hooks, 0 edge types`; `plugin list` derives metadata the
   same honest way.
 
+- **`graph understand` MAP rows follow relevance, not the alphabet**
+  (DF-WARPFS-102, GAP-078): the `MAP` table's tie-break sorted by file path,
+  so a task-named anchor and an alphabetical decoy carrying the same MAP
+  depth score could swap places and the decoy rendered first. The sort is now
+  stable over the order the engine already computed (score, anchor match
+  grade, then path), so the on-task file stays ahead of the decoy. Graded
+  whole-component, prefix, and substring anchor matching is unchanged.
+
 ### Changed
 
 - **`hilo --version` now includes build provenance** (git describe + UTC
   build time, baked by `hilo-cli/build.rs`). A rebuilt binary is no longer
   indistinguishable from an 11-day-old one.
 - Workspace version bumped from `0.3.1-dev` to `0.4.0` for the release cut.
+
+### Carried forward (not fixed in 0.4.0)
+
+- **No tag-triggered release workflow.** `make release` (build + `strip`) is
+  the documented artifact path and the only thing a maintainer runs at cut
+  time; the binaries on this Release were built from the tag and attached by
+  hand. Nothing in CI builds or publishes them.
+- **No clean-machine QA evidence for this tag.** The shared bunker host that
+  runs the clean-machine battery had its root filesystem exhausted, so the
+  preflight refused to launch (`QA-WARPFS-025`, `QA-WARPFS-DOCS-1`). Hosted CI
+  (build, `cargo fmt --check`, `clippy -D warnings`, workspace tests) is the
+  evidence behind this release; the install-from-source path is unverified on
+  a machine that has never built Hilo.
+- **The v0.3.0 tree does not build on a fresh agent** (`QA-WARPFS-QA-3`,
+  `cargo build --workspace` rc=101). That baseline defect is unchanged by this
+  release and is the reason a prebuilt binary now ships.
 
 ## [0.3.0] — 2026-09-21
 
