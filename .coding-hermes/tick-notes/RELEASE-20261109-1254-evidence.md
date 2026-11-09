@@ -1,69 +1,59 @@
-# warpfs release readiness evidence — 2026-11-09 12:54 tick
+# warpfs release readiness evidence — 2026-11-09 re-delivery
 
 Target: gethilo/hilo
 Canonical checkout: /home/kara/warpfs
+Certified candidate: 773087b02aef57cad281fb7819f1855357f09716
 Default branch: master
-Certified release candidate: 7f039cd9abe00ed20f69446ab24a2862b5104cf9
-Remote parity: origin/master, git ls-remote, and GitHub API all report 7f039cd9abe00ed20f69446ab24a2862b5104cf9.
-Baseline: v0.3.0 at 702c4a8cefcda240e7d555926a77bb69a66c285f.
-Range: v0.3.0..7f039cd9abe00ed20f69446ab24a2862b5104cf9, 740 non-merge commits.
+Remote parity: local origin/master and git ls-remote origin refs/heads/master both resolve to the certified candidate.
+Baseline: v0.4.0 -> 57002335c7295500b48ac65f7e2d08f260ab28b5
 
 ## Decision
 
-NO CUT. Proposed version remains v0.4.0 minor, but the candidate is not release-ready. The exact-head hosted CI is green and the candidate-bound GitReins guard passes, but the release notes are stale after version preparation, the repository has no tag-triggered publisher or release script/docs, the previous Release has zero assets, current-head dogfood/clean-machine evidence is incomplete, and open P1 release-relevant QA findings remain. No tag, GitHub Release, or artifact publication was created.
+NOT DUE under the release-engineering no-material-delta rule. v0.4.0 is already published and the post-tag range contains only board/PM bookkeeping: one chore commit and two non-conventional PM commits, with no feat, fix, perf, or breaking marker. No tag was created or moved, no GitHub Release was created, and no artifact was published in this pass.
 
-The current sweep refreshes canonical row RELEASE-013 rather than creating a duplicate. A foreman should first land release-notes coverage and a documented, verified artifact/publish path, then rerun exact-head CI and the QA gates before a cut.
+The previous v0.4.0 release remains verified. This pass refreshes canonical board row RELEASE-012 rather than creating a duplicate. Open follow-ups RELEASE-015 through RELEASE-018 remain recorded separately.
 
 ## Commits and semver
 
-Census v0.3.0..candidate: feat 27, fix 139, perf 5, chore 212, docs 39, test 10, refactor 1, other 307; total 740. No BREAKING CHANGE footer or typed ! marker found. The material-path census (excluding board, GitReins, docs/README/CHANGELOG, and generated bookkeeping paths) is feat 27, fix 131, perf 5, other 33, total 196. Proposed bump: minor v0.4.0.
+The exact v0.4.0..candidate range has 3 non-merge commits:
 
-The current Cargo workspace and all 11 published workspace crates carry version 0.4.0. CHANGELOG.md has [0.4.0] dated 2026-11-08 and an empty [Unreleased], but the section predates the candidate: 12 commits landed after the prep commit a046c89f55f78245d4c71d3ecd40752d7ec4dff8, including fix(graph) 16539a5 and the gitignore change 8b1147b. The release section does not yet cover those post-prep commits. The candidate also contains later board/QA commits that must be explicitly excluded from release notes as bookkeeping.
+- 1 chore: 89a4440 chore(board): file RELEASE-014..017, close RELEASE-013 — v0.4.0 cut published
+- 2 other/non-conventional PM bookkeeping commits: dc4f34e PM: make five owner-gated slices dispatchable; 773087b PM(dispatchability): warpfs board repair
+- 0 feat, 0 fix, 0 perf, 0 docs, 0 test, 0 refactor
+- 0 BREAKING CHANGE footers and 0 type-bang breaking subjects
 
-## Release tooling and artifacts
+There is no material product delta after v0.4.0, so no patch/minor bump is proposed. Major is not implicated.
 
-Repository-owned tooling found first: Makefile target release, which runs scripts/build-hilo.sh -p hilo-cli, strips target/release/hilo, and lists the binary. README documents make release and states that no prebuilt binaries are published. No scripts/release*, GoReleaser configuration, Dockerfile, package registry workflow, or tag-triggered release workflow exists. The only hosted workflows are CI, Pages, and pages-build-deployment. A manual gh release create fallback is possible only after release notes are corrected and the Makefile artifact is built and verified from the immutable tag; it does not close the missing automation/documentation gap.
+## Version hygiene and release tooling
 
-Previous release probe: v0.3.0 GitHub Release exists, is public/non-draft/non-prerelease, and has assets: []. Its zero-asset gap is still present. No v0.4.0 tag exists locally or remotely.
-
-Artifact build was not run in this readiness-only pass: the repository's release build is a long, side-effecting Rust/DuckDB build and the candidate is blocked on release-prep coverage and the missing publish contract. The installed /home/kara/.cargo/bin/hilo is not a candidate artifact: it reports hilo 0.4.0 but build v0.3.0-293-g3adfb9ed, built 2026-10-08, while its file mtime is 2026-10-08 and it is an unstripped 1.4 GB binary.
+The workspace and all 11 published workspace crates report version 0.4.0. CHANGELOG.md contains [Unreleased] followed by [0.4.0] dated 2026-11-09. The repository-owned Makefile release target remains the authoritative build path: scripts/build-hilo.sh -p hilo-cli, strip target/release/hilo, then list the binary. No scripts/release*, GoReleaser configuration, Dockerfile, docs/releasing.md, or tag-triggered release workflow exists. RELEASE-015 and RELEASE-017 own those repeatability gaps.
 
 ## Hosted CI
 
-Exact candidate run: 42623087215, https://github.com/gethilo/hilo/actions/runs/42623087215.
-Status completed, conclusion success, head SHA 7f039cd9abe00ed20f69446ab24a2862b5104cf9. Job Build & Test (stable) completed success. Steps Set up job, checkout, Rust installation, system dependencies, cargo cache, formatting, build, clippy, test, and post steps all completed success.
-
-Recent relevant run history: 42609109723 success at 16539a5; 42593865876 success at 8b1147b; 42578191698 success at 5f34bd9; 42477564871 success at 0dd62c4; 42466946781 success at b8a616c. Runs 42620552979 and 42619750999 were cancelled by concurrency supersession, not red. There is no tag-triggered workflow to verify after a future tag.
+Exact candidate run 42657026493 on 773087b02aef57cad281fb7819f1855357f09716 completed success. Build & Test (stable) passed formatting, build, clippy, and test. The immediately prior run 42654042718 on 89a444047fa8a6c65fe076a77381e5e23aaba573 was cancelled after the PM lane advanced the branch; it is superseded, not a candidate failure. Check-runs API for the certified candidate reports one completed/success check.
 
 ## GitReins
 
-Fresh candidate detached worktree: /home/kara/.hermes/cache/scratch/warpfs-release-candidate.xD0d0W, HEAD exactly 7f039cd9abe00ed20f69446ab24a2862b5104cf9, clean, remote git@github.com:gethilo/hilo.git.
-
-Command: gitreins guard --full --scope working-tree --json
-Receipt: /home/kara/.hermes/cache/scratch/warpfs-gitreins-20261109-1254.json
-Result: PASS, gitreins 0.20.0, changedFileCount 0, degraded false, skippedSteps [], checkCount 2. Tests full PASS; secrets check PASS with no files in working-tree scope, and gitleaks not run for that bounded scope. The receipt is exact-tree evidence but not a substitute for hosted release CI or artifact verification.
-
-Repository history contains prior task-bound verdicts, but no stored GitReins verdict was found bound to the current candidate SHA. The fresh guard above is the candidate-bound verdict.
+No stored GitReins verdict was found bound to the certified candidate. The most recent repository verdicts are historical and not candidate evidence: QA-WARPFS-032 is passed=false on 0dd62c472feb2fa88dc7e8250367056d136b0558 because its S3 proxy test still hangs; DF-WARPFS-80 is passed=true on b0753403d8e52b76b2341d7e3b2f9d76d0d25d71; DF-WARPFS-168-R3 has both a provider-billing INCOMPLETE and a later passed=true verdict on 10d5898985b585d800d5253160fb1f41aa276f20. None is bound to 773087b.
 
 ## Dogfood and QA
 
-Latest committed clean-machine QA audit is event 10046 at tested SHA 0dd62c472feb2fa88dc7e8250367056d136b0558. It is not current-head evidence: the canonical tip is now 7f039cd9. The battery graded only 2 of 14 canonical cells; 11 were UNVERIFIED, install exceeded the 3600-second ceiling, and the run filed QA-WARPFS-035/036 plus product QA-WARPFS-037. Hosted CI was green at the older SHA, but this does not clear the current candidate.
+The latest committed dogfood record is Run 48 from 2026-10-26, classified UNKNOWN-VALUE because it used a stale v0.3.0-542-gd1f88c75 artifact and could not complete a current-head build within its budget. Run 47b later recorded a completed fresh-install cell but remained PROMISING-BUT-ROUGH for its broader surface. The latest committed clean-machine QA evidence is not bound to 773087b and remains partial/unverified; prior evidence graded only 2 of 14 canonical cells and left 11 UNVERIFIED. These are not release blockers for this pass because there is no release warranted, but they remain open evidence gaps for the next material cut. RELEASE-016 owns the clean-machine receipt.
 
-Latest committed dogfood record is Run 48, 2026-10-26, UNKNOWN-VALUE. It used a stale v0.3.0-542-gd1f88c75 artifact, could not complete a current-head build within the run, and reported the fresh-machine host critically full. Earlier run 47b was PROMISING-BUT-ROUGH despite later HEAD re-verification. These records are historical and do not waive current-head artifact/QA evidence.
+## Previous release artifact and deployed freshness
 
-Open P1 findings relevant to release readiness include QA-WARPFS-025 (shared bunker disk exhaustion truncates the battery), QA-WARPFS-DOCS-1 (battery refused at 98% disk), and NEVER-DONE (blocked perpetual audit). Open P2 release-related rows include RELEASE-012, RELEASE-013, QA-WARPFS-QA-3 (v0.3.0 upgrade build failure on a fresh agent), and DF-WARPFS-99 (stale installed binary prevents PERF-009 verification). These are recorded findings, not silently waived.
+v0.4.0 is a public, non-draft, non-prerelease GitHub Release published 2026-11-09T16:07:29Z. The annotated tag peels to 57002335c7295500b48ac65f7e2d08f260ab28b5 and has not moved. Assets are hilo-0.4.0-x86_64-linux.tar.gz (32,941,916 bytes, uploaded) and its .sha256 file (97 bytes, uploaded); the recorded asset checksum is aa066b2c823e475bf0fa135abbcf2b74a5f6870b921d59f6f21edd5624f493a7. The prior release's exact-tag CI run 42639045303 was green.
 
-## Public posture and deployed freshness
+The installed /home/kara/.cargo/bin/hilo reports version 0.4.0 but build v0.3.0-293-g3adfb9ed, built 2026-10-08, with a 1,424,102,520-byte file. It is stale and not evidence about the published asset; do not refresh it in this verification-only pass.
 
-GitHub repo gethilo/hilo is public and MIT licensed. Branch protection API returned 404, meaning master is unprotected. GitHub security_and_analysis reports Dependabot security updates, secret scanning, non-provider secret scanning, push protection, and validity checks disabled. No deployed service health/version endpoint was identified for this CLI repository; the measurable installed binary is stale as recorded above.
+## Open blockers and next gates
 
-## Required next gates
-
-1. Update CHANGELOG [0.4.0] coverage for all material commits after a046c89f, reopen/retain [Unreleased] correctly, and rerun the notes census at the final cut SHA.
-2. Define and document the artifact surface: make release output, version/provenance check, checksum/packaging format, install/capability smoke, and manual or automated publication path. The v0.3.0 zero-asset gap must not repeat.
-3. Resolve or explicitly disposition the current-head QA/clean-machine evidence gaps, especially QA-WARPFS-025, QA-WARPFS-DOCS-1, QA-WARPFS-QA-3, and QA-WARPFS-037.
-4. Re-run exact-head CI, fresh GitReins, artifact build/provenance, and dogfood/QA against the immutable cut SHA before creating any tag.
+- RELEASE-015: add a tag-triggered CI artifact publisher.
+- RELEASE-016: obtain a clean-machine install/capability receipt for v0.4.0.
+- RELEASE-017: document the release procedure and evidence contract.
+- RELEASE-018: repair the unmounted CARGO_HOME environment and distinguish toolchain failures from lint findings in the guard.
+- RELEASE-012 remains the rolling readiness row; no duplicate RELEASE row was filed.
 
 ## Board receipt
 
-Canonical row to refresh: RELEASE-013. This report is the evidence artifact for this pass. No tag, Release object, or artifact was created.
+This evidence file is intended to be committed with the RELEASE-012 refresh. No tag, Release object, or new artifact was created by this sweep.
