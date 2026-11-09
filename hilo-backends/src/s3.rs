@@ -1129,6 +1129,7 @@ mod tests {
     // wiring the unit-level provider assertion cannot: endpoint_client must
     // install THAT provider on the client it returns. An empty key pair — the
     // pre-fix behaviour — shows up here as `Credential=/" or no auth at all.
+    // ch:trace row=QA-WARPFS-032-R2 spec=none:board-acceptance wave=none:serial test=hilo-backends/src/s3.rs::profile_credentials_sign_requests_end_to_end doc=none evidence=none:worker-local witness=none:worker-local verdict=none:open-finding commit=none:worker-local memory=none:unwritten
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn profile_credentials_sign_requests_end_to_end() {
@@ -1167,7 +1168,7 @@ mod tests {
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
+        let mut server = tokio::spawn(async move {
             let (mut sock, _peer) = listener.accept().await.unwrap();
             let mut head = Vec::new();
             let mut chunk = [0u8; 2048];
@@ -1206,8 +1207,30 @@ mod tests {
             "profile credentials defer no failure: {deferred:?}"
         );
         // The response shape is not the point here; the captured request is.
-        let _ = client.list_objects_v2().bucket("b").send().await;
-        let head = server.await.unwrap();
+        let request = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            client.list_objects_v2().bucket("b").send(),
+        )
+        .await;
+        let head = match request {
+            Ok(Ok(_)) => {
+                match tokio::time::timeout(std::time::Duration::from_secs(5), &mut server).await {
+                    Ok(result) => result.expect("loopback server task must complete cleanly"),
+                    Err(_) => {
+                        server.abort();
+                        panic!("loopback server did not receive the signed request within 5s");
+                    }
+                }
+            }
+            Ok(Err(error)) => {
+                server.abort();
+                panic!("S3 request failed before reaching the loopback listener: {error}");
+            }
+            Err(_) => {
+                server.abort();
+                panic!("S3 request did not reach the loopback listener within 5s");
+            }
+        };
 
         // hyper emits lower-case header names on the wire, so compare folded.
         let lower = head.to_lowercase();
