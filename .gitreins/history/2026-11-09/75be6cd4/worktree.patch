@@ -1,0 +1,19 @@
+diff --git a/.gitreins/tasks.yaml b/.gitreins/tasks.yaml
+index ca4da70..0140282 100644
+--- a/.gitreins/tasks.yaml
++++ b/.gitreins/tasks.yaml
+@@ -2673,3 +2673,14 @@ tasks:
+   status: complete
+   created_at: '2026-11-08T17:04:52.717822+00:00'
+   completed_at: '2026-11-08T17:32:13.049623+00:00'
++- id: QA-WARPFS-032-R2
++  title: Fix S3 proxy-disconnect test hang
++  criteria:
++  - 'FAILIF: profile_credentials_sign_requests_end_to_end hangs beyond 10 seconds
++    when HTTP_PROXY HTTPS_PROXY and ALL_PROXY point at an unreachable loopback proxy;
++    PROOF: the test exits non-zero and reports the request/listener failure, while
++    the no-proxy control still passes; no discarded send error or unbounded listener
++    await remains'
++  status: complete
++  created_at: '2026-11-09T13:38:45.033538+00:00'
++  completed_at: '2026-11-09T13:38:45.903215+00:00'

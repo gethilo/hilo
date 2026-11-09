@@ -1,0 +1,131 @@
+{
+  "task_id": "QA-WARPFS-032-R2",
+  "task_title": "Fix S3 proxy-disconnect test hang",
+  "task_criteria": [
+    "FAILIF: profile_credentials_sign_requests_end_to_end hangs beyond 10 seconds when HTTP_PROXY HTTPS_PROXY and ALL_PROXY point at an unreachable loopback proxy; PROOF: the test exits non-zero and reports the request/listener failure, while the no-proxy control still passes; no discarded send error or unbounded listener await remains"
+  ],
+  "passed": true,
+  "worktree": "/home/kara/worktrees/warpfs-QA-WARPFS-032-R2",
+  "branch": "wt/QA-WARPFS-032-R2",
+  "commit": "588ea8425ad64cec156e0662eb5153756d2ab0d8",
+  "pass_class": "judged",
+  "tier2_skipped": false,
+  "working_tree_content_fingerprint": "20f80e0a399aa1fab802e4b5b3e57716c9936a4e07373361b9c0e5586b1749d3",
+  "working_tree_dirty_path_count": 1,
+  "items": [
+    {
+      "criterion": "FAILIF: profile_credentials_sign_requests_end_to_end hangs beyond 10 seconds when HTTP_PROXY HTTPS_PROXY and ALL_PROXY point at an unreachable loopback proxy; PROOF: the test exits non-zero and reports the request/listener failure, while the no-proxy control still passes; no discarded send error or unbounded listener await remains",
+      "status": "PASS",
+      "detail": "Proxy-disconnect run: `HTTP_PROXY=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 ALL_PROXY=http://127.0.0.1:9 cargo test -p hilo_backends --lib profile_credentials_sign_requests_end_to_end` -> EXIT=101, ELAPSED=2s, output: \"panicked at hilo-backends/src/s3.rs:1227: S3 request failed before reaching the loopback listener: dispatch failure\" and \"test result: FAILED. 0 passed; 1 failed ... finished in 1.59s\" \u2014 non-zero exit, names the request failure, and finishes far under the 10s bound. No-proxy control: `env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY ... cargo test ...` -> EXIT=0, \"test s3::tests::profile_credentials_sign_requests_end_to_end ... ok ... finished in 0.03s\". No discarded send error remains: the old `let _ = client.list_objects_v2().bucket(\"b\").send().await;` is gone (grep for `let _ = client` returns nothing); the only `.send()` in the test is bound at s3.rs:1212 inside `tokio::time::timeout(5s, ...)` and matched at s3.rs:1215-1233 with explicit panic arms. No unbounded listener await: `tokio::time::timeout(Duration::from_secs(5), &mut server)` at s3.rs:1217 with `server.abort()` + panic on Err (1219-1222), and abort on send error/timeout (1226, 1230)."
+    },
+    {
+      "criterion": "The bounded failure path does not mask the test's real assertion: with no proxy the test still reaches the loopback listener and asserts the SigV4 Authorization header signed with the profile key",
+      "status": "PASS",
+      "detail": "No-proxy run exits 0 with \"test s3::tests::profile_credentials_sign_requests_end_to_end ... ok\", which requires the Ok(Ok(_)) arm at s3.rs:1216, a successful `&mut server` await, and the assertions at s3.rs:1238-1245 (`authorization: aws4-hmac-sha256`, `credential=akiaiosfodnn7example/`). The new timeouts only fire on error/timeout, so the signing assertion is still exercised.",
+      "derived": true
+    },
+    {
+      "criterion": "The fix does not regress the rest of the hilo_backends lib suite (all other tests still pass in both proxy and no-proxy environments)",
+      "status": "PASS",
+      "detail": "Full lib suite `cargo test -p hilo_backends --lib`: no-proxy EXIT=0, \"test result: ok. 140 passed; 0 failed; 0 ignored\"; proxy env EXIT=101, \"test result: FAILED. 139 passed; 1 failed\" \u2014 the single failure is the target test, no collateral regressions.",
+      "derived": true
+    },
+    {
+      "criterion": "The test terminates promptly (well under the 10s FAILIF bound) in the proxy-disconnect scenario rather than relying on the harness timeout",
+      "status": "PASS",
+      "detail": "Proxy-disconnect run finished in 2s wall clock (test finished in 1.59s), failing fast through the Ok(Err) arm at s3.rs:1225-1228; the 5s `tokio::time::timeout` at s3.rs:1210-1214 and s3.rs:1217 bound both the send and the listener await, so no path can exceed ~10s.",
+      "derived": true
+    }
+  ],
+  "merge_recommendation": "no_concerns_found",
+  "stages": {
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 FAILIF: profile_credentials_sign_requests_end_to_end hangs beyond 10 seconds when HTTP_PROXY HTTPS_PROXY and ALL_PROXY point at an unreachable loopback proxy; PROOF: the test exits non-zero and reports the request/listener failure, while the no-proxy control still passes; no discarded send error or unbounded listener await remains: Proxy-disconnect run: `HTTP_PROXY=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 ALL_PROXY=http://127.0.0.1:9 cargo test -p hilo_backends --lib profile_credentials_sign_requests_end_to_end` -> EXIT=101, ELAPSED=2s, output: \"panicked at hilo-backends/src/s3.rs:1227: S3 request failed before reaching the loopback listener: dispatch failure\" and \"test result: FAILED. 0 passed; 1 failed ... finished in 1.59s\" \u2014 non-zero exit, names the request failure, and finishes far under the 10s bound. No-proxy control: `env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY ... cargo test ...` -> EXIT=0, \"test s3::tests::profile_credentials_sign_requests_end_to_end ... ok ... finished in 0.03s\". No discarded send error remains: the old `let _ = client.list_objects_v2().bucket(\"b\").send().await;` is gone (grep for `let _ = client` returns nothing); the only `.send()` in the test is bound at s3.rs:1212 inside `tokio::time::timeout(5s, ...)` and matched at s3.rs:1215-1233 with explicit panic arms. No unbounded listener await: `tokio::time::timeout(Duration::from_secs(5), &mut server)` at s3.rs:1217 with `server.abort()` + panic on Err (1219-1222), and abort on send error/timeout (1226, 1230).\n  \u2713 The bounded failure path does not mask the test's real assertion: with no proxy the test still reaches the loopback listener and asserts the SigV4 Authorization header signed with the profile key: No-proxy run exits 0 with \"test s3::tests::profile_credentials_sign_requests_end_to_end ... ok\", which requires the Ok(Ok(_)) arm at s3.rs:1216, a successful `&mut server` await, and the assertions at s3.rs:1238-1245 (`authorization: aws4-hmac-sha256`, `credential=akiaiosfodnn7example/`). The new timeouts only fire on error/timeout, so the signing assertion is still exercised.\n  \u2713 The fix does not regress the rest of the hilo_backends lib suite (all other tests still pass in both proxy and no-proxy environments): Full lib suite `cargo test -p hilo_backends --lib`: no-proxy EXIT=0, \"test result: ok. 140 passed; 0 failed; 0 ignored\"; proxy env EXIT=101, \"test result: FAILED. 139 passed; 1 failed\" \u2014 the single failure is the target test, no collateral regressions.\n  \u2713 The test terminates promptly (well under the 10s FAILIF bound) in the proxy-disconnect scenario rather than relying on the harness timeout: Proxy-disconnect run finished in 2s wall clock (test finished in 1.59s), failing fast through the Ok(Err) arm at s3.rs:1225-1228; the 5s `tokio::time::timeout` at s3.rs:1210-1214 and s3.rs:1217 bound both the send and the listener await, so no path can exceed ~10s.\nThe commit replaces the discarded send result and unbounded `server.await` with 5s-bounded, explicitly-panicking paths; verified by running the test under an unreachable loopback proxy (exit 101 in 2s with the request-failure message) and the no-proxy control (exit 0, 140/140 lib tests passing).",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 FAILIF: profile_credentials_sign_requests_end_to_end hangs beyond 10 seconds when HTTP_PROXY HTTPS_PROXY and ALL_PROXY point at an unreachable loopback proxy; PROOF: the test exits non-zero and reports the request/listener failure, while the no-proxy control still passes; no discarded send error or unbounded listener await remains: Proxy-disconnect run: `HTTP_PROXY=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 ALL_PROXY=http://127.0.0.1:9 cargo test -p hilo_backends --lib profile_credentials_sign_requests_end_to_end` -> EXIT=101, ELAPSED=2s, output: \"panicked at hilo-backends/src/s3.rs:1227: S3 request failed before reaching the loopback listener: dispatch failure\" and \"test result: FAILED. 0 passed; 1 failed ... finished in 1.59s\" \u2014 non-zero exit, names the request failure, and finishes far under the 10s bound. No-proxy control: `env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY ... cargo test ...` -> EXIT=0, \"test s3::tests::profile_credentials_sign_requests_end_to_end ... ok ... finished in 0.03s\". No discarded send error remains: the old `let _ = client.list_objects_v2().bucket(\"b\").send().await;` is gone (grep for `let _ = client` returns nothing); the only `.send()` in the test is bound at s3.rs:1212 inside `tokio::time::timeout(5s, ...)` and matched at s3.rs:1215-1233 with explicit panic arms. No unbounded listener await: `tokio::time::timeout(Duration::from_secs(5), &mut server)` at s3.rs:1217 with `server.abort()` + panic on Err (1219-1222), and abort on send error/timeout (1226, 1230).\n  \u2713 The bounded failure path does not mask the test's real assertion: with no proxy the test still reaches the loopback listener and asserts the SigV4 Authorization header signed with the profile key: No-proxy run exits 0 with \"test s3::tests::profile_credentials_sign_requests_end_to_end ... ok\", which requires the Ok(Ok(_)) arm at s3.rs:1216, a successful `&mut server` await, and the assertions at s3.rs:1238-1245 (`authorization: aws4-hmac-sha256`, `credential=akiaiosfodnn7example/`). The new timeouts only fire on error/timeout, so the signing assertion is still exercised.\n  \u2713 The fix does not regress the rest of the hilo_backends lib suite (all other tests still pass in both proxy and no-proxy environments): Full lib suite `cargo test -p hilo_backends --lib`: no-proxy EXIT=0, \"test result: ok. 140 passed; 0 failed; 0 ignored\"; proxy env EXIT=101, \"test result: FAILED. 139 passed; 1 failed\" \u2014 the single failure is the target test, no collateral regressions.\n  \u2713 The test terminates promptly (well under the 10s FAILIF bound) in the proxy-disconnect scenario rather than relying on the harness timeout: Proxy-disconnect run finished in 2s wall clock (test finished in 1.59s), failing fast through the Ok(Err) arm at s3.rs:1225-1228; the 5s `tokio::time::timeout` at s3.rs:1210-1214 and s3.rs:1217 bound both the send and the listener await, so no path can exceed ~10s.\nThe commit replaces the discarded send result and unbounded `server.await` with 5s-bounded, explicitly-panicking paths; verified by running the test under an unreachable loopback proxy (exit 101 in 2s with the request-failure message) and the no-proxy control (exit 0, 140/140 lib tests passing).",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "FAILIF: profile_credentials_sign_requests_end_to_end hangs beyond 10 seconds when HTTP_PROXY HTTPS_PROXY and ALL_PROXY point at an unreachable loopback proxy; PROOF: the test exits non-zero and reports the request/listener failure, while the no-proxy control still passes; no discarded send error or unbounded listener await remains",
+                "status": "PASS",
+                "detail": "Proxy-disconnect run: `HTTP_PROXY=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 ALL_PROXY=http://127.0.0.1:9 cargo test -p hilo_backends --lib profile_credentials_sign_requests_end_to_end` -> EXIT=101, ELAPSED=2s, output: \"panicked at hilo-backends/src/s3.rs:1227: S3 request failed before reaching the loopback listener: dispatch failure\" and \"test result: FAILED. 0 passed; 1 failed ... finished in 1.59s\" \u2014 non-zero exit, names the request failure, and finishes far under the 10s bound. No-proxy control: `env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY ... cargo test ...` -> EXIT=0, \"test s3::tests::profile_credentials_sign_requests_end_to_end ... ok ... finished in 0.03s\". No discarded send error remains: the old `let _ = client.list_objects_v2().bucket(\"b\").send().await;` is gone (grep for `let _ = client` returns nothing); the only `.send()` in the test is bound at s3.rs:1212 inside `tokio::time::timeout(5s, ...)` and matched at s3.rs:1215-1233 with explicit panic arms. No unbounded listener await: `tokio::time::timeout(Duration::from_secs(5), &mut server)` at s3.rs:1217 with `server.abort()` + panic on Err (1219-1222), and abort on send error/timeout (1226, 1230).",
+                "resolution_probability": 0.03
+              },
+              {
+                "criterion": "The bounded failure path does not mask the test's real assertion: with no proxy the test still reaches the loopback listener and asserts the SigV4 Authorization header signed with the profile key",
+                "status": "PASS",
+                "detail": "No-proxy run exits 0 with \"test s3::tests::profile_credentials_sign_requests_end_to_end ... ok\", which requires the Ok(Ok(_)) arm at s3.rs:1216, a successful `&mut server` await, and the assertions at s3.rs:1238-1245 (`authorization: aws4-hmac-sha256`, `credential=akiaiosfodnn7example/`). The new timeouts only fire on error/timeout, so the signing assertion is still exercised.",
+                "derived": true
+              },
+              {
+                "criterion": "The fix does not regress the rest of the hilo_backends lib suite (all other tests still pass in both proxy and no-proxy environments)",
+                "status": "PASS",
+                "detail": "Full lib suite `cargo test -p hilo_backends --lib`: no-proxy EXIT=0, \"test result: ok. 140 passed; 0 failed; 0 ignored\"; proxy env EXIT=101, \"test result: FAILED. 139 passed; 1 failed\" \u2014 the single failure is the target test, no collateral regressions.",
+                "derived": true
+              },
+              {
+                "criterion": "The test terminates promptly (well under the 10s FAILIF bound) in the proxy-disconnect scenario rather than relying on the harness timeout",
+                "status": "PASS",
+                "detail": "Proxy-disconnect run finished in 2s wall clock (test finished in 1.59s), failing fast through the Ok(Err) arm at s3.rs:1225-1228; the 5s `tokio::time::timeout` at s3.rs:1210-1214 and s3.rs:1217 bound both the send and the listener await, so no path can exceed ~10s.",
+                "derived": true
+              }
+            ],
+            "summary": "The commit replaces the discarded send result and unbounded `server.await` with 5s-bounded, explicitly-panicking paths; verified by running the test under an unreachable loopback proxy (exit 101 in 2s with the request-failure message) and the no-proxy control (exit 0, 140/140 lib tests passing).",
+            "provenance": {
+              "model": "deepseek-v4-flash",
+              "base_url_source": "GITREINS_LLM_BASE_URL",
+              "api_key_source": "GITREINS_LLM_API_KEY"
+            }
+          }
+        }
+      ],
+      "model": "deepseek-v4-flash",
+      "base_url_source": "GITREINS_LLM_BASE_URL",
+      "api_key_source": "GITREINS_LLM_API_KEY"
+    }
+  },
+  "review": {
+    "reviewer_email": "totalwindupflightsystems@gmail.com",
+    "reviewer_name": "totalwindupflightsystems",
+    "commit_author_email": "totalwindupflightsystems@gmail.com",
+    "commit_author_name": "totalwindupflightsystems",
+    "self_review": true,
+    "findings": [],
+    "summary": "The diff only appends a completed task record to .gitreins/tasks.yaml with no code changes, so there is nothing to review for correctness, wiring, tests, or convention drift."
+  },
+  "summary": "Stage tier2: PASS\n  COMPLETE\n  \u2713 FAILIF: profile_credentials_sign_requests_end_to_end hangs beyond 10 seconds when HTTP_PROXY HTTPS_PROXY and ALL_PROXY point at an unreachable loopback proxy; PROOF: the test exits non-zero and reports the request/listener failure, while the no-proxy control still passes; no discarded send error or unbounded listener await remains: Proxy-disconnect run: `HTTP_PROXY=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 ALL_PROXY=http://127.0.0.1:9 cargo test -p hilo_backends --lib profile_credentials_sign_requests_end_to_end` -> EXIT=101, ELAPSED=2s, output: \"panicked at hilo-backends/src/s3.rs:1227: S3 request failed before reaching the loopback listener: dispatch failure\" and \"test result: FAILED. 0 passed; 1 failed ... finished in 1.59s\" \u2014 non-zero exit, names the request failure, and finishes far under the 10s bound. No-proxy control: `env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY ... cargo test ...` -> EXIT=0, \"test s3::tests::profile_credentials_sign_requests_end_to_end ... ok ... finished in 0.03s\". No discarded send error remains: the old `let _ = client.list_objects_v2().bucket(\"b\").send().await;` is gone (grep for `let _ = client` returns nothing); the only `.send()` in the test is bound at s3.rs:1212 inside `tokio::time::timeout(5s, ...)` and matched at s3.rs:1215-1233 with explicit panic arms. No unbounded listener await: `tokio::time::timeout(Duration::from_secs(5), &mut server)` at s3.rs:1217 with `server.abort()` + panic on Err (1219-1222), and abort on send error/timeout (1226, 1230).\n  \u2713 The bounded failure path does not mask the test's real assertion: with no proxy the test still reaches the loopback listener and asserts the SigV4 Authorization header signed with the profile key: No-proxy run exits 0 with \"test s3::tests::profile_credentials_sign_requests_end_to_end ... ok\", which requires the Ok(Ok(_)) arm at s3.rs:1216, a successful `&mut server` await, and the assertions at s3.rs:1238-1245 (`authorization: aws4-hmac-sha256`, `credential=akiaiosfodnn7example/`). The new timeouts only fire on error/timeout, so the signing assertion is still exercised.\n  \u2713 The fix does not regress the rest of the hilo_backends lib suite (all other tests still pass in both proxy and no-proxy environments): Full lib suite `cargo test -p hilo_backends --lib`: no-proxy EXIT=0, \"test result: ok. 140 passed; 0 failed; 0 ignored\"; proxy env EXIT=101, \"test result: FAILED. 139 passed; 1 failed\" \u2014 the single failure is the target test, no collateral regressions.\n  \u2713 The test terminates promptly (well under the 10s FAILIF bound) in the proxy-disconnect scenario rather than relying on the harness timeout: Proxy-disconnect run finished in 2s wall clock (test finished in 1.59s), failing fast through the Ok(Err) arm at s3.rs:1225-1228; the 5s `tokio::time::timeout` at s3.rs:1210-1214 and s3.rs:1217 bound both the send and the listener await, so no path can exceed ~10s.\nThe commit replaces the discarded send result and unbounded `server.await` with 5s-bounded, explicitly-panicking paths; verified by running the test under an unreachable loopback proxy (exit 101 in 2s with the request-failure message) and the no-proxy control (exit 0, 140/140 lib tests passing).\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-11-09T13:41:31.433102",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-11-09T13:41:31.462241+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 3544,
+        "truncated": false,
+        "source": "git show 588ea8425ad6"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 856,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "QA-WARPFS-032-R2"
+  }
+}
