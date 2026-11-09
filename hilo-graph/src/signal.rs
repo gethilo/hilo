@@ -3160,9 +3160,11 @@ fn format_output_with_reserve(
             a.signal_score - map_depth_adjustment(&a.path),
             b.signal_score - map_depth_adjustment(&b.path),
         );
-        kb.partial_cmp(&ka)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.path.cmp(&b.path))
+        // `files` already carries the engine's relevance order: score,
+        // anchor match grade, then path. Stable sorting keeps that order
+        // for equal MAP position scores; sorting by path here would put
+        // an alphabetical decoy ahead of the on-task anchor (GAP-078).
+        kb.partial_cmp(&ka).unwrap_or(std::cmp::Ordering::Equal)
     });
 
     let mut map = String::from("## MAP\n");
