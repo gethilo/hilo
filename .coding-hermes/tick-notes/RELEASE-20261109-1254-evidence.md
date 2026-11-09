@@ -213,3 +213,177 @@ evidence gaps for the next material release. RELEASE-016 owns the clean-machine 
 RELEASE-012 is refreshed in place as the single rolling readiness row (no duplicate sweep
 row for this tick id), and the build-repeatability defect above is filed as RELEASE-019.
 Nothing was closed.
+Artifact note: the H1 above dates from pass 2. Passes 3 and 4 are appended beneath it, per the
+append-only re-delivery rule; nothing above this line was rewritten.
+
+## Pass 4 — 2026-11-09 advisory and reachability sweep
+
+Certified candidate: `eaf03b2e99d9426fe195148e6d79eb1bb5c48986`
+Baseline: `v0.4.0` -> `57002335c7295500b48ac65f7e2d08f260ab28b5`
+Published release: `v0.4.0`, published 2026-11-09T16:07:29Z, not a draft, assets
+`hilo-0.4.0-x86_64-linux.tar.gz` (32,941,916 bytes) and its `.sha256` (97 bytes).
+Remote parity: `git rev-parse HEAD` = `git rev-parse origin/master` = `git ls-remote origin refs/heads/master`
+= `eaf03b2e99d9426fe195148e6d79eb1bb5c48986`. The tip did not move during this sweep.
+
+### Decision
+
+NOT DUE on the material-delta rule — the post-tag range is still bookkeeping-only.
+
+DUE as a **patch** under the security rule. This pass ran the one gate the three earlier passes never
+ran: a vulnerability scan of the shipped lockfile. `cargo audit` reports 32 advisories, of which 22 are
+in crates that appear in the `hilo` binary's **normal** (runtime) dependency graph for
+`x86_64-unknown-linux-gnu`. Every one of those advisories was published before the v0.4.0 cut (newest
+2026-10-29, i.e. 11 days before publication of the release). So v0.4.0 shipped known-vulnerable runtime
+dependencies, and the release-engineering rule "an advisory affecting a runtime dependency releases now,
+as a patch" applies to the next cut.
+
+It was **not cut in this pass**. No fix commit exists; tagging the current tree would publish a version
+that claims a fix it does not contain. The work is filed as RELEASE-020 (P1) with the fix split and
+acceptance written so a worker can land it, after which the cut is a patch (v0.4.1) and is inside this
+lane's authority.
+
+### Candidate and range (re-derived, not inherited)
+
+`git rev-list --no-merges v0.4.0..eaf03b2` = 10 commits:
+
+- 7 `releng:` bookkeeping commits (readiness passes and artifact corrections)
+- 1 `chore(board):` commit
+- 2 non-conventional PM commits (`PM: make five owner-gated slices dispatchable`,
+  `PM(dispatchability): warpfs board repair`)
+- 0 feat, 0 fix, 0 perf, 0 docs, 0 test, 0 refactor, 0 BREAKING CHANGE footers, 0 type-bang subjects
+
+`git diff v0.4.0..eaf03b2 -- . ':(exclude).coding-hermes'` returns 0 bytes. `eaf03b2` itself touches
+only `.coding-hermes/tick-notes/` and `.coding-hermes/board/`. The product tree is byte-identical to the
+tree v0.4.0 was cut from.
+
+Stopping the carrier regress: every readiness pass must commit its own artifact, so HEAD is always one
+bookkeeping commit ahead of the tree it certifies. This pass fixes the definition rather than chasing it
+— the certified candidate is the last commit whose product tree was tested (`eaf03b2`), and the pass-4
+carrier is bookkeeping-only by construction, verifiable with
+`git diff --stat <carrier>^..<carrier> -- . ':(exclude).coding-hermes'` (empty). CI is not chased onto
+the artifact commit for a no-material-delta verdict.
+
+### Hosted CI
+
+Run `42675872082` on `eaf03b2e99d9426fe195148e6d79eb1bb5c48986`: completed / success in 16m20s
+(started 18:39:01Z, finished 18:55:21Z), single job `Build & Test (stable)`, 12 of 12 steps success, 0
+failed — checkout, rust toolchain, system deps, cargo cache, `cargo fmt --check`, `cargo build
+--workspace`, `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, plus the post and
+complete steps. `.github/workflows/ci.yml` triggers on push to `master` with `cancel-in-progress: true`
+and has no path filter, so the carrier commit receives its own full run; it is awaited and reported
+below rather than borrowed from the candidate.
+
+### Vulnerability scan — new gate, 32 findings
+
+Tool `cargo-audit-audit 0.22.2`; advisory DB commit `d9cb059f3217db87aeccd190b81eaffe8cc29cb9`,
+last updated `2026-11-09T17:13:08+01:00` (16:13Z — six minutes after the v0.4.0 cut), 1430 advisories.
+Scanned lock: 611 packages. No ignore list (`cargo audit settings` reports `"ignore": []`; there is no
+`.cargo/audit.toml` or `deny.toml` in the repo).
+
+Reachability was measured, then used, not assumed:
+`cargo tree --target x86_64-unknown-linux-gnu --edges normal` (628 resolved packages) intersected with
+the advisory packages.
+
+In the runtime graph — 22 advisories, these ship:
+
+| crate | version | advisories | patched at | resolved by a lock refresh |
+|---|---|---|---|---|
+| wasmtime | 43.0.2 | 9 (RUSTSEC-2026-0222, 0269, 0316, 0327, 0359, 0362, 0363, 0379, 0424) | >=46.0.3 / >=47.0.4 / >=48.0.8 / >=49.0.5 depending on advisory | 49.0.5 (via extism 1.30.0 -> 1.41.0) |
+| rustls | 0.23.42 | 4 (RUSTSEC-2026-0285, 0346, 0348, 0349) | >=0.23.46 | 0.23.46 |
+| zstd-safe | 7.2.4 | 2 (RUSTSEC-2026-0398, 0403) | ^7.4.0 | 7.4.0 |
+| zstd | 0.13.3 | 1 (RUSTSEC-2026-0391) | ^0.13.4 | 0.13.4 |
+| zstd-sys | 2.0.16+zstd.1.5.7 | 1 (RUSTSEC-2026-0410) | >=2.1.2 | 2.1.2 |
+| rustls-webpki | 0.103.13 | 1 (RUSTSEC-2026-0382) | >=0.103.16 | 0.103.16 |
+| webpki-roots | 1.0.9 | 1 (RUSTSEC-2026-0381) | >=1.0.10 | 1.0.11 |
+| libz-sys | 1.1.29 | 1 (RUSTSEC-2026-0418) | >=1.1.31 | 1.1.32 |
+| h2 | 0.4.15 | 1 (RUSTSEC-2026-0258) | >=0.4.16 | 0.4.20 |
+| ctutils | 0.4.2 | 1 (RUSTSEC-2026-0385) | >=0.4.4 | 0.4.8 |
+
+Lock-only — 10 advisories, not compiled into the binary:
+
+| crate | version | advisories | why it is not shipped |
+|---|---|---|---|
+| quinn-proto | 0.11.16 | 5 (RUSTSEC-2026-0338, 0339, 0340, 0341, 0342) | absent from the normal graph; QUIC is never enabled |
+| zip | 6.0.0 | 4 (RUSTSEC-2026-0367, 0368, 0369, 0429) | absent from the normal graph |
+| rkyv | 0.7.46 | 1 (RUSTSEC-2026-0235) | absent from the normal graph |
+
+Dependency chains that make the first table matter rather than academic:
+
+- `wasmtime 43.0.2` <- `extism 1.30.0` <- `hilo_plugins` (workspace member) — the plugin runtime. This is
+  the FFI/plugin execution surface, so a wasmtime sandbox advisory is the highest-consequence class in
+  the table (RUSTSEC-2026-0269 was patched in 46.0.3+ and never in 43.x).
+- `rustls 0.23.42` <- `aws-smithy-http-client` (S3 backend) and <- `ureq` <- `extism`.
+- `h2 0.4.15` <- the same AWS HTTP stack.
+
+Informational warnings, not counted above: 3 (`unmaintained basic-toml 0.1.10`, `unsound arrow-data
+58.3.0`, `yanked chacha20 0.10.1`).
+
+Process finding, filed inside RELEASE-020: the v0.4.0 cut had no advisory gate at all — the pre-cut
+passes checked CI, artifacts, and staleness, but never scanned the lock. 22 runtime advisories were
+published for 11 to 26 days before the tag was cut and were shipped anyway. A release procedure that
+cannot see advisories will keep shipping them; the gate belongs in the documented procedure
+(RELEASE-017) as a blocking step.
+
+### Dependency census (measured with a working CARGO_HOME)
+
+The lane's exported `CARGO_HOME=/mnt/usb512/cargo-home` makes every registry operation fail (RELEASE-018),
+which is why earlier passes recorded dependency state as unmeasurable. With a scratch
+`CARGO_HOME` under lane scratch, `cargo update --dry-run` relocks 242 packages: **214 updating**, 29
+adding, 67 removing, 1 downgrade (`cbindgen 0.29.4 -> 0.29.3`, i.e. a pin already ahead of the
+compatible range). By semver field: **109 patch, 69 minor, 36 major-field** (the major count is
+dominated by 0.x crates whose minor field carries the breaking change, wasmtime among them).
+
+This also refines RELEASE-018: the registry is reachable from this host, so the lane defect is the
+exported `CARGO_HOME` value, not the network or the toolchain. The existing canonical dependency row
+SUP-DEPS-20261004 (pending since 2026-10-04, "147 package changes") is refreshed with this census and
+its acceptance is left as written — the refresh work itself is now subordinate to RELEASE-020, because
+the advisory fix forces the same relock.
+
+### Artifact re-verification (fresh download, not copied from pass 2)
+
+`gh release download v0.4.0 -p 'hilo-0.4.0-x86_64-linux.tar.gz*'` into lane scratch, then
+`sha256sum -c hilo-0.4.0-x86_64-linux.tar.gz.sha256` -> OK. Recomputed digest
+`aa066b2c823e475bf0fa135abbcf2b74a5f6870b921d59f6f21edd5624f493a7`, size 32,941,916 bytes, matching the
+asset the API reports. Tarball members: `./README.md`, `./LICENSE`, `./hilo`. GitHub reports no
+`digest` field for either asset, so the sidecar file is the only published integrity claim.
+
+The bytes were then RUN, not just hashed (a matching sidecar proves only that the publisher uploaded
+these bytes; the self-report is what binds them to the release line):
+
+```
+hilo 0.4.0
+build: v0.4.0
+built: 2026-11-09T15:44:47Z
+```
+
+`./hilo --help` also exits 0 and lists the advertised commands (init, meta, graph, serve, backend,
+mount, sandbox). So the asset is a genuine v0.4.0 build, stamped 23 minutes before the release object
+was published, not a hand-uploaded or stale binary.
+
+One packaging fact the asset does not state: `ldd` shows the binary is dynamically linked against
+`libfuse3.so.4` (plus libz/libstdc++/libgcc). It runs `--version` and `--help` on a host with fuse3
+installed, but a clean machine without `libfuse3` cannot start it, and the tarball ships no dependency
+note. Appended to RELEASE-016 (the clean-machine install receipt row), which is where that belongs.
+
+### Deployed-binary staleness (unchanged)
+
+No hilo daemon, container, or cron entry on this host; nothing serves a stale build. Installed CLI
+`/home/kara/.cargo/bin/hilo` reports `0.4.0` with `build: v0.3.0-293-g3adfb9ed`, built 2026-10-08 —
+it predates the release and is not release evidence. Not refreshed in a verify-only pass.
+
+### GitReins and dogfood (unchanged)
+
+No stored verdict is bound to `eaf03b2`: `grep -rl eaf03b2 .gitreins/history` returns nothing across
+395 `verdict.json` files. Historical verdicts (QA-WARPFS-032 on `0dd62c47` failed, DF-WARPFS-80 on
+`b0753403` passed, DF-WARPFS-168-R3 on `10d58989`) are not candidate evidence and were not re-used.
+Latest committed dogfood remains Run 48 (2026-10-26), UNKNOWN-VALUE on a stale
+`v0.3.0-542-gd1f88c75` artifact; clean-machine QA evidence is still not bound to this candidate.
+Both are open evidence gaps for the next material release (RELEASE-016).
+
+### Board receipt
+
+- RELEASE-020 filed (P1): runtime advisory fix + v0.4.1 patch cut, with the fix split into the
+  semver-compatible set and the wasmtime-major set, acceptance criteria and blast radius written.
+- RELEASE-012 refreshed in place as the single rolling readiness row (no duplicate sweep row).
+- SUP-DEPS-20261004 refreshed with the measured 214/109/69/36 census.
+- Nothing was closed; no tag was created or moved; no release was published or edited.
