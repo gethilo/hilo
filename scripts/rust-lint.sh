@@ -33,8 +33,8 @@
 #
 # Exit codes, so a blocked commit says WHICH class of failure it is:
 #   0  every leg green
-#   1  clippy findings at deny level (-D warnings)
-#   2  toolchain components missing (cargo / clippy)
+#   1  compiler or clippy errors at deny level (-D warnings)
+#   2  toolchain components or writable Cargo paths unavailable
 #   3  infrastructure: killed by the internal budget (cold tree / slow host)
 #   4  rust-analyzer unusable: missing, not executable, or failing to run
 #   5  rust-analyzer killed by its own budget (hung binary)
@@ -58,9 +58,31 @@ ACCOUNT_HOME="$(getent passwd "$(id -u)" | cut -d: -f6)"
 RA_FROM_CALLER_PATH="$(command -v rust-analyzer 2>/dev/null || true)"
 
 export RUSTUP_HOME="${RUSTUP_HOME:-${ACCOUNT_HOME:-$HOME}/.rustup}"
-export CARGO_HOME="${CARGO_HOME:-${ACCOUNT_HOME:-$HOME}/.cargo}"
+
+# Do not create paths under a stale mount: only use an existing directory that
+# can actually accept a file. A dangling symlink or read-only mount fails this.
+usable_dir() {
+    [ -d "$1" ] && [ -w "$1" ] && local probe &&
+        probe="$(mktemp "$1/.hilo-write-probe.XXXXXXXX" 2>/dev/null)" && rm -f "$probe"
+}
+resolve_dir() {
+    local requested="$1" fallback="$2"
+    if [ -n "$requested" ] && usable_dir "$requested"; then
+        printf '%s\n' "$requested"
+    else
+        mkdir -p "$fallback" && usable_dir "$fallback" || {
+            echo "rust-lint: infrastructure unavailable: cannot write $fallback" >&2
+            return 1
+        }
+        printf '%s\n' "$fallback"
+    fi
+}
+export CARGO_HOME="$(resolve_dir "${CARGO_HOME:-}" "${ACCOUNT_HOME:-$HOME}/.cargo")" || exit 2
+export CARGO_TARGET_DIR="$(resolve_dir "${CARGO_TARGET_DIR:-}" "${ACCOUNT_HOME:-$HOME}/.cache/hilo/rust-lint-target")" || exit 2
 export PATH="$CARGO_HOME/bin:$PATH"
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}"
+echo "rust-lint: CARGO_HOME=$CARGO_HOME"
+echo "rust-lint: CARGO_TARGET_DIR=$CARGO_TARGET_DIR"
 
 # Internal budget stays below guards.test_timeout so cargo's own diagnostics,
 # not the guard's generic timeout note, reach the reader. A kill here is
@@ -142,7 +164,7 @@ esac
 echo "rust-lint: rust-analyzer ran: $RA_BIN — $RA_FIRST_LINE"
 
 cargo clippy --version >/dev/null 2>&1 || {
-    echo "rust-lint: clippy component missing (rustup component add clippy)" >&2
+    echo "rust-lint: infrastructure unavailable: clippy component missing (rustup component add clippy)" >&2
     exit 2
 }
 
@@ -151,24 +173,39 @@ run_clippy() {
     timeout --signal=KILL "$TIMEOUT" cargo clippy "$@" --all-targets -- -D warnings
 }
 
-# Primary gate: whole workspace, warnings denied.
-if run_clippy --workspace; then
+classify_clippy_failure() {
+    local log="$1" status="$2"
+    if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
+        echo "rust-lint: infrastructure unavailable: clippy was killed by the ${TIMEOUT}s budget" >&2
+        return 3
+    fi
+    # Cargo emits these before any compiler diagnostics when the registry,
+    # git source, toolchain, or target directory cannot be used. They are not
+    # Clippy findings and must never be reported as such.
+    if grep -Eqi '(failed to (get|load source|fetch)|failed to create directory|permission denied|no such file or directory|toolchain|rustc.*not found|network failure|unable to update)' "$log"; then
+        echo "rust-lint: infrastructure unavailable: dependency/toolchain resolution failed" >&2
+        return 2
+    fi
+    if grep -Eq '(^error\[|^error:|\[-D (warnings|clippy::)|due to -D warnings)' "$log"; then
+        echo "rust-lint: compiler or clippy reported deny-level errors" >&2
+        return 1
+    fi
+    echo "rust-lint: infrastructure unavailable or unclassified Cargo failure (exit $status); not claiming clippy findings" >&2
+    return 2
+}
+
+# Primary gate: whole workspace, warnings denied. Capture Cargo output so a
+# dependency/toolchain refusal can be classified from its actual diagnostics.
+CLIPPY_LOG="$(mktemp "${TMPDIR:-/tmp}/hilo-rust-lint-clippy.XXXXXXXX")"
+trap 'rm -f "$CLIPPY_LOG"' EXIT
+if run_clippy --workspace >"$CLIPPY_LOG" 2>&1; then
+    cat "$CLIPPY_LOG"
     echo "rust-lint: clippy --workspace --all-targets -- -D warnings: clean"
 else
     status=$?
-    # Distinguish real findings from local infrastructure (cold tree / slow
-    # workspace) so a blocked commit is explained honestly.
-    if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
-        echo "rust-lint: clippy --workspace killed by the ${TIMEOUT}s budget (cold tree?); run heavy lint on the build host" >&2
-        exit 3
-    fi
-    echo "rust-lint: workspace clippy reported findings; classifying with the scoped pair" >&2
-    if timeout --signal=KILL "$TIMEOUT" cargo clippy -p hilo_graph -p hilo-cli --all-targets -- -D warnings; then
-        echo "rust-lint: scoped clippy green but the workspace run failed — blocking (infra suspected)" >&2
-        exit 3
-    fi
-    echo "rust-lint: clippy reported findings at deny level -D warnings" >&2
-    exit 1
+    cat "$CLIPPY_LOG"
+    classify_clippy_failure "$CLIPPY_LOG" "$status"
+    exit $?
 fi
 
 # Existing coverage is preserved: the graph unit suite still runs, fail-closed.
