@@ -2684,3 +2684,11 @@ tasks:
   status: complete
   created_at: '2026-11-09T13:02:41.631189+00:00'
   completed_at: '2026-11-09T23:30:00.000000+00:00'
+- id: RELEASE-020
+  title: v0.4.1 RustSec dependency remediation
+  criteria:
+  - 'Implement RELEASE-020: eliminate runtime-reachable RustSec advisories, upgrade
+    extism/wasmtime, keep the workspace green, and add the release advisory gate;
+    preserve the exact board acceptance criteria.'
+  status: in_progress
+  created_at: '2026-11-10T10:21:58.346213+00:00'
