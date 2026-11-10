@@ -12,6 +12,7 @@ import tempfile
 import unittest
 
 
+# ch:trace row=RELEASE-018 spec=.gitreins/config.yaml#guards.test_command wave=warpfs-foreman-2026-11-10-17-25-01#serial test=tests/test_gitreins_rust_guard.py::RustGuardTest.test_dependency_failure_is_not_reported_as_clippy_finding doc=none:no-document-change evidence=tests/test_gitreins_rust_guard.py witness=live:ambient-cargo-fetch-and-rust-lint verdict=none:foreman-will-run-judge commit=c577f75b00d3f734d7e28414bd2b5bb8f5d6303e memory=none:worker-report-only
 class RustGuardTest(unittest.TestCase):
     def _fixture(self, root):
         """Isolated, dependency-free Rust fixture (never touches product sources).
