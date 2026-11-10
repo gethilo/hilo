@@ -2692,3 +2692,13 @@ tasks:
     preserve the exact board acceptance criteria.'
   status: in_progress
   created_at: '2026-11-10T10:21:58.346213+00:00'
+- id: RELEASE-018
+  title: Repair ambient Cargo paths and rust-lint attribution
+  criteria:
+  - 'PASSIF: ambient cargo fetch --locked exits 0 and rust-lint reports resolved CARGO_HOME
+    and CARGO_TARGET_DIR before executing the workspace lint; PROOF: capture the command
+    output and guard log from the committed tree under the fleet default environment;
+    FAILIF: cargo still resolves through an unusable ambient path, or the guard labels
+    dependency-resolution failure as clippy findings'
+  status: in_progress
+  created_at: '2026-11-10T17:30:36.937850+00:00'
