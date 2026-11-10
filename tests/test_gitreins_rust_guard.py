@@ -3,6 +3,7 @@
 Requires gitreins, git and Rust/Clippy on PATH. Uses an isolated dependency-free
 Rust crate, never mutating product sources or invoking the LLM evaluator.
 """
+
 import os
 from pathlib import Path
 import shutil
@@ -11,6 +12,7 @@ import tempfile
 import unittest
 
 
+# ch:trace row=RELEASE-018 spec=.gitreins/config.yaml#guards.test_command wave=warpfs-foreman-2026-11-10-17-25-01#serial test=tests/test_gitreins_rust_guard.py::RustGuardTest.test_dependency_failure_is_not_reported_as_clippy_finding doc=none:no-document-change evidence=tests/test_gitreins_rust_guard.py witness=live:ambient-cargo-fetch-and-rust-lint verdict=none:foreman-will-run-judge commit=c577f75b00d3f734d7e28414bd2b5bb8f5d6303e memory=none:worker-report-only
 class RustGuardTest(unittest.TestCase):
     def _fixture(self, root):
         """Isolated, dependency-free Rust fixture (never touches product sources).
@@ -24,12 +26,26 @@ class RustGuardTest(unittest.TestCase):
         (root / "scripts").mkdir()
         shutil.copyfile(repo / ".gitreins/config.yaml", root / ".gitreins/config.yaml")
         shutil.copyfile(repo / "scripts/rust-lint.sh", root / "scripts/rust-lint.sh")
+        shutil.copyfile(
+            repo / "scripts/check_usage_skill.py", root / "scripts/check_usage_skill.py"
+        )
         (root / "Cargo.toml").write_text(
             '[package]\nname = "hilo_graph"\nversion = "0.1.0"\nedition = "2021"\n'
         )
         # The Makefile triggered the historical C++ misclassification.
         (root / "Makefile").write_text("all:\n\t@true\n")
         (root / "src/lib.rs").write_text("pub fn answer() -> bool { true }\n")
+        # The final shipped-surface check is part of the real gate. Keep the
+        # isolated fixture honest enough to reach the Cargo assertions.
+        (root / "skills/hilo-usage").mkdir(parents=True)
+        (root / "skills/hilo-usage/SKILL.md").write_text("fixture\n")
+        (root / "hilo-cli/src/commands").mkdir(parents=True)
+        (root / "hilo-cli/src/commands/init.rs").write_text(
+            'const HILO_MANAGED_IGNORE_HEADER: &str = "fixture";\n'
+            'const HILO_DUCKDB_IGNORE_ENTRY: &str = "fixture";\n'
+        )
+        (root / "hilo-mcp/src/tools").mkdir(parents=True)
+        (root / "hilo-mcp/src/tools/mod.rs").write_text('name: "vfs_fixture".into(),\n')
 
     def _env_with_rust_analyzer_on_path(self, stub_dir):
         """Caller env with *stub_dir* prepended to PATH.
@@ -42,6 +58,89 @@ class RustGuardTest(unittest.TestCase):
         env["PATH"] = f"{stub_dir}{os.pathsep}{env.get('PATH', '')}"
         return env
 
+    def _stub_cargo(self, stub_dir, body):
+        cargo = stub_dir / "cargo"
+        cargo.write_text(
+            "#!/usr/bin/env bash\n"
+            'if [ "$1" = "clippy" ] && [ "$2" = "--version" ]; then\n'
+            "  echo 'clippy 1.98.0 (stub)'\n  exit 0\nfi\n"
+            f"{body}\n"
+        )
+        cargo.chmod(0o755)
+
+    def test_broken_ambient_cargo_paths_fall_back_and_are_reported(self):
+        with tempfile.TemporaryDirectory(prefix="hilo-cargo-paths-") as tmp:
+            root = Path(tmp)
+            self._fixture(root)
+            stub_dir = root / "stub"
+            stub_dir.mkdir()
+            (stub_dir / "rust-analyzer").write_text(
+                "#!/usr/bin/env bash\necho 'rust-analyzer 1.98.0 (stub)'\n"
+            )
+            (stub_dir / "rust-analyzer").chmod(0o755)
+            bad_target = root / "dangling-target"
+            bad_target.symlink_to(root / "missing-target")
+            self._stub_cargo(
+                stub_dir,
+                'if [ "$1" = "clippy" ]; then exit 0; fi\necho \'running 0 tests\'\nexit 0',
+            )
+            env = self._env_with_rust_analyzer_on_path(stub_dir)
+            env["CARGO_HOME"] = str(root / "missing-cargo-home")
+            env["CARGO_TARGET_DIR"] = str(bad_target / "target")
+            self.assertEqual(
+                subprocess.run(("git", "init", "-q"), cwd=root).returncode, 0
+            )
+            result = subprocess.run(
+                ("bash", "scripts/rust-lint.sh"),
+                cwd=root,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                timeout=360,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout)
+            self.assertIn("rust-lint: CARGO_HOME=", result.stdout)
+            self.assertIn("rust-lint: CARGO_TARGET_DIR=", result.stdout)
+            self.assertNotIn(str(env["CARGO_HOME"]), result.stdout)
+            self.assertNotIn(str(env["CARGO_TARGET_DIR"]), result.stdout)
+
+    def test_dependency_failure_is_not_reported_as_clippy_finding(self):
+        with tempfile.TemporaryDirectory(prefix="hilo-cargo-classification-") as tmp:
+            root = Path(tmp)
+            self._fixture(root)
+            stub_dir = root / "stub"
+            stub_dir.mkdir()
+            (stub_dir / "rust-analyzer").write_text(
+                "#!/usr/bin/env bash\necho 'rust-analyzer 1.98.0 (stub)'\n"
+            )
+            (stub_dir / "rust-analyzer").chmod(0o755)
+            self._stub_cargo(
+                stub_dir,
+                "echo 'error: failed to get dependency: permission denied'\nexit 101",
+            )
+            cargo_home = root / "fake-cargo-home"
+            (cargo_home / "bin").mkdir(parents=True)
+            shutil.copyfile(stub_dir / "cargo", cargo_home / "bin/cargo")
+            (cargo_home / "bin/cargo").chmod(0o755)
+            env = self._env_with_rust_analyzer_on_path(stub_dir)
+            env["CARGO_HOME"] = str(cargo_home)
+            self.assertEqual(
+                subprocess.run(("git", "init", "-q"), cwd=root).returncode, 0
+            )
+            result = subprocess.run(
+                ("bash", "scripts/rust-lint.sh"),
+                cwd=root,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 2, result.stdout)
+            self.assertIn("infrastructure unavailable", result.stdout)
+            self.assertNotIn("clippy reported findings", result.stdout)
+
     def test_clippy_warning_blocks_real_guard(self):
         repo = Path(__file__).resolve().parents[1]
         for tool in ("gitreins", "cargo", "git"):
@@ -53,8 +152,16 @@ class RustGuardTest(unittest.TestCase):
             (root / "src").mkdir()
             (root / ".gitreins").mkdir()
             (root / "scripts").mkdir()
-            shutil.copyfile(repo / ".gitreins/config.yaml", root / ".gitreins/config.yaml")
-            shutil.copyfile(repo / "scripts/rust-lint.sh", root / "scripts/rust-lint.sh")
+            shutil.copyfile(
+                repo / ".gitreins/config.yaml", root / ".gitreins/config.yaml"
+            )
+            shutil.copyfile(
+                repo / "scripts/rust-lint.sh", root / "scripts/rust-lint.sh"
+            )
+            shutil.copyfile(
+                repo / "scripts/check_usage_skill.py",
+                root / "scripts/check_usage_skill.py",
+            )
             (root / "Cargo.toml").write_text(
                 '[package]\nname = "hilo_graph"\nversion = "0.1.0"\nedition = "2021"\n'
             )
@@ -62,11 +169,32 @@ class RustGuardTest(unittest.TestCase):
             (root / "Makefile").write_text("all:\n\t@true\n")
             source = root / "src/lib.rs"
             source.write_text("pub fn answer() -> bool { true }\n")
+            (root / "skills/hilo-usage").mkdir(parents=True)
+            (root / "skills/hilo-usage/SKILL.md").write_text("fixture\n")
+            (root / "hilo-cli/src/commands").mkdir(parents=True)
+            (root / "hilo-cli/src/commands/init.rs").write_text(
+                'const HILO_MANAGED_IGNORE_HEADER: &str = "fixture";\n'
+                'const HILO_DUCKDB_IGNORE_ENTRY: &str = "fixture";\n'
+            )
+            (root / "hilo-mcp/src/tools").mkdir(parents=True)
+            (root / "hilo-mcp/src/tools/mod.rs").write_text(
+                'name: "vfs_fixture".into(),\n'
+            )
+            shutil.copyfile(
+                repo / "scripts/check_usage_skill.py",
+                root / "scripts/check_usage_skill.py",
+            )
 
             def run(*args):
-                return subprocess.run(args, cwd=root, env=env, text=True,
-                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                      timeout=360)
+                return subprocess.run(
+                    args,
+                    cwd=root,
+                    env=env,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    timeout=360,
+                )
 
             self.assertEqual(run("git", "init", "-q").returncode, 0)
             self.assertEqual(run("git", "add", ".").returncode, 0)
@@ -83,8 +211,12 @@ class RustGuardTest(unittest.TestCase):
             self.assertIn("Tier 1 Guards: FAIL", bad.stdout)
             self.assertNotIn("cppcheck", bad.stdout)
             # Print bounded real evidence for reviewers, not fabricated output.
-            print("clean guard exit:", clean.returncode,
-                  "Clippy-violating guard exit:", bad.returncode)
+            print(
+                "clean guard exit:",
+                clean.returncode,
+                "Clippy-violating guard exit:",
+                bad.returncode,
+            )
 
     def test_broken_rust_analyzer_fails_real_guard(self):
         """NEGATIVE CONTROL (INT-GITREINS-003): an unusable rust-analyzer FAILS.
@@ -117,9 +249,15 @@ class RustGuardTest(unittest.TestCase):
             env = self._env_with_rust_analyzer_on_path(stub_dir)
 
             def run(*args):
-                return subprocess.run(args, cwd=fixture, env=env, text=True,
-                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                      timeout=360)
+                return subprocess.run(
+                    args,
+                    cwd=fixture,
+                    env=env,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    timeout=360,
+                )
 
             self.assertEqual(run("git", "init", "-q").returncode, 0)
             self.assertEqual(run("git", "add", ".").returncode, 0)
@@ -134,8 +272,12 @@ class RustGuardTest(unittest.TestCase):
             # The phantom green tick, and the native lsp leg, are gone.
             self.assertNotIn("rust-analyzer — clean", guard.stdout)
             self.assertNotIn("true == true", guard.stdout)
-            print("broken rust-analyzer guard exit:", guard.returncode, "|",
-                  [ln for ln in guard.stdout.splitlines() if "rust-lint" in ln])
+            print(
+                "broken rust-analyzer guard exit:",
+                guard.returncode,
+                "|",
+                [ln for ln in guard.stdout.splitlines() if "rust-lint" in ln],
+            )
 
     def test_working_rust_analyzer_passes_and_reports_version(self):
         """The gate must name the binary it proved AND let a healthy tree through.
@@ -164,9 +306,15 @@ class RustGuardTest(unittest.TestCase):
             env = self._env_with_rust_analyzer_on_path(stub_dir)
 
             def run(*args):
-                return subprocess.run(args, cwd=fixture, env=env, text=True,
-                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                      timeout=360)
+                return subprocess.run(
+                    args,
+                    cwd=fixture,
+                    env=env,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    timeout=360,
+                )
 
             self.assertEqual(run("git", "init", "-q").returncode, 0)
             self.assertEqual(run("git", "add", ".").returncode, 0)
@@ -185,9 +333,14 @@ class RustGuardTest(unittest.TestCase):
             guard = run("gitreins", "guard")
             self.assertEqual(guard.returncode, 0, guard.stdout)
             self.assertIn("Tier 1 Guards: PASS", guard.stdout)
-            print("working rust-analyzer gate exit:", gate.returncode,
-                  "guard exit:", guard.returncode, "|",
-                  [ln for ln in gate.stdout.splitlines() if "rust-lint" in ln])
+            print(
+                "working rust-analyzer gate exit:",
+                gate.returncode,
+                "guard exit:",
+                guard.returncode,
+                "|",
+                [ln for ln in gate.stdout.splitlines() if "rust-lint" in ln],
+            )
 
 
 if __name__ == "__main__":
