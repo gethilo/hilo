@@ -11,7 +11,9 @@ All notable changes to Hilo are documented in this file.
   crates were refreshed. The prior release carried 22 runtime-reachable
   RustSec advisories; this release removes those runtime-reachable findings.
 - Added a blocking release gate that runs `cargo audit` and rejects any
-  advisory package reachable through normal workspace dependencies.
+  advisory package reachable through normal workspace dependencies. It is
+  implemented as `scripts/audit-gate.sh` and enforced as a blocking step in
+  `.github/workflows/ci.yml`, so CI fails before a tag can be cut.
 
 ## [Unreleased]
 

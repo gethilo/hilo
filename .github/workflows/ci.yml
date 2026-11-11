@@ -60,3 +60,9 @@ jobs:
 
       - name: Test
         run: cargo test --workspace
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Advisory gate (runtime-reachable RustSec)
+        run: bash scripts/audit-gate.sh

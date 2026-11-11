@@ -14,56 +14,21 @@ advisory package names with the normal, workspace dependency tree for the
 release target. The gate below keeps lock-only findings visible but blocks when
 any advisory package is runtime-reachable.
 
-Copy-paste this command from the repository root. The target triple is
-intentionally explicit so the result is reproducible:
+The gate is implemented as `scripts/audit-gate.sh` and runs as a blocking step
+in `.github/workflows/ci.yml`, so a runtime-reachable advisory fails CI before a
+tag can be cut (the gate is enforced, not just documented). Run it locally from
+the repository root:
 
 ```bash
-set -u
-set -o pipefail
-TARGET_TRIPLE=x86_64-unknown-linux-gnu
-AUDIT_JSON=$(mktemp)
-TREE_NAMES=$(mktemp)
-AUDIT_NAMES=$(mktemp)
-INTERSECTION=$(mktemp)
-trap 'rm -f "$AUDIT_JSON" "$TREE_NAMES" "$AUDIT_NAMES" "$INTERSECTION"' EXIT
-
-set +e
-cargo audit --file Cargo.lock --json >"$AUDIT_JSON"
-AUDIT_RC=$?
-set -e
-if [ "$AUDIT_RC" -gt 1 ]; then
-  echo "cargo audit failed to run (exit $AUDIT_RC)" >&2
-  exit "$AUDIT_RC"
-fi
-
-cargo tree \
-  --target "$TARGET_TRIPLE" \
-  --workspace \
-  --edges normal \
-  --prefix none \
-  --format '{p}' \
-  | sed -E 's/ v[^ ]+.*$//' \
-  | LC_ALL=C sort -u >"$TREE_NAMES"
-
-jq -r '.vulnerabilities.list[]?.package.name' "$AUDIT_JSON" \
-  | LC_ALL=C sort -u >"$AUDIT_NAMES"
-LC_ALL=C comm -12 "$AUDIT_NAMES" "$TREE_NAMES" >"$INTERSECTION"
-
-printf 'target: %s\n' "$TARGET_TRIPLE"
-printf 'cargo audit exit: %s (non-zero means lockfile findings were reported)\n' "$AUDIT_RC"
-printf 'lockfile advisory packages: %s\n' "$(wc -l <"$AUDIT_NAMES")"
-printf 'runtime-reachable advisory intersection:\n'
-cat "$INTERSECTION"
-
-if [ -s "$INTERSECTION" ]; then
-  echo 'FAIL: advisory packages are reachable through normal workspace dependencies' >&2
-  exit 1
-fi
-printf 'PASS: runtime-reachable advisory intersection is empty\n'
+bash scripts/audit-gate.sh
 ```
 
-The command above is a shell snippet embedded in Markdown; run only the lines
-inside the fenced `bash` block.
+The script exits `0` only when the intersection is empty. Exit `1` means an
+advisory package is reachable through normal workspace edges (blocked). Exit
+`2` means the gate could not be evaluated (cargo-audit missing, audit failed to
+run, `cargo tree` failed) and is also blocking. It prints the lockfile advisory
+packages it tolerated as build-only or feature-disabled so every one stays
+visible in the release evidence.
 
 A non-zero `cargo audit` status of `1` is expected when the lockfile still has
 advisories that are not reachable through normal runtime dependencies. It is

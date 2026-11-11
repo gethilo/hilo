@@ -258,7 +258,10 @@ fn mcp_stdio_mode_still_works() {
 
     let init: serde_json::Value = serde_json::from_str(lines[0]).expect("initialize response");
     assert_eq!(init["result"]["serverInfo"]["name"], "hilo-mcp");
-    assert_eq!(init["result"]["serverInfo"]["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        init["result"]["serverInfo"]["version"],
+        env!("CARGO_PKG_VERSION")
+    );
 
     let tools: serde_json::Value = serde_json::from_str(lines[1]).expect("tools/list response");
     let count = tools["result"]["tools"]
