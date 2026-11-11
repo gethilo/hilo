@@ -2,6 +2,17 @@
 
 All notable changes to Hilo are documented in this file.
 
+## [0.4.1] — 2026-11-11
+
+### Fixed
+
+- Remediated the runtime dependency set: wasmtime 43.0.2 → 49.0.5,
+  Extism → 1.41.0, cap-std 3.4.5 → 4.0.3, and the compatible supporting
+  crates were refreshed. The prior release carried 22 runtime-reachable
+  RustSec advisories; this release removes those runtime-reachable findings.
+- Added a blocking release gate that runs `cargo audit` and rejects any
+  advisory package reachable through normal workspace dependencies.
+
 ## [Unreleased]
 
 ## [0.4.0] — 2026-11-09

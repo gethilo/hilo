@@ -173,12 +173,15 @@ fn http_health_endpoint() {
     let parsed: serde_json::Value =
         serde_json::from_str(body).unwrap_or_else(|e| panic!("body is not JSON: {e}: {body}"));
     assert_eq!(parsed["status"], "ok", "body: {body}");
-    assert_eq!(parsed["version"], "0.4.0", "body: {body}");
+    assert_eq!(parsed["version"], env!("CARGO_PKG_VERSION"), "body: {body}");
 
-    // Byte-exact documented shape.
+    // Byte-exact documented shape (version tracks the crate version).
     assert_eq!(
         body.trim(),
-        "{\"status\":\"ok\",\"version\":\"0.4.0\"}",
+        format!(
+            "{{\"status\":\"ok\",\"version\":\"{}\"}}",
+            env!("CARGO_PKG_VERSION")
+        ),
         "byte-exact /health body"
     );
 
@@ -255,7 +258,7 @@ fn mcp_stdio_mode_still_works() {
 
     let init: serde_json::Value = serde_json::from_str(lines[0]).expect("initialize response");
     assert_eq!(init["result"]["serverInfo"]["name"], "hilo-mcp");
-    assert_eq!(init["result"]["serverInfo"]["version"], "0.4.0");
+    assert_eq!(init["result"]["serverInfo"]["version"], env!("CARGO_PKG_VERSION"));
 
     let tools: serde_json::Value = serde_json::from_str(lines[1]).expect("tools/list response");
     let count = tools["result"]["tools"]

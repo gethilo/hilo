@@ -284,7 +284,7 @@ GET /health
 ```
 
 ```json
-{"status": "ok", "version": "0.4.0"}
+{"status": "ok", "version": "0.4.1"}
 ```
 
 `version` is the running `hilo` version (workspace `Cargo.toml`). Unknown

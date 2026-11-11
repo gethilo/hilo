@@ -87,3 +87,11 @@ and the version must satisfy every published RustSec patched range applicable
 to that release. Record the exact command output and target triple with the
 release evidence. The tag and publication step is intentionally separate from
 this dependency gate and must use the exact CI-verified commit.
+
+## Tag and release assets
+
+After all checks pass, create an annotated tag named `vX.Y.Z`. The release
+bundle is produced with `scripts/build-hilo.sh -p hilo-cli` and consists of
+the versioned tarball and its matching `.sha256` checksum. Tagging, uploading,
+and publishing are separate releng actions; this procedure does not perform
+them.
