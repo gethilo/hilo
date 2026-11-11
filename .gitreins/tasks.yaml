@@ -2702,3 +2702,12 @@ tasks:
     dependency-resolution failure as clippy findings'
   status: in_progress
   created_at: '2026-11-10T17:30:36.937850+00:00'
+- id: DF-WARPFS-79-R2
+  title: Repair non-empty invalid graph cache
+  criteria:
+  - At merged HEAD, the production graph open path names the cache path and graph
+    clean/warm remedy for non-empty invalid DuckDB bytes, and the regression test
+    passes.
+  status: complete
+  created_at: '2026-11-11T01:53:21.271970+00:00'
+  completed_at: '2026-11-11T01:53:22.168108+00:00'
