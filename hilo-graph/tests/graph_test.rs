@@ -20,6 +20,45 @@ fn test_graph_insert_and_count() {
 }
 
 #[test]
+// ch:trace row=DF-WARPFS-79-R2 spec=none:board-acceptance wave=none:serial-worker test=hilo-graph/tests/graph_test.rs::non_empty_invalid_graph_cache_fails_closed_with_recovery_remedy doc=none:code-fix evidence=/home/kara/.hermes/cache/scratch/df79-evidence.log witness=none:no-live-witness verdict=none:pending-foreman-judge commit=none:pending-foreman-judge memory=none:pending-foreman-closeout
+fn non_empty_invalid_graph_cache_fails_closed_with_recovery_remedy() {
+    let root = tempfile::tempdir().unwrap();
+    let graph_dir = root.path().join(".vfs/graph");
+    std::fs::create_dir_all(&graph_dir).unwrap();
+    let graph_path = graph_dir.join("graph.db");
+    let edges_path = graph_dir.join("edges.jsonl");
+    let edges = vec![edge("src/main.rs", "pkg:util", "imports")];
+    std::fs::write(
+        &edges_path,
+        edges
+            .iter()
+            .map(|value| serde_json::to_string(value).unwrap() + "\n")
+            .collect::<String>(),
+    )
+    .unwrap();
+
+    let graph_path_str = graph_path.to_str().unwrap();
+    let db = GraphDB::open(graph_path_str).unwrap();
+    db.insert_edges(&edges).unwrap();
+    drop(db);
+    std::fs::write(&graph_path, vec![0xA5; 4096]).unwrap();
+
+    let error = match GraphDB::open_read_only(graph_path_str) {
+        Ok(_) => panic!("invalid graph cache must not open successfully"),
+        Err(error) => error,
+    };
+    let message = error.to_string();
+    assert!(
+        message.contains(graph_path_str),
+        "error must name cache path: {message}"
+    );
+    assert!(
+        message.contains("hilo graph clean") && message.contains("hilo graph warm"),
+        "error must name the graph clean/warm recovery remedy: {message}"
+    );
+}
+
+#[test]
 fn test_graph_group_by() {
     let db = GraphDB::open(":memory:").unwrap();
     let edges = vec![
