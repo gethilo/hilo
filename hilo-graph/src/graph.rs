@@ -1365,6 +1365,11 @@ fn is_conflicting_lock_error(err: &duckdb::Error) -> bool {
     text.contains("IO Error") && text.contains("Conflicting lock")
 }
 
+/// Whether DuckDB rejected a graph cache because its bytes are not a database.
+fn is_invalid_database_error(err: &duckdb::Error) -> bool {
+    err.to_string().contains("not a valid DuckDB database file")
+}
+
 /// Is the DuckDB database at `path` present but ZERO bytes (DF-WARPFS-79)?
 ///
 /// A 0-byte graph.db happens when a disk-full crash or a killed copy leaves
@@ -1540,7 +1545,15 @@ impl GraphDB {
             } else {
                 GraphAccess::ReadWrite
             };
-            let conn = open_disk_connection(path, resolved)?;
+            let conn = match open_disk_connection(path, resolved) {
+                Ok(conn) => conn,
+                Err(GraphError::DuckDB(error)) if is_invalid_database_error(&error) => {
+                    return Err(GraphError::Other(format!(
+                        "graph database at {path} is invalid; run `hilo graph clean` then `hilo graph warm` to rebuild it from edges.jsonl: {error}"
+                    )));
+                }
+                Err(error) => return Err(error),
+            };
             configure_disk_connection(&conn, &perf);
             disk_perf = Some((perf, spill_watermark));
             conn
