@@ -2711,3 +2711,14 @@ tasks:
   status: complete
   created_at: '2026-11-11T01:53:21.271970+00:00'
   completed_at: '2026-11-11T01:53:22.168108+00:00'
+- id: INT-CI-017
+  title: Add resilient apt mirror fallback
+  criteria:
+  - 'PROOF: .github/workflows/ci.yml remains valid and the install step installs libfuse3-dev
+    attr pkg-config libssl-dev after recovering from an azure.archive.ubuntu.com DNS
+    failure via explicit archive/security fallback; FAILIF: any repository gate is
+    skipped, conditionalized, continue-on-error, or the workflow is invalid; ch:trace
+    row=INT-CI-017'
+  status: complete
+  created_at: '2026-11-11T21:54:51.043596+00:00'
+  completed_at: '2026-11-11T22:18:34.003845+00:00'
