@@ -36,9 +36,32 @@ jobs:
         # QA-WARPFS-23: libssl-dev is no longer required — OpenSSL is vendored
         # by default (hilo_backends). Kept installed so the optional
         # system-OpenSSL build path stays exercisable; the build does not need it.
+        # ch:trace row=INT-CI-017 spec=docs/releasing.md#release-checklist wave=none:serial test=.github/workflows/ci.yml::Install-system-dependencies doc=docs/releasing.md evidence=none:ci-run-required witness=none:hosted-run-required verdict=none:open-finding commit=none:not-shipped memory=none:not-written
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libfuse3-dev attr pkg-config libssl-dev
+          packages=(libfuse3-dev attr pkg-config libssl-dev)
+
+          apt_retry() {
+            local attempt
+            for attempt in 1 2 3; do
+              if sudo apt-get update && sudo apt-get install -y "${packages[@]}"; then
+                return 0
+              fi
+              if (( attempt < 3 )); then
+                sleep 5
+              fi
+            done
+            return 1
+          }
+
+          if ! apt_retry; then
+            ubuntu_codename=$(. /etc/os-release && printf '%s' "$VERSION_CODENAME")
+            sudo tee /etc/apt/sources.list.d/ubuntu-mirrors.list >/dev/null <<EOF
+          deb http://archive.ubuntu.com/ubuntu/ ${ubuntu_codename} main restricted universe multiverse
+          deb http://archive.ubuntu.com/ubuntu/ ${ubuntu_codename}-updates main restricted universe multiverse
+          deb http://security.ubuntu.com/ubuntu/ ${ubuntu_codename}-security main restricted universe multiverse
+          EOF
+            apt_retry
+          fi
 
       - name: Cache cargo
         uses: actions/cache@v4
