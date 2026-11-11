@@ -19,6 +19,7 @@ intentionally explicit so the result is reproducible:
 
 ```bash
 set -u
+set -o pipefail
 TARGET_TRIPLE=x86_64-unknown-linux-gnu
 AUDIT_JSON=$(mktemp)
 TREE_NAMES=$(mktemp)
@@ -60,6 +61,9 @@ if [ -s "$INTERSECTION" ]; then
 fi
 printf 'PASS: runtime-reachable advisory intersection is empty\n'
 ```
+
+The command above is a shell snippet embedded in Markdown; run only the lines
+inside the fenced `bash` block.
 
 A non-zero `cargo audit` status of `1` is expected when the lockfile still has
 advisories that are not reachable through normal runtime dependencies. It is
