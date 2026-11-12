@@ -2,18 +2,31 @@
 
 All notable changes to Hilo are documented in this file.
 
-## [0.4.1] — 2026-11-11
+## [0.4.1] — 2026-11-12
 
 ### Fixed
 
-- Remediated the runtime dependency set: wasmtime 43.0.2 → 49.0.5,
-  Extism → 1.41.0, cap-std 3.4.5 → 4.0.3, and the compatible supporting
-  crates were refreshed. The prior release carried 22 runtime-reachable
-  RustSec advisories; this release removes those runtime-reachable findings.
+- Remediated the runtime dependency set: `wasmtime` 43.0.2 → 49.0.5 and
+  `extism` 1.30.0 → 1.41.0, and the compatible supporting crates were
+  refreshed. The cap-std family left the dependency graph entirely: 0.4.0
+  resolved `cap-std` 3.4.5, `cap-fs-ext`, `cap-rand` and `cap-time-ext`;
+  0.4.1 resolves only the transitive `cap-primitives`. Measured against the
+  advisory database on 2026-11-12, `v0.4.0` failed the runtime gate with 23
+  advisory records across 11 runtime-reachable packages (`wasmtime` ×9,
+  `rustls` ×4, `zstd-safe` ×2, `h2`, `rustls-webpki`, `webpki-roots`,
+  `libz-sys`, `zstd`, `zstd-sys`, `ctutils`, `cap-primitives`). `v0.4.1`
+  has an empty runtime intersection; the two remaining lockfile advisories
+  (`rkyv` ×1, `zip` ×4) are build-only or feature-disabled and are printed
+  by the gate on every run.
 - Added a blocking release gate that runs `cargo audit` and rejects any
   advisory package reachable through normal workspace dependencies. It is
   implemented as `scripts/audit-gate.sh` and enforced as a blocking step in
   `.github/workflows/ci.yml`, so CI fails before a tag can be cut.
+- CI: the `Install system dependencies` step falls back to `archive.ubuntu.com`
+  and `security.ubuntu.com` when the Azure mirror's DNS fails, so the
+  fmt/build/clippy/test/advisory steps execute instead of being skipped
+  (INT-CI-017). The s3 proxy-disconnect test is bounded so a wedged test
+  fails instead of hanging the suite.
 
 ## [Unreleased]
 
