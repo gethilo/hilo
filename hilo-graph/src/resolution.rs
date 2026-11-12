@@ -580,6 +580,30 @@ fn package_name(manifest: &Path) -> Option<String> {
     None
 }
 
+/// Find the nearest Go module containing `file` and return its root and path.
+///
+/// The nearest `go.mod` wins, matching the Go toolchain's module boundary. A
+/// `go.mod` without a valid module directive stops the walk and returns `None`.
+fn go_module_for_file(file: &Path) -> Option<(PathBuf, String)> {
+    let mut current = file.parent()?;
+    loop {
+        let manifest = current.join("go.mod");
+        if manifest.is_file() {
+            return module_path(&manifest).map(|module| (current.to_path_buf(), module));
+        }
+        current = current.parent()?;
+    }
+}
+
+/// Return the Go module path containing `file`, if any.
+///
+/// This is also used by the Go import classifier. It must run before the
+/// single-segment `std:` fallback: a module named `probea` legitimately has
+/// imports such as `probea/util`, even though that import path contains no dot.
+pub fn go_module_path_for_file(file: &Path) -> Option<String> {
+    go_module_for_file(file).map(|(_, module)| module)
+}
+
 /// Walk up from `file` to the nearest `go.mod` and return the import path of
 /// the Go package containing `file` (GAP-057).
 ///
@@ -591,16 +615,9 @@ fn package_name(manifest: &Path) -> Option<String> {
 /// any module).
 pub fn go_package_for_file(file: &Path) -> Option<String> {
     let dir = file.parent()?;
-    let mut current = dir;
-    loop {
-        let manifest = current.join("go.mod");
-        if manifest.is_file() {
-            let module = module_path(&manifest)?;
-            let rel = dir.strip_prefix(current).ok()?;
-            return Some(import_path(&module, rel));
-        }
-        current = current.parent()?;
-    }
+    let (module_root, module) = go_module_for_file(file)?;
+    let rel = dir.strip_prefix(module_root).ok()?;
+    Some(import_path(&module, rel))
 }
 
 /// Extract the module path from a `go.mod` (`module <path>` line).
@@ -1913,6 +1930,15 @@ mod tests {
             resolver.pkg_node(&go).as_deref(),
             Some("pkg:example.com/demo/cmd/tool")
         );
+    }
+
+    #[test]
+    fn go_module_path_reads_single_word_module() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("go.mod"), "module probea\n").unwrap();
+        let file = dir.path().join("app/main.go");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        assert_eq!(go_module_path_for_file(&file).as_deref(), Some("probea"));
     }
 
     #[test]

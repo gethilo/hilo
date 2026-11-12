@@ -683,7 +683,7 @@ pub fn compute_impact_at(
     // GAP-069: TS/JS `local:` reverse index — built ONCE per query from a
     // single scan of the `local:` edges, so per-BFS-node resolution is a
     // hash lookup and the traversal stays linear.
-    let local_resolver = crate::resolution::LocalSpecResolver::from_edges(conn).ok();
+    let local_resolver = Some(crate::resolution::LocalSpecResolver::from_edges(conn)?);
     let mut resolver = PkgResolver::new();
     // GAP-083: a query target that is a real FILE reaches crate-level rows one
     // extra hop away (file → pkg:<crate> → importer), so those rows can never
@@ -914,7 +914,7 @@ pub fn compute_impact_with_external(
     let mut resolver = PkgResolver::new();
     // GAP-069: TS/JS `local:` reverse index — one scan per query, shared
     // across the whole BFS (see compute_impact).
-    let local_resolver = crate::resolution::LocalSpecResolver::from_edges(conn).ok();
+    let local_resolver = Some(crate::resolution::LocalSpecResolver::from_edges(conn)?);
     // GAP-083: same file-vs-symbol accounting as compute_impact — a FILE query
     // pays one extra hop for rows reached through its `pkg:<crate>` node.
     let file_query = !start_path.starts_with("pkg:") && !start_path.starts_with("sys:");
