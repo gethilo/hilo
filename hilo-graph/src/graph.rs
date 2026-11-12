@@ -3034,7 +3034,9 @@ impl GraphDB {
                 |visit| self.scan_jsonl_edges(visit),
             );
         }
-        // Parse the start file first (no-op if already cached).
+        // Parse the start file first (no-op if already cached). A source file
+        // can be graph-resident only as a `from` row with zero outgoing edges,
+        // so a successful no-op here must not hide a real parse/cache failure.
         self.ensure_parsed(start_path)?;
         // Delegate to existing BFS over the DuckDB edges cache.
         impact::compute_impact_at(&self.conn, start_path, max_depth, anchored)

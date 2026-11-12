@@ -326,7 +326,15 @@ impl Parser {
         let mut lexical_only = false;
         let mut paths: Vec<String> = Vec::new();
         match self.language {
-            Language::Go => extract_go_imports(tree.root_node(), source.as_bytes(), &mut paths),
+            Language::Go => {
+                let module = crate::resolution::go_module_for_file(Path::new(file_path));
+                extract_go_imports(
+                    tree.root_node(),
+                    source.as_bytes(),
+                    &mut paths,
+                    module.as_deref(),
+                )
+            }
             Language::Python => {
                 let ctx = PythonImportCtx::build(file_path);
                 extract_python_imports(tree.root_node(), source.as_bytes(), &mut paths, &ctx)
@@ -466,14 +474,14 @@ impl Parser {
 }
 
 // ── Go ──────────────────────────────────────────────────────────────
-fn extract_go_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+fn extract_go_imports(node: Node, source: &[u8], paths: &mut Vec<String>, module: Option<&str>) {
     if node.kind() == "import_spec" {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             if child.kind() == "interpreted_string_literal" {
                 if let Ok(text) = child.utf8_text(source) {
                     let cleaned = text.trim_matches('"');
-                    paths.push(classify_go(cleaned));
+                    paths.push(classify_go(cleaned, module));
                 }
             }
         }
@@ -484,12 +492,16 @@ fn extract_go_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
         node.children(&mut c).collect()
     };
     for child in children {
-        extract_go_imports(child, source, paths);
+        extract_go_imports(child, source, paths, module);
     }
 }
 
-fn classify_go(path: &str) -> String {
-    if path.contains('.') {
+fn classify_go(path: &str, module: Option<&str>) -> String {
+    // A module's own import path can be a single word (for example `probea`).
+    // Treat that path and its descendants as package nodes; only bare imports
+    // outside the current module retain the stdlib classification.
+    let internal = module.is_some_and(|root| path == root || path.starts_with(&format!("{root}/")));
+    if internal || path.contains('.') {
         format!("pkg:{path}")
     } else {
         format!("std:{path}")
@@ -2276,8 +2288,16 @@ mod tests {
 
     #[test]
     fn go_classification() {
-        assert_eq!(classify_go("fmt"), "std:fmt");
-        assert_eq!(classify_go("github.com/foo/bar"), "pkg:github.com/foo/bar");
+        assert_eq!(classify_go("fmt", None), "std:fmt");
+        assert_eq!(
+            classify_go("github.com/foo/bar", None),
+            "pkg:github.com/foo/bar"
+        );
+        assert_eq!(
+            classify_go("probea/util", Some("probea")),
+            "pkg:probea/util"
+        );
+        assert_eq!(classify_go("fmt", Some("probea")), "std:fmt");
     }
 
     #[test]
@@ -2285,6 +2305,24 @@ mod tests {
         let imports = parse(Language::Go, "package p\nimport \"fmt\"\nimport \"os\"");
         assert!(imports.contains(&"std:fmt".into()));
         assert!(imports.contains(&"std:os".into()));
+    }
+
+    #[test]
+    fn go_single_word_module_import_is_package() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("go.mod"), "module probea\n").unwrap();
+        let file = dir.path().join("app/main.go");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+
+        let mut parser = Parser::for_language(Language::Go).unwrap();
+        let edges = parser
+            .parse_imports(
+                file.to_str().unwrap(),
+                "package main\nimport \"probea/util\"\n",
+            )
+            .unwrap();
+        assert!(edges.iter().any(|edge| edge.to == "pkg:probea/util"));
+        assert!(!edges.iter().any(|edge| edge.to == "std:probea/util"));
     }
 
     #[test]

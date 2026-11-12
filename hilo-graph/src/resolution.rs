@@ -580,6 +580,22 @@ fn package_name(manifest: &Path) -> Option<String> {
     None
 }
 
+/// Walk up from `file` to the nearest `go.mod` and return its module path.
+///
+/// This is separate from [`go_package_for_file`] because Go import
+/// classification needs the module root even when the importing file is in a
+/// subpackage. A single-word module path is still a valid module path.
+pub(crate) fn go_module_for_file(file: &Path) -> Option<String> {
+    let mut current = file.parent()?;
+    loop {
+        let manifest = current.join("go.mod");
+        if manifest.is_file() {
+            return module_path(&manifest);
+        }
+        current = current.parent()?;
+    }
+}
+
 /// Walk up from `file` to the nearest `go.mod` and return the import path of
 /// the Go package containing `file` (GAP-057).
 ///
@@ -1913,6 +1929,16 @@ mod tests {
             resolver.pkg_node(&go).as_deref(),
             Some("pkg:example.com/demo/cmd/tool")
         );
+    }
+
+    #[test]
+    fn go_module_for_file_reads_single_word_module() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("go.mod"), "module probea\n").unwrap();
+        let file = dir.path().join("app/main.go");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "package main\n").unwrap();
+        assert_eq!(go_module_for_file(&file).as_deref(), Some("probea"));
     }
 
     #[test]
