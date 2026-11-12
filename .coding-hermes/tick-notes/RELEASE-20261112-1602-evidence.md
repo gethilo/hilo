@@ -77,3 +77,16 @@ Resume point is mechanical and costs minutes, not hours: the certified binary al
 ## 9. What was not mutated
 
 No tag, no Release object, no asset uploaded, no `Cargo.*`/workflow/product file edited, no deployed binary installed, no existing tag moved. The only tree change is the docs-prep commit `4216c7f` (CHANGELOG.md, +18/−5) plus this tick's board/note writes.
+
+
+## Post-cut verification — 2026-11-12T19:30Z
+
+The release was cut after the earlier certified-not-cut pass. This section supersedes the earlier NO TAG / NO RELEASE statement for the same tick.
+
+- Annotated tag `v0.4.1` was created once and pushed. Tag object: `628c01ce9c4d1ebeca8e3bb0af96d6ef2699a2f3`; peeled commit: `4216c7f456a73b4a64b614d8f1f6addf88f65d6f`. The pre-existing `v0.4.0` tag was not moved.
+- GitHub Release `hilo 0.4.1` is public, non-draft, non-prerelease at https://github.com/gethilo/hilo/releases/tag/v0.4.1.
+- Assets read back from the Release: `hilo-0.4.1-x86_64-linux.tar.gz` (32,735,042 bytes) and `.sha256` (178 bytes). Downloaded assets verify with `sha256sum -c`; measured tarball SHA-256 is `a96838c48a2dd772ab11eea1122589aa131d7d8679608d63ba26a1eeb531718c`.
+- Extracted downloaded binary smoke checks passed: `hilo 0.4.1`; `--version`, `--help`, and `graph --help` exited 0.
+- CI on the tagged commit is the existing exact-commit run `43281097211`: completed success, one required job, check-run success. This repository has no `tags:` workflow trigger, so no separate tag-created run exists; tag-SHA checks resolve to the same green candidate run.
+- Release body read back contains `## Known issues` and the candidate CI receipt `43281097211`.
+- The candidate and tag are immutable and remote-verified. The moving default branch remains `43b639056970e131a69cd730393bd6a1584dfd8b`; it contains later board/evidence commits and was not retagged.
