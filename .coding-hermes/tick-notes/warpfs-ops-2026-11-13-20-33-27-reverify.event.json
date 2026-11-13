@@ -1,0 +1,60 @@
+{
+  "decision": "VERIFIED_PASS_ANNOTATE_ONLY",
+  "tick": "warpfs-ops-2026-11-13-20-33-27",
+  "project": "warpfs",
+  "actor": "warpfs-ops",
+  "head": "235de763d90972995467fe4a4060fa6e8cdc9723",
+  "fix_commit": "c89bf2d0539af11784f3ce46b741be2c74da57e9",
+  "tree_synced_to_origin_master": true,
+  "arms": {
+    "audit": {
+      "result": "PASS",
+      "cargo_audit_vulnerabilities_in_lock": 8,
+      "advisory_packages": ["zip", "rkyv", "quinn-proto", "quinn-udp"],
+      "advisory_packages_on_normal_edges": 0,
+      "audit_gate_sh_rc": 0,
+      "note": "zip=build-dep of libduckdb-sys; rkyv=unenabled rust_decimal feature; quinn*=non-runtime edge"
+    },
+    "wasmtime": {
+      "result": "PASS",
+      "wasmtime_version": "49.0.5",
+      "via": "extism 1.41.0 -> hilo_plugins -> hilo-cli",
+      "plugin_tests": {"plugin_test": "17 passed 0 failed", "dfwarpfs59_init_no_plugins": "1 passed 0 failed", "plugins_not_implemented": "2 passed 0 failed"}
+    },
+    "ladder": {
+      "result": "PASS",
+      "fmt_rc": 0,
+      "build_rc": 0,
+      "clippy_rc": 0,
+      "clippy_warnings": 0,
+      "test_rc": 0,
+      "test_suites": 71,
+      "test_passed": 1669,
+      "test_failed": 0,
+      "preconditions": [
+        "TMPDIR must be on a FUSE-permitted path: ambient TMPDIR=/var/tmp/hermes-scratch gives 'fusermount3: mount failed: Permission denied' / 'Operation not permitted (os error 1)' and dfwarpfs30_trigger_mount_lock fails at its 30s deadline; same binary mounts in ~500ms under a HOME path",
+        "$HOME must not carry a root-level stale graph cache: /home/kara/.vfs/graph/graph.db (1,847,296 B, 2026-09-11, pre-granularity schema) was adopted by every hilo invocation whose workspace is under /home/kara, producing 'Referenced column \"granularity\" not found' and a graph_stats that reported the /home/kara tree; quarantined by rename to /home/kara/.vfs.quarantine-20261113 (reversible, no live consumer, no references in ~/.hermes/scripts)"
+      ]
+    },
+    "release": {
+      "result": "PASS",
+      "tag": "v0.4.1",
+      "assets": ["hilo-0.4.1-x86_64-linux.tar.gz", "hilo-0.4.1-x86_64-linux.tar.gz.sha256"],
+      "tarball_sha256": "a96838c48a2dd772ab11eea1122589aa131d7d8679608d63ba26a1eeb531718c",
+      "sidecar_matches_tarball": true,
+      "binary_version": "hilo 0.4.1 (build: v0.4.0-50-g4216c7f)",
+      "defect_found": "published .sha256 line embeds the builder absolute path (/home/kara/.hermes/cache/scratch/warpfs-releng-2026-11-12-16-02-23/assets-v0.4.1/...), so sha256sum -c only works on the build host and silently validated a stale local copy here; emit a bare filename"
+    }
+  },
+  "host_state": {
+    "disk_root": "218G avail, 88% used",
+    "loadavg": "4.71 6.64 5.55",
+    "quarantined_path": "/home/kara/.vfs -> /home/kara/.vfs.quarantine-20261113",
+    "service_restarts": 0,
+    "scheduler_db_writes": 0,
+    "lanes_disabled": 0
+  },
+  "why_not_complete": "boardctl update --status complete REQUIRES --evidence-run-id bound to a .gitreins/history/<date>/<run>/ directory (TR-251); this ops fire produced no judge run, so the row stays pending with all four arms measured PASS",
+  "evidence_artifact": ".coding-hermes/tick-notes/warpfs-ops-2026-11-13-20-33-27-reverify.md",
+  "spillover_rows_not_touched": ["QA-WARPFS-038 (FUSE/TMPDIR premise, re-confirmed live, left to its owner)", "RELEASE-021 (installed-binary refresh, packaging scope)"]
+}
