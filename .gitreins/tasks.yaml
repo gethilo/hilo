@@ -2722,3 +2722,15 @@ tasks:
   status: complete
   created_at: '2026-11-11T21:54:51.043596+00:00'
   completed_at: '2026-11-11T22:18:34.003845+00:00'
+- id: RELEASE-021-V
+  title: Verify RELEASE-021 v0.4.1 publication
+  criteria:
+  - 'PROOF: the committed verification artifact .coding-hermes/tick-notes/RELEASE-021-verification-2026-11-13.md
+    exists at the judged commit and records the exact tag, release, asset hash, binary
+    version, and CI run. FAILIF: the artifact is absent, the tag does not peel to
+    4216c7f456a73b4a64b614d8f1f6addf88f65d6f, the downloaded asset hash does not match
+    its sidecar, the extracted binary does not report hilo 0.4.1, or run 43281097211
+    is not completed/success.'
+  status: complete
+  created_at: '2026-11-13T09:49:42.993704+00:00'
+  completed_at: '2026-11-13T09:50:03.697303+00:00'
