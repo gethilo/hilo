@@ -2734,3 +2734,37 @@ tasks:
   status: complete
   created_at: '2026-11-13T09:49:42.993704+00:00'
   completed_at: '2026-11-13T09:50:03.697303+00:00'
+- id: RELEASE-020-R5
+  title: Verify RELEASE-020 v0.4.1 RustSec remediation and release at ops tick warpfs-ops-2026-11-13-20-33-27
+  criteria:
+  - 'PROOF: .coding-hermes/tick-notes/warpfs-ops-2026-11-13-20-33-27-reverify.md Arm
+    1 records `bash scripts/audit-gate.sh` rc=0 and lists quinn-proto, quinn-udp,
+    rkyv, zip as not present on a normal workspace edge. FAILIF: audit-gate.sh exits
+    nonzero, or any advisory package is reachable through a normal workspace edge.'
+  - 'PROOF: Cargo.lock pins wasmtime 49.0.5 and `cargo test -p hilo_plugins` exits
+    0 with 17 passed 0 failed. FAILIF: wasmtime resolves below 49.0.5, or any plugin
+    test fails.'
+  - 'PROOF: at the fix HEAD, `cargo fmt --all -- --check`, `cargo build --workspace`,
+    `cargo clippy --workspace -- -D warnings` and `cargo test --workspace` each exit
+    0. FAILIF: any of the four commands returns a nonzero exit code.'
+  - 'PROOF: `gh release view v0.4.1` lists hilo-0.4.1-x86_64-linux.tar.gz (32735042
+    bytes) plus hilo-0.4.1-x86_64-linux.tar.gz.sha256, the tarball sha256 equals a96838c48a2dd772ab11eea1122589aa131d7d8679608d63ba26a1eeb531718c,
+    and the extracted binary reports hilo 0.4.1. FAILIF: the tag or either asset is
+    missing, or the digest disagrees with the sidecar.'
+  status: complete
+  created_at: '2026-11-13T21:30:38.270947+00:00'
+  completed_at: '2026-11-13T21:32:50.087846+00:00'
+- id: RELEASE-020-R6
+  title: 'Tier-1 guard proof for RELEASE-020 v0.4.1: workspace clippy, rust-lint and
+    hilo_plugins at the fix HEAD'
+  criteria:
+  - 'PROOF: .gitreins/logs/guard-20261113T212012.140734Z.log records rust-lint PASS
+    and cargo tests 583 passed, 0 failed at HEAD 6747dd8 with hilo_plugins 17 passed
+    separately. FAILIF: rust-lint.sh exits nonzero, or any workspace or plugin test
+    fails.'
+  - 'PROOF: Cargo.lock pins wasmtime 49.0.5 and scripts/audit-gate.sh prints PASS
+    with quinn-proto, quinn-udp, rkyv and zip absent from the normal-edge graph. FAILIF:
+    wasmtime resolves below 49.0.5, or audit-gate.sh exits nonzero.'
+  status: complete
+  created_at: '2026-11-13T22:07:44.885845+00:00'
+  completed_at: '2026-11-13T22:07:45.416789+00:00'
