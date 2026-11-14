@@ -2682,7 +2682,17 @@ impl GraphDB {
                 file_sources.push((node, cnt));
             }
         }
-        let unique_files: i64 = file_sources.len() as i64;
+        let edge_source_files: i64 = file_sources.len() as i64;
+        // A disk-backed graph belongs to a project whose warm ledger is the
+        // authoritative file census. Edge-less source files are intentionally
+        // absent from `edges`, so using only edge sources undercounts the
+        // shipped `graph stats` contract. In-memory graphs have no project root
+        // and retain the historical edge-derived census used by callers/tests.
+        let unique_files = self
+            .root
+            .as_deref()
+            .and_then(coverage_ledger_files)
+            .unwrap_or(edge_source_files);
         let unique_dependencies: i64 = self.conn.query_row(
             "SELECT COUNT(DISTINCT \"to\") FROM edges",
             params![],
@@ -3110,6 +3120,21 @@ const NON_COMPONENT_DIRS: &[&str] = &[
     "venv",
     "site-packages",
 ];
+
+/// Read the source-file census persisted by `graph warm`.
+///
+/// The warm command already walks the project using its include and exclusion
+/// rules, and stores the resulting count in `coverage.json`. Reusing that
+/// ledger keeps `graph stats` aligned with the shipped discovery semantics,
+/// including source files that produced no edges.
+fn coverage_ledger_files(root: &Path) -> Option<i64> {
+    let path = root.join(".vfs").join("graph").join("coverage.json");
+    let body = std::fs::read_to_string(path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&body).ok()?;
+    value
+        .get("discovered_files")
+        .and_then(serde_json::Value::as_i64)
+}
 
 /// Recursively count files under `dir`, pruning [`NON_COMPONENT_DIRS`] and
 /// symlinked directories. Symlinks to FILES count (they are visible tree
@@ -6213,6 +6238,39 @@ mod tests {
             stats.total_files, 1,
             "only a/main.go carries an outgoing edge; c/constants.py is a to-target, not a source"
         );
+    }
+
+    #[test]
+    fn stats_file_census_includes_edge_less_project_source_file() {
+        // ch:trace row=DF-WARPFS-72
+        let project = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(project.path().join("src")).unwrap();
+        std::fs::write(project.path().join("src/main.rs"), "use std::fmt;\n").unwrap();
+        std::fs::write(
+            project.path().join("src/constants.rs"),
+            "pub const N: u8 = 1;\n",
+        )
+        .unwrap();
+        let graph_dir = project.path().join(".vfs/graph");
+        std::fs::create_dir_all(&graph_dir).unwrap();
+        std::fs::write(
+            graph_dir.join("coverage.json"),
+            r#"{"schema":1,"discovered_files":2,"contributes":1,"package_facades":0,"no_imports":1}"#,
+        )
+        .unwrap();
+        let graph_path = graph_dir.join("graph.db");
+
+        let db = GraphDB::open(graph_path.to_str().unwrap()).unwrap();
+        db.insert_edges(&[Edge::new("src/main.rs", "pkg:std:fmt", "imports")])
+            .unwrap();
+        let stats = db.stats().unwrap();
+
+        assert_eq!(stats.total_edges, 1);
+        assert_eq!(
+            stats.total_files, 2,
+            "graph stats must count the edge-less source file"
+        );
+        assert_eq!(stats.unique_files, 2);
     }
 
     #[test]
