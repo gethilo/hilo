@@ -168,9 +168,72 @@ cargo clippy --version >/dev/null 2>&1 || {
     exit 2
 }
 
+# Cargo can spawn rustc and build-script descendants. Run it as a session
+# leader, then terminate its process group rather than only the cargo PID.
+# This keeps a timeout from leaving descendants holding target locks.
+process_group_alive() {
+    kill -0 -- "-$1" 2>/dev/null
+}
+
 run_clippy() {
     # Argument order matters: cargo takes its options AFTER the subcommand.
-    timeout --signal=KILL "$TIMEOUT" cargo clippy "$@" --all-targets -- -D warnings
+    # `setsid` makes the background cargo PID the process-group/session leader.
+    local pid pgid status timed_out=0 deadline grace_deadline
+    setsid cargo clippy "$@" --all-targets -- -D warnings &
+    pid=$!
+
+    # Resolve the PGID explicitly; fail closed if the isolation primitive did
+    # not create the expected one-process session.
+    pgid="$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]')"
+    if [ -z "$pgid" ] || [ "$pgid" -ne "$pid" ] 2>/dev/null; then
+        kill -TERM "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+        echo "rust-lint: infrastructure unavailable: could not isolate cargo process group" >&2
+        return 2
+    fi
+
+    deadline=$((SECONDS + TIMEOUT))
+    while kill -0 "$pid" 2>/dev/null; do
+        if (( SECONDS >= deadline )); then
+            timed_out=1
+            break
+        fi
+        sleep 0.1
+    done
+
+    if [ "$timed_out" -eq 1 ]; then
+        # Give cargo a short chance to release its lock cleanly, then use KILL
+        # on the whole group so stubborn rustc/build-script descendants cannot
+        # survive the timeout. Always reap the direct child below.
+        kill -TERM -- "-$pgid" 2>/dev/null || true
+        grace_deadline=$((SECONDS + 2))
+        while process_group_alive "$pgid"; do
+            if (( SECONDS >= grace_deadline )); then
+                break
+            fi
+            sleep 0.1
+        done
+        if process_group_alive "$pgid"; then
+            kill -KILL -- "-$pgid" 2>/dev/null || true
+        fi
+        wait "$pid" 2>/dev/null || true
+        # A SIGKILL can leave Cargo's marker file behind even though its file
+        # lock is released. Remove only an unheld marker after the group died.
+        if ! process_group_alive "$pgid"; then
+            local lock="${CARGO_TARGET_DIR}/debug/.cargo-lock"
+            if [ -e "$lock" ] && { ! command -v fuser >/dev/null 2>&1 || ! fuser "$lock" >/dev/null 2>&1; }; then
+                rm -f -- "$lock"
+            fi
+        fi
+        return 124
+    fi
+
+    if wait "$pid"; then
+        status=0
+    else
+        status=$?
+    fi
+    return "$status"
 }
 
 classify_clippy_failure() {

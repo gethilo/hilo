@@ -12,7 +12,8 @@ import tempfile
 import unittest
 
 
-# ch:trace row=RELEASE-018 spec=.gitreins/config.yaml#guards.test_command wave=warpfs-foreman-2026-11-10-17-25-01#serial test=tests/test_gitreins_rust_guard.py::RustGuardTest.test_dependency_failure_is_not_reported_as_clippy_finding doc=none:no-document-change evidence=tests/test_gitreins_rust_guard.py witness=live:ambient-cargo-fetch-and-rust-lint verdict=none:foreman-will-run-judge commit=c577f75b00d3f734d7e28414bd2b5bb8f5d6303e memory=none:worker-report-only
+# ch:trace row=RELEASE-018 spec=.coding-hermes/board/tasks.jsonl#RELEASE-018 wave=none:serial test=tests/test_gitreins_rust_guard.py::RustGuardTest.test_timeout_reaps_cargo_process_group_and_lock doc=none:no-document-change evidence=tests/test_gitreins_rust_guard.py witness=local:process-group-regression verdict=none:foreman-will-run-judge commit=none:worker-commit-pending memory=none:foreman-closeout-pending
+# STATUS: complete | TIER: T2 | EVIDENCE: tests/test_gitreins_rust_guard.py and command captures
 class RustGuardTest(unittest.TestCase):
     def _fixture(self, root):
         """Isolated, dependency-free Rust fixture (never touches product sources).
@@ -104,6 +105,108 @@ class RustGuardTest(unittest.TestCase):
             self.assertIn("rust-lint: CARGO_TARGET_DIR=", result.stdout)
             self.assertNotIn(str(env["CARGO_HOME"]), result.stdout)
             self.assertNotIn(str(env["CARGO_TARGET_DIR"]), result.stdout)
+
+    def test_timeout_reaps_cargo_process_group_and_lock(self):
+        """A timed-out Cargo tree must not leave descendants or its lock behind.
+
+        The stub deliberately ignores TERM in its descendants. A timeout that
+        kills only the direct cargo process therefore leaves the marker PID
+        alive; the production gate must escalate KILL to the whole process
+        group. The lock is created by the stub so this test is independent of
+        the product workspace's compile time.
+        """
+        with tempfile.TemporaryDirectory(prefix="hilo-cargo-timeout-") as tmp:
+            root = Path(tmp)
+            self._fixture(root)
+            stub_dir = root / "stub"
+            stub_dir.mkdir()
+            rust_analyzer = stub_dir / "rust-analyzer"
+            rust_analyzer.write_text(
+                "#!/usr/bin/env bash\n"
+                "echo 'rust-analyzer 1.98.0 (stub)'\n"
+            )
+            rust_analyzer.chmod(0o755)
+            grandchild = stub_dir / "cargo-grandchild"
+            grandchild.write_text(
+                "#!/usr/bin/env bash\n"
+                "trap '' TERM\n"
+                "echo $BASHPID > \"$PID_DIR/grandchild.pid\"\n"
+                "sleep 30 &\n"
+                "echo $! > \"$PID_DIR/sleep.pid\"\n"
+                "wait\n"
+            )
+            grandchild.chmod(0o755)
+            cargo = stub_dir / "cargo"
+            cargo.write_text(
+                "#!/usr/bin/env bash\n"
+                'if [ "$1" = "clippy" ] && [ "$2" = "--version" ]; then\n'
+                "  echo 'clippy 1.98.0 (stub)'\n  exit 0\nfi\n"
+                'if [ "$1" = "clippy" ]; then\n'
+                '  mkdir -p "$CARGO_TARGET_DIR/debug"\n'
+                '  : > "$CARGO_TARGET_DIR/debug/.cargo-lock"\n'
+                '  "$STUB_GRANDCHILD" &\n'
+                '  echo $! > "$PID_DIR/child.pid"\n'
+                '  wait\n'
+                "fi\n"
+            )
+            cargo.chmod(0o755)
+            cargo_home = root / "cargo-home"
+            (cargo_home / "bin").mkdir(parents=True)
+            shutil.copyfile(cargo, cargo_home / "bin/cargo")
+            (cargo_home / "bin/cargo").chmod(0o755)
+            pid_dir = root / "pids"
+            pid_dir.mkdir()
+            target = root / "target"
+            env = self._env_with_rust_analyzer_on_path(stub_dir)
+            env.update(
+                {
+                    "CARGO_HOME": str(root / "cargo-home"),
+                    "CARGO_TARGET_DIR": str(target),
+                    "PID_DIR": str(pid_dir),
+                    "STUB_GRANDCHILD": str(grandchild),
+                    "RUST_LINT_TIMEOUT": "1",
+                }
+            )
+            self.assertEqual(
+                subprocess.run(("git", "init", "-q"), cwd=root).returncode, 0
+            )
+            result = subprocess.run(
+                ("bash", "scripts/rust-lint.sh"),
+                cwd=root,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                timeout=15,
+            )
+            self.assertEqual(result.returncode, 3, result.stdout)
+            self.assertIn("clippy was killed by the 1s budget", result.stdout)
+            child_pid = int((pid_dir / "child.pid").read_text())
+            grandchild_pid = int((pid_dir / "grandchild.pid").read_text())
+            sleep_pid = int((pid_dir / "sleep.pid").read_text())
+            for name, pid in (
+                ("cargo child", child_pid),
+                ("cargo grandchild", grandchild_pid),
+                ("cargo grandchild sleeper", sleep_pid),
+            ):
+                self.assertFalse(
+                    self._pid_exists(pid),
+                    f"{name} survived timeout: pid={pid}\\n{result.stdout}",
+                )
+            self.assertFalse(
+                (target / "debug/.cargo-lock").exists(),
+                result.stdout,
+            )
+
+    @staticmethod
+    def _pid_exists(pid):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
 
     def test_dependency_failure_is_not_reported_as_clippy_finding(self):
         with tempfile.TemporaryDirectory(prefix="hilo-cargo-classification-") as tmp:
