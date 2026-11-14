@@ -1,0 +1,1064 @@
+{
+  "task_id": "DF-WARPFS-173",
+  "task_title": "Classify Go module-local imports and hard impact errors",
+  "task_criteria": [
+    "PROOF: The committed DF-WARPFS-173 regression test passes for a single-word Go module and confirms util/util.go impact lists app/main.go; PROOF: initialized cold graph impact either succeeds via auto-parse or exits nonzero without reporting success for a hard graph error; PROOF: consensus-style URL-shaped module resolution remains covered by existing graph behavior; FAILIF: the module-local import is emitted as a std pseudo-node, the focused regression test fails, or a hard impact error exits zero."
+  ],
+  "passed": true,
+  "worktree": "/home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration",
+  "branch": "wt/warpfs-foreman-2026-11-14-04-57-03-173",
+  "commit": "84c0267029ec4418cee1b560cdc05978eb87078a",
+  "pass_class": "judged",
+  "tier2_skipped": false,
+  "working_tree_content_fingerprint": "57139752acbb89bbcbeb91269ca02b5d0ac3fbdaf71e53ce520040857ef2e9e8",
+  "working_tree_dirty_path_count": 1,
+  "items": [
+    {
+      "criterion": "PROOF: The committed DF-WARPFS-173 regression test passes for a single-word Go module and confirms util/util.go impact lists app/main.go; PROOF: initialized cold graph impact either succeeds via auto-parse or exits nonzero without reporting success for a hard graph error; PROOF: consensus-style URL-shaped module resolution remains covered by existing graph behavior; FAILIF: the module-local import is emitted as a std pseudo-node, the focused regression test fails, or a hard impact error exits zero.",
+      "status": "PASS",
+      "detail": "All four proof points verified with actual command output. (1) Focused regression test: `cargo test -p hilo-cli --test dfwarpfs173_go` => \"test result: ok. 2 passed; 0 failed; 0 ignored\" \u2014 `single_word_go_module_import_is_a_pkg_dependency ... ok` and `initialized_cold_graph_impact_never_reports_success_for_missing_warm ... ok`. The test (hilo-cli/tests/dfwarpfs173_go.rs:44-83) builds a `module probea` tree, warms, runs `graph impact util/util.go`, asserts stdout contains `app/main.go` and does NOT contain `std:probea/util`. (2) Cold graph: manual run in a fresh `hilo init`-ed repo => `error: No complete graph warm found. Run `hilo graph warm` first (project root: /tmp/df173-cold-MYp3).` with `COLD_IMPACT_RC=1` \u2014 nonzero, no false success. Gate is hilo-cli/src/commands/graph.rs:2064-2067 (`anyhow::bail!` when a project manifest exists but no freshness state). (3) URL-shaped module: manual consensus-style run (`module github.com/totalwindupflightsystems/consensus`) => edges.jsonl `{\"from\":\"cmd/main.go\",\"to\":\"pkg:github.com/totalwindupflightsystems/consensus/internal/harness\",\"rel\":\"imports\",...}` and `graph impact internal/harness/planning.go` lists `cmd/main.go` rc=0. Existing coverage retained: `cargo test -p hilo_graph --lib` => \"test result: ok. 585 passed; 0 failed\" including `resolution::tests::resolves_nested_go_file_to_module_package` (example.com/demo), `resolves_go_file_in_module_root`, `go_and_rust_resolution_coexist_in_one_tree`, `java_resolution_coexists_with_other_languages`, and the new `go_module_path_reads_single_word_module`. (4) No std pseudo-node: manual single-word run produced edges.jsonl `{\"from\":\"app/main.go\",\"to\":\"pkg:probea/util\",...}` and `grep -c \"std:probea\"` = 0; hilo-graph/src/parser.rs:2323 asserts `!targets.contains(&\"std:probea/util\")`. The classifier fix is at hilo-graph/src/parser.rs:499-505 (`classify_go` checks module prefix before the dot heuristic) and is wired from the single Go import entrypoint at hilo-graph/src/parser.rs:329-337. The hard-error change at hilo-graph/src/impact.rs:686 and :917 replaces `.ok()` with `?`, propagating `GraphResult` instead of silently degrading. `cargo clippy -p hilo_graph -p hilo-cli --all-targets -- -D warnings` => \"Finished `dev` profile\" with 0 warnings/errors; LSP diagnostics empty. [resolution 0.03; util/util.go, app/main.go]"
+    }
+  ],
+  "merge_recommendation": "no_concerns_found",
+  "stages": {
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 PROOF: The committed DF-WARPFS-173 regression test passes for a single-word Go module and confirms util/util.go impact lists app/main.go; PROOF: initialized cold graph impact either succeeds via auto-parse or exits nonzero without reporting success for a hard graph error; PROOF: consensus-style URL-shaped module resolution remains covered by existing graph behavior; FAILIF: the module-local import is emitted as a std pseudo-node, the focused regression test fails, or a hard impact error exits zero.: All four proof points verified with actual command output. (1) Focused regression test: `cargo test -p hilo-cli --test dfwarpfs173_go` => \"test result: ok. 2 passed; 0 failed; 0 ignored\" \u2014 `single_word_go_module_import_is_a_pkg_dependency ... ok` and `initialized_cold_graph_impact_never_reports_success_for_missing_warm ... ok`. The test (hilo-cli/tests/dfwarpfs173_go.rs:44-83) builds a `module probea` tree, warms, runs `graph impact util/util.go`, asserts stdout contains `app/main.go` and does NOT contain `std:probea/util`. (2) Cold graph: manual run in a fresh `hilo init`-ed repo => `error: No complete graph warm found. Run `hilo graph warm` first (project root: /tmp/df173-cold-MYp3).` with `COLD_IMPACT_RC=1` \u2014 nonzero, no false success. Gate is hilo-cli/src/commands/graph.rs:2064-2067 (`anyhow::bail!` when a project manifest exists but no freshness state). (3) URL-shaped module: manual consensus-style run (`module github.com/totalwindupflightsystems/consensus`) => edges.jsonl `{\"from\":\"cmd/main.go\",\"to\":\"pkg:github.com/totalwindupflightsystems/consensus/internal/harness\",\"rel\":\"imports\",...}` and `graph impact internal/harness/planning.go` lists `cmd/main.go` rc=0. Existing coverage retained: `cargo test -p hilo_graph --lib` => \"test result: ok. 585 passed; 0 failed\" including `resolution::tests::resolves_nested_go_file_to_module_package` (example.com/demo), `resolves_go_file_in_module_root`, `go_and_rust_resolution_coexist_in_one_tree`, `java_resolution_coexists_with_other_languages`, and the new `go_module_path_reads_single_word_module`. (4) No std pseudo-node: manual single-word run produced edges.jsonl `{\"from\":\"app/main.go\",\"to\":\"pkg:probea/util\",...}` and `grep -c \"std:probea\"` = 0; hilo-graph/src/parser.rs:2323 asserts `!targets.contains(&\"std:probea/util\")`. The classifier fix is at hilo-graph/src/parser.rs:499-505 (`classify_go` checks module prefix before the dot heuristic) and is wired from the single Go import entrypoint at hilo-graph/src/parser.rs:329-337. The hard-error change at hilo-graph/src/impact.rs:686 and :917 replaces `.ok()` with `?`, propagating `GraphResult` instead of silently degrading. `cargo clippy -p hilo_graph -p hilo-cli --all-targets -- -D warnings` => \"Finished `dev` profile\" with 0 warnings/errors; LSP diagnostics empty. [resolution 0.03; util/util.go, app/main.go]\nThe DF-WARPFS-173 fix is correctly wired from the Go import parser through to `graph impact`: the focused regression test passes, module-local imports emit `pkg:probea/util` rather than `std:probea/util`, cold-graph impact exits 1 with a hard error, and URL-shaped module resolution is preserved across 585 passing hilo_graph tests.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 PROOF: The committed DF-WARPFS-173 regression test passes for a single-word Go module and confirms util/util.go impact lists app/main.go; PROOF: initialized cold graph impact either succeeds via auto-parse or exits nonzero without reporting success for a hard graph error; PROOF: consensus-style URL-shaped module resolution remains covered by existing graph behavior; FAILIF: the module-local import is emitted as a std pseudo-node, the focused regression test fails, or a hard impact error exits zero.: All four proof points verified with actual command output. (1) Focused regression test: `cargo test -p hilo-cli --test dfwarpfs173_go` => \"test result: ok. 2 passed; 0 failed; 0 ignored\" \u2014 `single_word_go_module_import_is_a_pkg_dependency ... ok` and `initialized_cold_graph_impact_never_reports_success_for_missing_warm ... ok`. The test (hilo-cli/tests/dfwarpfs173_go.rs:44-83) builds a `module probea` tree, warms, runs `graph impact util/util.go`, asserts stdout contains `app/main.go` and does NOT contain `std:probea/util`. (2) Cold graph: manual run in a fresh `hilo init`-ed repo => `error: No complete graph warm found. Run `hilo graph warm` first (project root: /tmp/df173-cold-MYp3).` with `COLD_IMPACT_RC=1` \u2014 nonzero, no false success. Gate is hilo-cli/src/commands/graph.rs:2064-2067 (`anyhow::bail!` when a project manifest exists but no freshness state). (3) URL-shaped module: manual consensus-style run (`module github.com/totalwindupflightsystems/consensus`) => edges.jsonl `{\"from\":\"cmd/main.go\",\"to\":\"pkg:github.com/totalwindupflightsystems/consensus/internal/harness\",\"rel\":\"imports\",...}` and `graph impact internal/harness/planning.go` lists `cmd/main.go` rc=0. Existing coverage retained: `cargo test -p hilo_graph --lib` => \"test result: ok. 585 passed; 0 failed\" including `resolution::tests::resolves_nested_go_file_to_module_package` (example.com/demo), `resolves_go_file_in_module_root`, `go_and_rust_resolution_coexist_in_one_tree`, `java_resolution_coexists_with_other_languages`, and the new `go_module_path_reads_single_word_module`. (4) No std pseudo-node: manual single-word run produced edges.jsonl `{\"from\":\"app/main.go\",\"to\":\"pkg:probea/util\",...}` and `grep -c \"std:probea\"` = 0; hilo-graph/src/parser.rs:2323 asserts `!targets.contains(&\"std:probea/util\")`. The classifier fix is at hilo-graph/src/parser.rs:499-505 (`classify_go` checks module prefix before the dot heuristic) and is wired from the single Go import entrypoint at hilo-graph/src/parser.rs:329-337. The hard-error change at hilo-graph/src/impact.rs:686 and :917 replaces `.ok()` with `?`, propagating `GraphResult` instead of silently degrading. `cargo clippy -p hilo_graph -p hilo-cli --all-targets -- -D warnings` => \"Finished `dev` profile\" with 0 warnings/errors; LSP diagnostics empty. [resolution 0.03; util/util.go, app/main.go]\nThe DF-WARPFS-173 fix is correctly wired from the Go import parser through to `graph impact`: the focused regression test passes, module-local imports emit `pkg:probea/util` rather than `std:probea/util`, cold-graph impact exits 1 with a hard error, and URL-shaped module resolution is preserved across 585 passing hilo_graph tests.",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "PROOF: The committed DF-WARPFS-173 regression test passes for a single-word Go module and confirms util/util.go impact lists app/main.go; PROOF: initialized cold graph impact either succeeds via auto-parse or exits nonzero without reporting success for a hard graph error; PROOF: consensus-style URL-shaped module resolution remains covered by existing graph behavior; FAILIF: the module-local import is emitted as a std pseudo-node, the focused regression test fails, or a hard impact error exits zero.",
+                "status": "PASS",
+                "detail": "All four proof points verified with actual command output. (1) Focused regression test: `cargo test -p hilo-cli --test dfwarpfs173_go` => \"test result: ok. 2 passed; 0 failed; 0 ignored\" \u2014 `single_word_go_module_import_is_a_pkg_dependency ... ok` and `initialized_cold_graph_impact_never_reports_success_for_missing_warm ... ok`. The test (hilo-cli/tests/dfwarpfs173_go.rs:44-83) builds a `module probea` tree, warms, runs `graph impact util/util.go`, asserts stdout contains `app/main.go` and does NOT contain `std:probea/util`. (2) Cold graph: manual run in a fresh `hilo init`-ed repo => `error: No complete graph warm found. Run `hilo graph warm` first (project root: /tmp/df173-cold-MYp3).` with `COLD_IMPACT_RC=1` \u2014 nonzero, no false success. Gate is hilo-cli/src/commands/graph.rs:2064-2067 (`anyhow::bail!` when a project manifest exists but no freshness state). (3) URL-shaped module: manual consensus-style run (`module github.com/totalwindupflightsystems/consensus`) => edges.jsonl `{\"from\":\"cmd/main.go\",\"to\":\"pkg:github.com/totalwindupflightsystems/consensus/internal/harness\",\"rel\":\"imports\",...}` and `graph impact internal/harness/planning.go` lists `cmd/main.go` rc=0. Existing coverage retained: `cargo test -p hilo_graph --lib` => \"test result: ok. 585 passed; 0 failed\" including `resolution::tests::resolves_nested_go_file_to_module_package` (example.com/demo), `resolves_go_file_in_module_root`, `go_and_rust_resolution_coexist_in_one_tree`, `java_resolution_coexists_with_other_languages`, and the new `go_module_path_reads_single_word_module`. (4) No std pseudo-node: manual single-word run produced edges.jsonl `{\"from\":\"app/main.go\",\"to\":\"pkg:probea/util\",...}` and `grep -c \"std:probea\"` = 0; hilo-graph/src/parser.rs:2323 asserts `!targets.contains(&\"std:probea/util\")`. The classifier fix is at hilo-graph/src/parser.rs:499-505 (`classify_go` checks module prefix before the dot heuristic) and is wired from the single Go import entrypoint at hilo-graph/src/parser.rs:329-337. The hard-error change at hilo-graph/src/impact.rs:686 and :917 replaces `.ok()` with `?`, propagating `GraphResult` instead of silently degrading. `cargo clippy -p hilo_graph -p hilo-cli --all-targets -- -D warnings` => \"Finished `dev` profile\" with 0 warnings/errors; LSP diagnostics empty. [resolution 0.03; util/util.go, app/main.go]",
+                "resolution_probability": 0.03,
+                "cited_path": "util/util.go, app/main.go"
+              }
+            ],
+            "summary": "The DF-WARPFS-173 fix is correctly wired from the Go import parser through to `graph impact`: the focused regression test passes, module-local imports emit `pkg:probea/util` rather than `std:probea/util`, cold-graph impact exits 1 with a hard error, and URL-shaped module resolution is preserved across 585 passing hilo_graph tests.",
+            "provenance": {
+              "model": "deepseek-v4-flash",
+              "base_url_source": "GITREINS_LLM_BASE_URL",
+              "api_key_source": "GITREINS_LLM_API_KEY"
+            }
+          }
+        }
+      ],
+      "model": "deepseek-v4-flash",
+      "base_url_source": "GITREINS_LLM_BASE_URL",
+      "api_key_source": "GITREINS_LLM_API_KEY",
+      "tool_calls": [
+        {
+          "tool": "get_task_item",
+          "command": "get_task_item {\"id\": \"DF-WARPFS-173\"}",
+          "exit_code": 0,
+          "output_sha": "bc18b7b8d30f6293bc29a7fce5de4aff6655b6e5e03ca70cdac28c482ad0106b"
+        },
+        {
+          "tool": "run_command",
+          "command": "ls -la; cat .gitreins/config.yaml 2>/dev/null",
+          "exit_code": 0,
+          "output_sha": "fa325efdb825a7b6a90ba9c399b67f9a7a2de2b2b6aba64828ac6198f02df5dd"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara 2>/dev/null; pwd; git -C . log --oneline -5 2>/dev/null; echo ---; cat .gitreins/config.yaml | head -60",
+          "exit_code": 0,
+          "output_sha": "4bec64fd76fd79c8c61424c23110d2dff6eb89cbce67bc92d25bd67a8f142bf4"
+        },
+        {
+          "tool": "read_diff",
+          "command": "read_diff {}",
+          "exit_code": 0,
+          "output_sha": "5d176dca68c9135c817d0e369d3ed332907b98f9c0c1fcc0fc05d6301a98066e"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara; ls; echo ---; cat .gitreins/config.yaml; echo ---; ls .gitreins",
+          "exit_code": 0,
+          "output_sha": "ae233cf50e34b582fb51ca990ed8a9e2c6626ed8bb5d938b1bf6e1e3baf6e26f"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs 2>/dev/null && pwd && ls && git log --oneline -5 && git status --short | head -20",
+          "exit_code": 0,
+          "output_sha": "58c736149719d08a295a4503d2c2ded4fa2744b4f3f3be9e2f6d1d03a70d2945"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git log --oneline -3 -- .gitreins/tasks.yaml; echo ---; git status --short | head; echo ---; grep -n \"DF-WARPFS-173\" -A 20 .gitreins/tasks.yaml | head -40",
+          "exit_code": 0,
+          "output_sha": "6782c27b58e374ae7bec118ceb22945eab6f00989b2e9888819365d7417a7bb7"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && grep -rn \"DF-WARPFS-173\" --include=*.yaml --include=*.md --include=*.rs --include=*.json . 2>/dev/null | head -20",
+          "exit_code": 0,
+          "output_sha": "01a4835d7016717e201254fde41579da9f3ed25cff8d6d2266a2ea5509262e2f"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git status --short; echo \"=== diff stat ===\"; git diff --stat; echo \"=== untracked ===\"; git status --porcelain --untracked-files=all | head -30",
+          "exit_code": 0,
+          "output_sha": "62b00586a0bf3663218d41808a6d9c23c4bf9b321bf1834afa3ff2ac639db312"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git log --all --oneline --grep=\"WARPFS-173\" | head -20; echo \"=== branches ===\"; git branch -a | head -20; echo \"=== worktrees ===\"; git worktree list | head -20",
+          "exit_code": 0,
+          "output_sha": "a10016da05d49941423beeae7541cbae209acbc925678edb5d6672c570e3a303"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show --stat 84c0267; echo \"=== parent ===\"; git log --oneline -3 84c0267",
+          "exit_code": 0,
+          "output_sha": "a27e555bbe7554a83b9bc149de49bd756f3a27ca9d8654cc82ce8c890e658221"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267 -- hilo-graph/src/parser.rs hilo-graph/src/resolution.rs hilo-graph/src/impact.rs",
+          "exit_code": 0,
+          "output_sha": "11d937e291c6f7a39f36b25ef97e2658b5f4a2b6beab0f679390add8248ac05b"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267 -- hilo-graph/src/parser.rs | sed -n '1,200p'",
+          "exit_code": 0,
+          "output_sha": "6142ceca51036440fe27d10a8ce292680bb52efafab9f84879bb5836e6cc3561"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267 -- hilo-graph/src/parser.rs | sed -n '95,140p'; echo \"=== resolution ===\"; git show 84c0267 -- hilo-graph/src/resolution.rs",
+          "exit_code": 0,
+          "output_sha": "e1949b90d3d461110bba526670d4079963d7457ce54ddbb118c9168e9d082a62"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-cli/tests/dfwarpfs173_go.rs",
+          "exit_code": 0,
+          "output_sha": "cb0ea235ab2781aee4f280c3e49ea7c3a44c2479e98c1e1fc6e645e0ea1bd7bc"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267 -- hilo-graph/src/parser.rs | sed -n '55,100p'",
+          "exit_code": 0,
+          "output_sha": "f9c41d6739b3776e06193294f0bc82c72ff12000531b2d567e784f4a520143c0"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/parser.rs | sed -n '300,360p'",
+          "exit_code": 0,
+          "output_sha": "d9b28e3b839b7e914a4120577fb71134e45efb500c5b97c72b334fd0c07d3f2c"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/parser.rs | grep -n \"fn parse_imports\" -A 30",
+          "exit_code": 0,
+          "output_sha": "a20ad191046c87de23d6e312ef3294a067325d8556af7172328931a11c6cb305"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/parser.rs | sed -n '360,420p'",
+          "exit_code": 0,
+          "output_sha": "bbb58c17c22d8687dcc6699258beeb940de79f05cb66746d757090a8b9f16696"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/parser.rs | sed -n '420,480p'",
+          "exit_code": 0,
+          "output_sha": "f28518ce34d4cedd27e34eeb352a6671f8fd0f72c30cb65bca5014dd84cb7593"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/resolution.rs | grep -n \"fn module_path\" -A 40",
+          "exit_code": 0,
+          "output_sha": "c54daf092a57b1f46da03a00de921d6f5f0a9c61ec5c0752dd43c216f83b03c6"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/impact.rs | grep -n \"fn compute_impact_at\" -A 40",
+          "exit_code": 0,
+          "output_sha": "0d1275ffd9753238e9eb14bc6a804b00e6a2a48a99b836480ebb40fbf4983f48"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/impact.rs | sed -n '677,760p'",
+          "exit_code": 0,
+          "output_sha": "c3b9e1a8add572a32dd25674928c5fa0e2be5a2f0d2261f277409f9d66459669"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/resolution.rs | grep -n \"fn pkg_node\\b\" -A 40",
+          "exit_code": 0,
+          "output_sha": "d6c32f5f8b5edd7502312d985b0aa080fccf07bb0e29d072d45f6e2ffd57b135"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/resolution.rs | grep -n \"fn go_pkg_node\" -A 30",
+          "exit_code": 0,
+          "output_sha": "b4c214e74f260a0a68f839ce8b2fff5c8241578e9804e24941e3ba9700c2131c"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/resolution.rs | grep -n \"fn from_edges\" -A 40",
+          "exit_code": 0,
+          "output_sha": "b7dd3fded74ff408872e059f8aea8113c1f271818c48473fc9515d515867eb60"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/resolution.rs | sed -n '1432,1560p'",
+          "exit_code": 0,
+          "output_sha": "b543d4725d548cd5e9a9876c18694c3e527dcea45b25887a5d15e78aaeaf9a74"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/resolution.rs | sed -n '1490,1530p'",
+          "exit_code": 0,
+          "output_sha": "f113271dbafc75c558efc857b87dfa265a3b89f601697965dce1a06fdb1c9aaf"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/resolution.rs | sed -n '1465,1495p'",
+          "exit_code": 0,
+          "output_sha": "2610bdf2bbd428369324df7ee7a41b46f9dba12fec270b0e986e675f8db62501"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/resolution.rs | grep -n \"fn candidate_paths\" -A 30",
+          "exit_code": 0,
+          "output_sha": "765e8dc2bd2a6f199215a00372c6ca7bb32f2c96abceb9886dc0f2034dde428b"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/impact.rs | grep -n \"nodes_for\" -B 5 -A 30",
+          "exit_code": 0,
+          "output_sha": "c11207fd6220b9893474ed8fe4417fe8363d9ba49669ba579180d2ca9ecad65b"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/impact.rs | sed -n '440,500p'",
+          "exit_code": 0,
+          "output_sha": "bcabb1b6bdd42c0923f236e88c1af0b283bfe57fba4089310f769ff39bd35566"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/impact.rs | sed -n '500,560p'",
+          "exit_code": 0,
+          "output_sha": "da14b261b5c8d152334d13aa4b259aa305924838fed82c804cddabfff677fdba"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/impact.rs | sed -n '560,640p'",
+          "exit_code": 0,
+          "output_sha": "05ed3f0ecb300e46883ce3e91a8d9544c6a395ef6b845dcec552276ff8ea0c36"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/impact.rs | sed -n '760,840p'",
+          "exit_code": 0,
+          "output_sha": "cd6f18e63238a8908f7100bcd28a0d85ff4942e6caa3d5c3b34bdfebd50c3ffe"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/impact.rs | sed -n '840,900p'",
+          "exit_code": 0,
+          "output_sha": "023a808c16891b4d0ac5436dde865f0511b7d9ad16bd2ce0a9630cc701ae037e"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/impact.rs | grep -n \"fn collect_family\" -A 60",
+          "exit_code": 0,
+          "output_sha": "0f9824c98f487da2c8afd17532d8a46eec2572c1833187971a2ddde62fe38222"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/impact.rs | grep -n \"fn collect\\b\" -A 40",
+          "exit_code": 0,
+          "output_sha": "d6d6fe7cd724f98f4498054d1cb22ae8e64187b9c13d63856cfd1427ffd7e7bc"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/impact.rs | grep -n \"fn impact_or_parse\" -A 80",
+          "exit_code": 1,
+          "output_sha": "1279e6b223887bf4ec1735d225f7a25c18988569b5020e10baf94ae9b7bcb98e"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git grep -n \"impact_or_parse\" 84c0267 | head -20",
+          "exit_code": 0,
+          "output_sha": "ff354e99b86a143bcbcd8e30556066fe60428f7cfae9275a0e780585c80db082"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git grep -n \"impact_or_parse\" 84c0267 -- '*.rs' | head -20",
+          "exit_code": 0,
+          "output_sha": "3c862e49e9d63f9fe568c3abd0a15a1104f5b9b385cddd823643643727a29d71"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/graph.rs | sed -n '2950,3050p'",
+          "exit_code": 0,
+          "output_sha": "cf4190014a5be3c409907521ae4c210249fdd800c940a0402dc2ba78625bdc5c"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/graph.rs | sed -n '2990,3025p'",
+          "exit_code": 0,
+          "output_sha": "7333630efab9020a8d17a5c6e6836efa70fecfbeda76a75f46728e93b3b44f52"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/graph.rs | grep -n \"fn require_cached_query\" -A 30",
+          "exit_code": 0,
+          "output_sha": "6536aa9b353abe1a4845d01bce4428a930916150444ef0613137f36305afbb27"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/graph.rs | grep -n \"degraded_reason\" -B 3 -A 10 | head -80",
+          "exit_code": 0,
+          "output_sha": "8c2c6266d6260d42021fe65c1547a5c7ec685774c0024006f872ae2c5ec1d1b3"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/graph.rs | sed -n '1610,1700p'",
+          "exit_code": 0,
+          "output_sha": "1ff40a8aedc56c55fdafd2c0ef8c15de52a7d3f2b4f09264870b4c6722a02391"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/graph.rs | sed -n '1660,1680p'",
+          "exit_code": 0,
+          "output_sha": "8fad9578bb3c6b12ea3b52ce139ded3a81590f67486766818b2ecb0de1c132c1"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/graph.rs | sed -n '1636,1662p'",
+          "exit_code": 0,
+          "output_sha": "0cddb7d13f71419838a3f314b12c49fc32b2cade15e3b18b972c451b3d0b931a"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/graph.rs | grep -n \"fn ingest_edges\" -A 60",
+          "exit_code": 0,
+          "output_sha": "68a3b7ef0c28e564255b2c45cba89a110c54ad7f80aa6d621b325c5a7cc33ccd"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/graph.rs | sed -n '1048,1090p'",
+          "exit_code": 0,
+          "output_sha": "b2b235836b3d5abbc01db234d2373e1523fe0022e3abd38d24cb3ef5b34ec750"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/graph.rs | grep -n \"fn insert_edge_chunk_until\" -A 60",
+          "exit_code": 0,
+          "output_sha": "18a73b0dfdb5812e380fe895389cac44013af14044bd743083feed5c42e2d03f"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/graph.rs | grep -n \"fn plan_reconcile\" -A 70",
+          "exit_code": 0,
+          "output_sha": "10e36d645cebc8195bda7a63ddcc06c9a14d0517125a2b92cb0781ec1a1f6b33"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/graph.rs | sed -n '839,870p'",
+          "exit_code": 0,
+          "output_sha": "db40ef5bc7c5264dbcf282f612aaffce7b1bcd6cdd855742bf984a10b8b02da7"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/graph.rs | grep -n \"fn write_stamp\" -A 40",
+          "exit_code": 0,
+          "output_sha": "605a6760ad33f1afedbf7219c41ba0065b7b01266bd1986ef5559e42c97fa376"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/graph.rs | grep -n \"fn jsonl_fingerprint\" -A 25",
+          "exit_code": 0,
+          "output_sha": "77845b5ffe11329193e2fff0267229512a7b8cf5bf4c0986549da3e9ed14a234"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/graph.rs | grep -n \"fn ensure_parsed\" -A 60",
+          "exit_code": 0,
+          "output_sha": "1270411d46d5d9a64ff43f1fd4ab7a466d05c34b18777e213592cceae9e94e1c"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/graph.rs | sed -n '2886,2950p'",
+          "exit_code": 0,
+          "output_sha": "2fbcfc5aaa618f0f74ab14a8db31196cf187c5f6d16a76d6e2353fc88013556f"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/graph.rs | grep -n \"fn file_in_graph\" -A 30",
+          "exit_code": 0,
+          "output_sha": "28138b1090b5bc8c6941a2f6c248fc620a1d96db5fc76de19a6b32e8036b8479"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-cli/src/commands/graph.rs | grep -n \"No complete graph warm found\" -B 20 -A 20",
+          "exit_code": 0,
+          "output_sha": "009f2379ac62d5a630192f755851a1eaa4ceb17ab60a864ecd3e5d322549c293"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-cli/src/commands/graph.rs | grep -n \"require_completed_warm\" | head -20",
+          "exit_code": 0,
+          "output_sha": "7f8aac7de867eafcb1542c8c908c6ce875a75b6f08e320ee912989349091d0d2"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-cli/src/commands/graph.rs | sed -n '3760,3800p'; echo \"=== 3870 ===\"; git show 84c0267:hilo-cli/src/commands/graph.rs | sed -n '3870,3900p'",
+          "exit_code": 0,
+          "output_sha": "7e0df68524a4985aeeec17e546b5337e1ea5a7dfa3b714ee8245f224f4e9523d"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-cli/src/commands/graph.rs | grep -n \"pub fn run_impact\" -A 60",
+          "exit_code": 0,
+          "output_sha": "2078fcbb141bd5c7f565fd69a6af21a511d99d3ebba18c1d487f6ede33db9235"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-cli/src/commands/graph.rs | sed -n '1750,1830p'",
+          "exit_code": 0,
+          "output_sha": "730e5125005c0d1bb13bf07a2fce104c5980219e985724402c5510d05f642695"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/graph.rs | grep -n \"fn review_or_parse\" -A 60",
+          "exit_code": 0,
+          "output_sha": "e31c65b9814755691748f9845cadeb4b7affbc2f888e1759404549af303717c5"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/impact.rs | grep -n \"pub fn expand_review_set\" -A 80",
+          "exit_code": 0,
+          "output_sha": "e7c1d886eb4950100fef6447a347f7099a367c1886fdaa6a3119a395da953c53"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/impact.rs | grep -n \"fn outgoing_rows\" -A 30; echo \"=== incoming ===\"; git show 84c0267:hilo-graph/src/impact.rs | grep -n \"fn incoming_rows\" -A 30",
+          "exit_code": 0,
+          "output_sha": "b8d778d0edbb4dcff98aa4d606a01490e060d0d1724a3f6c684c14498e4ee9da"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/impact.rs | grep -n \"REVIEW_FORWARD_DEPTH\\|REVIEW_REVERSE_DEPTH\" | head; echo \"=== is_symbol_node ===\"; git show 84c0267:hilo-graph/src/impact.rs | grep -n \"fn is_symbol_node\" -A 15",
+          "exit_code": 0,
+          "output_sha": "7c5f8cf09faa620cedf3716645a6b91e6121bdd4218edfff852585ff155fb253"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/impact.rs | sed -n '215,270p'",
+          "exit_code": 0,
+          "output_sha": "894a02a1df29b3017cde7fb087bd9a0a16aaf5aaf79b00eb2bf9f81acac6b386"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/parser.rs | grep -n \"fn classify_go\" -A 15",
+          "exit_code": 0,
+          "output_sha": "ea78aebd0bc3011d44d96ce293885d4f63653a06e39cb054906ec0c30ddc96d4"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/parser.rs | grep -n \"fn extract_go_imports\" -A 30",
+          "exit_code": 0,
+          "output_sha": "ef15daad337a7bbc573930a91b81e05ffbd0769e681c2c0a9cac51c4489a2a13"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/parser.rs | grep -n \"fn go_imports\" -A 25",
+          "exit_code": 0,
+          "output_sha": "89ea9c7b123bdb95c30c05061c596b5ad96a7cd5990a3f049fbba9adeccbf08d"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/parser.rs | grep -n \"fn parse(\" -A 15",
+          "exit_code": 0,
+          "output_sha": "c2f8e998488841ec03cfc1615267af022f7738371a24248ff7227bc96229719b"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/parser.rs | grep -n \"fn go_package_for_file\" -A 20; echo \"=== go_module_for_file ===\"; git show 84c0267:hilo-graph/src/resolution.rs | grep -n \"fn go_module_for_file\" -A 20",
+          "exit_code": 0,
+          "output_sha": "145328ef94ae9f25167b6a810b53f8fe223d3bd44c8f1f6657bc7edb34eee8ae"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/resolution.rs | sed -n '607,625p'",
+          "exit_code": 0,
+          "output_sha": "6da1c98cf1bbeb2eaf024671de8b6cd63a6b9496ebafe2129e1c112f3746850e"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/resolution.rs | grep -n \"go_package_for_file\\|go_module_path_for_file\" | head -20",
+          "exit_code": 0,
+          "output_sha": "c16c585ffff63b419c3a025be30e95f90c69ead371354d3deb9efcc8bb72562f"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/resolution.rs | sed -n '280,300p'",
+          "exit_code": 0,
+          "output_sha": "c6a2721507bf138f38b3bd7552204229e88debcfbb108395fde49d8e4aeb84f9"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/resolution.rs | grep -n \"fn resolve\" -A 25 | head -50",
+          "exit_code": 0,
+          "output_sha": "f20ff2b19a3de42347b4ed837defdd4af9ccf1fd89221311b43c176fd43b86f4"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/resolution.rs | grep -n \"pub struct AnchoredRoot\" -A 40",
+          "exit_code": 0,
+          "output_sha": "2c876d1a3cc9b470fb700c77ca34fa42510d4c7c00dcebcd620139cab79f9222"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/graph.rs | grep -n \"fn derived_root\\|let derived_root\" -A 30 | head -60",
+          "exit_code": 0,
+          "output_sha": "4ce923435b61a8488c6b1df92a5d4fe64596e5f844f8134dad5c24d2c9184d9d"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/graph.rs | grep -n \"fn open_read_only\" -A 20",
+          "exit_code": 0,
+          "output_sha": "e7ccf3c0d7f3e268deb24de6a611ee378f2bbafacec34e2e448f1cd90052bcea"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/graph.rs | grep -n \"fn request_path_reconcile_budget_ms\" -A 20",
+          "exit_code": 0,
+          "output_sha": "98d2fad14d4c95fe0bea07df9ed5a4a1c9dd2c47e9ab1936409629ee275b2939"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/graph.rs | grep -n \"REQUEST_PATH_RECONCILE_BUDGET_MS\" -B 5 -A 10 | head -40",
+          "exit_code": 0,
+          "output_sha": "2e0202dd172fc46ce02bc41c5ee9232c2b0a13e795310b72f75f57658f5abb21"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/graph.rs | sed -n '1514,1600p'",
+          "exit_code": 0,
+          "output_sha": "1110f38ca4b9c4eecd37618a184763cdc4a2aa6840ddbc89fd7aab37ef42b330"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/graph.rs | grep -n \"fn ro_open_hot\" -A 40",
+          "exit_code": 0,
+          "output_sha": "f8989e7fd2c5466c25f923ee64fe5ad281f29e45682a6115fdec8f204d865211"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/graph.rs | grep -n \"fn open_disk_connection\" -A 40",
+          "exit_code": 0,
+          "output_sha": "45182d721d52f58e1ef8c750171e32a1131f3101884ed8a106918f807743d395"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/graph.rs | grep -n \"fn ensure_schema\" -A 40",
+          "exit_code": 0,
+          "output_sha": "e35c6cd809d0ca5b98d5318d64ce1e8521f3216fb6e5be9e3e575de4b6a60aef"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/graph.rs | sed -n '1560,1590p'",
+          "exit_code": 0,
+          "output_sha": "55d95b6f25433e7e35949f4c4544b9fa949317feb39d3fb69cd014dfbf35c3ab"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/graph.rs | sed -n '1536,1562p'",
+          "exit_code": 0,
+          "output_sha": "67543d37d27e9e698ec2c1541b46d6013e477b9a0e958ea9cac399d572e4038b"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/graph.rs | grep -n \"fn configure_disk_connection\" -A 40",
+          "exit_code": 0,
+          "output_sha": "bf8c60a8be157c8da20fe2544fb9811c6b5007f0fea1fa2f48392024f2b4c243"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/graph.rs | grep -n \"fn apply_duckdb_setting\" -A 25",
+          "exit_code": 0,
+          "output_sha": "6d80af039cf802e66bd2cfa309f4bd2863b3cc7042d9cbac93bb17c694a9cb92"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/graph.rs | grep -n \"fn insert_edges\\b\" -A 30",
+          "exit_code": 0,
+          "output_sha": "f5d69cee9fdeeb252d2ec98a55450d25bef7d04745b8ababa87caf3a6fa0a4fc"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/graph.rs | grep -n \"pub fn insert_edges_into\" -A 30",
+          "exit_code": 0,
+          "output_sha": "341a4367e1b0a4131a5066257a9ad95454525a73a5aae4c450fde981c8ad5e84"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/graph.rs | grep -n \"fn insert_edges_in_chunks\" -A 40",
+          "exit_code": 0,
+          "output_sha": "4be48b4d86c9fc4227a9e22d1ebd7db67e731d3a8dbc7081cc6a11fd28f1dc53"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/graph.rs | grep -n \"INSERT_EDGE_SQL\" -A 8 | head -20",
+          "exit_code": 0,
+          "output_sha": "a94e17d1bbeb679cf9d0efc74229766285ca48e5547a6abdbcc7480661376aa0"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/graph.rs | grep -n \"fn db_edge_row_count\" -A 15",
+          "exit_code": 0,
+          "output_sha": "4bc9d28f528d4bcdf1c577b5ff99e61ac40784ea6abb616d33307271d3115188"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/warpfs && git show 84c0267:hilo-graph/src/graph.rs | grep -n \"fn reconcile_edges_from_jsonl\" -A 40",
+          "exit_code": 0,
+          "output_sha": "e8cdfa82297c062536dd79fdc794f1f43a658797743c58e136e82eca971f1246"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /repo 2>/dev/null || cd .; pwd; git status --short | head -50; echo \"---\"; git log --oneline -5",
+          "exit_code": 0,
+          "output_sha": "c558352c139eeaff8f4339c2062c612a4b9798342aac8dbba9a10a5280267df1"
+        },
+        {
+          "tool": "read_diff",
+          "command": "read_diff {}",
+          "exit_code": 0,
+          "output_sha": "5d176dca68c9135c817d0e369d3ed332907b98f9c0c1fcc0fc05d6301a98066e"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; git show --stat HEAD",
+          "exit_code": 0,
+          "output_sha": "9fd776f7ca5833313334dacbf136415faa9856ed237524aac3b76451aed7c9f5"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; git show HEAD",
+          "exit_code": 0,
+          "output_sha": "09ed6fa87baee9876e126a588cdca4bddcd1bdf0b5462fd40a1e07a22d912e03"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; git show HEAD -- hilo-graph/src/resolution.rs hilo-graph/src/impact.rs",
+          "exit_code": 0,
+          "output_sha": "ea45aa1cbbe46c5997e60e737a7209a40b54ad193b277be5a9d7fa14ae32bce4"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; git show HEAD -- hilo-graph/src/parser.rs",
+          "exit_code": 0,
+          "output_sha": "0516da5ce599df131756440c9a27611dd76f859cef00a83f0bd2187eb7bf2d64"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; sed -n 470,540p hilo-graph/src/parser.rs",
+          "exit_code": 0,
+          "output_sha": "aea1093b7dd7e2a811441e1a34a91eb7358e1ce35376c1cac337f148ec0013cc"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; sed -n 560,640p hilo-graph/src/resolution.rs",
+          "exit_code": 0,
+          "output_sha": "6fb7137efed7e443787838640ba9983e6ff447d25a18806676373366425cbedb"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; sed -n 640,700p hilo-graph/src/resolution.rs",
+          "exit_code": 0,
+          "output_sha": "63e9e1479f5333335eca44a9b148b28628350fddebfbf8532f1a7c831fd722d5"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; cat hilo-cli/tests/dfwarpfs173_go.rs",
+          "exit_code": 0,
+          "output_sha": "fb1339ceda14483fd3cb6ab300eb7afa4a0a65d1e844f0e687bc0c1b78c80cc1"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; grep -rn \"LocalSpecResolver::from_edges\" --include=*.rs | head -20; echo ---; grep -rn \"fn from_edges\" -A 30 hilo-graph/src/resolution.rs | head -60",
+          "exit_code": 0,
+          "output_sha": "92963f2c9dae21278bbc6b6550c8cb829b4c16c79fa06a56d6fcd23bf2cd71a5"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; sed -n 660,700p hilo-graph/src/impact.rs; echo \"=== signature\"; grep -n \"pub fn compute_impact_at\" -A 20 hilo-graph/src/impact.rs | head -40",
+          "exit_code": 0,
+          "output_sha": "25012422a3ad7d176a27452c7930441b05bdca2a1fdfae34b67134752aec10b9"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; cat .gitreins/config.yaml 2>/dev/null | head -40",
+          "exit_code": 0,
+          "output_sha": "d40f8819f868c6fa933ba41cf3a384a0a6a235bf21a90b85d38080dcfa73bfd9"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; timeout 3000 cargo test -p hilo-cli --test dfwarpfs173_go -- --nocapture 2>&1 | tail -40",
+          "exit_code": -15,
+          "output_sha": "3e1c2f1f7d440c6917fd95038cd581b1476aa6501e75fc076b10ecfab1c55050"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; nohup cargo test -p hilo-cli --test dfwarpfs173_go -- --nocapture > /tmp/df173.log 2>&1 &\necho started",
+          "exit_code": 0,
+          "output_sha": "ec70a1aa6a4c0609e35fc1f1b4f68643faca7ddc5117573f781b95561e35d319"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; grep -rn \"No complete graph warm found\" --include=*.rs | head -20",
+          "exit_code": 0,
+          "output_sha": "86af039af1551c013841ecd83247d66e1354d6996e0284feaad06e2c6728f5db"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; grep -rn \"Impact\" hilo-cli/src/*.rs | head -30",
+          "exit_code": 0,
+          "output_sha": "1c1e1e02b53cace3c8ea9f5c769b86c71d0c674010921069e200f69e34660014"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; sed -n 2000,2130p hilo-cli/src/commands/graph.rs",
+          "exit_code": 0,
+          "output_sha": "6c430fe8125c8cf6e58e36ddfe82bd0346f95019cbfca03929d7ed0baf1a44cc"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; sed -n 2040,2075p hilo-cli/src/commands/graph.rs; echo \"=== run_impact\"; grep -n \"pub fn run_impact\" -A 80 hilo-cli/src/commands/graph.rs | head -120",
+          "exit_code": 0,
+          "output_sha": "c1c014d4c8f276286dc1bd7146b53ceb767258418e795976dbc9f7c9e11518d4"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; sed -n 1690,1800p hilo-cli/src/commands/graph.rs",
+          "exit_code": 0,
+          "output_sha": "99ca4c01df173805ad096063ca3637c30e9d26da6ed716379c150938ebe06578"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; sed -n 370,400p hilo-cli/tests/cli.rs; echo \"=== log\"; tail -20 /tmp/df173.log",
+          "exit_code": 0,
+          "output_sha": "da6dc6d661c303702f34fa63969cfdf1ff2b91acd22b2ea107924d003fe87ab6"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 120; tail -30 /tmp/df173.log; echo \"=== running?\"; pgrep -f \"dfwarpfs173_go\" | head",
+          "exit_code": -15,
+          "output_sha": "5cf8b5b0cc1bc9dc4b0198dfff40130c0bd1311a412409647609be4f975425e3"
+        },
+        {
+          "tool": "run_command",
+          "command": "tail -30 /tmp/df173.log; echo \"=== running?\"; pgrep -af \"cargo|rustc\" | head -5",
+          "exit_code": 0,
+          "output_sha": "ba5df5a43f302c46c20d42f2c9fe2a7dab70ec7691040c6aa84a500e72e1021e"
+        },
+        {
+          "tool": "run_command",
+          "command": "ls -la /tmp/df173.log; cat /tmp/df173.log | head -20; ls /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration/target/debug 2>/dev/null | head",
+          "exit_code": 0,
+          "output_sha": "4b57b0b4ad99c8a322c30afae7f5ed800aee046dffec477c055212ebc662a7f6"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; ls; echo ---; ls target 2>/dev/null | head; echo ---; which cargo; cargo --version",
+          "exit_code": 0,
+          "output_sha": "c6b76e925522700bba66f2ca942674e52060bcb8d1be7fb3d6cb148748dcf71c"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; setsid nohup cargo test -p hilo-cli --test dfwarpfs173_go -- --nocapture > /tmp/df173.log 2>&1 < /dev/null & disown; sleep 25; wc -l /tmp/df173.log; tail -5 /tmp/df173.log",
+          "exit_code": 0,
+          "output_sha": "b541483405b98b6ea48bc7c964714a736ff7c210be8116da4c2842f7b61fc8c2"
+        },
+        {
+          "tool": "run_command",
+          "command": "cat /tmp/df173.log",
+          "exit_code": 0,
+          "output_sha": "e0f9383014fafdcb26be56e2b5dc6c5f750efc26a10b6827f9c8e18d12191995"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PARTIAL: cargo test -p hilo-cli --test dfwarpfs173_go => \\\"test result: ok. 2 passed; 0 failed\\\" (single_word_go_module_import_is_a_pkg_dependency ok; initialized_cold_graph_impact_never_reports_success_for_missing_warm ok). Still need: consensus-style URL-shaped module resolution coverage + std pseudo-node check.\", \"key\": \"verified_0\"}",
+          "exit_code": 0,
+          "output_sha": "70b7cd9ecafe190deff53b4e3eca07c9690111a930aa5ed699a99ba20cee6bf4"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; grep -rn \"consensus\" --include=*.rs hilo-graph/src hilo-cli/tests | head -20",
+          "exit_code": 0,
+          "output_sha": "0de5040c058a255473e24eaf20de8a2217bf98ff79c798c5ab36364cc09557d1"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; grep -rn \"classify_go\\|go_module_path_for_file\\|go_package_for_file\" --include=*.rs . | grep -v \"^./target\" | head -30",
+          "exit_code": 0,
+          "output_sha": "26044addcf21c286c8557753fca2ede9545feb6f39adfc49d35247b5bce37ac1"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; sed -n 1,60p hilo-cli/tests/gap121_granularity.rs",
+          "exit_code": 0,
+          "output_sha": "18680aed4ed5cf59802bda290fc73f69ddf4c8341dff3f3f7b5eb6ac65a76c6c"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; sed -n 1820,1960p hilo-graph/src/resolution.rs",
+          "exit_code": 0,
+          "output_sha": "0a03bfcd190d7ea76d7763bd320518545815e5ea999e7ec381debfd5c4ed0102"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; grep -rn \"example.com/demo\\|github.com/foo/bar\" --include=*.rs hilo-graph/src hilo-cli/tests | head -20; echo \"=== go import tests in parser\"; grep -n \"fn go_imports\" -A 25 hilo-graph/src/parser.rs | head -80",
+          "exit_code": 0,
+          "output_sha": "e5b3c0a6b0506057344273426756673724113237fa7ffb5e691b1637c8a26b52"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; sed -n 2325,2370p hilo-graph/src/resolution.rs; echo \"=== 2590\"; sed -n 2590,2620p hilo-graph/src/resolution.rs",
+          "exit_code": 0,
+          "output_sha": "be195ef6ca129be2208c64460d5a9552b455ab62e499fd1747899c2ddde1e403"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; setsid nohup cargo test -p hilo-graph --lib > /tmp/graphlib.log 2>&1 < /dev/null & sleep 28; tail -5 /tmp/graphlib.log",
+          "exit_code": 0,
+          "output_sha": "fa26a84efee6f09623927cecadb125c9dc0568d3070cf9443674e366f7cbb93e"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; setsid nohup cargo test -p hilo_graph --lib > /tmp/graphlib.log 2>&1 < /dev/null & sleep 29; tail -5 /tmp/graphlib.log",
+          "exit_code": 0,
+          "output_sha": "dd43ed0339fdfd8963b6d910464b0bd492a15e5050cfd17df7a113572cc629b4"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; tail -20 /tmp/graphlib.log; echo \"=== go tests\"; grep -E \"go_|module_path|resolution::tests\" /tmp/graphlib.log | head -40",
+          "exit_code": 0,
+          "output_sha": "5a00de43eb93525db61e25f49c9aeeb7758657e3c24a9412a10f1c8c5c654e29"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -E \"^test result|FAILED|failures:\" /tmp/graphlib.log | head -10; echo \"=== count\"; grep -c \"^test \" /tmp/graphlib.log",
+          "exit_code": 0,
+          "output_sha": "1a302ff457edc654217cbdfe0dd77d353d6fd88f9bc7e0623bf311abe181d2a6"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 20; grep -E \"^test result|FAILED|failures:\" /tmp/graphlib.log | head -10; tail -3 /tmp/graphlib.log",
+          "exit_code": 0,
+          "output_sha": "86b31ceb353afcd541036adace0476990a822b59a7ab74c98dc4f9c71f00f3a5"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 29; grep -E \"^test result|FAILED|failures:\" /tmp/graphlib.log | head; tail -2 /tmp/graphlib.log",
+          "exit_code": 0,
+          "output_sha": "e9d047ea11e7051a752d79b3b3018c73d6bac6f6a9953ce2690a95fa027eca30"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 29; grep -E \"^test result|FAILED|failures:\" /tmp/graphlib.log | head; tail -2 /tmp/graphlib.log",
+          "exit_code": 0,
+          "output_sha": "4e0e3f140e24064fe74467e98d0ac5f29e97143ea71b3ba110275dc8ae42b4d4"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; grep -E \"^test result|FAILED|failures:\" /tmp/graphlib.log | head; echo \"---\"; tail -3 /tmp/graphlib.log; pgrep -f \"hilo_graph\" | head -2",
+          "exit_code": 0,
+          "output_sha": "242423e85d1df6718b071bd536663aff1f397ff6badd406a02f43091d48dfe19"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 28; grep -E \"^test result|FAILED|failures:\" /tmp/graphlib.log | head; echo \"---\"; tail -2 /tmp/graphlib.log",
+          "exit_code": 0,
+          "output_sha": "a87fc1fdadce00177bf90130b3ed3804dd91ee60104a271e6a6d6bc11c490287"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: cargo test -p hilo-cli --test dfwarpfs173_go => \\\"test result: ok. 2 passed; 0 failed\\\" (single_word_go_module_import_is_a_pkg_dependency ok; initialized_cold_graph_impact_never_reports_success_for_missing_warm ok). cargo test -p hilo_graph --lib => \\\"test result: ok. 585 passed; 0 failed\\\" incl. resolution::tests::go_module_path_reads_single_word_module, resolves_nested_go_file_to_module_package (example.com/demo URL-shaped), go_and_rust_resolution_coexist_in_one_tree, java_resolution_coexists_with_other_languages. parser.rs:2323 asserts !targets.contains(\\\"std:probea/util\\\").\", \"key\": \"verified_0\"}",
+          "exit_code": 0,
+          "output_sha": "f8897db40483f9fbe090179692255b176dd3293b04b3efd9c51b72f17e2e3a77"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; grep -rn \"std:\" --include=*.rs hilo-graph/src/impact.rs | head -20",
+          "exit_code": 0,
+          "output_sha": "ef1b689ca1817d5853a874d023581136680e5268556dc718db70d74c1c07643b"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; sed -n 60,80p hilo-graph/src/impact.rs; echo \"=== is_symbol_node callers\"; grep -rn \"is_symbol_node\" --include=*.rs hilo-graph/src hilo-cli/src | head -20",
+          "exit_code": 0,
+          "output_sha": "235dbd894c33e1bb5943bf23bd2360ecf60420c6cb364623120e4f28c8edf5f5"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; sed -n 360,395p hilo-graph/src/resolution.rs",
+          "exit_code": 0,
+          "output_sha": "e34340a5eea036e20c60dcd056f77fc607f7a1fc9e5b99953b085166da8377c4"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; ls /var/tmp/hermes-target/debug/hilo 2>/dev/null; find / -name \"hilo\" -type f -perm -u+x 2>/dev/null | grep -v proc | head -5",
+          "exit_code": -15,
+          "output_sha": "d3e8f7d10f51595df1eab892eb8e36f4598ae14ebb33e2294b5afd3917eb6dc6"
+        },
+        {
+          "tool": "run_command",
+          "command": "set -e; R=$(mktemp -d /tmp/df173-manual-XXXX); cd $R; printf 'module probea\\n\\ngo 1.23\\n' > go.mod; mkdir -p app util; printf 'package main\\n\\nimport \"probea/util\"\\n\\nfunc main() { util.Value() }\\n' > app/main.go; printf 'package util\\n\\nfunc Value() {}\\n' > util/util.go; H=/var/tmp/hermes-target/debug/hilo; $H init >/dev/null 2>&1; echo \"init rc=$?\"; $H graph warm >/dev/null 2>&1; echo \"warm rc=$?\"; echo \"=== impact\"; $H graph impact util/util.go; echo \"impact rc=$?\"; echo \"=== edges\"; cat .vfs/graph/edges.jsonl 2>/dev/null | head -20; echo \"=== grep std:probea\"; grep -c \"std:probea\" .vfs/graph/edges.jsonl || echo \"none\"; echo \"REPO=$R\"",
+          "exit_code": 0,
+          "output_sha": "67ec3e7adaf258b786484303f6771ff8ff811aa7871d4f30d636aa000996bf44"
+        },
+        {
+          "tool": "run_command",
+          "command": "R=$(mktemp -d /tmp/df173-cold-XXXX); cd $R; printf 'package main\\n' > main.go; H=/var/tmp/hermes-target/debug/hilo; $H init >/dev/null 2>&1; echo \"init rc=$?\"; echo \"=== cold impact\"; $H graph impact main.go; echo \"COLD_IMPACT_RC=$?\"; echo \"=== stderr only\"; $H graph impact main.go 2>&1 >/dev/null; echo \"REPO=$R\"",
+          "exit_code": 0,
+          "output_sha": "fa05f426e1912c5114b0403c11c7952f664052fbe3679ba01a93023ed7c46110"
+        },
+        {
+          "tool": "run_command",
+          "command": "R=$(mktemp -d /tmp/df173-url-XXXX); cd $R; printf 'module github.com/totalwindupflightsystems/consensus\\n\\ngo 1.23\\n' > go.mod; mkdir -p internal/harness cmd; printf 'package main\\n\\nimport \"github.com/totalwindupflightsystems/consensus/internal/harness\"\\n\\nfunc main() { harness.Run() }\\n' > cmd/main.go; printf 'package harness\\n\\nfunc Run() {}\\n' > internal/harness/planning.go; H=/var/tmp/hermes-target/debug/hilo; $H init >/dev/null 2>&1; $H graph warm >/dev/null 2>&1; echo \"warm rc=$?\"; echo \"=== impact\"; $H graph impact internal/harness/planning.go; echo \"rc=$?\"; echo \"=== edges\"; cat .vfs/graph/edges.jsonl; echo \"REPO=$R\"",
+          "exit_code": 0,
+          "output_sha": "58ed01692c2558af3376ad956afbecf9b5538033bb85ce259ddea5e4e18e6220"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; grep -n \"pub fn compute_impact\\b\" -A 15 hilo-graph/src/impact.rs | head -30; echo \"=== GraphResult\"; grep -rn \"pub type GraphResult\" hilo-graph/src/*.rs",
+          "exit_code": 0,
+          "output_sha": "3b91fe0229a3822c46fa1c20c4957cee9fb55a011a1bf31c850861b6e0d89ff4"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; grep -rn \"compute_impact\\b\\|compute_impact_at\\|compute_impact_with_external\" --include=*.rs hilo-graph/src hilo-cli/src hilo-mcp/src hilo-triggers/src | grep -v \"^hilo-graph/src/impact.rs:6[0-9][0-9]\" | head -20",
+          "exit_code": 0,
+          "output_sha": "4ec5670a53a415150e3355f3bb5aa145010179fe43687498287f16983b996ef0"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; sed -n 3030,3050p hilo-graph/src/graph.rs; echo \"=== 3455-3470\"; sed -n 3450,3475p hilo-graph/src/graph.rs",
+          "exit_code": 0,
+          "output_sha": "b2d50e67ed683fbbd8de5ebc60fbff62e9883af7b88db6a09345d1ae3364706d"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; setsid nohup cargo clippy -p hilo_graph -p hilo-cli --all-targets -- -D warnings > /tmp/clippy.log 2>&1 < /dev/null & sleep 29; tail -5 /tmp/clippy.log",
+          "exit_code": 0,
+          "output_sha": "ac170df1eeba0b4e6ce61ad3e13d4aa54cdf67e3424c537ac6f458c67ce8ef1f"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 29; tail -8 /tmp/clippy.log; echo \"=== warnings/errors\"; grep -cE \"^(warning|error)\" /tmp/clippy.log",
+          "exit_code": 1,
+          "output_sha": "26e8c438558b6b50086aee4b7119d72fb005232d3db6a07f2ddf8b9bf4cb5c16"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: cargo test -p hilo-cli --test dfwarpfs173_go => \\\"test result: ok. 2 passed; 0 failed\\\" (single_word_go_module_import_is_a_pkg_dependency ok; initialized_cold_graph_impact_never_reports_success_for_missing_warm ok). cargo test -p hilo_graph --lib => \\\"test result: ok. 585 passed; 0 failed\\\" incl. resolution::tests::go_module_path_reads_single_word_module, resolves_nested_go_file_to_module_package (example.com/demo URL-shaped), go_and_rust_resolution_coexist_in_one_tree, java_resolution_coexists_with_other_languages. parser.rs:2323 asserts !targets.contains(\\\"std:probea/util\\\"). Manual E2E: single-word module probea -> edges.jsonl {\\\"from\\\":\\\"app/main.go\\\",\\\"to\\\":\\\"pkg:probea/util\\\",...}, impact lists app/main.go, grep std:probea = 0. Cold init impact => \\\"error: No complete graph warm found...\\\" rc=1. URL-shaped consensus module => pkg:github.com/totalwindupflightsystems/consensus/internal/harness, impact lists cmd/main.go rc=0. cargo clippy -p hilo_graph -p hilo-cli --all-targets -- -D warnings => Finished, 0 warnings/errors.\", \"key\": \"verified_0\"}",
+          "exit_code": 0,
+          "output_sha": "c628acc9e504f4ca59b8438f1f4afe78b5d732d6f9e4ba80a10240608dcfaf28"
+        },
+        {
+          "tool": "read_lsp_diagnostics",
+          "command": "read_lsp_diagnostics {}",
+          "exit_code": 0,
+          "output_sha": "ef420cbeebd549fc8c5438d6ea41a3e521fa58e29563c4cae80f491b9bfe2143"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; grep -rn \"go_module_path_for_file\\|go_module_for_file\" --include=*.rs . | grep -v target",
+          "exit_code": 0,
+          "output_sha": "c2b4e67fa16e60d539ee8a597b8509293a76f7ce42539b64f18fffec2cda6d39"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; sed -n 320,345p hilo-graph/src/parser.rs",
+          "exit_code": 0,
+          "output_sha": "de01227ac7842664ce560401ebbc0e4942f4dceb91746d983be27d82f4c2c883"
+        },
+        {
+          "tool": "run_command",
+          "command": "R=$(mktemp -d /tmp/df173-jit-XXXX); cd $R; printf 'module probea\\n\\ngo 1.23\\n' > go.mod; mkdir -p app util; printf 'package main\\n\\nimport \"probea/util\"\\n\\nfunc main() { util.Value() }\\n' > app/main.go; printf 'package util\\n\\nfunc Value() {}\\n' > util/util.go; H=/var/tmp/hermes-target/debug/hilo; $H init >/dev/null 2>&1; echo \"=== JIT impact (no warm)\"; $H graph impact util/util.go; echo \"rc=$?\"; echo \"=== edges\"; cat .vfs/graph/edges.jsonl 2>/dev/null; echo \"=== std:probea count\"; grep -c \"std:probea\" .vfs/graph/edges.jsonl 2>/dev/null || echo 0",
+          "exit_code": 0,
+          "output_sha": "c41de98faaef15f988935c84411613662aecce18f17238e800e0e2a33bdb0674"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; grep -rn \"parse_imports\" --include=*.rs hilo-graph/src hilo-mcp/src hilo-cli/src | head -10",
+          "exit_code": 0,
+          "output_sha": "e5517583aa80aaf43201609189b99381618ef7823903f2db62851f1f51d70e27"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; grep -n \"fn go_and_rust_resolution_coexist_in_one_tree\" -A 30 hilo-graph/src/resolution.rs | head -40",
+          "exit_code": 0,
+          "output_sha": "2a9a5ccaa5243630797465bf0b46de12470bfd6108a86909c9a1f05e94e9faaa"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-04-57-03-a1/integration; grep -n \"fn resolves_go_file_in_module_root\" -A 16 hilo-graph/src/resolution.rs",
+          "exit_code": 0,
+          "output_sha": "547975234ea89ba8460ce637b8916ca477c8afb718a0c954dbe32c8039ff0894"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"FINAL: All proof points verified. (1) focused regression test passes: cargo test -p hilo-cli --test dfwarpfs173_go => \\\"test result: ok. 2 passed; 0 failed\\\". (2) cold graph impact exits nonzero: manual run => \\\"error: No complete graph warm found...\\\" rc=1. (3) URL-shaped module resolution covered: manual consensus-style run => pkg:github.com/totalwindupflightsystems/consensus/internal/harness, impact lists cmd/main.go rc=0; plus 585 hilo_graph lib tests pass. (4) no std pseudo-node: edges.jsonl has pkg:probea/util, grep std:probea = 0; parser.rs:2323 asserts !targets.contains(\\\"std:probea/util\\\"). clippy -D warnings clean. LSP diagnostics empty.\", \"key\": \"final\"}",
+          "exit_code": 0,
+          "output_sha": "11eb28a3a4bd093cb02582ab3efe783852e2771d7fc544080ed7c77a6acc5a56"
+        }
+      ]
+    }
+  },
+  "review": {
+    "reviewer_email": "totalwindupflightsystems@gmail.com",
+    "reviewer_name": "totalwindupflightsystems",
+    "commit_author_email": "totalwindupflightsystems@gmail.com",
+    "commit_author_name": "totalwindupflightsystems",
+    "self_review": true,
+    "findings": [],
+    "summary": "The diff only appends a completed task record to .gitreins/tasks.yaml with no code changes, so there is nothing to review for correctness, wiring, tests, or convention drift."
+  },
+  "summary": "Stage tier2: PASS\n  COMPLETE\n  \u2713 PROOF: The committed DF-WARPFS-173 regression test passes for a single-word Go module and confirms util/util.go impact lists app/main.go; PROOF: initialized cold graph impact either succeeds via auto-parse or exits nonzero without reporting success for a hard graph error; PROOF: consensus-style URL-shaped module resolution remains covered by existing graph behavior; FAILIF: the module-local import is emitted as a std pseudo-node, the focused regression test fails, or a hard impact error exits zero.: All four proof points verified with actual command output. (1) Focused regression test: `cargo test -p hilo-cli --test dfwarpfs173_go` => \"test result: ok. 2 passed; 0 failed; 0 ignored\" \u2014 `single_word_go_module_import_is_a_pkg_dependency ... ok` and `initialized_cold_graph_impact_never_reports_success_for_missing_warm ... ok`. The test (hilo-cli/tests/dfwarpfs173_go.rs:44-83) builds a `module probea` tree, warms, runs `graph impact util/util.go`, asserts stdout contains `app/main.go` and does NOT contain `std:probea/util`. (2) Cold graph: manual run in a fresh `hilo init`-ed repo => `error: No complete graph warm found. Run `hilo graph warm` first (project root: /tmp/df173-cold-MYp3).` with `COLD_IMPACT_RC=1` \u2014 nonzero, no false success. Gate is hilo-cli/src/commands/graph.rs:2064-2067 (`anyhow::bail!` when a project manifest exists but no freshness state). (3) URL-shaped module: manual consensus-style run (`module github.com/totalwindupflightsystems/consensus`) => edges.jsonl `{\"from\":\"cmd/main.go\",\"to\":\"pkg:github.com/totalwindupflightsystems/consensus/internal/harness\",\"rel\":\"imports\",...}` and `graph impact internal/harness/planning.go` lists `cmd/main.go` rc=0. Existing coverage retained: `cargo test -p hilo_graph --lib` => \"test result: ok. 585 passed; 0 failed\" including `resolution::tests::resolves_nested_go_file_to_module_package` (example.com/demo), `resolves_go_file_in_module_root`, `go_and_rust_resolution_coexist_in_one_tree`, `java_resolution_coexists_with_other_languages`, and the new `go_module_path_reads_single_word_module`. (4) No std pseudo-node: manual single-word run produced edges.jsonl `{\"from\":\"app/main.go\",\"to\":\"pkg:probea/util\",...}` and `grep -c \"std:probea\"` = 0; hilo-graph/src/parser.rs:2323 asserts `!targets.contains(&\"std:probea/util\")`. The classifier fix is at hilo-graph/src/parser.rs:499-505 (`classify_go` checks module prefix before the dot heuristic) and is wired from the single Go import entrypoint at hilo-graph/src/parser.rs:329-337. The hard-error change at hilo-graph/src/impact.rs:686 and :917 replaces `.ok()` with `?`, propagating `GraphResult` instead of silently degrading. `cargo clippy -p hilo_graph -p hilo-cli --all-targets -- -D warnings` => \"Finished `dev` profile\" with 0 warnings/errors; LSP diagnostics empty. [resolution 0.03; util/util.go, app/main.go]\nThe DF-WARPFS-173 fix is correctly wired from the Go import parser through to `graph impact`: the focused regression test passes, module-local imports emit `pkg:probea/util` rather than `std:probea/util`, cold-graph impact exits 1 with a hard error, and URL-shaped module resolution is preserved across 585 passing hilo_graph tests.\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-11-14T05:33:21.204715",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-11-14T05:33:21.227122+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 12384,
+        "truncated": false,
+        "source": "git show 84c0267029ec"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 1056,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "DF-WARPFS-173"
+  }
+}
