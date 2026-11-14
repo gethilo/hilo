@@ -127,6 +127,13 @@ pub struct GraphStats {
     /// Count of distinct real-file `from` values (source files).
     #[serde(skip)]
     pub unique_files: i64,
+    /// Count of distinct real-file `from` values that actually have edges.
+    ///
+    /// This remains separate from [`GraphStats::total_files`], which is the
+    /// disk-backed discovered-file census and therefore includes edge-less
+    /// files after a completed warm.
+    #[serde(skip)]
+    pub edge_source_files: i64,
     /// Count of distinct `to` values (unique dependencies).
     #[serde(skip)]
     pub unique_dependencies: i64,
@@ -2824,6 +2831,7 @@ impl GraphDB {
             total_edges,
             total_files: unique_files,
             unique_files,
+            edge_source_files,
             unique_dependencies,
             most_connected,
             orphans,

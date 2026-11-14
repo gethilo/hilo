@@ -2142,12 +2142,10 @@ pub fn run_stats(limit: usize) -> Result<()> {
         None => println!("Total edges: {}", stats.total_edges),
     }
     println!("Total files: {}", stats.total_files);
-    // DF-WARPFS-43: reconcile the edge-derived census against warm's own
-    // end-of-warm accounting. The census (and Total files above) counts
-    // DISTINCT edge sources in the graph; warm's Coverage line counts every
-    // discovered file. Zero-edge files never enter the census, so the two
-    // numbers disagree by design on most trees — surface both definitions
-    // and the delta instead of two headline numbers that look contradictory.
+    // DF-WARPFS-43: reconcile the distinct edge-source census against warm's
+    // end-of-warm accounting. `Total files` is the discovered-file total and
+    // includes edge-less files; the File census intentionally uses the
+    // separate edge-source quantity so the comparison remains truthful.
     // DF-WARPFS-170: warm prunes sources whose file is gone, so a census that
     // is still ahead of the ledger now means the graph predates the last warm
     // (or was never warmed), not that the inventory is permanently stale.
@@ -2169,7 +2167,7 @@ pub fn run_stats(limit: usize) -> Result<()> {
             if let (Some(discovered), Some(contributes), Some(no_imports), Some(facades)) =
                 (discovered, contributes, no_imports, facades)
             {
-                let census = stats.total_files.max(0) as u64;
+                let census = stats.edge_source_files.max(0) as u64;
                 let zero_edge = no_imports + facades + parse_miss;
                 // Only name the parse-miss bucket once there is one, so a
                 // corpus that parses cleanly keeps its established line.
