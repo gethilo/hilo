@@ -156,6 +156,112 @@ fn test_signal_understand_traverses_graph() {
     );
 }
 
+// ch:trace row=DF-WARPFS-118 spec=none:board-acceptance wave=none:serial-implementation test=hilo-graph/tests/signal_test.rs::understand_detail_owner_precedes_example_files_in_detail_order doc=none:board-acceptance prompt=/home/kara/.hermes/cache/scratch/warpfs-foreman-2026-11-14-16-47-33-attempt-1/brief-DF-WARPFS-118.txt evidence=hilo-graph/tests/signal_test.rs witness=none:foreman-verifies-after-merge verdict=none:foreman-verifies-after-merge commit=none:worker-commit memory=none:foreman-closeout
+// STATUS: partial
+// TIER: T2
+// EVIDENCE: focused regression test plus commit
+
+#[test]
+fn understand_detail_owner_precedes_example_files_in_detail_order() {
+    // DF-WARPFS-118: path-exact example anchors must not consume DETAIL ahead
+    // of the implementation file that owns the request-flow symbols.
+    let db = GraphDB::open(":memory:").unwrap();
+    let mut edges = vec![
+        edge(
+            "examples/celery/src/task_app/views.py",
+            "pkg:task_app",
+            "imports",
+        ),
+        edge(
+            "examples/javascript/js_example/views.py",
+            "pkg:js_example",
+            "imports",
+        ),
+        edge("src/flask/views.py", "pkg:flask.globals", "imports"),
+        edge("src/flask/app.py", "src/flask/views.py", "imports"),
+        edge("src/flask/helpers.py", "src/flask/views.py", "imports"),
+    ];
+    for dep in [
+        "pkg:flask.ctx",
+        "pkg:flask.globals",
+        "pkg:flask.helpers",
+        "pkg:flask.sessions",
+        "pkg:flask.templating",
+        "pkg:flask.wrappers",
+    ] {
+        edges.push(edge("src/flask/app.py", dep, "imports"));
+    }
+    db.insert_edges(&edges).unwrap();
+
+    let reader = |path: &str| -> Option<String> {
+        let source = match path {
+            "src/flask/app.py" => {
+                "def wsgi_app(self, environ):\n    pass\n\ndef full_dispatch_request(self):\n    pass\n\ndef finalize_request(self, rv):\n    return rv\n"
+            }
+            "src/flask/views.py" => "def render_view():\n    pass\n",
+            "src/flask/helpers.py" => "def make_response():\n    pass\n",
+            _ => "def handler():\n    pass\n",
+        };
+        Some(source.to_string())
+    };
+    let opts = SignalOpts {
+        seed_limit: 5,
+        map_exclude_paths: vec!["examples".to_string()],
+        ..Default::default()
+    };
+    let result = understand_with_source(
+        &db,
+        "request flow WSGI->view->response",
+        &opts,
+        Some(reader),
+    )
+    .unwrap();
+
+    let detail_paths: Vec<&str> = result
+        .files
+        .iter()
+        .filter(|file| file.tier == Tier::Detail)
+        .map(|file| file.path.as_str())
+        .collect();
+    let owner = detail_paths
+        .iter()
+        .position(|path| *path == "src/flask/app.py")
+        .expect("the task-owning app.py must be selected for DETAIL");
+    let example_indices: Vec<usize> = [
+        "examples/celery/src/task_app/views.py",
+        "examples/javascript/js_example/views.py",
+    ]
+    .iter()
+    .filter_map(|example| detail_paths.iter().position(|path| path == example))
+    .collect();
+    assert!(
+        example_indices.iter().all(|index| owner < *index),
+        "owner must precede lower-priority examples: {detail_paths:?}"
+    );
+
+    let detail_headers: Vec<&str> = result
+        .text
+        .split("## DETAIL")
+        .nth(1)
+        .unwrap_or("")
+        .lines()
+        .filter(|line| line.contains(" [provenance="))
+        .collect();
+    let owner_header = detail_headers
+        .iter()
+        .position(|line| line.starts_with("src/flask/app.py "))
+        .expect("the owner must render a DETAIL block");
+    let example_headers: Vec<usize> = detail_headers
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| line.starts_with("examples/").then_some(index))
+        .collect();
+    assert!(
+        example_headers.iter().all(|index| owner_header < *index),
+        "rendered DETAIL must put the owner before examples: {detail_headers:?}"
+    );
+}
+
 #[test]
 fn test_signal_understand_tokens_estimate_within_budget() {
     let db = GraphDB::open(":memory:").unwrap();
