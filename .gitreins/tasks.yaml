@@ -2700,8 +2700,9 @@ tasks:
     output and guard log from the committed tree under the fleet default environment;
     FAILIF: cargo still resolves through an unusable ambient path, or the guard labels
     dependency-resolution failure as clippy findings'
-  status: in_progress
+  status: complete
   created_at: '2026-11-10T17:30:36.937850+00:00'
+  completed_at: '2026-11-14T09:30:56.618190+00:00'
 - id: DF-WARPFS-79-R2
   title: Repair non-empty invalid graph cache
   criteria:
