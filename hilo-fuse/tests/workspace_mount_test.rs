@@ -19,11 +19,16 @@ use std::path::PathBuf;
 use hilo_core::workspace::MountEntry;
 use hilo_fuse::permissions::PermissionEngine;
 use hilo_fuse::workspace_mount::{
-    ws_backing_file_for_test, ws_child_names_for_test, ws_create_for_test,
-    ws_inode_for_path_for_test, ws_populate_dir_for_test, ws_root_ino_for_test,
-    ws_setattr_size_for_test, ws_write_for_test, WorkspaceMount,
+    ws_backing_file_for_test, ws_child_names_for_test, ws_create_for_test, ws_get_xattr_for_test,
+    ws_inode_for_path_for_test, ws_list_xattrs_for_test, ws_populate_dir_for_test,
+    ws_root_ino_for_test, ws_setattr_size_for_test, ws_write_for_test, WorkspaceMount,
 };
 use hilo_fuse::FuseConfig;
+
+// ch:trace row=DF-WARPFS-70 spec=specs/warpfs-spec.md#metadata-or-none:reason test=hilo-fuse/tests/workspace_mount_test.rs::xattrs_written_before_mount_are_visible_through_workspace_mount doc=README.md evidence=cargo test -p hilo_fuse --test workspace_mount_test witness=none:live-fuse-not-available verdict=none:foreman-judge-pending commit=none:worker-commit-pending memory=none:foreman-closeout-pending
+// STATUS: complete
+// TIER: T1
+// EVIDENCE: cargo test -p hilo_fuse --test workspace_mount_test
 
 /// A backing repo with a file at depth 0, 1 and 2, mounted as `demo`.
 fn fixture() -> (tempfile::TempDir, WorkspaceMount) {
@@ -286,6 +291,29 @@ fn ws138_create_materializes_backing_file_and_lookup_sees_it() {
     let n = ws_write_for_test(&fs, ino, 0, b"hi").expect("write to created file");
     assert_eq!(n, 2);
     assert_eq!(fs::read(&backing_file).unwrap(), b"hi");
+}
+
+#[test]
+fn xattrs_written_before_mount_are_visible_through_workspace_mount() {
+    let (backing, fs) = writable_fixture(false);
+    hilo_metadata::set_vfs_xattr(&backing.path().join("README.md"), "role", "library").unwrap();
+
+    let ino = readme_ino(&fs);
+    assert_eq!(
+        ws_get_xattr_for_test(&fs, ino, "user.vfs.role"),
+        Ok(Some("library".to_string()))
+    );
+    assert_eq!(
+        ws_list_xattrs_for_test(&fs, ino),
+        Ok(vec!["user.vfs.role".to_string()])
+    );
+}
+
+#[test]
+fn missing_workspace_xattr_remains_absent() {
+    let (_backing, fs) = writable_fixture(false);
+    let ino = readme_ino(&fs);
+    assert_eq!(ws_get_xattr_for_test(&fs, ino, "user.vfs.role"), Ok(None));
 }
 
 #[test]

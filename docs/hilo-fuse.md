@@ -62,6 +62,12 @@ hilo mount /mnt/hilo --triggers
 hilo workspace mount
 ```
 
+FUSE xattr behavior: `getxattr` and `listxattr` read the backing file's
+`user.vfs.*` attributes, so values written before mount (for example with
+`hilo meta`) are visible through the mounted path. The default mount is
+read-only; xattr writes through the mount are refused. Write metadata on the
+backing path and remount when a fresh mount view is needed.
+
 Neither default mount requests `allow_other`, so both work on a stock
 Debian/Ubuntu box where `/etc/fuse.conf` leaves `user_allow_other` commented
 out (DF-WARPFS-6, DF-WARPFS-52). Auto-unmount is only emitted alongside an
