@@ -33,6 +33,14 @@ Extended attribute (xattr) read/write and JSONL inventory file I/O. The shared `
 | `read_mounts(path) -> Result<Vec<BackendMount>>` | Read backend mounts from mounts.yaml |
 | `write_mounts(path, mounts) -> Result<()>` | Write backend mounts to mounts.yaml |
 
+## FUSE mount behavior
+
+The FUSE mount passes through `user.vfs.*` xattrs from each backing file, so
+metadata written with the CLI before mounting is available through
+`getfattr` on the mounted path. The default mount is read-only and does not
+provide an xattr write path; use `hilo meta` on the backing file, then remount
+when the mounted view must reflect a changed value.
+
 ## Usage Example
 
 ```rust

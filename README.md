@@ -486,6 +486,12 @@ getfattr -n user.vfs.role /mnt/vfs/src/main.rs
 hilo serve --mcp
 ```
 
+The FUSE mount reads `user.vfs.*` attributes from the backing files, so
+attributes set before mounting (for example with `hilo meta`) are visible
+through `getfattr` on the mounted path. The default mount is read-only:
+metadata writes through the mount are refused; set metadata on the backing
+path with `hilo meta`; reads through the mount observe the backing file.
+
 For the init-and-graph flow above, commit these source-of-truth paths:
 
 - `.vfs/manifest.yaml`
@@ -592,11 +598,12 @@ disclosed, never silently consumed. Both accepted manifest schemas — and the
 key-by-key mapping between them — are documented in
 [docs/workspace.md](docs/workspace.md).
 
-`hilo workspace mount` is a plain union of backing files: it does not expose
-the backing files' `user.vfs.*` extended attributes or a workspace-level
-`.vfs/` graph. Use the backing repository paths with `hilo meta` or graph
-commands when you need Hilo metadata; do not expect those annotations through
-the workspace mount.
+`hilo workspace mount` is a plain union of backing files. It passes through the
+backing files' `user.vfs.*` extended attributes, but the default workspace mount
+is read-only, so metadata writes through the mount are refused. Set metadata on
+the backing repository path with `hilo meta` and read it through the mount after
+the change; the workspace mount does not expose a separate workspace-level
+`.vfs/` graph.
 
 `hilo workspace mount` does not need `user_allow_other` in `/etc/fuse.conf`:
 a single-user mount never asks for `allow_other`, so it works on a stock

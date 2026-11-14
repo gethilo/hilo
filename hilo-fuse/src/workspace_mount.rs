@@ -285,6 +285,34 @@ impl WorkspaceMount {
         self.resolve_to_real(&entry.path)
     }
 
+    /// Resolve the backing file used by the FUSE xattr operations.
+    ///
+    /// Xattrs belong to the backing file, not to the workspace inode table.
+    /// Keeping this lookup in the same path used by the Filesystem methods
+    /// makes pre-mount `hilo meta`/`setfattr` values visible through the
+    /// workspace mount without creating a second metadata cache.
+    fn xattr_backing_path(&self, ino: u64) -> Result<PathBuf, i32> {
+        let files = self.files.read().unwrap();
+        let entry = match files.get(&ino) {
+            Some(entry) => entry.clone(),
+            None => return Err(ENOENT),
+        };
+        drop(files);
+        self.backing_path_for(&entry)
+            .map(|(_, path)| path)
+            .ok_or(ENOENT)
+    }
+
+    fn get_xattr_for_inode(&self, ino: u64, name: &str) -> Result<Option<String>, i32> {
+        let path = self.xattr_backing_path(ino)?;
+        hilo_metadata::get_vfs_xattr(&path, name).map_err(|_| ENODATA)
+    }
+
+    fn list_xattrs_for_inode(&self, ino: u64) -> Result<Vec<String>, i32> {
+        let path = self.xattr_backing_path(ino)?;
+        hilo_metadata::list_vfs_xattrs(&path).map_err(|_| ENODATA)
+    }
+
     /// Write-through core for `write()`: open the backing file and write the
     /// bytes at the requested offset. All failures after the gates pass map
     /// to EIO with a stderr diagnostic (mirrors ops.rs §8.4).
@@ -696,19 +724,42 @@ impl Filesystem for WorkspaceMount {
         reply.ok();
     }
 
-    fn getxattr(
-        &mut self,
-        _req: &Request,
-        _ino: u64,
-        _name: &OsStr,
-        _size: u32,
-        reply: ReplyXattr,
-    ) {
-        reply.error(ENODATA);
+    fn getxattr(&mut self, _req: &Request, ino: u64, name: &OsStr, size: u32, reply: ReplyXattr) {
+        let name = match name.to_str() {
+            Some(name) => name,
+            None => {
+                reply.error(ENODATA);
+                return;
+            }
+        };
+        match self.get_xattr_for_inode(ino, name) {
+            Ok(Some(value)) if size == 0 => reply.size(value.len() as u32),
+            Ok(Some(value)) => reply.data(value.as_bytes()),
+            Ok(None) | Err(ENODATA) => reply.error(ENODATA),
+            Err(errno) => reply.error(errno),
+        }
     }
 
-    fn listxattr(&mut self, _req: &Request, _ino: u64, _size: u32, reply: ReplyXattr) {
-        reply.error(ENODATA);
+    fn listxattr(&mut self, _req: &Request, ino: u64, size: u32, reply: ReplyXattr) {
+        let attrs = match self.list_xattrs_for_inode(ino) {
+            Ok(attrs) => attrs,
+            Err(errno) => {
+                reply.error(errno);
+                return;
+            }
+        };
+        let mut list = attrs.join("\0");
+        if !list.is_empty() {
+            list.push('\0');
+        }
+        let bytes = list.as_bytes();
+        if size == 0 {
+            reply.size(bytes.len() as u32);
+        } else if bytes.len() <= size as usize {
+            reply.data(bytes);
+        } else {
+            reply.error(libc::ERANGE);
+        }
     }
 
     fn write(
@@ -1039,6 +1090,20 @@ pub fn ws_backing_file_for_test(fs: &WorkspaceMount, rel: &str) -> Option<PathBu
 #[doc(hidden)]
 pub fn ws_root_ino_for_test() -> u64 {
     ROOT_INO
+}
+
+#[doc(hidden)]
+pub fn ws_get_xattr_for_test(
+    fs: &WorkspaceMount,
+    ino: u64,
+    name: &str,
+) -> Result<Option<String>, i32> {
+    fs.get_xattr_for_inode(ino, name)
+}
+
+#[doc(hidden)]
+pub fn ws_list_xattrs_for_test(fs: &WorkspaceMount, ino: u64) -> Result<Vec<String>, i32> {
+    fs.list_xattrs_for_inode(ino)
 }
 
 #[doc(hidden)]
