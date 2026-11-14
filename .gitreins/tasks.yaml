@@ -2768,3 +2768,16 @@ tasks:
   status: complete
   created_at: '2026-11-13T22:07:44.885845+00:00'
   completed_at: '2026-11-13T22:07:45.416789+00:00'
+- id: DF-WARPFS-173
+  title: Classify Go module-local imports and hard impact errors
+  criteria:
+  - 'PROOF: The committed DF-WARPFS-173 regression test passes for a single-word Go
+    module and confirms util/util.go impact lists app/main.go; PROOF: initialized
+    cold graph impact either succeeds via auto-parse or exits nonzero without reporting
+    success for a hard graph error; PROOF: consensus-style URL-shaped module resolution
+    remains covered by existing graph behavior; FAILIF: the module-local import is
+    emitted as a std pseudo-node, the focused regression test fails, or a hard impact
+    error exits zero.'
+  status: complete
+  created_at: '2026-11-14T05:07:48.220935+00:00'
+  completed_at: '2026-11-14T05:18:18.582540+00:00'
