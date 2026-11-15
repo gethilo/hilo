@@ -39392,7 +39392,6 @@
 {"from":"hilo-cli/tests/gap121_granularity.rs","to":"pkg:std::path::Path","rel":"tested_by","provenance":"ast_exact","confidence":1.0}
 {"from":"hilo-cli/tests/gap121_granularity.rs","to":"pkg:std::path::PathBuf","rel":"imports","provenance":"ast_exact","confidence":1.0}
 {"from":"hilo-cli/tests/gap121_granularity.rs","to":"pkg:std::path::PathBuf","rel":"tested_by","provenance":"ast_exact","confidence":1.0}
-{"from":"hilo-cli/tests/gap121_granularity.rs","to":"pkg:std","rel":"imports","provenance":"ast_exact","confidence":1.0}
 {"from":"hilo-cli/tests/gap121_granularity.rs","to":"pkg:std::time::SystemTime","rel":"imports","provenance":"ast_exact","confidence":1.0}
 {"from":"hilo-cli/tests/gap121_granularity.rs","to":"pkg:std::time::SystemTime","rel":"tested_by","provenance":"ast_exact","confidence":1.0}
 {"from":"hilo-cli/tests/gap121_granularity.rs","to":"pkg:std::time::UNIX_EPOCH","rel":"imports","provenance":"ast_exact","confidence":1.0}
