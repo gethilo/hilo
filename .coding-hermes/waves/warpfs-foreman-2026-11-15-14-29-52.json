@@ -1,0 +1,16 @@
+{
+  "tick_id": "warpfs-foreman-2026-11-15-14-29-52",
+  "project": "warpfs",
+  "base_sha": "4078c78a2f8607bdf45be4df91cb2253512e3897",
+  "selected_row": "INT-CI-017",
+  "wave_budget": 4,
+  "wave_size": 0,
+  "eligible_independent": 0,
+  "workers": [],
+  "landed": [],
+  "status": "verification-only",
+  "classification": "landed-premise-disproven",
+  "blocker": "none:implementation-already-landed; row closure is bookkeeping-only",
+  "verification": "run:43281097211",
+  "trace": "ch:trace row=INT-CI-017 spec=none:ci-remediation-row wave=.coding-hermes/waves/warpfs-foreman-2026-11-15-14-29-52.json#verification-only test=run:43281097211 doc=none:no-doc-change evidence=.coding-hermes/tick-notes/INT-CI-017-2026-11-15-14-29-52-verification.md witness=run:43281097211 verdict=none:verification-only-no-gitreins-needed commit=none:board-closeout-pending memory=none:pending"
+}
