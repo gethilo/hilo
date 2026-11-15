@@ -76,4 +76,5 @@ target-local/
 .vfs/graph/.symbols_cache.json
 .vfs/graph/.last_reconcile
 .vfs/graph/state.json
+.vfs/graph/edges.jsonl.lock
 .gitreins/rescued-*/
