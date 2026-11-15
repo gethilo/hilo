@@ -2782,3 +2782,36 @@ tasks:
   status: complete
   created_at: '2026-11-14T05:07:48.220935+00:00'
   completed_at: '2026-11-14T05:18:18.582540+00:00'
+- id: DF-WARPFS-70-V-20261115
+  title: Verify DF-WARPFS-70 evidence at published tip
+  criteria:
+  - 'PASS: The committed evidence artifact .coding-hermes/evidence/DF-WARPFS-70-2026-11-15.md
+    exists at the judged commit and records DF-WARPFS-70 verification at the published
+    origin/master tip. PROOF: git show HEAD:.coding-hermes/evidence/DF-WARPFS-70-2026-11-15.md
+    succeeds; git status --porcelain is empty; cargo test -p hilo_fuse --test workspace_mount_test,
+    cargo test -p hilo_fuse, and cargo clippy -p hilo_fuse --all-targets -- -D warnings
+    each exit 0 on the published source tree described by the artifact. The evidence
+    records the implementation-only acceptance and explicitly says the board row is
+    not changed by this evidence commit. FAILIF: the artifact is absent, the worktree
+    is dirty with unrelated paths, any named gate fails, or the artifact claims that
+    the pending board row was already closed.'
+  status: complete
+  created_at: '2026-11-15T14:00:55.623588+00:00'
+  completed_at: '2026-11-15T14:01:05.564746+00:00'
+- id: DF-WARPFS-70-V-R2
+  title: Reverify DF-WARPFS-70 evidence artifact
+  criteria:
+  - 'PASS: The committed evidence artifact .coding-hermes/evidence/DF-WARPFS-70-2026-11-15.md
+    exists at the judged commit and records DF-WARPFS-70 verification on the published
+    source tree. PROOF: git show HEAD:.coding-hermes/evidence/DF-WARPFS-70-2026-11-15.md
+    succeeds; the only post-commit working-tree change is the GitReins lifecycle record
+    for this verification task; cargo test -p hilo_fuse --test workspace_mount_test,
+    cargo test -p hilo_fuse, and cargo clippy -p hilo_fuse --all-targets -- -D warnings
+    each exit 0 on the published source tree described by the artifact. The evidence
+    explicitly says this evidence commit changes only the evidence artifact and does
+    not change the DF-WARPFS-70 board row or either board JSONL file. FAILIF: the
+    artifact is absent, any unrelated working-tree path is dirty, any named gate fails,
+    or the artifact claims that the pending board row was already closed.'
+  status: complete
+  created_at: '2026-11-15T14:10:24.319447+00:00'
+  completed_at: '2026-11-15T14:10:50.698108+00:00'
