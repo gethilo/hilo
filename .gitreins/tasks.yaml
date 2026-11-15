@@ -2695,13 +2695,13 @@ tasks:
 - id: RELEASE-018
   title: Repair ambient Cargo paths and rust-lint attribution
   criteria:
-  - 'PASSIF: ambient cargo fetch --locked exits 0 and rust-lint reports resolved CARGO_HOME
-    and CARGO_TARGET_DIR before executing the workspace lint; PROOF: capture the command
-    output and guard log from the committed tree under the fleet default environment;
-    FAILIF: cargo still resolves through an unusable ambient path, or the guard labels
-    dependency-resolution failure as clippy findings'
+  - 'PASS: under ambient CARGO_HOME/CARGO_TARGET_DIR cargo fetch --locked exits 0;
+    rust-lint reports resolved paths; cold-target timeout kills all cargo descendants
+    and warm-target rust-lint exits 0. PROOF: run exact acceptance commands. FAILIF:
+    dependency resolution is mislabeled as clippy findings, a cargo child survives
+    timeout, or warm run is unverified.'
   status: in_progress
-  created_at: '2026-11-10T17:30:36.937850+00:00'
+  created_at: '2026-11-14T09:10:34.623935+00:00'
 - id: DF-WARPFS-79-R2
   title: Repair non-empty invalid graph cache
   criteria:
@@ -2768,3 +2768,15 @@ tasks:
   status: complete
   created_at: '2026-11-13T22:07:44.885845+00:00'
   completed_at: '2026-11-13T22:07:45.416789+00:00'
+- id: DF-WARPFS-91
+  title: Extract Erlang structural module references
+  criteria:
+  - 'PASS: the integrated commit changes the production Erlang parser path to emit
+    behaviour and qualified callback module references; focused parser regression
+    test and cargo fmt pass. PROOF: run the exact focused cargo test and cargo fmt
+    --all -- --check on the integrated SHA and read their exit/results. FAILIF: no
+    production-path change, focused test fails, formatting fails, or the verdict is
+    bound to a different commit.'
+  status: complete
+  created_at: '2026-11-15T06:51:00.847187+00:00'
+  completed_at: '2026-11-15T06:53:40.808046+00:00'
