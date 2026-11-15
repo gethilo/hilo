@@ -1707,6 +1707,36 @@ fn extract_erlang_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
         }
         return;
     }
+
+    // Structural module references are represented by dedicated grammar
+    // nodes, not by text in their ancestor spans. A behaviour names the
+    // module directly (`-behaviour(gen_server).`). A callback only names an
+    // external module when it uses the qualified form
+    // (`-callback gen_server:handle_call(...) -> ... .`); an unqualified
+    // callback is a declaration in the current module, not an import edge.
+    // Reading the named fields keeps comments and strings out of the graph.
+    // This is intentionally structural coverage; ordinary Erlang call
+    // resolution remains outside this extractor's scope.
+    match node.kind() {
+        "behaviour_attribute" => {
+            if let Some(name) = erlang_named_atom(node.child_by_field_name("name"), source) {
+                paths.push(format!("pkg:{name}"));
+            }
+            return;
+        }
+        "callback" => {
+            if let Some(module) = node
+                .child_by_field_name("module")
+                .and_then(|module| module.child_by_field_name("name"))
+                .and_then(|name| erlang_named_atom(Some(name), source))
+            {
+                paths.push(format!("pkg:{module}"));
+            }
+            return;
+        }
+        _ => {}
+    }
+
     let children: Vec<Node> = {
         let mut c = node.walk();
         node.children(&mut c).collect()
@@ -1714,6 +1744,20 @@ fn extract_erlang_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
     for child in children {
         extract_erlang_imports(child, source, paths);
     }
+}
+
+/// Return a concrete Erlang atom from a grammar `_name` field.
+///
+/// Macro and variable names are intentionally excluded: neither identifies a
+/// stable module node that can be queried in the graph. Quoted atoms are
+/// normalised to the same label as their unquoted spelling.
+fn erlang_named_atom(node: Option<Node>, source: &[u8]) -> Option<String> {
+    let node = node?;
+    if node.kind() != "atom" {
+        return None;
+    }
+    let name = node.utf8_text(source).ok()?.trim().trim_matches('\'');
+    (!name.is_empty()).then(|| name.to_string())
 }
 
 // ── Scala ───────────────────────────────────────────────────────────
@@ -2911,6 +2955,38 @@ use anyhow::{bail, Context as _};
             "-include_lib(\"eunit/include/eunit.hrl\").\n-module(myapp).\n",
         );
         assert!(imports.iter().any(|p| p.contains("eunit.hrl")));
+    }
+
+    #[test]
+    fn erlang_structural_module_references() {
+        let imports = parse(
+            Language::Erlang,
+            "%% -behaviour(fake_comment).\n\
+             -module(myapp).\n\
+             -behaviour(gen_server).\n\
+             -callback gen_server:handle_call(term(), term(), term()) -> term().\n\
+             -callback local_callback(term()) -> term().\n\
+             %% A string is not an attribute: \"-callback fake_string()\".\n",
+        );
+
+        assert_eq!(
+            imports
+                .iter()
+                .filter(|path| *path == "pkg:gen_server")
+                .count(),
+            2,
+            "behaviour and qualified callback should both reference gen_server: {imports:?}"
+        );
+        assert!(
+            !imports
+                .iter()
+                .any(|path| path.contains("fake_comment") || path.contains("fake_string")),
+            "comment/text lookalikes must not create module edges: {imports:?}"
+        );
+        assert!(
+            !imports.iter().any(|path| path == "pkg:local_callback"),
+            "an unqualified callback is local, not an external module edge: {imports:?}"
+        );
     }
 
     #[test]
