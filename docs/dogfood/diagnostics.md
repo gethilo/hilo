@@ -1279,8 +1279,7 @@ correct counts) rather than re-running the foreman's own test.
 - Never trust stats' Orphans block on PHP until DF-82 lands.
 - After a pull on any second machine, run `hilo graph warm` manually —
   the hook will not do it (DF-WARPFS-83).
-- Kotlin warm under-reports: template .kt files under test/resources
-  contribute zero edges (DF-WARPFS-85); pkg-form impact ~98% of grep.
+- Historical Kotlin warm finding, superseded 2026-11-16: template .kt files under test/resources contributed zero edges (DF-WARPFS-85) and pkg-form impact was ~98% of grep; re-measured parity is 181/181 against the current corpus. See docs/dogfood/2026-11-16-df85-impact-parity.md and hilo-cli/tests/dfwarpfs85_impact_parity.rs.
 
 **Cross-run family watch.** file->pkg resolution: 7 languages now
 (Go/Python/TS-JS/Java/Ruby/PHP/Kotlin) — one language-keyed resolver, not

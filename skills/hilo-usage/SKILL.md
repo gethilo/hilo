@@ -836,8 +836,11 @@ Limits (run-44 rows, file before trusting the sandbox for hostile code):
   shows 0/31 dependents and stats calls it an orphan. Until fixed, PHP
   blast radius is use-statement-only — know the blind spot before
   trusting an empty answer.
-- **Kotlin pkg-form impact 173/176** (98.3%): template .kt files under
-  exposed-maven-plugin/src/test/resources contribute no edges (DF-85).
+- **Kotlin pkg-form impact 173/176 (98.3%) — superseded 2026-11-16 by
+  181/181**: measured 2026-09-25; template .kt files under
+  exposed-maven-plugin/src/test/resources were reported as contributing no
+  edges (DF-85). See docs/dogfood/2026-11-16-df85-impact-parity.md and
+  hilo-cli/tests/dfwarpfs85_impact_parity.rs.
 - **File-form impact/related silently empty on PHP AND Kotlin (DF-84)** —
   same family as Ruby (DF-78, open) and Java (fixed). Translate to pkg:
   yourself.

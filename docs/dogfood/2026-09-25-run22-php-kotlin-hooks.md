@@ -18,7 +18,10 @@ hilo init && hilo graph warm          # composer: 10.9s; Exposed: 83.9s
 hilo graph impact 'pkg:Composer\DependencyResolver\Solver' --max-depth 1
   # → 2 dependents, == grep (exact). Cross-namespace use-imports are reliable.
 hilo graph impact 'pkg:org.jetbrains.exposed.v1.core.Table' --max-depth 1
-  # → 173/176 vs grep import-truth (98.3%).
+  # → 173/176 vs grep import-truth (98.3%), superseded 2026-11-16 by 181/181;
+  # historical 2026-09-25 snapshot (upstream corpus moved since). Repro:
+  # docs/dogfood/2026-11-16-df85-impact-parity.md and
+  # hilo-cli/tests/dfwarpfs85_impact_parity.rs.
 hilo graph related src/Composer/Installer.php   # outgoing deps, [external package] labels
 hilo meta <file> --set user.vfs.dogfood --value run22-php   # xattr round-trips via getfattr
 hilo classify                          # composer: 279 test / 2 entrypoint / 20 unknown
