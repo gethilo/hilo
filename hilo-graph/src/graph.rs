@@ -2102,6 +2102,28 @@ impl GraphDB {
         rel_filter: Option<&str>,
         direction: Direction,
     ) -> GraphResult<Vec<Edge>> {
+        self.related_with_local(path, rel_filter, direction, None)
+    }
+
+    /// PERF: build the `local:` reverse index ONCE for a batch of per-file
+    /// `related` queries (the BFS in `signal::traverse_and_score` calls this
+    /// once per visited node). Each build is a full SQL scan of the `local:`
+    /// edges plus one disk probe ladder per (importer dir, specifier) pair —
+    /// on a 475-file corpus one build costs ~1,100 `statx` probes, and the
+    /// traversal was paying it 245 times per `hilo graph understand`.
+    pub fn local_spec_resolver(&self) -> Option<LocalSpecResolver> {
+        LocalSpecResolver::from_edges(&self.conn).ok()
+    }
+
+    /// [`Self::related`] with an optional pre-built `local:` index. `None`
+    /// reproduces the historical per-call build exactly.
+    pub fn related_with_local(
+        &self,
+        path: &str,
+        rel_filter: Option<&str>,
+        direction: Direction,
+        local: Option<&LocalSpecResolver>,
+    ) -> GraphResult<Vec<Edge>> {
         if self.degraded {
             return self.related_from_jsonl(path, rel_filter, direction);
         }
@@ -2201,7 +2223,15 @@ impl GraphDB {
         // actually lands on this file (`from ∈ allowed importers`), so
         // same-named nodes from other directories never cross-match.
         if direction == Direction::Reverse {
-            if let Ok(resolver) = crate::resolution::LocalSpecResolver::from_edges(&self.conn) {
+            let built;
+            let resolver = match local {
+                Some(existing) => Some(existing),
+                None => {
+                    built = crate::resolution::LocalSpecResolver::from_edges(&self.conn).ok();
+                    built.as_ref()
+                }
+            };
+            if let Some(resolver) = resolver {
                 let mut keep = resolver.nodes_for(path);
                 keep.sort();
                 keep.dedup();
