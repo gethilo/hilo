@@ -1,0 +1,52 @@
+2.29
+   Compiling hilo_permissions v0.4.1 (/home/bunker-c3a0807b/qa-warpfs/hilo-permissions)
+   Compiling hilo_core v0.4.1 (/home/bunker-c3a0807b/qa-warpfs/hilo-core)
+   Compiling num-integer v0.1.46
+   Compiling half v2.7.1
+   Compiling num-bigint v0.4.8
+   Compiling num-complex v0.4.6
+   Compiling chrono v0.4.45
+   Compiling aws-smithy-types v1.6.1
+   Compiling atoi v2.0.0
+   Compiling rust_decimal v1.42.1
+   Compiling arrow-buffer v58.3.0
+   Compiling aws-smithy-runtime-api v1.13.0
+   Compiling aws-smithy-eventstream v0.61.1
+   Compiling arrow-data v58.3.0
+   Compiling aws-smithy-query v0.61.1
+   Compiling ciborium-ll v0.2.2
+   Compiling ciborium v0.2.2
+   Compiling plotters v0.3.7
+   Compiling arrow-array v58.3.0
+   Compiling aws-smithy-schema v0.2.0
+   Compiling aws-smithy-http v0.64.0
+   Compiling aws-credential-types v1.3.0
+   Compiling aws-smithy-http-client v1.2.0
+   Compiling aws-smithy-observability v0.3.0
+   Compiling aws-types v1.4.0
+   Compiling aws-sigv4 v1.5.1
+   Compiling aws-smithy-xml v0.61.1
+   Compiling aws-smithy-json v0.63.0
+   Compiling aws-smithy-checksums v0.65.0
+   Compiling criterion-plot v0.5.0
+   Compiling criterion v0.5.1
+   Compiling aws-smithy-runtime v1.12.0
+   Compiling rmp v0.8.15
+   Compiling arrow-select v58.3.0
+   Compiling arrow-row v58.3.0
+   Compiling arrow-arith v58.3.0
+   Compiling arrow-ord v58.3.0
+   Compiling arrow-string v58.3.0
+   Compiling aws-runtime v1.8.1
+   Compiling arrow-cast v58.3.0
+   Compiling aws-sdk-sts v1.108.0
+   Compiling aws-sdk-s3 v1.138.1
+   Compiling rmp-serde v1.3.1
+   Compiling extism-convert v1.41.0
+   Compiling extism v1.41.0
+   Compiling arrow v58.3.0
+   Compiling aws-config v1.9.0
+   Compiling hilo_plugins v0.4.1 (/home/bunker-c3a0807b/qa-warpfs/hilo-plugins)
+   Compiling hilo_metadata v0.4.1 (/home/bunker-c3a0807b/qa-warpfs/hilo-metadata)
+   Compiling hilo_backends v0.4.1 (/home/bunker-c3a0807b/qa-warpfs/hilo-backends)
+   Compiling hilo_fuse v0.4.1 (/home/bunker-c3a0807b/qa-warpfs/hilo-fuse)

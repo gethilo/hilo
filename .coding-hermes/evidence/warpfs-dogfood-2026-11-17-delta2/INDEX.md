@@ -19,3 +19,13 @@ claims in runs 48/49 stay scoped to the certified artifact `4216c7f`.
 Timings quoted in the rows and the log (all wall clock, UTC on 2026-11-17): agent
 launched 12:46:21Z; `fresh-install` timeout at 3600 s → killed ≈13:46Z; cargo observed at
 56 m 36 s one minute earlier; local HEAD cargo observed at 50 m 15 s with no binary.
+
+## Third-delivery additions (14:5x UTC)
+
+| file | what it shows |
+|------|----------------|
+| `bunker-c3a0807b-qa-evidence.jsonl.harvest-3rd` | ledger re-pulled at third-delivery close: still 8 rows, byte-identical to the delivery-2 copy (tests cell had not finished) |
+| `lint.log` | the `go vet ./...` refusal verbatim ("directory prefix . does not contain main module") — the ladder's missing Rust branch, owned by QA-WARPFS-035 |
+| `tests-log-tail-3rd.txt` | last 2 KB of the tests cell log at close: `cargo test --workspace` ~65 min in, hilo_plugins/metadata/backends/fuse compiling, DuckDB debug units still in flight |
+
+Bunker-host paths are left as-is (`/home/bunker-c3a0807b/...` is the ephemeral agent's home, consistent with the delivery-2 files above); the `~` convention applies to controller-host paths only.
