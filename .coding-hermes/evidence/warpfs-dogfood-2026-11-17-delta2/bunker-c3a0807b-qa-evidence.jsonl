@@ -1,0 +1,8 @@
+{"project": "warpfs", "cell": "toolchain-bootstrap", "status": "OK", "detail": "go 1.27.4 installed (discovered; ~/tools/go; floor=none ambient=1.22.2 installed=1.27.4)", "ts": "2026-11-17T12:46:36.291541+00:00"}
+{"project": "warpfs", "cell": "toolchain-bootstrap", "status": "OK", "detail": "rust stable installed (~/tools/cargo + ~/tools/rustup)", "ts": "2026-11-17T12:46:47.279714+00:00"}
+{"project": "warpfs", "cell": "toolchain-bootstrap", "status": "OK", "detail": "system gcc/g++ toolchain (~/tools/bin wrappers -> gcc/g++) \u2014 preferred over zig-cc for C++ cgo deps (MCP-008)", "ts": "2026-11-17T12:46:52.839163+00:00"}
+{"project": "warpfs", "cell": "toolchain-bootstrap", "status": "OK", "detail": "make available (preinstalled) \u2014 GNU Make 4.3", "ts": "2026-11-17T12:46:52.873770+00:00"}
+{"project": "warpfs", "cell": "toolchain-bootstrap", "status": "OK", "detail": "jq installed (static jq-linux64 -> jq-1.8.2 at /home/bunker-c3a0807b/tools/bin/jq)", "ts": "2026-11-17T12:46:53.622700+00:00"}
+{"project": "warpfs", "cell": "toolchain-bootstrap", "status": "INFO", "detail": "bare agent missing system deps: openssl(libssl-dev) \u2014 rust build cells graded ENV-BLOCKED when they fail on these (no sudo to apt install)", "ts": "2026-11-17T12:46:53.683959+00:00"}
+{"project": "warpfs", "cell": "fresh-install", "status": "SKIP", "detail": "install exceeded 3600s timeout (slice/cpu too small for this workspace or genuine hang) \u2014 grade UNVERIFIED upstream", "ts": "2026-11-17T13:46:53.842164+00:00"}
+{"project": "warpfs", "cell": "lint", "status": "FAIL", "detail": "rc=1 cmd=[go vet ./...] \u2014 pattern ./...: directory prefix . does not contain main module or its selected dependencies|", "ts": "2026-11-17T13:46:54.044354+00:00"}

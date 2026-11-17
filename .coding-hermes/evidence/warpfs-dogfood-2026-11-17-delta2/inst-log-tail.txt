@@ -1,0 +1,7 @@
+1056 /home/bunker-c3a0807b/qa-logs-99209/inst.log
+   Compiling hilo-cli v0.4.1 (/home/bunker-c3a0807b/qa-warpfs/hilo-cli)
+   Compiling hilo_plugins v0.4.1 (/home/bunker-c3a0807b/qa-warpfs/hilo-plugins)
+   Compiling git2 v0.19.0
+   Compiling hilo_core v0.4.1 (/home/bunker-c3a0807b/qa-warpfs/hilo-core)
+   Compiling hilo_backends v0.4.1 (/home/bunker-c3a0807b/qa-warpfs/hilo-backends)
+   Compiling hilo_fuse v0.4.1 (/home/bunker-c3a0807b/qa-warpfs/hilo-fuse)
