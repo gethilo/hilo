@@ -2643,8 +2643,23 @@ tasks:
   created_at: '2026-11-03T05:40:09.118606+00:00'
   completed_at: '2026-11-03T06:32:40.351208+00:00'
 - id: DF-WARPFS-85
+  title: ''
   criteria:
-  - 'PASS (judge this from the repository tree with git show / grep / jq ONLY - do NOT run cargo, tests, make, npm, go test or pytest; the foreman already ran them and re-running them is out of scope): (1) hilo-cli/tests/dfwarpfs85_impact_parity.rs exists in HEAD and asserts SET EQUALITY between the output of `hilo graph impact pkg:org.jetbrains.exposed.v1.core.Table --max-depth 1` and the test''s own recursive .kt importer scan over $HILO_EXPOSED_CORPUS, with no hardcoded 173/176 constant, and exits 0 printing a skipped line when that env var is unset; (2) docs/dogfood/2026-11-16-df85-impact-parity.md exists in HEAD and records the measurement (corpus file/bucket counts, depth-1 parity 181 == 181, the negative control) plus the exact commands to reproduce it; (3) the three historical stale claims each name the 2026-11-16 re-measurement and that artifact: skills/hilo-usage/SKILL.md (~line 839), docs/dogfood/2026-09-25-run22-php-kotlin-hooks.md (~line 21), docs/dogfood/diagnostics.md (~line 1282); (4) the Kotlin template recovery is still present in hilo-graph/src/parser.rs (RepairedTemplate / LexicalScan) and the coverage line in hilo-cli/src/commands/graph.rs still names every parse-miss file by path.'
+  - 'PASS (judge this from the repository tree with git show / grep / jq ONLY - do
+    NOT run cargo, tests, make, npm, go test or pytest; the foreman already ran them
+    and re-running them is out of scope): (1) hilo-cli/tests/dfwarpfs85_impact_parity.rs
+    exists in HEAD and asserts SET EQUALITY between the output of `hilo graph impact
+    pkg:org.jetbrains.exposed.v1.core.Table --max-depth 1` and the test''s own recursive
+    .kt importer scan over $HILO_EXPOSED_CORPUS, with no hardcoded 173/176 constant,
+    and exits 0 printing a skipped line when that env var is unset; (2) docs/dogfood/2026-11-16-df85-impact-parity.md
+    exists in HEAD and records the measurement (corpus file/bucket counts, depth-1
+    parity 181 == 181, the negative control) plus the exact commands to reproduce
+    it; (3) the three historical stale claims each name the 2026-11-16 re-measurement
+    and that artifact: skills/hilo-usage/SKILL.md (~line 839), docs/dogfood/2026-09-25-run22-php-kotlin-hooks.md
+    (~line 21), docs/dogfood/diagnostics.md (~line 1282); (4) the Kotlin template
+    recovery is still present in hilo-graph/src/parser.rs (RepairedTemplate / LexicalScan)
+    and the coverage line in hilo-cli/src/commands/graph.rs still names every parse-miss
+    file by path.'
   status: complete
   created_at: '2026-11-03T07:52:30.274446+00:00'
   completed_at: '2026-11-16T15:49:43.873884+00:00'
@@ -2814,3 +2829,16 @@ tasks:
   status: complete
   created_at: '2026-11-15T14:10:24.319447+00:00'
   completed_at: '2026-11-15T14:10:50.698108+00:00'
+- id: RELEASE-023
+  title: Remediate runtime-reachable libz-sys advisory RUSTSEC-2026-0544 by bumping
+    the lock to 1.1.33
+  criteria:
+  - 'PASS: Cargo.lock pins libz-sys 1.1.33 (patched per RUSTSEC-2026-0544) and only
+    that one package version changed in the lockfile; bash scripts/audit-gate.sh exits
+    0 on the committed tree and no longer lists libz-sys as a runtime-reachable advisory
+    package; cargo tree -e normal shows libz-sys 1.1.33 on the libgit2-sys/git2 runtime
+    edge. FAILIF: any other dependency version moved, the advisory gate still lists
+    libz-sys, or the change is a suppression/allowlist rather than a real version
+    bump.'
+  status: in_progress
+  created_at: '2026-11-17T15:46:54.809127+00:00'
