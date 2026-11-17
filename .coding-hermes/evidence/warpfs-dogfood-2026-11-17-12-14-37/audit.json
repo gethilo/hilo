@@ -1,0 +1,5725 @@
+{
+  "schema": 1,
+  "root": "~/.hermes/cache/scratch/df49/corpus",
+  "scanned_files": 256,
+  "public_symbols": 199,
+  "entrypoints": {
+    "count": 11,
+    "rule": "files whose role classifies as `entrypoint` via classify_file (filename convention: main.rs/__main__.py/index.js/Program.cs/Main.kt/index.php/main.swift, or an AST-detected main / canonical entry symbol); 11 found",
+    "files": [
+      "cmd/gendocs/main.go",
+      "cmd/genwire/main.go",
+      "cmd/toolsd/main.go",
+      "qa_discover.py",
+      "scripts/check_board_ids.py",
+      "scripts/check_docs_claims.py",
+      "scripts/fuzzy_apply_foil.py",
+      "scripts/qa_board_append.py",
+      "scripts/reap_stale_jobs.py",
+      "scripts/stub-lsp.py",
+      "scripts/svg-validate.py"
+    ]
+  },
+  "buckets": {
+    "unreachable": {
+      "count": 5,
+      "rule": "no caller path from a declared entrypoint: no file reachable from an entrypoint names the symbol, and its defining file is not itself an entrypoint (reachability computed from 11 declared entrypoint file(s))",
+      "symbols": [
+        {
+          "name": "Network",
+          "file": "cmd/toolsd/serve.go",
+          "line": 299
+        },
+        {
+          "name": "RemoteAddr",
+          "file": "cmd/toolsd/serve.go",
+          "line": 327
+        },
+        {
+          "name": "SetReadDeadline",
+          "file": "cmd/toolsd/serve.go",
+          "line": 329
+        },
+        {
+          "name": "SetWriteDeadline",
+          "file": "cmd/toolsd/serve.go",
+          "line": 330
+        },
+        {
+          "name": "Bye",
+          "file": "internal/scratch/s2.go",
+          "line": 3
+        }
+      ]
+    },
+    "unlinked": {
+      "count": 38,
+      "rule": "reachable from a declared entrypoint, but no test file names the symbol and no COV-2 coverage link targets it (reachability computed from 11 declared entrypoint file(s))",
+      "symbols": [
+        {
+          "name": "Addr",
+          "file": "cmd/toolsd/serve.go",
+          "line": 293
+        },
+        {
+          "name": "LocalAddr",
+          "file": "cmd/toolsd/serve.go",
+          "line": 326
+        },
+        {
+          "name": "SetDeadline",
+          "file": "cmd/toolsd/serve.go",
+          "line": 328
+        },
+        {
+          "name": "DetectGoModule",
+          "file": "internal/lsp/module.go",
+          "line": 48
+        },
+        {
+          "name": "IsGoWorkspace",
+          "file": "internal/lsp/module.go",
+          "line": 59
+        },
+        {
+          "name": "AimDescription",
+          "file": "internal/lsp/position_classify.go",
+          "line": 256
+        },
+        {
+          "name": "StageRemove",
+          "file": "internal/multifile/multifile.go",
+          "line": 188
+        },
+        {
+          "name": "ReadTail",
+          "file": "internal/usage/usage.go",
+          "line": 151
+        },
+        {
+          "name": "is_git_worktree",
+          "file": "qa_discover.py",
+          "line": 22
+        },
+        {
+          "name": "load_ledger",
+          "file": "qa_discover.py",
+          "line": 52
+        },
+        {
+          "name": "positive_int",
+          "file": "qa_discover.py",
+          "line": 111
+        },
+        {
+          "name": "parse_args",
+          "file": "qa_discover.py",
+          "line": 131
+        },
+        {
+          "name": "pick_projects",
+          "file": "qa_discover.py",
+          "line": 142
+        },
+        {
+          "name": "parse_args",
+          "file": "scripts/check_board_ids.py",
+          "line": 48
+        },
+        {
+          "name": "read_lines",
+          "file": "scripts/check_board_ids.py",
+          "line": 68
+        },
+        {
+          "name": "load_baseline",
+          "file": "scripts/check_board_ids.py",
+          "line": 78
+        },
+        {
+          "name": "check_board",
+          "file": "scripts/check_board_ids.py",
+          "line": 102
+        },
+        {
+          "name": "check_missing",
+          "file": "scripts/check_board_ids.py",
+          "line": 190
+        },
+        {
+          "name": "run_script",
+          "file": "scripts/check_board_ids.py",
+          "line": 228
+        },
+        {
+          "name": "simple_board",
+          "file": "scripts/check_board_ids.py",
+          "line": 238
+        },
+        {
+          "name": "load_status",
+          "file": "scripts/check_docs_claims.py",
+          "line": 85
+        },
+        {
+          "name": "markdown_files",
+          "file": "scripts/check_docs_claims.py",
+          "line": 104
+        },
+        {
+          "name": "evaluator_comment_lines",
+          "file": "scripts/check_docs_claims.py",
+          "line": 110
+        },
+        {
+          "name": "config_rule_check",
+          "file": "scripts/check_docs_claims.py",
+          "line": 136
+        },
+        {
+          "name": "self_test",
+          "file": "scripts/check_docs_claims.py",
+          "line": 208
+        },
+        {
+          "name": "count_nonempty_lines",
+          "file": "scripts/qa_board_append.py",
+          "line": 14
+        },
+        {
+          "name": "parse_row",
+          "file": "scripts/qa_board_append.py",
+          "line": 22
+        },
+        {
+          "name": "json_values_equal",
+          "file": "scripts/qa_board_append.py",
+          "line": 31
+        },
+        {
+          "name": "strict_reason",
+          "file": "scripts/qa_board_append.py",
+          "line": 35
+        },
+        {
+          "name": "loose_match",
+          "file": "scripts/qa_board_append.py",
+          "line": 58
+        },
+        {
+          "name": "row_label",
+          "file": "scripts/qa_board_append.py",
+          "line": 74
+        },
+        {
+          "name": "classify_rows",
+          "file": "scripts/qa_board_append.py",
+          "line": 81
+        },
+        {
+          "name": "is_live_pid",
+          "file": "scripts/reap_stale_jobs.py",
+          "line": 31
+        },
+        {
+          "name": "record_age_hours",
+          "file": "scripts/reap_stale_jobs.py",
+          "line": 46
+        },
+        {
+          "name": "terminalize_error_string",
+          "file": "scripts/reap_stale_jobs.py",
+          "line": 54
+        },
+        {
+          "name": "atomic_write_json",
+          "file": "scripts/reap_stale_jobs.py",
+          "line": 64
+        },
+        {
+          "name": "build_parser",
+          "file": "scripts/reap_stale_jobs.py",
+          "line": 98
+        },
+        {
+          "name": "read_message",
+          "file": "scripts/stub-lsp.py",
+          "line": 19
+        }
+      ]
+    },
+    "ok": {
+      "count": 156,
+      "rule": "reachable from a declared entrypoint AND carries a coverage link (reachability computed from 11 declared entrypoint file(s))",
+      "symbols": [
+        {
+          "name": "String",
+          "file": "cmd/toolsd/main.go",
+          "line": 2146
+        },
+        {
+          "name": "Set",
+          "file": "cmd/toolsd/main.go",
+          "line": 2149
+        },
+        {
+          "name": "String",
+          "file": "cmd/toolsd/main.go",
+          "line": 2334
+        },
+        {
+          "name": "Set",
+          "file": "cmd/toolsd/main.go",
+          "line": 2337
+        },
+        {
+          "name": "String",
+          "file": "cmd/toolsd/main.go",
+          "line": 2349
+        },
+        {
+          "name": "Set",
+          "file": "cmd/toolsd/main.go",
+          "line": 2352
+        },
+        {
+          "name": "Accept",
+          "file": "cmd/toolsd/serve.go",
+          "line": 284
+        },
+        {
+          "name": "Close",
+          "file": "cmd/toolsd/serve.go",
+          "line": 292
+        },
+        {
+          "name": "String",
+          "file": "cmd/toolsd/serve.go",
+          "line": 300
+        },
+        {
+          "name": "Read",
+          "file": "cmd/toolsd/serve.go",
+          "line": 318
+        },
+        {
+          "name": "Write",
+          "file": "cmd/toolsd/serve.go",
+          "line": 319
+        },
+        {
+          "name": "Close",
+          "file": "cmd/toolsd/serve.go",
+          "line": 321
+        },
+        {
+          "name": "Path",
+          "file": "internal/config/config.go",
+          "line": 173
+        },
+        {
+          "name": "Lookup",
+          "file": "internal/config/config.go",
+          "line": 211
+        },
+        {
+          "name": "String",
+          "file": "internal/config/config.go",
+          "line": 241
+        },
+        {
+          "name": "Concrete",
+          "file": "internal/config/config.go",
+          "line": 277
+        },
+        {
+          "name": "DefaultPath",
+          "file": "internal/config/config.go",
+          "line": 327
+        },
+        {
+          "name": "Specs",
+          "file": "internal/config/config.go",
+          "line": 452
+        },
+        {
+          "name": "Parse",
+          "file": "internal/config/config.go",
+          "line": 463
+        },
+        {
+          "name": "Resolve",
+          "file": "internal/config/config.go",
+          "line": 666
+        },
+        {
+          "name": "Registry",
+          "file": "internal/describe/render.go",
+          "line": 25
+        },
+        {
+          "name": "Lookup",
+          "file": "internal/describe/render.go",
+          "line": 34
+        },
+        {
+          "name": "Text",
+          "file": "internal/describe/render.go",
+          "line": 46
+        },
+        {
+          "name": "Full",
+          "file": "internal/describe/render.go",
+          "line": 83
+        },
+        {
+          "name": "VerbText",
+          "file": "internal/describe/render.go",
+          "line": 94
+        },
+        {
+          "name": "JSON",
+          "file": "internal/describe/render.go",
+          "line": 164
+        },
+        {
+          "name": "Merge",
+          "file": "internal/diff3/diff3.go",
+          "line": 116
+        },
+        {
+          "name": "Generate",
+          "file": "internal/diffgen/diffgen.go",
+          "line": 46
+        },
+        {
+          "name": "Open",
+          "file": "internal/fsops/fsops.go",
+          "line": 69
+        },
+        {
+          "name": "Path",
+          "file": "internal/fsops/fsops.go",
+          "line": 108
+        },
+        {
+          "name": "Read",
+          "file": "internal/fsops/fsops.go",
+          "line": 151
+        },
+        {
+          "name": "Write",
+          "file": "internal/fsops/fsops.go",
+          "line": 183
+        },
+        {
+          "name": "MkdirAll",
+          "file": "internal/fsops/fsops.go",
+          "line": 229
+        },
+        {
+          "name": "List",
+          "file": "internal/fsops/fsops.go",
+          "line": 244
+        },
+        {
+          "name": "DecisionBlock",
+          "file": "internal/gendocs/gendocs.go",
+          "line": 53
+        },
+        {
+          "name": "Run",
+          "file": "internal/gendocs/gendocs.go",
+          "line": 93
+        },
+        {
+          "name": "Error",
+          "file": "internal/lease/errors.go",
+          "line": 56
+        },
+        {
+          "name": "Unwrap",
+          "file": "internal/lease/errors.go",
+          "line": 70
+        },
+        {
+          "name": "Error",
+          "file": "internal/lease/errors.go",
+          "line": 82
+        },
+        {
+          "name": "Unwrap",
+          "file": "internal/lease/errors.go",
+          "line": 88
+        },
+        {
+          "name": "Open",
+          "file": "internal/lease/lease.go",
+          "line": 161
+        },
+        {
+          "name": "RegistryPath",
+          "file": "internal/lease/lease.go",
+          "line": 232
+        },
+        {
+          "name": "Acquire",
+          "file": "internal/lease/lease.go",
+          "line": 309
+        },
+        {
+          "name": "Release",
+          "file": "internal/lease/lease.go",
+          "line": 444
+        },
+        {
+          "name": "Status",
+          "file": "internal/lease/lease.go",
+          "line": 488
+        },
+        {
+          "name": "RenewLease",
+          "file": "internal/lease/renew.go",
+          "line": 98
+        },
+        {
+          "name": "Renew",
+          "file": "internal/lease/renew.go",
+          "line": 123
+        },
+        {
+          "name": "Server",
+          "file": "internal/lsp/api.go",
+          "line": 265
+        },
+        {
+          "name": "Error",
+          "file": "internal/lsp/client.go",
+          "line": 64
+        },
+        {
+          "name": "Unwrap",
+          "file": "internal/lsp/client.go",
+          "line": 73
+        },
+        {
+          "name": "Is",
+          "file": "internal/lsp/client.go",
+          "line": 76
+        },
+        {
+          "name": "Connect",
+          "file": "internal/lsp/client.go",
+          "line": 93
+        },
+        {
+          "name": "Definition",
+          "file": "internal/lsp/client.go",
+          "line": 332
+        },
+        {
+          "name": "References",
+          "file": "internal/lsp/client.go",
+          "line": 376
+        },
+        {
+          "name": "Shutdown",
+          "file": "internal/lsp/client.go",
+          "line": 449
+        },
+        {
+          "name": "Close",
+          "file": "internal/lsp/client.go",
+          "line": 462
+        },
+        {
+          "name": "Error",
+          "file": "internal/lsp/errors.go",
+          "line": 106
+        },
+        {
+          "name": "Unwrap",
+          "file": "internal/lsp/errors.go",
+          "line": 119
+        },
+        {
+          "name": "LanguageForPath",
+          "file": "internal/lsp/language.go",
+          "line": 61
+        },
+        {
+          "name": "DefaultCommand",
+          "file": "internal/lsp/language.go",
+          "line": 74
+        },
+        {
+          "name": "DefaultServers",
+          "file": "internal/lsp/language.go",
+          "line": 108
+        },
+        {
+          "name": "PositionAt",
+          "file": "internal/lsp/position.go",
+          "line": 21
+        },
+        {
+          "name": "ClassifyOffset",
+          "file": "internal/lsp/position.go",
+          "line": 98
+        },
+        {
+          "name": "ByteOffset",
+          "file": "internal/lsp/position.go",
+          "line": 109
+        },
+        {
+          "name": "Close",
+          "file": "internal/lsp/process.go",
+          "line": 60
+        },
+        {
+          "name": "Close",
+          "file": "internal/lsp/process.go",
+          "line": 76
+        },
+        {
+          "name": "Write",
+          "file": "internal/lsp/process.go",
+          "line": 94
+        },
+        {
+          "name": "String",
+          "file": "internal/lsp/process.go",
+          "line": 105
+        },
+        {
+          "name": "NewFramedTransport",
+          "file": "internal/lsp/transport.go",
+          "line": 40
+        },
+        {
+          "name": "Send",
+          "file": "internal/lsp/transport.go",
+          "line": 51
+        },
+        {
+          "name": "Recv",
+          "file": "internal/lsp/transport.go",
+          "line": 70
+        },
+        {
+          "name": "Close",
+          "file": "internal/lsp/transport.go",
+          "line": 119
+        },
+        {
+          "name": "PathToURI",
+          "file": "internal/lsp/uri.go",
+          "line": 21
+        },
+        {
+          "name": "URIToPath",
+          "file": "internal/lsp/uri.go",
+          "line": 43
+        },
+        {
+          "name": "ReadCounts",
+          "file": "internal/metrics/metrics.go",
+          "line": 60
+        },
+        {
+          "name": "Note",
+          "file": "internal/metrics/metrics.go",
+          "line": 106
+        },
+        {
+          "name": "NoteConflict",
+          "file": "internal/metrics/metrics.go",
+          "line": 209
+        },
+        {
+          "name": "MarshalJSON",
+          "file": "internal/metrics/metrics.go",
+          "line": 228
+        },
+        {
+          "name": "UnmarshalJSON",
+          "file": "internal/metrics/metrics.go",
+          "line": 284
+        },
+        {
+          "name": "UnmarshalJSON",
+          "file": "internal/metrics/metrics.go",
+          "line": 343
+        },
+        {
+          "name": "Begin",
+          "file": "internal/multifile/multifile.go",
+          "line": 114
+        },
+        {
+          "name": "Stage",
+          "file": "internal/multifile/multifile.go",
+          "line": 161
+        },
+        {
+          "name": "Commit",
+          "file": "internal/multifile/multifile.go",
+          "line": 352
+        },
+        {
+          "name": "Rollback",
+          "file": "internal/multifile/multifile.go",
+          "line": 523
+        },
+        {
+          "name": "Summarize",
+          "file": "internal/narrate/narrate.go",
+          "line": 137
+        },
+        {
+          "name": "Render",
+          "file": "internal/narrate/narrate.go",
+          "line": 182
+        },
+        {
+          "name": "String",
+          "file": "internal/patch/devnull.go",
+          "line": 35
+        },
+        {
+          "name": "Error",
+          "file": "internal/patch/errors.go",
+          "line": 30
+        },
+        {
+          "name": "Unwrap",
+          "file": "internal/patch/errors.go",
+          "line": 38
+        },
+        {
+          "name": "Error",
+          "file": "internal/patch/errors.go",
+          "line": 55
+        },
+        {
+          "name": "Unwrap",
+          "file": "internal/patch/errors.go",
+          "line": 60
+        },
+        {
+          "name": "Error",
+          "file": "internal/patch/errors.go",
+          "line": 86
+        },
+        {
+          "name": "Unwrap",
+          "file": "internal/patch/errors.go",
+          "line": 95
+        },
+        {
+          "name": "Error",
+          "file": "internal/patch/errors.go",
+          "line": 109
+        },
+        {
+          "name": "Unwrap",
+          "file": "internal/patch/errors.go",
+          "line": 117
+        },
+        {
+          "name": "ParseUnifiedDiff",
+          "file": "internal/patch/patch.go",
+          "line": 216
+        },
+        {
+          "name": "Apply",
+          "file": "internal/patch/patch.go",
+          "line": 795
+        },
+        {
+          "name": "Run",
+          "file": "internal/probe/probe.go",
+          "line": 181
+        },
+        {
+          "name": "Summarize",
+          "file": "internal/probe/probe.go",
+          "line": 350
+        },
+        {
+          "name": "WriteJSONL",
+          "file": "internal/probe/probe.go",
+          "line": 418
+        },
+        {
+          "name": "WriteSummaryJSON",
+          "file": "internal/probe/probe.go",
+          "line": 445
+        },
+        {
+          "name": "LoadHeaderFile",
+          "file": "internal/probe/probe.go",
+          "line": 470
+        },
+        {
+          "name": "Hello",
+          "file": "internal/scratch/s.go",
+          "line": 4
+        },
+        {
+          "name": "Error",
+          "file": "internal/session/api.go",
+          "line": 107
+        },
+        {
+          "name": "Unwrap",
+          "file": "internal/session/api.go",
+          "line": 116
+        },
+        {
+          "name": "Error",
+          "file": "internal/session/api.go",
+          "line": 125
+        },
+        {
+          "name": "Unwrap",
+          "file": "internal/session/api.go",
+          "line": 130
+        },
+        {
+          "name": "Error",
+          "file": "internal/session/api.go",
+          "line": 142
+        },
+        {
+          "name": "Unwrap",
+          "file": "internal/session/api.go",
+          "line": 147
+        },
+        {
+          "name": "Error",
+          "file": "internal/session/api.go",
+          "line": 158
+        },
+        {
+          "name": "Unwrap",
+          "file": "internal/session/api.go",
+          "line": 163
+        },
+        {
+          "name": "RegistryPath",
+          "file": "internal/session/api.go",
+          "line": 261
+        },
+        {
+          "name": "WorktreeRoot",
+          "file": "internal/session/api.go",
+          "line": 265
+        },
+        {
+          "name": "Open",
+          "file": "internal/session/session.go",
+          "line": 38
+        },
+        {
+          "name": "Start",
+          "file": "internal/session/session.go",
+          "line": 124
+        },
+        {
+          "name": "End",
+          "file": "internal/session/session.go",
+          "line": 248
+        },
+        {
+          "name": "List",
+          "file": "internal/session/session.go",
+          "line": 552
+        },
+        {
+          "name": "Search",
+          "file": "internal/structure/search.go",
+          "line": 64
+        },
+        {
+          "name": "Complete",
+          "file": "internal/structure/structure.go",
+          "line": 220
+        },
+        {
+          "name": "Complete",
+          "file": "internal/structure/structure.go",
+          "line": 248
+        },
+        {
+          "name": "BinaryPath",
+          "file": "internal/structure/structure.go",
+          "line": 259
+        },
+        {
+          "name": "Argv",
+          "file": "internal/structure/structure.go",
+          "line": 304
+        },
+        {
+          "name": "IsGoSelectorCallPattern",
+          "file": "internal/structure/structure.go",
+          "line": 324
+        },
+        {
+          "name": "CallPatternParseRootRefusal",
+          "file": "internal/structure/structure.go",
+          "line": 363
+        },
+        {
+          "name": "PatternDelimiterRefusal",
+          "file": "internal/structure/structure.go",
+          "line": 410
+        },
+        {
+          "name": "Classify",
+          "file": "internal/structure/structure.go",
+          "line": 493
+        },
+        {
+          "name": "Error",
+          "file": "internal/textedit/errors.go",
+          "line": 54
+        },
+        {
+          "name": "Unwrap",
+          "file": "internal/textedit/errors.go",
+          "line": 62
+        },
+        {
+          "name": "Replace",
+          "file": "internal/textedit/textedit.go",
+          "line": 71
+        },
+        {
+          "name": "Enabled",
+          "file": "internal/usage/usage.go",
+          "line": 111
+        },
+        {
+          "name": "Caller",
+          "file": "internal/usage/usage.go",
+          "line": 114
+        },
+        {
+          "name": "Settings",
+          "file": "internal/usage/usage.go",
+          "line": 119
+        },
+        {
+          "name": "DefaultDestination",
+          "file": "internal/usage/usage.go",
+          "line": 130
+        },
+        {
+          "name": "AppendRecord",
+          "file": "internal/usage/usage.go",
+          "line": 196
+        },
+        {
+          "name": "RedactArgv",
+          "file": "internal/usage/usage.go",
+          "line": 405
+        },
+        {
+          "name": "ledger_key",
+          "file": "qa_discover.py",
+          "line": 73
+        },
+        {
+          "name": "is_due",
+          "file": "qa_discover.py",
+          "line": 92
+        },
+        {
+          "name": "error",
+          "file": "qa_discover.py",
+          "line": 127
+        },
+        {
+          "name": "main",
+          "file": "qa_discover.py",
+          "line": 201
+        },
+        {
+          "name": "check",
+          "file": "scripts/check_board_ids.py",
+          "line": 205
+        },
+        {
+          "name": "report",
+          "file": "scripts/check_board_ids.py",
+          "line": 216
+        },
+        {
+          "name": "write",
+          "file": "scripts/check_board_ids.py",
+          "line": 223
+        },
+        {
+          "name": "battery",
+          "file": "scripts/check_board_ids.py",
+          "line": 249
+        },
+        {
+          "name": "main",
+          "file": "scripts/check_board_ids.py",
+          "line": 456
+        },
+        {
+          "name": "check",
+          "file": "scripts/check_docs_claims.py",
+          "line": 162
+        },
+        {
+          "name": "main",
+          "file": "scripts/check_docs_claims.py",
+          "line": 278
+        },
+        {
+          "name": "main",
+          "file": "scripts/fuzzy_apply_foil.py",
+          "line": 18
+        },
+        {
+          "name": "main",
+          "file": "scripts/qa_board_append.py",
+          "line": 118
+        },
+        {
+          "name": "main",
+          "file": "scripts/reap_stale_jobs.py",
+          "line": 118
+        },
+        {
+          "name": "run",
+          "file": "scripts/render-demo.py",
+          "line": 64
+        },
+        {
+          "name": "h",
+          "file": "scripts/render-demo.py",
+          "line": 69
+        },
+        {
+          "name": "esc",
+          "file": "scripts/render-demo.py",
+          "line": 176
+        },
+        {
+          "name": "row",
+          "file": "scripts/render-demo.py",
+          "line": 185
+        },
+        {
+          "name": "send",
+          "file": "scripts/stub-lsp.py",
+          "line": 36
+        },
+        {
+          "name": "main",
+          "file": "scripts/stub-lsp.py",
+          "line": 43
+        },
+        {
+          "name": "main",
+          "file": "scripts/svg-validate.py",
+          "line": 15
+        }
+      ]
+    }
+  },
+  "unknown": {
+    "count": 0,
+    "rule": "every source file in the corpus is in a language with a public-function extractor (rust, go, python, typescript, javascript); nothing was left unaudited",
+    "languages": [],
+    "files": []
+  },
+  "census": [
+    {
+      "language": "go",
+      "files": 243,
+      "public_symbols": 148,
+      "extractor": "tree-sitter go: function_declaration / method_declaration whose name starts uppercase"
+    },
+    {
+      "language": "python",
+      "files": 12,
+      "public_symbols": 51,
+      "extractor": "tree-sitter python: function_definition whose name does not start with `_`"
+    },
+    {
+      "language": "typescript",
+      "files": 1,
+      "public_symbols": 0,
+      "extractor": "tree-sitter ts/js: declarations inside an `export_statement`"
+    }
+  ],
+  "symbols": [
+    {
+      "name": "String",
+      "file": "cmd/toolsd/main.go",
+      "line": 2146,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 80,
+      "referenced_by": [
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht059_devnull_cli_test.go",
+        "cmd/toolsd/cht065_staleness_test.go",
+        "cmd/toolsd/cht070_usage_conflict_cli_test.go",
+        "cmd/toolsd/cht080_metrics_selfrecord_test.go",
+        "cmd/toolsd/cht081_metrics_empty_json_test.go",
+        "cmd/toolsd/cht084_metrics_nousage_json_test.go",
+        "cmd/toolsd/cht085_prefix_cli_test.go",
+        "cmd/toolsd/cht095_remote_access_test.go"
+      ],
+      "tested_by_count": 64,
+      "tested_by": [
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht059_devnull_cli_test.go",
+        "cmd/toolsd/cht065_staleness_test.go",
+        "cmd/toolsd/cht070_usage_conflict_cli_test.go",
+        "cmd/toolsd/cht080_metrics_selfrecord_test.go",
+        "cmd/toolsd/cht081_metrics_empty_json_test.go",
+        "cmd/toolsd/cht084_metrics_nousage_json_test.go",
+        "cmd/toolsd/cht085_prefix_cli_test.go",
+        "cmd/toolsd/cht095_remote_access_test.go"
+      ]
+    },
+    {
+      "name": "Set",
+      "file": "cmd/toolsd/main.go",
+      "line": 2149,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 6,
+      "referenced_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht094_serve_health_test.go",
+        "cmd/toolsd/serve.go",
+        "cmd/toolsd/usage.go",
+        "internal/lsp/api.go",
+        "internal/probe/probe.go"
+      ],
+      "tested_by_count": 2,
+      "tested_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht094_serve_health_test.go"
+      ]
+    },
+    {
+      "name": "String",
+      "file": "cmd/toolsd/main.go",
+      "line": 2334,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 80,
+      "referenced_by": [
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht059_devnull_cli_test.go",
+        "cmd/toolsd/cht065_staleness_test.go",
+        "cmd/toolsd/cht070_usage_conflict_cli_test.go",
+        "cmd/toolsd/cht080_metrics_selfrecord_test.go",
+        "cmd/toolsd/cht081_metrics_empty_json_test.go",
+        "cmd/toolsd/cht084_metrics_nousage_json_test.go",
+        "cmd/toolsd/cht085_prefix_cli_test.go",
+        "cmd/toolsd/cht095_remote_access_test.go"
+      ],
+      "tested_by_count": 64,
+      "tested_by": [
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht059_devnull_cli_test.go",
+        "cmd/toolsd/cht065_staleness_test.go",
+        "cmd/toolsd/cht070_usage_conflict_cli_test.go",
+        "cmd/toolsd/cht080_metrics_selfrecord_test.go",
+        "cmd/toolsd/cht081_metrics_empty_json_test.go",
+        "cmd/toolsd/cht084_metrics_nousage_json_test.go",
+        "cmd/toolsd/cht085_prefix_cli_test.go",
+        "cmd/toolsd/cht095_remote_access_test.go"
+      ]
+    },
+    {
+      "name": "Set",
+      "file": "cmd/toolsd/main.go",
+      "line": 2337,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 6,
+      "referenced_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht094_serve_health_test.go",
+        "cmd/toolsd/serve.go",
+        "cmd/toolsd/usage.go",
+        "internal/lsp/api.go",
+        "internal/probe/probe.go"
+      ],
+      "tested_by_count": 2,
+      "tested_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht094_serve_health_test.go"
+      ]
+    },
+    {
+      "name": "String",
+      "file": "cmd/toolsd/main.go",
+      "line": 2349,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 80,
+      "referenced_by": [
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht059_devnull_cli_test.go",
+        "cmd/toolsd/cht065_staleness_test.go",
+        "cmd/toolsd/cht070_usage_conflict_cli_test.go",
+        "cmd/toolsd/cht080_metrics_selfrecord_test.go",
+        "cmd/toolsd/cht081_metrics_empty_json_test.go",
+        "cmd/toolsd/cht084_metrics_nousage_json_test.go",
+        "cmd/toolsd/cht085_prefix_cli_test.go",
+        "cmd/toolsd/cht095_remote_access_test.go"
+      ],
+      "tested_by_count": 64,
+      "tested_by": [
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht059_devnull_cli_test.go",
+        "cmd/toolsd/cht065_staleness_test.go",
+        "cmd/toolsd/cht070_usage_conflict_cli_test.go",
+        "cmd/toolsd/cht080_metrics_selfrecord_test.go",
+        "cmd/toolsd/cht081_metrics_empty_json_test.go",
+        "cmd/toolsd/cht084_metrics_nousage_json_test.go",
+        "cmd/toolsd/cht085_prefix_cli_test.go",
+        "cmd/toolsd/cht095_remote_access_test.go"
+      ]
+    },
+    {
+      "name": "Set",
+      "file": "cmd/toolsd/main.go",
+      "line": 2352,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 6,
+      "referenced_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht094_serve_health_test.go",
+        "cmd/toolsd/serve.go",
+        "cmd/toolsd/usage.go",
+        "internal/lsp/api.go",
+        "internal/probe/probe.go"
+      ],
+      "tested_by_count": 2,
+      "tested_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht094_serve_health_test.go"
+      ]
+    },
+    {
+      "name": "Accept",
+      "file": "cmd/toolsd/serve.go",
+      "line": 284,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 11,
+      "referenced_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht094_serve_health_test.go",
+        "cmd/toolsd/cht095_remote_access_test.go",
+        "cmd/toolsd/cht107_test.go",
+        "cmd/toolsd/cht10a_perconn_units_test.go",
+        "cmd/toolsd/cht137_serve_shape_test.go",
+        "cmd/toolsd/review2_socket_mode_test.go",
+        "internal/describe/registry.go",
+        "internal/docsguard/descriptor_examples_test.go",
+        "internal/docsguard/generated_surface.go"
+      ],
+      "tested_by_count": 8,
+      "tested_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht094_serve_health_test.go",
+        "cmd/toolsd/cht095_remote_access_test.go",
+        "cmd/toolsd/cht107_test.go",
+        "cmd/toolsd/cht10a_perconn_units_test.go",
+        "cmd/toolsd/cht137_serve_shape_test.go",
+        "cmd/toolsd/review2_socket_mode_test.go",
+        "internal/docsguard/descriptor_examples_test.go"
+      ]
+    },
+    {
+      "name": "Close",
+      "file": "cmd/toolsd/serve.go",
+      "line": 292,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 34,
+      "referenced_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht094_serve_health_test.go",
+        "cmd/toolsd/cht095_remote_access_test.go",
+        "cmd/toolsd/cht098_lsp_battery_test.go",
+        "cmd/toolsd/cht098_mcp_stdio_test.go",
+        "cmd/toolsd/cht098_narrate_battery_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/fsverbs.go"
+      ],
+      "tested_by_count": 21,
+      "tested_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht094_serve_health_test.go",
+        "cmd/toolsd/cht095_remote_access_test.go",
+        "cmd/toolsd/cht098_lsp_battery_test.go",
+        "cmd/toolsd/cht098_mcp_stdio_test.go",
+        "cmd/toolsd/cht098_narrate_battery_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/fsverbs_perf_test.go"
+      ]
+    },
+    {
+      "name": "Addr",
+      "file": "cmd/toolsd/serve.go",
+      "line": 293,
+      "bucket": "unlinked",
+      "reachable": true,
+      "linked": false,
+      "referenced_by_count": 0,
+      "referenced_by": [],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "Network",
+      "file": "cmd/toolsd/serve.go",
+      "line": 299,
+      "bucket": "unreachable",
+      "reachable": false,
+      "linked": true,
+      "referenced_by_count": 1,
+      "referenced_by": [
+        "cmd/toolsd/cht095_remote_access_test.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "cmd/toolsd/cht095_remote_access_test.go"
+      ]
+    },
+    {
+      "name": "String",
+      "file": "cmd/toolsd/serve.go",
+      "line": 300,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 80,
+      "referenced_by": [
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht059_devnull_cli_test.go",
+        "cmd/toolsd/cht065_staleness_test.go",
+        "cmd/toolsd/cht070_usage_conflict_cli_test.go",
+        "cmd/toolsd/cht080_metrics_selfrecord_test.go",
+        "cmd/toolsd/cht081_metrics_empty_json_test.go",
+        "cmd/toolsd/cht084_metrics_nousage_json_test.go",
+        "cmd/toolsd/cht085_prefix_cli_test.go",
+        "cmd/toolsd/cht095_remote_access_test.go"
+      ],
+      "tested_by_count": 64,
+      "tested_by": [
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht059_devnull_cli_test.go",
+        "cmd/toolsd/cht065_staleness_test.go",
+        "cmd/toolsd/cht070_usage_conflict_cli_test.go",
+        "cmd/toolsd/cht080_metrics_selfrecord_test.go",
+        "cmd/toolsd/cht081_metrics_empty_json_test.go",
+        "cmd/toolsd/cht084_metrics_nousage_json_test.go",
+        "cmd/toolsd/cht085_prefix_cli_test.go",
+        "cmd/toolsd/cht095_remote_access_test.go"
+      ]
+    },
+    {
+      "name": "Read",
+      "file": "cmd/toolsd/serve.go",
+      "line": 318,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 13,
+      "referenced_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/fsverbs.go",
+        "cmd/toolsd/fsverbs_test.go",
+        "cmd/toolsd/main.go",
+        "cmd/toolsd/mcp.go",
+        "internal/describe/registry.go",
+        "internal/docsguard/descriptor_examples_test.go",
+        "internal/docsguard/generated_surface.go",
+        "internal/fsops/errors.go",
+        "internal/fsops/fsops.go"
+      ],
+      "tested_by_count": 4,
+      "tested_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/fsverbs_test.go",
+        "internal/docsguard/descriptor_examples_test.go",
+        "internal/fsops/fsops_test.go"
+      ]
+    },
+    {
+      "name": "Write",
+      "file": "cmd/toolsd/serve.go",
+      "line": 319,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 22,
+      "referenced_by": [
+        "cmd/toolsd/cht098_narrate_battery_test.go",
+        "cmd/toolsd/fsverbs.go",
+        "cmd/toolsd/fsverbs_test.go",
+        "cmd/toolsd/main.go",
+        "cmd/toolsd/mcp.go",
+        "internal/describe/registry.go",
+        "internal/docsguard/descriptor_examples_test.go",
+        "internal/docsguard/generated_surface.go",
+        "internal/fsops/errors.go",
+        "internal/fsops/fsops.go"
+      ],
+      "tested_by_count": 6,
+      "tested_by": [
+        "cmd/toolsd/cht098_narrate_battery_test.go",
+        "cmd/toolsd/fsverbs_test.go",
+        "internal/docsguard/descriptor_examples_test.go",
+        "internal/fsops/fsops_test.go",
+        "internal/fsops/symlink_test.go",
+        "internal/wiregen/cht055_transport_http_test.go"
+      ]
+    },
+    {
+      "name": "Close",
+      "file": "cmd/toolsd/serve.go",
+      "line": 321,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 34,
+      "referenced_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht094_serve_health_test.go",
+        "cmd/toolsd/cht095_remote_access_test.go",
+        "cmd/toolsd/cht098_lsp_battery_test.go",
+        "cmd/toolsd/cht098_mcp_stdio_test.go",
+        "cmd/toolsd/cht098_narrate_battery_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/fsverbs.go"
+      ],
+      "tested_by_count": 21,
+      "tested_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht094_serve_health_test.go",
+        "cmd/toolsd/cht095_remote_access_test.go",
+        "cmd/toolsd/cht098_lsp_battery_test.go",
+        "cmd/toolsd/cht098_mcp_stdio_test.go",
+        "cmd/toolsd/cht098_narrate_battery_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/fsverbs_perf_test.go"
+      ]
+    },
+    {
+      "name": "LocalAddr",
+      "file": "cmd/toolsd/serve.go",
+      "line": 326,
+      "bucket": "unlinked",
+      "reachable": true,
+      "linked": false,
+      "referenced_by_count": 0,
+      "referenced_by": [],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "RemoteAddr",
+      "file": "cmd/toolsd/serve.go",
+      "line": 327,
+      "bucket": "unreachable",
+      "reachable": false,
+      "linked": false,
+      "referenced_by_count": 0,
+      "referenced_by": [],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "SetDeadline",
+      "file": "cmd/toolsd/serve.go",
+      "line": 328,
+      "bucket": "unlinked",
+      "reachable": true,
+      "linked": false,
+      "referenced_by_count": 0,
+      "referenced_by": [],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "SetReadDeadline",
+      "file": "cmd/toolsd/serve.go",
+      "line": 329,
+      "bucket": "unreachable",
+      "reachable": false,
+      "linked": false,
+      "referenced_by_count": 0,
+      "referenced_by": [],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "SetWriteDeadline",
+      "file": "cmd/toolsd/serve.go",
+      "line": 330,
+      "bucket": "unreachable",
+      "reachable": false,
+      "linked": false,
+      "referenced_by_count": 0,
+      "referenced_by": [],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "Path",
+      "file": "internal/config/config.go",
+      "line": 173,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 52,
+      "referenced_by": [
+        "cmd/genwire/main.go",
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht076_usage_claim_test.go",
+        "cmd/toolsd/cht083_symlink_cli_test.go",
+        "cmd/toolsd/cht098_lsp_battery_test.go",
+        "cmd/toolsd/cht098_narrate_battery_test.go",
+        "cmd/toolsd/cht140_cwd_config_test.go",
+        "cmd/toolsd/cht164_apply_root_test.go",
+        "cmd/toolsd/config_verb.go"
+      ],
+      "tested_by_count": 33,
+      "tested_by": [
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht076_usage_claim_test.go",
+        "cmd/toolsd/cht083_symlink_cli_test.go",
+        "cmd/toolsd/cht098_lsp_battery_test.go",
+        "cmd/toolsd/cht098_narrate_battery_test.go",
+        "cmd/toolsd/cht140_cwd_config_test.go",
+        "cmd/toolsd/cht164_apply_root_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/lsp_test.go"
+      ]
+    },
+    {
+      "name": "Lookup",
+      "file": "internal/config/config.go",
+      "line": 211,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 17,
+      "referenced_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht061_mcp_write_test.go",
+        "cmd/toolsd/cht064_mcp_schema_test.go",
+        "cmd/toolsd/cht094_serve_health_test.go",
+        "cmd/toolsd/cht095_remote_access_test.go",
+        "cmd/toolsd/cht160_binary_patch_test.go",
+        "cmd/toolsd/describe_test.go",
+        "cmd/toolsd/main.go",
+        "cmd/toolsd/mcp.go",
+        "cmd/toolsd/mcp_test.go"
+      ],
+      "tested_by_count": 13,
+      "tested_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht061_mcp_write_test.go",
+        "cmd/toolsd/cht064_mcp_schema_test.go",
+        "cmd/toolsd/cht094_serve_health_test.go",
+        "cmd/toolsd/cht095_remote_access_test.go",
+        "cmd/toolsd/cht160_binary_patch_test.go",
+        "cmd/toolsd/describe_test.go",
+        "cmd/toolsd/mcp_test.go",
+        "cmd/toolsd/metrics_cli_test.go",
+        "cmd/toolsd/status_cli_test.go"
+      ]
+    },
+    {
+      "name": "String",
+      "file": "internal/config/config.go",
+      "line": 241,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 80,
+      "referenced_by": [
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht059_devnull_cli_test.go",
+        "cmd/toolsd/cht065_staleness_test.go",
+        "cmd/toolsd/cht070_usage_conflict_cli_test.go",
+        "cmd/toolsd/cht080_metrics_selfrecord_test.go",
+        "cmd/toolsd/cht081_metrics_empty_json_test.go",
+        "cmd/toolsd/cht084_metrics_nousage_json_test.go",
+        "cmd/toolsd/cht085_prefix_cli_test.go",
+        "cmd/toolsd/cht095_remote_access_test.go"
+      ],
+      "tested_by_count": 64,
+      "tested_by": [
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht059_devnull_cli_test.go",
+        "cmd/toolsd/cht065_staleness_test.go",
+        "cmd/toolsd/cht070_usage_conflict_cli_test.go",
+        "cmd/toolsd/cht080_metrics_selfrecord_test.go",
+        "cmd/toolsd/cht081_metrics_empty_json_test.go",
+        "cmd/toolsd/cht084_metrics_nousage_json_test.go",
+        "cmd/toolsd/cht085_prefix_cli_test.go",
+        "cmd/toolsd/cht095_remote_access_test.go"
+      ]
+    },
+    {
+      "name": "Concrete",
+      "file": "internal/config/config.go",
+      "line": 277,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 3,
+      "referenced_by": [
+        "cmd/toolsd/main.go",
+        "cmd/toolsd/usage.go",
+        "internal/config/config_test.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/config/config_test.go"
+      ]
+    },
+    {
+      "name": "DefaultPath",
+      "file": "internal/config/config.go",
+      "line": 327,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 7,
+      "referenced_by": [
+        "cmd/toolsd/cht140_cwd_config_test.go",
+        "cmd/toolsd/config_verb.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/main.go",
+        "cmd/toolsd/usage.go",
+        "internal/config/cht140_gitroot_test.go",
+        "internal/config/config_test.go"
+      ],
+      "tested_by_count": 4,
+      "tested_by": [
+        "cmd/toolsd/cht140_cwd_config_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "internal/config/cht140_gitroot_test.go",
+        "internal/config/config_test.go"
+      ]
+    },
+    {
+      "name": "Specs",
+      "file": "internal/config/config.go",
+      "line": 452,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 5,
+      "referenced_by": [
+        "cmd/toolsd/config_verb.go",
+        "cmd/toolsd/main.go",
+        "cmd/toolsd/usage.go",
+        "internal/config/config_test.go",
+        "internal/docsguard/config_docs_test.go"
+      ],
+      "tested_by_count": 2,
+      "tested_by": [
+        "internal/config/config_test.go",
+        "internal/docsguard/config_docs_test.go"
+      ]
+    },
+    {
+      "name": "Parse",
+      "file": "internal/config/config.go",
+      "line": 463,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 15,
+      "referenced_by": [
+        "cmd/genwire/main.go",
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/config_verb.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/main.go",
+        "cmd/toolsd/probe_summary_test.go",
+        "cmd/toolsd/structure_verb.go",
+        "cmd/toolsd/usage.go",
+        "internal/config/config_test.go",
+        "internal/describe/registry.go"
+      ],
+      "tested_by_count": 5,
+      "tested_by": [
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/probe_summary_test.go",
+        "internal/config/config_test.go",
+        "internal/docsguard/config_docs_test.go"
+      ]
+    },
+    {
+      "name": "Resolve",
+      "file": "internal/config/config.go",
+      "line": 666,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 7,
+      "referenced_by": [
+        "cmd/toolsd/config_verb.go",
+        "cmd/toolsd/main.go",
+        "cmd/toolsd/usage.go",
+        "internal/config/config_test.go",
+        "internal/docsguard/config_docs_test.go",
+        "internal/lease/lease.go",
+        "qa_discover.py"
+      ],
+      "tested_by_count": 2,
+      "tested_by": [
+        "internal/config/config_test.go",
+        "internal/docsguard/config_docs_test.go"
+      ]
+    },
+    {
+      "name": "Registry",
+      "file": "internal/describe/render.go",
+      "line": 25,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 16,
+      "referenced_by": [
+        "cmd/toolsd/cht061_mcp_write_test.go",
+        "cmd/toolsd/cht098_mcp_stdio_test.go",
+        "cmd/toolsd/cht141_metrics_untagged_test.go",
+        "cmd/toolsd/describe_test.go",
+        "cmd/toolsd/main.go",
+        "cmd/toolsd/mcp.go",
+        "cmd/toolsd/mcp_test.go",
+        "internal/describe/describe.go",
+        "internal/describe/registry_test.go",
+        "internal/describe/render_test.go"
+      ],
+      "tested_by_count": 11,
+      "tested_by": [
+        "cmd/toolsd/cht061_mcp_write_test.go",
+        "cmd/toolsd/cht098_mcp_stdio_test.go",
+        "cmd/toolsd/cht141_metrics_untagged_test.go",
+        "cmd/toolsd/describe_test.go",
+        "cmd/toolsd/mcp_test.go",
+        "internal/describe/registry_test.go",
+        "internal/describe/render_test.go",
+        "internal/docsguard/cht094_health_docs_test.go",
+        "internal/docsguard/descriptor_examples_test.go",
+        "internal/docsguard/registry_docs_test.go"
+      ]
+    },
+    {
+      "name": "Lookup",
+      "file": "internal/describe/render.go",
+      "line": 34,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 17,
+      "referenced_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht061_mcp_write_test.go",
+        "cmd/toolsd/cht064_mcp_schema_test.go",
+        "cmd/toolsd/cht094_serve_health_test.go",
+        "cmd/toolsd/cht095_remote_access_test.go",
+        "cmd/toolsd/cht160_binary_patch_test.go",
+        "cmd/toolsd/describe_test.go",
+        "cmd/toolsd/main.go",
+        "cmd/toolsd/mcp.go",
+        "cmd/toolsd/mcp_test.go"
+      ],
+      "tested_by_count": 13,
+      "tested_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht061_mcp_write_test.go",
+        "cmd/toolsd/cht064_mcp_schema_test.go",
+        "cmd/toolsd/cht094_serve_health_test.go",
+        "cmd/toolsd/cht095_remote_access_test.go",
+        "cmd/toolsd/cht160_binary_patch_test.go",
+        "cmd/toolsd/describe_test.go",
+        "cmd/toolsd/mcp_test.go",
+        "cmd/toolsd/metrics_cli_test.go",
+        "cmd/toolsd/status_cli_test.go"
+      ]
+    },
+    {
+      "name": "Text",
+      "file": "internal/describe/render.go",
+      "line": 46,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 17,
+      "referenced_by": [
+        "clients/go/toolsdclient/client.gen.go",
+        "cmd/toolsd/cht155_unbounded_exec_guard_test.go",
+        "cmd/toolsd/main.go",
+        "cmd/toolsd/mcp.go",
+        "cmd/toolsd/mcp_wire.gen.go",
+        "cmd/toolsd/structure_verb.go",
+        "cmd/toolsd/testmain_guard_test.go",
+        "internal/describe/describe.go",
+        "internal/describe/render_test.go",
+        "internal/gendocs/gendocs.go"
+      ],
+      "tested_by_count": 5,
+      "tested_by": [
+        "cmd/toolsd/cht155_unbounded_exec_guard_test.go",
+        "cmd/toolsd/testmain_guard_test.go",
+        "internal/describe/render_test.go",
+        "internal/hermeticity/guard_test.go",
+        "internal/structure/structure_test.go"
+      ]
+    },
+    {
+      "name": "Full",
+      "file": "internal/describe/render.go",
+      "line": 83,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 2,
+      "referenced_by": [
+        "cmd/toolsd/main.go",
+        "internal/describe/render_test.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/describe/render_test.go"
+      ]
+    },
+    {
+      "name": "VerbText",
+      "file": "internal/describe/render.go",
+      "line": 94,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 3,
+      "referenced_by": [
+        "cmd/toolsd/main.go",
+        "internal/describe/describe.go",
+        "internal/describe/render_test.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/describe/render_test.go"
+      ]
+    },
+    {
+      "name": "JSON",
+      "file": "internal/describe/render.go",
+      "line": 164,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 93,
+      "referenced_by": [
+        "clients/go/toolsdclient/client.gen.go",
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/cht060_reaper_test.go",
+        "cmd/toolsd/cht061_mcp_write_test.go",
+        "cmd/toolsd/cht064_stdin_cli_test.go",
+        "cmd/toolsd/cht070_usage_conflict_cli_test.go",
+        "cmd/toolsd/cht076_usage_claim_test.go"
+      ],
+      "tested_by_count": 63,
+      "tested_by": [
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/cht060_reaper_test.go",
+        "cmd/toolsd/cht061_mcp_write_test.go",
+        "cmd/toolsd/cht064_stdin_cli_test.go",
+        "cmd/toolsd/cht070_usage_conflict_cli_test.go",
+        "cmd/toolsd/cht076_usage_claim_test.go",
+        "cmd/toolsd/cht079_unpinned_test.go"
+      ]
+    },
+    {
+      "name": "Merge",
+      "file": "internal/diff3/diff3.go",
+      "line": 116,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 5,
+      "referenced_by": [
+        "cmd/toolsd/main.go",
+        "internal/diff3/diff3_bench_test.go",
+        "internal/diff3/diff3_test.go",
+        "internal/diff3/trailing_nl_test.go",
+        "internal/lease/lease.go"
+      ],
+      "tested_by_count": 3,
+      "tested_by": [
+        "internal/diff3/diff3_bench_test.go",
+        "internal/diff3/diff3_test.go",
+        "internal/diff3/trailing_nl_test.go"
+      ]
+    },
+    {
+      "name": "Generate",
+      "file": "internal/diffgen/diffgen.go",
+      "line": 46,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 5,
+      "referenced_by": [
+        "cmd/toolsd/main.go",
+        "internal/describe/registry.go",
+        "internal/diffgen/diffgen_test.go",
+        "internal/diffgen/doc.go",
+        "scripts/render-demo.py"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/diffgen/diffgen_test.go"
+      ]
+    },
+    {
+      "name": "Open",
+      "file": "internal/fsops/fsops.go",
+      "line": 69,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 25,
+      "referenced_by": [
+        "cmd/toolsd/cht067_lease_refusal_cli_test.go",
+        "cmd/toolsd/cht068_session_refusal_cli_test.go",
+        "cmd/toolsd/cht098_lsp_battery_test.go",
+        "cmd/toolsd/cht130_apply_lease.go",
+        "cmd/toolsd/cht130_apply_lease_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/fsverbs.go",
+        "cmd/toolsd/fsverbs_perf_test.go",
+        "cmd/toolsd/lease_test.go",
+        "cmd/toolsd/main.go"
+      ],
+      "tested_by_count": 15,
+      "tested_by": [
+        "cmd/toolsd/cht067_lease_refusal_cli_test.go",
+        "cmd/toolsd/cht068_session_refusal_cli_test.go",
+        "cmd/toolsd/cht098_lsp_battery_test.go",
+        "cmd/toolsd/cht130_apply_lease_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/fsverbs_perf_test.go",
+        "cmd/toolsd/lease_test.go",
+        "internal/docsguard/descriptor_examples_test.go",
+        "internal/fsops/fsops_test.go",
+        "internal/hermeticity/guard_test.go"
+      ]
+    },
+    {
+      "name": "Path",
+      "file": "internal/fsops/fsops.go",
+      "line": 108,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 52,
+      "referenced_by": [
+        "cmd/genwire/main.go",
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht076_usage_claim_test.go",
+        "cmd/toolsd/cht083_symlink_cli_test.go",
+        "cmd/toolsd/cht098_lsp_battery_test.go",
+        "cmd/toolsd/cht098_narrate_battery_test.go",
+        "cmd/toolsd/cht140_cwd_config_test.go",
+        "cmd/toolsd/cht164_apply_root_test.go",
+        "cmd/toolsd/config_verb.go"
+      ],
+      "tested_by_count": 33,
+      "tested_by": [
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht076_usage_claim_test.go",
+        "cmd/toolsd/cht083_symlink_cli_test.go",
+        "cmd/toolsd/cht098_lsp_battery_test.go",
+        "cmd/toolsd/cht098_narrate_battery_test.go",
+        "cmd/toolsd/cht140_cwd_config_test.go",
+        "cmd/toolsd/cht164_apply_root_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/lsp_test.go"
+      ]
+    },
+    {
+      "name": "Read",
+      "file": "internal/fsops/fsops.go",
+      "line": 151,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 13,
+      "referenced_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/fsverbs.go",
+        "cmd/toolsd/fsverbs_test.go",
+        "cmd/toolsd/main.go",
+        "cmd/toolsd/mcp.go",
+        "cmd/toolsd/serve.go",
+        "internal/describe/registry.go",
+        "internal/docsguard/descriptor_examples_test.go",
+        "internal/docsguard/generated_surface.go",
+        "internal/fsops/errors.go"
+      ],
+      "tested_by_count": 4,
+      "tested_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/fsverbs_test.go",
+        "internal/docsguard/descriptor_examples_test.go",
+        "internal/fsops/fsops_test.go"
+      ]
+    },
+    {
+      "name": "Write",
+      "file": "internal/fsops/fsops.go",
+      "line": 183,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 22,
+      "referenced_by": [
+        "cmd/toolsd/cht098_narrate_battery_test.go",
+        "cmd/toolsd/fsverbs.go",
+        "cmd/toolsd/fsverbs_test.go",
+        "cmd/toolsd/main.go",
+        "cmd/toolsd/mcp.go",
+        "cmd/toolsd/serve.go",
+        "internal/describe/registry.go",
+        "internal/docsguard/descriptor_examples_test.go",
+        "internal/docsguard/generated_surface.go",
+        "internal/fsops/errors.go"
+      ],
+      "tested_by_count": 6,
+      "tested_by": [
+        "cmd/toolsd/cht098_narrate_battery_test.go",
+        "cmd/toolsd/fsverbs_test.go",
+        "internal/docsguard/descriptor_examples_test.go",
+        "internal/fsops/fsops_test.go",
+        "internal/fsops/symlink_test.go",
+        "internal/wiregen/cht055_transport_http_test.go"
+      ]
+    },
+    {
+      "name": "MkdirAll",
+      "file": "internal/fsops/fsops.go",
+      "line": 229,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 37,
+      "referenced_by": [
+        "cmd/genwire/main.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht057_followup_path_test.go",
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/cht065_staleness_test.go",
+        "cmd/toolsd/cht076_usage_claim_test.go",
+        "cmd/toolsd/cht083_symlink_cli_test.go",
+        "cmd/toolsd/cht085_prefix_cli_test.go",
+        "cmd/toolsd/cht130_apply_lease_test.go"
+      ],
+      "tested_by_count": 32,
+      "tested_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht057_followup_path_test.go",
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/cht065_staleness_test.go",
+        "cmd/toolsd/cht076_usage_claim_test.go",
+        "cmd/toolsd/cht083_symlink_cli_test.go",
+        "cmd/toolsd/cht085_prefix_cli_test.go",
+        "cmd/toolsd/cht130_apply_lease_test.go",
+        "cmd/toolsd/cht140_cwd_config_test.go"
+      ]
+    },
+    {
+      "name": "List",
+      "file": "internal/fsops/fsops.go",
+      "line": 244,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 13,
+      "referenced_by": [
+        "cmd/toolsd/fsverbs.go",
+        "cmd/toolsd/fsverbs_test.go",
+        "cmd/toolsd/main.go",
+        "internal/describe/registry.go",
+        "internal/docsguard/descriptor_examples_test.go",
+        "internal/docsguard/generated_surface.go",
+        "internal/fsops/errors.go",
+        "internal/fsops/fsops_test.go",
+        "internal/session/api.go",
+        "internal/session/cht069_unborn_head_test.go"
+      ],
+      "tested_by_count": 5,
+      "tested_by": [
+        "cmd/toolsd/fsverbs_test.go",
+        "internal/docsguard/descriptor_examples_test.go",
+        "internal/fsops/fsops_test.go",
+        "internal/session/cht069_unborn_head_test.go",
+        "internal/session/session_test.go"
+      ]
+    },
+    {
+      "name": "DecisionBlock",
+      "file": "internal/gendocs/gendocs.go",
+      "line": 53,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 2,
+      "referenced_by": [
+        "internal/docsguard/registry_docs_test.go",
+        "internal/gendocs/gendocs_test.go"
+      ],
+      "tested_by_count": 2,
+      "tested_by": [
+        "internal/docsguard/registry_docs_test.go",
+        "internal/gendocs/gendocs_test.go"
+      ]
+    },
+    {
+      "name": "Run",
+      "file": "internal/gendocs/gendocs.go",
+      "line": 93,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 107,
+      "referenced_by": [
+        "cmd/gendocs/main.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/cht058_board_gate_test.go",
+        "cmd/toolsd/cht060_reaper_test.go",
+        "cmd/toolsd/cht065_staleness_test.go",
+        "cmd/toolsd/cht072_diffgen_red_test.go",
+        "cmd/toolsd/cht075_incomplete_section_cli_test.go",
+        "cmd/toolsd/cht076_usage_claim_test.go"
+      ],
+      "tested_by_count": 99,
+      "tested_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/cht058_board_gate_test.go",
+        "cmd/toolsd/cht060_reaper_test.go",
+        "cmd/toolsd/cht065_staleness_test.go",
+        "cmd/toolsd/cht072_diffgen_red_test.go",
+        "cmd/toolsd/cht075_incomplete_section_cli_test.go",
+        "cmd/toolsd/cht076_usage_claim_test.go",
+        "cmd/toolsd/cht094_serve_health_test.go"
+      ]
+    },
+    {
+      "name": "Error",
+      "file": "internal/lease/errors.go",
+      "line": 56,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 53,
+      "referenced_by": [
+        "clients/go/toolsdclient/client.gen.go",
+        "clients/typescript/toolsd-client.gen.ts",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht062_install_readme_test.go",
+        "cmd/toolsd/cht067_lease_refusal_cli_test.go",
+        "cmd/toolsd/cht068_session_refusal_cli_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/lease_test.go",
+        "cmd/toolsd/main.go"
+      ],
+      "tested_by_count": 38,
+      "tested_by": [
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht062_install_readme_test.go",
+        "cmd/toolsd/cht067_lease_refusal_cli_test.go",
+        "cmd/toolsd/cht068_session_refusal_cli_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/lease_test.go",
+        "cmd/toolsd/mcp_test.go",
+        "cmd/toolsd/probe_test.go",
+        "cmd/toolsd/renew_paths_test.go"
+      ]
+    },
+    {
+      "name": "Unwrap",
+      "file": "internal/lease/errors.go",
+      "line": 70,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 6,
+      "referenced_by": [
+        "internal/lsp/client.go",
+        "internal/lsp/errors.go",
+        "internal/patch/errors.go",
+        "internal/session/api.go",
+        "internal/structure/structure_test.go",
+        "internal/textedit/errors.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/structure/structure_test.go"
+      ]
+    },
+    {
+      "name": "Error",
+      "file": "internal/lease/errors.go",
+      "line": 82,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 53,
+      "referenced_by": [
+        "clients/go/toolsdclient/client.gen.go",
+        "clients/typescript/toolsd-client.gen.ts",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht062_install_readme_test.go",
+        "cmd/toolsd/cht067_lease_refusal_cli_test.go",
+        "cmd/toolsd/cht068_session_refusal_cli_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/lease_test.go",
+        "cmd/toolsd/main.go"
+      ],
+      "tested_by_count": 38,
+      "tested_by": [
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht062_install_readme_test.go",
+        "cmd/toolsd/cht067_lease_refusal_cli_test.go",
+        "cmd/toolsd/cht068_session_refusal_cli_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/lease_test.go",
+        "cmd/toolsd/mcp_test.go",
+        "cmd/toolsd/probe_test.go",
+        "cmd/toolsd/renew_paths_test.go"
+      ]
+    },
+    {
+      "name": "Unwrap",
+      "file": "internal/lease/errors.go",
+      "line": 88,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 6,
+      "referenced_by": [
+        "internal/lsp/client.go",
+        "internal/lsp/errors.go",
+        "internal/patch/errors.go",
+        "internal/session/api.go",
+        "internal/structure/structure_test.go",
+        "internal/textedit/errors.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/structure/structure_test.go"
+      ]
+    },
+    {
+      "name": "Open",
+      "file": "internal/lease/lease.go",
+      "line": 161,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 25,
+      "referenced_by": [
+        "cmd/toolsd/cht067_lease_refusal_cli_test.go",
+        "cmd/toolsd/cht068_session_refusal_cli_test.go",
+        "cmd/toolsd/cht098_lsp_battery_test.go",
+        "cmd/toolsd/cht130_apply_lease.go",
+        "cmd/toolsd/cht130_apply_lease_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/fsverbs.go",
+        "cmd/toolsd/fsverbs_perf_test.go",
+        "cmd/toolsd/lease_test.go",
+        "cmd/toolsd/main.go"
+      ],
+      "tested_by_count": 15,
+      "tested_by": [
+        "cmd/toolsd/cht067_lease_refusal_cli_test.go",
+        "cmd/toolsd/cht068_session_refusal_cli_test.go",
+        "cmd/toolsd/cht098_lsp_battery_test.go",
+        "cmd/toolsd/cht130_apply_lease_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/fsverbs_perf_test.go",
+        "cmd/toolsd/lease_test.go",
+        "internal/docsguard/descriptor_examples_test.go",
+        "internal/fsops/fsops_test.go",
+        "internal/hermeticity/guard_test.go"
+      ]
+    },
+    {
+      "name": "RegistryPath",
+      "file": "internal/lease/lease.go",
+      "line": 232,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 3,
+      "referenced_by": [
+        "internal/lease/lease_test.go",
+        "internal/session/api.go",
+        "internal/session/session_test.go"
+      ],
+      "tested_by_count": 2,
+      "tested_by": [
+        "internal/lease/lease_test.go",
+        "internal/session/session_test.go"
+      ]
+    },
+    {
+      "name": "Acquire",
+      "file": "internal/lease/lease.go",
+      "line": 309,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 8,
+      "referenced_by": [
+        "cmd/toolsd/cht130_apply_lease_test.go",
+        "cmd/toolsd/main.go",
+        "internal/lease/lease_test.go",
+        "internal/lease/liveness.go",
+        "internal/lease/renew.go",
+        "internal/lease/renew_paths_test.go",
+        "internal/session/session.go",
+        "internal/session/session_test.go"
+      ],
+      "tested_by_count": 4,
+      "tested_by": [
+        "cmd/toolsd/cht130_apply_lease_test.go",
+        "internal/lease/lease_test.go",
+        "internal/lease/renew_paths_test.go",
+        "internal/session/session_test.go"
+      ]
+    },
+    {
+      "name": "Release",
+      "file": "internal/lease/lease.go",
+      "line": 444,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 5,
+      "referenced_by": [
+        "cmd/toolsd/main.go",
+        "internal/lease/errors.go",
+        "internal/lease/lease_test.go",
+        "internal/lease/renew.go",
+        "internal/session/session.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/lease/lease_test.go"
+      ]
+    },
+    {
+      "name": "Status",
+      "file": "internal/lease/lease.go",
+      "line": 488,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 11,
+      "referenced_by": [
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/cht130_apply_lease.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/lease_test.go",
+        "cmd/toolsd/main.go",
+        "cmd/toolsd/probe_test.go",
+        "internal/describe/registry.go",
+        "internal/lease/lease_test.go",
+        "internal/probe/probe.go",
+        "internal/probe/probe_test.go"
+      ],
+      "tested_by_count": 7,
+      "tested_by": [
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/lease_test.go",
+        "cmd/toolsd/probe_test.go",
+        "internal/lease/lease_test.go",
+        "internal/probe/probe_test.go",
+        "internal/session/session_test.go"
+      ]
+    },
+    {
+      "name": "RenewLease",
+      "file": "internal/lease/renew.go",
+      "line": 98,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 2,
+      "referenced_by": [
+        "cmd/toolsd/main.go",
+        "internal/lease/renew_paths_test.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/lease/renew_paths_test.go"
+      ]
+    },
+    {
+      "name": "Renew",
+      "file": "internal/lease/renew.go",
+      "line": 123,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 3,
+      "referenced_by": [
+        "cmd/toolsd/main.go",
+        "internal/lease/lease_test.go",
+        "internal/lease/renew_paths_test.go"
+      ],
+      "tested_by_count": 2,
+      "tested_by": [
+        "internal/lease/lease_test.go",
+        "internal/lease/renew_paths_test.go"
+      ]
+    },
+    {
+      "name": "Server",
+      "file": "internal/lsp/api.go",
+      "line": 265,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 9,
+      "referenced_by": [
+        "cmd/toolsd/cht098_lsp_battery_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/lsp_test.go",
+        "cmd/toolsd/main.go",
+        "cmd/toolsd/probe_summary_test.go",
+        "cmd/toolsd/serve.go",
+        "internal/lsp/client_test.go",
+        "internal/probe/probe_test.go"
+      ],
+      "tested_by_count": 7,
+      "tested_by": [
+        "cmd/toolsd/cht098_lsp_battery_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/lsp_test.go",
+        "cmd/toolsd/probe_summary_test.go",
+        "internal/lsp/client_test.go",
+        "internal/probe/probe_test.go"
+      ]
+    },
+    {
+      "name": "Error",
+      "file": "internal/lsp/client.go",
+      "line": 64,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 53,
+      "referenced_by": [
+        "clients/go/toolsdclient/client.gen.go",
+        "clients/typescript/toolsd-client.gen.ts",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht062_install_readme_test.go",
+        "cmd/toolsd/cht067_lease_refusal_cli_test.go",
+        "cmd/toolsd/cht068_session_refusal_cli_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/lease_test.go",
+        "cmd/toolsd/main.go"
+      ],
+      "tested_by_count": 38,
+      "tested_by": [
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht062_install_readme_test.go",
+        "cmd/toolsd/cht067_lease_refusal_cli_test.go",
+        "cmd/toolsd/cht068_session_refusal_cli_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/lease_test.go",
+        "cmd/toolsd/mcp_test.go",
+        "cmd/toolsd/probe_test.go",
+        "cmd/toolsd/renew_paths_test.go"
+      ]
+    },
+    {
+      "name": "Unwrap",
+      "file": "internal/lsp/client.go",
+      "line": 73,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 6,
+      "referenced_by": [
+        "internal/lease/errors.go",
+        "internal/lsp/errors.go",
+        "internal/patch/errors.go",
+        "internal/session/api.go",
+        "internal/structure/structure_test.go",
+        "internal/textedit/errors.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/structure/structure_test.go"
+      ]
+    },
+    {
+      "name": "Is",
+      "file": "internal/lsp/client.go",
+      "line": 76,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 66,
+      "referenced_by": [
+        "cmd/toolsd/cht066_empty_diff_cli_test.go",
+        "cmd/toolsd/cht067_lease_refusal_cli_test.go",
+        "cmd/toolsd/cht068_session_refusal_cli_test.go",
+        "cmd/toolsd/cht130_apply_lease.go",
+        "cmd/toolsd/cht155_bounded_exec_test.go",
+        "cmd/toolsd/fsverbs.go",
+        "cmd/toolsd/main.go",
+        "cmd/toolsd/mcp.go",
+        "cmd/toolsd/metrics_verb.go",
+        "cmd/toolsd/serve.go"
+      ],
+      "tested_by_count": 37,
+      "tested_by": [
+        "cmd/toolsd/cht066_empty_diff_cli_test.go",
+        "cmd/toolsd/cht067_lease_refusal_cli_test.go",
+        "cmd/toolsd/cht068_session_refusal_cli_test.go",
+        "cmd/toolsd/cht155_bounded_exec_test.go",
+        "internal/config/config_test.go",
+        "internal/fsops/fsops_test.go",
+        "internal/fsops/symlink_test.go",
+        "internal/lease/cht067_refusal_message_test.go",
+        "internal/lease/lease_test.go",
+        "internal/lease/renew_paths_test.go"
+      ]
+    },
+    {
+      "name": "Connect",
+      "file": "internal/lsp/client.go",
+      "line": 93,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 10,
+      "referenced_by": [
+        "cmd/toolsd/main.go",
+        "internal/lsp/api.go",
+        "internal/lsp/cht132_test.go",
+        "internal/lsp/client_test.go",
+        "internal/lsp/language_test.go",
+        "internal/lsp/module_test.go",
+        "internal/lsp/process_test.go",
+        "internal/lsp/settle_test.go",
+        "internal/lsp/transport.go",
+        "internal/lsp/transport_test.go"
+      ],
+      "tested_by_count": 7,
+      "tested_by": [
+        "internal/lsp/cht132_test.go",
+        "internal/lsp/client_test.go",
+        "internal/lsp/language_test.go",
+        "internal/lsp/module_test.go",
+        "internal/lsp/process_test.go",
+        "internal/lsp/settle_test.go",
+        "internal/lsp/transport_test.go"
+      ]
+    },
+    {
+      "name": "Definition",
+      "file": "internal/lsp/client.go",
+      "line": 332,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 9,
+      "referenced_by": [
+        "cmd/toolsd/cht098_lsp_battery_test.go",
+        "cmd/toolsd/lsp_test.go",
+        "cmd/toolsd/main.go",
+        "internal/lsp/api.go",
+        "internal/lsp/cht132_test.go",
+        "internal/lsp/client_test.go",
+        "internal/lsp/module_test.go",
+        "internal/lsp/process_test.go",
+        "internal/lsp/settle_test.go"
+      ],
+      "tested_by_count": 7,
+      "tested_by": [
+        "cmd/toolsd/cht098_lsp_battery_test.go",
+        "cmd/toolsd/lsp_test.go",
+        "internal/lsp/cht132_test.go",
+        "internal/lsp/client_test.go",
+        "internal/lsp/module_test.go",
+        "internal/lsp/process_test.go",
+        "internal/lsp/settle_test.go"
+      ]
+    },
+    {
+      "name": "References",
+      "file": "internal/lsp/client.go",
+      "line": 376,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 7,
+      "referenced_by": [
+        "cmd/toolsd/cht098_lsp_battery_test.go",
+        "cmd/toolsd/lsp_test.go",
+        "cmd/toolsd/main.go",
+        "internal/lsp/api.go",
+        "internal/lsp/cht132_test.go",
+        "internal/lsp/client_test.go",
+        "internal/lsp/process_test.go"
+      ],
+      "tested_by_count": 5,
+      "tested_by": [
+        "cmd/toolsd/cht098_lsp_battery_test.go",
+        "cmd/toolsd/lsp_test.go",
+        "internal/lsp/cht132_test.go",
+        "internal/lsp/client_test.go",
+        "internal/lsp/process_test.go"
+      ]
+    },
+    {
+      "name": "Shutdown",
+      "file": "internal/lsp/client.go",
+      "line": 449,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 5,
+      "referenced_by": [
+        "cmd/toolsd/cht098_lsp_battery_test.go",
+        "cmd/toolsd/lsp_test.go",
+        "cmd/toolsd/main.go",
+        "internal/lsp/client_test.go",
+        "internal/lsp/process_test.go"
+      ],
+      "tested_by_count": 4,
+      "tested_by": [
+        "cmd/toolsd/cht098_lsp_battery_test.go",
+        "cmd/toolsd/lsp_test.go",
+        "internal/lsp/client_test.go",
+        "internal/lsp/process_test.go"
+      ]
+    },
+    {
+      "name": "Close",
+      "file": "internal/lsp/client.go",
+      "line": 462,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 34,
+      "referenced_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht094_serve_health_test.go",
+        "cmd/toolsd/cht095_remote_access_test.go",
+        "cmd/toolsd/cht098_lsp_battery_test.go",
+        "cmd/toolsd/cht098_mcp_stdio_test.go",
+        "cmd/toolsd/cht098_narrate_battery_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/fsverbs.go"
+      ],
+      "tested_by_count": 21,
+      "tested_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht094_serve_health_test.go",
+        "cmd/toolsd/cht095_remote_access_test.go",
+        "cmd/toolsd/cht098_lsp_battery_test.go",
+        "cmd/toolsd/cht098_mcp_stdio_test.go",
+        "cmd/toolsd/cht098_narrate_battery_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/fsverbs_perf_test.go"
+      ]
+    },
+    {
+      "name": "Error",
+      "file": "internal/lsp/errors.go",
+      "line": 106,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 53,
+      "referenced_by": [
+        "clients/go/toolsdclient/client.gen.go",
+        "clients/typescript/toolsd-client.gen.ts",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht062_install_readme_test.go",
+        "cmd/toolsd/cht067_lease_refusal_cli_test.go",
+        "cmd/toolsd/cht068_session_refusal_cli_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/lease_test.go",
+        "cmd/toolsd/main.go"
+      ],
+      "tested_by_count": 38,
+      "tested_by": [
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht062_install_readme_test.go",
+        "cmd/toolsd/cht067_lease_refusal_cli_test.go",
+        "cmd/toolsd/cht068_session_refusal_cli_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/lease_test.go",
+        "cmd/toolsd/mcp_test.go",
+        "cmd/toolsd/probe_test.go",
+        "cmd/toolsd/renew_paths_test.go"
+      ]
+    },
+    {
+      "name": "Unwrap",
+      "file": "internal/lsp/errors.go",
+      "line": 119,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 6,
+      "referenced_by": [
+        "internal/lease/errors.go",
+        "internal/lsp/client.go",
+        "internal/patch/errors.go",
+        "internal/session/api.go",
+        "internal/structure/structure_test.go",
+        "internal/textedit/errors.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/structure/structure_test.go"
+      ]
+    },
+    {
+      "name": "LanguageForPath",
+      "file": "internal/lsp/language.go",
+      "line": 61,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 5,
+      "referenced_by": [
+        "cmd/toolsd/main.go",
+        "internal/lsp/api.go",
+        "internal/lsp/client.go",
+        "internal/lsp/language_test.go",
+        "internal/lsp/module.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/lsp/language_test.go"
+      ]
+    },
+    {
+      "name": "DefaultCommand",
+      "file": "internal/lsp/language.go",
+      "line": 74,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 3,
+      "referenced_by": [
+        "cmd/toolsd/main.go",
+        "internal/lsp/api.go",
+        "internal/lsp/language_test.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/lsp/language_test.go"
+      ]
+    },
+    {
+      "name": "DefaultServers",
+      "file": "internal/lsp/language.go",
+      "line": 108,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 1,
+      "referenced_by": [
+        "internal/config/config_test.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/config/config_test.go"
+      ]
+    },
+    {
+      "name": "DetectGoModule",
+      "file": "internal/lsp/module.go",
+      "line": 48,
+      "bucket": "unlinked",
+      "reachable": true,
+      "linked": false,
+      "referenced_by_count": 1,
+      "referenced_by": [
+        "cmd/toolsd/main.go"
+      ],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "IsGoWorkspace",
+      "file": "internal/lsp/module.go",
+      "line": 59,
+      "bucket": "unlinked",
+      "reachable": true,
+      "linked": false,
+      "referenced_by_count": 1,
+      "referenced_by": [
+        "cmd/toolsd/main.go"
+      ],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "PositionAt",
+      "file": "internal/lsp/position.go",
+      "line": 21,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 4,
+      "referenced_by": [
+        "cmd/toolsd/main.go",
+        "internal/lsp/api.go",
+        "internal/lsp/position_classify.go",
+        "internal/lsp/position_test.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/lsp/position_test.go"
+      ]
+    },
+    {
+      "name": "ClassifyOffset",
+      "file": "internal/lsp/position.go",
+      "line": 98,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 3,
+      "referenced_by": [
+        "cmd/toolsd/main.go",
+        "internal/lsp/position_classify.go",
+        "internal/lsp/position_classify_test.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/lsp/position_classify_test.go"
+      ]
+    },
+    {
+      "name": "ByteOffset",
+      "file": "internal/lsp/position.go",
+      "line": 109,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 9,
+      "referenced_by": [
+        "cmd/toolsd/main.go",
+        "cmd/toolsd/structure_verb.go",
+        "internal/lsp/api.go",
+        "internal/lsp/client.go",
+        "internal/lsp/position_classify.go",
+        "internal/lsp/position_classify_test.go",
+        "internal/lsp/position_test.go",
+        "internal/structure/search.go",
+        "internal/structure/structure_test.go"
+      ],
+      "tested_by_count": 3,
+      "tested_by": [
+        "internal/lsp/position_classify_test.go",
+        "internal/lsp/position_test.go",
+        "internal/structure/structure_test.go"
+      ]
+    },
+    {
+      "name": "AimDescription",
+      "file": "internal/lsp/position_classify.go",
+      "line": 256,
+      "bucket": "unlinked",
+      "reachable": true,
+      "linked": false,
+      "referenced_by_count": 1,
+      "referenced_by": [
+        "cmd/toolsd/main.go"
+      ],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "Close",
+      "file": "internal/lsp/process.go",
+      "line": 60,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 34,
+      "referenced_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht094_serve_health_test.go",
+        "cmd/toolsd/cht095_remote_access_test.go",
+        "cmd/toolsd/cht098_lsp_battery_test.go",
+        "cmd/toolsd/cht098_mcp_stdio_test.go",
+        "cmd/toolsd/cht098_narrate_battery_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/fsverbs.go"
+      ],
+      "tested_by_count": 21,
+      "tested_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht094_serve_health_test.go",
+        "cmd/toolsd/cht095_remote_access_test.go",
+        "cmd/toolsd/cht098_lsp_battery_test.go",
+        "cmd/toolsd/cht098_mcp_stdio_test.go",
+        "cmd/toolsd/cht098_narrate_battery_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/fsverbs_perf_test.go"
+      ]
+    },
+    {
+      "name": "Close",
+      "file": "internal/lsp/process.go",
+      "line": 76,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 34,
+      "referenced_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht094_serve_health_test.go",
+        "cmd/toolsd/cht095_remote_access_test.go",
+        "cmd/toolsd/cht098_lsp_battery_test.go",
+        "cmd/toolsd/cht098_mcp_stdio_test.go",
+        "cmd/toolsd/cht098_narrate_battery_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/fsverbs.go"
+      ],
+      "tested_by_count": 21,
+      "tested_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht094_serve_health_test.go",
+        "cmd/toolsd/cht095_remote_access_test.go",
+        "cmd/toolsd/cht098_lsp_battery_test.go",
+        "cmd/toolsd/cht098_mcp_stdio_test.go",
+        "cmd/toolsd/cht098_narrate_battery_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/fsverbs_perf_test.go"
+      ]
+    },
+    {
+      "name": "Write",
+      "file": "internal/lsp/process.go",
+      "line": 94,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 22,
+      "referenced_by": [
+        "cmd/toolsd/cht098_narrate_battery_test.go",
+        "cmd/toolsd/fsverbs.go",
+        "cmd/toolsd/fsverbs_test.go",
+        "cmd/toolsd/main.go",
+        "cmd/toolsd/mcp.go",
+        "cmd/toolsd/serve.go",
+        "internal/describe/registry.go",
+        "internal/docsguard/descriptor_examples_test.go",
+        "internal/docsguard/generated_surface.go",
+        "internal/fsops/errors.go"
+      ],
+      "tested_by_count": 6,
+      "tested_by": [
+        "cmd/toolsd/cht098_narrate_battery_test.go",
+        "cmd/toolsd/fsverbs_test.go",
+        "internal/docsguard/descriptor_examples_test.go",
+        "internal/fsops/fsops_test.go",
+        "internal/fsops/symlink_test.go",
+        "internal/wiregen/cht055_transport_http_test.go"
+      ]
+    },
+    {
+      "name": "String",
+      "file": "internal/lsp/process.go",
+      "line": 105,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 80,
+      "referenced_by": [
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht059_devnull_cli_test.go",
+        "cmd/toolsd/cht065_staleness_test.go",
+        "cmd/toolsd/cht070_usage_conflict_cli_test.go",
+        "cmd/toolsd/cht080_metrics_selfrecord_test.go",
+        "cmd/toolsd/cht081_metrics_empty_json_test.go",
+        "cmd/toolsd/cht084_metrics_nousage_json_test.go",
+        "cmd/toolsd/cht085_prefix_cli_test.go",
+        "cmd/toolsd/cht095_remote_access_test.go"
+      ],
+      "tested_by_count": 64,
+      "tested_by": [
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht059_devnull_cli_test.go",
+        "cmd/toolsd/cht065_staleness_test.go",
+        "cmd/toolsd/cht070_usage_conflict_cli_test.go",
+        "cmd/toolsd/cht080_metrics_selfrecord_test.go",
+        "cmd/toolsd/cht081_metrics_empty_json_test.go",
+        "cmd/toolsd/cht084_metrics_nousage_json_test.go",
+        "cmd/toolsd/cht085_prefix_cli_test.go",
+        "cmd/toolsd/cht095_remote_access_test.go"
+      ]
+    },
+    {
+      "name": "NewFramedTransport",
+      "file": "internal/lsp/transport.go",
+      "line": 40,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 4,
+      "referenced_by": [
+        "internal/lsp/api.go",
+        "internal/lsp/process.go",
+        "internal/lsp/process_test.go",
+        "internal/lsp/transport_test.go"
+      ],
+      "tested_by_count": 2,
+      "tested_by": [
+        "internal/lsp/process_test.go",
+        "internal/lsp/transport_test.go"
+      ]
+    },
+    {
+      "name": "Send",
+      "file": "internal/lsp/transport.go",
+      "line": 51,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 4,
+      "referenced_by": [
+        "internal/lsp/api.go",
+        "internal/lsp/client.go",
+        "internal/lsp/client_test.go",
+        "internal/lsp/transport_test.go"
+      ],
+      "tested_by_count": 2,
+      "tested_by": [
+        "internal/lsp/client_test.go",
+        "internal/lsp/transport_test.go"
+      ]
+    },
+    {
+      "name": "Recv",
+      "file": "internal/lsp/transport.go",
+      "line": 70,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 4,
+      "referenced_by": [
+        "internal/lsp/api.go",
+        "internal/lsp/client.go",
+        "internal/lsp/client_test.go",
+        "internal/lsp/transport_test.go"
+      ],
+      "tested_by_count": 2,
+      "tested_by": [
+        "internal/lsp/client_test.go",
+        "internal/lsp/transport_test.go"
+      ]
+    },
+    {
+      "name": "Close",
+      "file": "internal/lsp/transport.go",
+      "line": 119,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 34,
+      "referenced_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht094_serve_health_test.go",
+        "cmd/toolsd/cht095_remote_access_test.go",
+        "cmd/toolsd/cht098_lsp_battery_test.go",
+        "cmd/toolsd/cht098_mcp_stdio_test.go",
+        "cmd/toolsd/cht098_narrate_battery_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/fsverbs.go"
+      ],
+      "tested_by_count": 21,
+      "tested_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht094_serve_health_test.go",
+        "cmd/toolsd/cht095_remote_access_test.go",
+        "cmd/toolsd/cht098_lsp_battery_test.go",
+        "cmd/toolsd/cht098_mcp_stdio_test.go",
+        "cmd/toolsd/cht098_narrate_battery_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/fsverbs_perf_test.go"
+      ]
+    },
+    {
+      "name": "PathToURI",
+      "file": "internal/lsp/uri.go",
+      "line": 21,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 3,
+      "referenced_by": [
+        "internal/lsp/client.go",
+        "internal/lsp/client_test.go",
+        "internal/lsp/uri_test.go"
+      ],
+      "tested_by_count": 2,
+      "tested_by": [
+        "internal/lsp/client_test.go",
+        "internal/lsp/uri_test.go"
+      ]
+    },
+    {
+      "name": "URIToPath",
+      "file": "internal/lsp/uri.go",
+      "line": 43,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 3,
+      "referenced_by": [
+        "cmd/toolsd/main.go",
+        "internal/lsp/api.go",
+        "internal/lsp/uri_test.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/lsp/uri_test.go"
+      ]
+    },
+    {
+      "name": "ReadCounts",
+      "file": "internal/metrics/metrics.go",
+      "line": 60,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 4,
+      "referenced_by": [
+        "cmd/toolsd/metrics_verb.go",
+        "cmd/toolsd/status_verb.go",
+        "internal/metrics/cht085_prefix_test.go",
+        "internal/metrics/metrics_test.go"
+      ],
+      "tested_by_count": 2,
+      "tested_by": [
+        "internal/metrics/cht085_prefix_test.go",
+        "internal/metrics/metrics_test.go"
+      ]
+    },
+    {
+      "name": "Note",
+      "file": "internal/metrics/metrics.go",
+      "line": 106,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 7,
+      "referenced_by": [
+        "cmd/toolsd/cht130_apply_lease_test.go",
+        "cmd/toolsd/main.go",
+        "cmd/toolsd/session_test.go",
+        "internal/lease/lease.go",
+        "internal/session/api.go",
+        "internal/session/session.go",
+        "internal/session/session_test.go"
+      ],
+      "tested_by_count": 3,
+      "tested_by": [
+        "cmd/toolsd/cht130_apply_lease_test.go",
+        "cmd/toolsd/session_test.go",
+        "internal/session/session_test.go"
+      ]
+    },
+    {
+      "name": "NoteConflict",
+      "file": "internal/metrics/metrics.go",
+      "line": 209,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 1,
+      "referenced_by": [
+        "internal/metrics/metrics_test.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/metrics/metrics_test.go"
+      ]
+    },
+    {
+      "name": "MarshalJSON",
+      "file": "internal/metrics/metrics.go",
+      "line": 228,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 3,
+      "referenced_by": [
+        "cmd/toolsd/cht081_metrics_empty_json_test.go",
+        "cmd/toolsd/metrics_verb.go",
+        "internal/metrics/metrics_test.go"
+      ],
+      "tested_by_count": 2,
+      "tested_by": [
+        "cmd/toolsd/cht081_metrics_empty_json_test.go",
+        "internal/metrics/metrics_test.go"
+      ]
+    },
+    {
+      "name": "UnmarshalJSON",
+      "file": "internal/metrics/metrics.go",
+      "line": 284,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 1,
+      "referenced_by": [
+        "internal/metrics/metrics_test.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/metrics/metrics_test.go"
+      ]
+    },
+    {
+      "name": "UnmarshalJSON",
+      "file": "internal/metrics/metrics.go",
+      "line": 343,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 1,
+      "referenced_by": [
+        "internal/metrics/metrics_test.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/metrics/metrics_test.go"
+      ]
+    },
+    {
+      "name": "Begin",
+      "file": "internal/multifile/multifile.go",
+      "line": 114,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 7,
+      "referenced_by": [
+        "cmd/toolsd/cht130_apply_lease.go",
+        "cmd/toolsd/cht157_patch_newdir_cli_test.go",
+        "cmd/toolsd/main.go",
+        "internal/multifile/durability_test.go",
+        "internal/multifile/multifile_bench_test.go",
+        "internal/multifile/multifile_test.go",
+        "internal/multifile/symlink_test.go"
+      ],
+      "tested_by_count": 5,
+      "tested_by": [
+        "cmd/toolsd/cht157_patch_newdir_cli_test.go",
+        "internal/multifile/durability_test.go",
+        "internal/multifile/multifile_bench_test.go",
+        "internal/multifile/multifile_test.go",
+        "internal/multifile/symlink_test.go"
+      ]
+    },
+    {
+      "name": "Stage",
+      "file": "internal/multifile/multifile.go",
+      "line": 161,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 8,
+      "referenced_by": [
+        "cmd/toolsd/cht076_usage_claim_test.go",
+        "cmd/toolsd/main.go",
+        "cmd/toolsd/main_test.go",
+        "internal/multifile/durability_test.go",
+        "internal/multifile/errors.go",
+        "internal/multifile/multifile_bench_test.go",
+        "internal/multifile/multifile_test.go",
+        "internal/multifile/symlink_test.go"
+      ],
+      "tested_by_count": 6,
+      "tested_by": [
+        "cmd/toolsd/cht076_usage_claim_test.go",
+        "cmd/toolsd/main_test.go",
+        "internal/multifile/durability_test.go",
+        "internal/multifile/multifile_bench_test.go",
+        "internal/multifile/multifile_test.go",
+        "internal/multifile/symlink_test.go"
+      ]
+    },
+    {
+      "name": "StageRemove",
+      "file": "internal/multifile/multifile.go",
+      "line": 188,
+      "bucket": "unlinked",
+      "reachable": true,
+      "linked": false,
+      "referenced_by_count": 1,
+      "referenced_by": [
+        "cmd/toolsd/main.go"
+      ],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "Commit",
+      "file": "internal/multifile/multifile.go",
+      "line": 352,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 8,
+      "referenced_by": [
+        "cmd/toolsd/main.go",
+        "internal/multifile/durability_test.go",
+        "internal/multifile/errors.go",
+        "internal/multifile/multifile_bench_test.go",
+        "internal/multifile/multifile_test.go",
+        "internal/multifile/symlink_errors.go",
+        "internal/multifile/symlink_test.go",
+        "internal/multifile/syncseam.go"
+      ],
+      "tested_by_count": 4,
+      "tested_by": [
+        "internal/multifile/durability_test.go",
+        "internal/multifile/multifile_bench_test.go",
+        "internal/multifile/multifile_test.go",
+        "internal/multifile/symlink_test.go"
+      ]
+    },
+    {
+      "name": "Rollback",
+      "file": "internal/multifile/multifile.go",
+      "line": 523,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 6,
+      "referenced_by": [
+        "cmd/toolsd/usage.go",
+        "internal/metrics/api.go",
+        "internal/metrics/metrics.go",
+        "internal/multifile/multifile_test.go",
+        "internal/multifile/symlink_test.go",
+        "internal/usage/usage.go"
+      ],
+      "tested_by_count": 2,
+      "tested_by": [
+        "internal/multifile/multifile_test.go",
+        "internal/multifile/symlink_test.go"
+      ]
+    },
+    {
+      "name": "Summarize",
+      "file": "internal/narrate/narrate.go",
+      "line": 137,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 5,
+      "referenced_by": [
+        "cmd/toolsd/cht066_empty_diff_cli_test.go",
+        "cmd/toolsd/main.go",
+        "internal/narrate/narrate_test.go",
+        "internal/probe/probe.go",
+        "internal/probe/probe_test.go"
+      ],
+      "tested_by_count": 3,
+      "tested_by": [
+        "cmd/toolsd/cht066_empty_diff_cli_test.go",
+        "internal/narrate/narrate_test.go",
+        "internal/probe/probe_test.go"
+      ]
+    },
+    {
+      "name": "Render",
+      "file": "internal/narrate/narrate.go",
+      "line": 182,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 8,
+      "referenced_by": [
+        "cmd/genwire/main.go",
+        "cmd/toolsd/main.go",
+        "internal/diffgen/diffgen.go",
+        "internal/narrate/narrate_test.go",
+        "internal/wiregen/cht055_transport_http_test.go",
+        "internal/wiregen/render.go",
+        "internal/wiregen/transport_http.go",
+        "scripts/render-demo.py"
+      ],
+      "tested_by_count": 2,
+      "tested_by": [
+        "internal/narrate/narrate_test.go",
+        "internal/wiregen/cht055_transport_http_test.go"
+      ]
+    },
+    {
+      "name": "String",
+      "file": "internal/patch/devnull.go",
+      "line": 35,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 80,
+      "referenced_by": [
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht059_devnull_cli_test.go",
+        "cmd/toolsd/cht065_staleness_test.go",
+        "cmd/toolsd/cht070_usage_conflict_cli_test.go",
+        "cmd/toolsd/cht080_metrics_selfrecord_test.go",
+        "cmd/toolsd/cht081_metrics_empty_json_test.go",
+        "cmd/toolsd/cht084_metrics_nousage_json_test.go",
+        "cmd/toolsd/cht085_prefix_cli_test.go",
+        "cmd/toolsd/cht095_remote_access_test.go"
+      ],
+      "tested_by_count": 64,
+      "tested_by": [
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht059_devnull_cli_test.go",
+        "cmd/toolsd/cht065_staleness_test.go",
+        "cmd/toolsd/cht070_usage_conflict_cli_test.go",
+        "cmd/toolsd/cht080_metrics_selfrecord_test.go",
+        "cmd/toolsd/cht081_metrics_empty_json_test.go",
+        "cmd/toolsd/cht084_metrics_nousage_json_test.go",
+        "cmd/toolsd/cht085_prefix_cli_test.go",
+        "cmd/toolsd/cht095_remote_access_test.go"
+      ]
+    },
+    {
+      "name": "Error",
+      "file": "internal/patch/errors.go",
+      "line": 30,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 53,
+      "referenced_by": [
+        "clients/go/toolsdclient/client.gen.go",
+        "clients/typescript/toolsd-client.gen.ts",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht062_install_readme_test.go",
+        "cmd/toolsd/cht067_lease_refusal_cli_test.go",
+        "cmd/toolsd/cht068_session_refusal_cli_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/lease_test.go",
+        "cmd/toolsd/main.go"
+      ],
+      "tested_by_count": 38,
+      "tested_by": [
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht062_install_readme_test.go",
+        "cmd/toolsd/cht067_lease_refusal_cli_test.go",
+        "cmd/toolsd/cht068_session_refusal_cli_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/lease_test.go",
+        "cmd/toolsd/mcp_test.go",
+        "cmd/toolsd/probe_test.go",
+        "cmd/toolsd/renew_paths_test.go"
+      ]
+    },
+    {
+      "name": "Unwrap",
+      "file": "internal/patch/errors.go",
+      "line": 38,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 6,
+      "referenced_by": [
+        "internal/lease/errors.go",
+        "internal/lsp/client.go",
+        "internal/lsp/errors.go",
+        "internal/session/api.go",
+        "internal/structure/structure_test.go",
+        "internal/textedit/errors.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/structure/structure_test.go"
+      ]
+    },
+    {
+      "name": "Error",
+      "file": "internal/patch/errors.go",
+      "line": 55,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 53,
+      "referenced_by": [
+        "clients/go/toolsdclient/client.gen.go",
+        "clients/typescript/toolsd-client.gen.ts",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht062_install_readme_test.go",
+        "cmd/toolsd/cht067_lease_refusal_cli_test.go",
+        "cmd/toolsd/cht068_session_refusal_cli_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/lease_test.go",
+        "cmd/toolsd/main.go"
+      ],
+      "tested_by_count": 38,
+      "tested_by": [
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht062_install_readme_test.go",
+        "cmd/toolsd/cht067_lease_refusal_cli_test.go",
+        "cmd/toolsd/cht068_session_refusal_cli_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/lease_test.go",
+        "cmd/toolsd/mcp_test.go",
+        "cmd/toolsd/probe_test.go",
+        "cmd/toolsd/renew_paths_test.go"
+      ]
+    },
+    {
+      "name": "Unwrap",
+      "file": "internal/patch/errors.go",
+      "line": 60,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 6,
+      "referenced_by": [
+        "internal/lease/errors.go",
+        "internal/lsp/client.go",
+        "internal/lsp/errors.go",
+        "internal/session/api.go",
+        "internal/structure/structure_test.go",
+        "internal/textedit/errors.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/structure/structure_test.go"
+      ]
+    },
+    {
+      "name": "Error",
+      "file": "internal/patch/errors.go",
+      "line": 86,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 53,
+      "referenced_by": [
+        "clients/go/toolsdclient/client.gen.go",
+        "clients/typescript/toolsd-client.gen.ts",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht062_install_readme_test.go",
+        "cmd/toolsd/cht067_lease_refusal_cli_test.go",
+        "cmd/toolsd/cht068_session_refusal_cli_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/lease_test.go",
+        "cmd/toolsd/main.go"
+      ],
+      "tested_by_count": 38,
+      "tested_by": [
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht062_install_readme_test.go",
+        "cmd/toolsd/cht067_lease_refusal_cli_test.go",
+        "cmd/toolsd/cht068_session_refusal_cli_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/lease_test.go",
+        "cmd/toolsd/mcp_test.go",
+        "cmd/toolsd/probe_test.go",
+        "cmd/toolsd/renew_paths_test.go"
+      ]
+    },
+    {
+      "name": "Unwrap",
+      "file": "internal/patch/errors.go",
+      "line": 95,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 6,
+      "referenced_by": [
+        "internal/lease/errors.go",
+        "internal/lsp/client.go",
+        "internal/lsp/errors.go",
+        "internal/session/api.go",
+        "internal/structure/structure_test.go",
+        "internal/textedit/errors.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/structure/structure_test.go"
+      ]
+    },
+    {
+      "name": "Error",
+      "file": "internal/patch/errors.go",
+      "line": 109,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 53,
+      "referenced_by": [
+        "clients/go/toolsdclient/client.gen.go",
+        "clients/typescript/toolsd-client.gen.ts",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht062_install_readme_test.go",
+        "cmd/toolsd/cht067_lease_refusal_cli_test.go",
+        "cmd/toolsd/cht068_session_refusal_cli_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/lease_test.go",
+        "cmd/toolsd/main.go"
+      ],
+      "tested_by_count": 38,
+      "tested_by": [
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht062_install_readme_test.go",
+        "cmd/toolsd/cht067_lease_refusal_cli_test.go",
+        "cmd/toolsd/cht068_session_refusal_cli_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/lease_test.go",
+        "cmd/toolsd/mcp_test.go",
+        "cmd/toolsd/probe_test.go",
+        "cmd/toolsd/renew_paths_test.go"
+      ]
+    },
+    {
+      "name": "Unwrap",
+      "file": "internal/patch/errors.go",
+      "line": 117,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 6,
+      "referenced_by": [
+        "internal/lease/errors.go",
+        "internal/lsp/client.go",
+        "internal/lsp/errors.go",
+        "internal/session/api.go",
+        "internal/structure/structure_test.go",
+        "internal/textedit/errors.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/structure/structure_test.go"
+      ]
+    },
+    {
+      "name": "ParseUnifiedDiff",
+      "file": "internal/patch/patch.go",
+      "line": 216,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 16,
+      "referenced_by": [
+        "cmd/toolsd/cht059_devnull_cli_test.go",
+        "cmd/toolsd/cht066_empty_diff_cli_test.go",
+        "cmd/toolsd/cht075_incomplete_section_cli_test.go",
+        "cmd/toolsd/main.go",
+        "internal/diffgen/diffgen_test.go",
+        "internal/narrate/narrate.go",
+        "internal/patch/cht075_incomplete_section_test.go",
+        "internal/patch/cht156_quoted_header_test.go",
+        "internal/patch/cht158_rename_test.go",
+        "internal/patch/cht159_mode_test.go"
+      ],
+      "tested_by_count": 13,
+      "tested_by": [
+        "cmd/toolsd/cht059_devnull_cli_test.go",
+        "cmd/toolsd/cht066_empty_diff_cli_test.go",
+        "cmd/toolsd/cht075_incomplete_section_cli_test.go",
+        "internal/diffgen/diffgen_test.go",
+        "internal/patch/cht075_incomplete_section_test.go",
+        "internal/patch/cht156_quoted_header_test.go",
+        "internal/patch/cht158_rename_test.go",
+        "internal/patch/cht159_mode_test.go",
+        "internal/patch/cht160_binary_test.go",
+        "internal/patch/devnull_test.go"
+      ]
+    },
+    {
+      "name": "Apply",
+      "file": "internal/patch/patch.go",
+      "line": 795,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 11,
+      "referenced_by": [
+        "cmd/toolsd/main.go",
+        "internal/describe/registry.go",
+        "internal/diffgen/diffgen_test.go",
+        "internal/patch/cht072_roundtrip_test.go",
+        "internal/patch/cht156_quoted_header_test.go",
+        "internal/patch/cht158_rename_test.go",
+        "internal/patch/cht159_mode_test.go",
+        "internal/patch/devnull.go",
+        "internal/patch/devnull_test.go",
+        "internal/patch/patch_bench_test.go"
+      ],
+      "tested_by_count": 8,
+      "tested_by": [
+        "internal/diffgen/diffgen_test.go",
+        "internal/patch/cht072_roundtrip_test.go",
+        "internal/patch/cht156_quoted_header_test.go",
+        "internal/patch/cht158_rename_test.go",
+        "internal/patch/cht159_mode_test.go",
+        "internal/patch/devnull_test.go",
+        "internal/patch/patch_bench_test.go",
+        "internal/patch/patch_test.go"
+      ]
+    },
+    {
+      "name": "Run",
+      "file": "internal/probe/probe.go",
+      "line": 181,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 107,
+      "referenced_by": [
+        "cmd/gendocs/main.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/cht058_board_gate_test.go",
+        "cmd/toolsd/cht060_reaper_test.go",
+        "cmd/toolsd/cht065_staleness_test.go",
+        "cmd/toolsd/cht072_diffgen_red_test.go",
+        "cmd/toolsd/cht075_incomplete_section_cli_test.go",
+        "cmd/toolsd/cht076_usage_claim_test.go"
+      ],
+      "tested_by_count": 99,
+      "tested_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/cht058_board_gate_test.go",
+        "cmd/toolsd/cht060_reaper_test.go",
+        "cmd/toolsd/cht065_staleness_test.go",
+        "cmd/toolsd/cht072_diffgen_red_test.go",
+        "cmd/toolsd/cht075_incomplete_section_cli_test.go",
+        "cmd/toolsd/cht076_usage_claim_test.go",
+        "cmd/toolsd/cht094_serve_health_test.go"
+      ]
+    },
+    {
+      "name": "Summarize",
+      "file": "internal/probe/probe.go",
+      "line": 350,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 5,
+      "referenced_by": [
+        "cmd/toolsd/cht066_empty_diff_cli_test.go",
+        "cmd/toolsd/main.go",
+        "internal/narrate/narrate.go",
+        "internal/narrate/narrate_test.go",
+        "internal/probe/probe_test.go"
+      ],
+      "tested_by_count": 3,
+      "tested_by": [
+        "cmd/toolsd/cht066_empty_diff_cli_test.go",
+        "internal/narrate/narrate_test.go",
+        "internal/probe/probe_test.go"
+      ]
+    },
+    {
+      "name": "WriteJSONL",
+      "file": "internal/probe/probe.go",
+      "line": 418,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 2,
+      "referenced_by": [
+        "cmd/toolsd/main.go",
+        "internal/probe/probe_test.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/probe/probe_test.go"
+      ]
+    },
+    {
+      "name": "WriteSummaryJSON",
+      "file": "internal/probe/probe.go",
+      "line": 445,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 2,
+      "referenced_by": [
+        "cmd/toolsd/main.go",
+        "internal/probe/probe_test.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/probe/probe_test.go"
+      ]
+    },
+    {
+      "name": "LoadHeaderFile",
+      "file": "internal/probe/probe.go",
+      "line": 470,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 2,
+      "referenced_by": [
+        "cmd/toolsd/main.go",
+        "internal/probe/probe_test.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/probe/probe_test.go"
+      ]
+    },
+    {
+      "name": "Hello",
+      "file": "internal/scratch/s.go",
+      "line": 4,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 1,
+      "referenced_by": [
+        "internal/textedit/textedit_test.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/textedit/textedit_test.go"
+      ]
+    },
+    {
+      "name": "Bye",
+      "file": "internal/scratch/s2.go",
+      "line": 3,
+      "bucket": "unreachable",
+      "reachable": false,
+      "linked": false,
+      "referenced_by_count": 0,
+      "referenced_by": [],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "Error",
+      "file": "internal/session/api.go",
+      "line": 107,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 53,
+      "referenced_by": [
+        "clients/go/toolsdclient/client.gen.go",
+        "clients/typescript/toolsd-client.gen.ts",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht062_install_readme_test.go",
+        "cmd/toolsd/cht067_lease_refusal_cli_test.go",
+        "cmd/toolsd/cht068_session_refusal_cli_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/lease_test.go",
+        "cmd/toolsd/main.go"
+      ],
+      "tested_by_count": 38,
+      "tested_by": [
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht062_install_readme_test.go",
+        "cmd/toolsd/cht067_lease_refusal_cli_test.go",
+        "cmd/toolsd/cht068_session_refusal_cli_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/lease_test.go",
+        "cmd/toolsd/mcp_test.go",
+        "cmd/toolsd/probe_test.go",
+        "cmd/toolsd/renew_paths_test.go"
+      ]
+    },
+    {
+      "name": "Unwrap",
+      "file": "internal/session/api.go",
+      "line": 116,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 6,
+      "referenced_by": [
+        "internal/lease/errors.go",
+        "internal/lsp/client.go",
+        "internal/lsp/errors.go",
+        "internal/patch/errors.go",
+        "internal/structure/structure_test.go",
+        "internal/textedit/errors.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/structure/structure_test.go"
+      ]
+    },
+    {
+      "name": "Error",
+      "file": "internal/session/api.go",
+      "line": 125,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 53,
+      "referenced_by": [
+        "clients/go/toolsdclient/client.gen.go",
+        "clients/typescript/toolsd-client.gen.ts",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht062_install_readme_test.go",
+        "cmd/toolsd/cht067_lease_refusal_cli_test.go",
+        "cmd/toolsd/cht068_session_refusal_cli_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/lease_test.go",
+        "cmd/toolsd/main.go"
+      ],
+      "tested_by_count": 38,
+      "tested_by": [
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht062_install_readme_test.go",
+        "cmd/toolsd/cht067_lease_refusal_cli_test.go",
+        "cmd/toolsd/cht068_session_refusal_cli_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/lease_test.go",
+        "cmd/toolsd/mcp_test.go",
+        "cmd/toolsd/probe_test.go",
+        "cmd/toolsd/renew_paths_test.go"
+      ]
+    },
+    {
+      "name": "Unwrap",
+      "file": "internal/session/api.go",
+      "line": 130,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 6,
+      "referenced_by": [
+        "internal/lease/errors.go",
+        "internal/lsp/client.go",
+        "internal/lsp/errors.go",
+        "internal/patch/errors.go",
+        "internal/structure/structure_test.go",
+        "internal/textedit/errors.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/structure/structure_test.go"
+      ]
+    },
+    {
+      "name": "Error",
+      "file": "internal/session/api.go",
+      "line": 142,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 53,
+      "referenced_by": [
+        "clients/go/toolsdclient/client.gen.go",
+        "clients/typescript/toolsd-client.gen.ts",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht062_install_readme_test.go",
+        "cmd/toolsd/cht067_lease_refusal_cli_test.go",
+        "cmd/toolsd/cht068_session_refusal_cli_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/lease_test.go",
+        "cmd/toolsd/main.go"
+      ],
+      "tested_by_count": 38,
+      "tested_by": [
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht062_install_readme_test.go",
+        "cmd/toolsd/cht067_lease_refusal_cli_test.go",
+        "cmd/toolsd/cht068_session_refusal_cli_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/lease_test.go",
+        "cmd/toolsd/mcp_test.go",
+        "cmd/toolsd/probe_test.go",
+        "cmd/toolsd/renew_paths_test.go"
+      ]
+    },
+    {
+      "name": "Unwrap",
+      "file": "internal/session/api.go",
+      "line": 147,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 6,
+      "referenced_by": [
+        "internal/lease/errors.go",
+        "internal/lsp/client.go",
+        "internal/lsp/errors.go",
+        "internal/patch/errors.go",
+        "internal/structure/structure_test.go",
+        "internal/textedit/errors.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/structure/structure_test.go"
+      ]
+    },
+    {
+      "name": "Error",
+      "file": "internal/session/api.go",
+      "line": 158,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 53,
+      "referenced_by": [
+        "clients/go/toolsdclient/client.gen.go",
+        "clients/typescript/toolsd-client.gen.ts",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht062_install_readme_test.go",
+        "cmd/toolsd/cht067_lease_refusal_cli_test.go",
+        "cmd/toolsd/cht068_session_refusal_cli_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/lease_test.go",
+        "cmd/toolsd/main.go"
+      ],
+      "tested_by_count": 38,
+      "tested_by": [
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht062_install_readme_test.go",
+        "cmd/toolsd/cht067_lease_refusal_cli_test.go",
+        "cmd/toolsd/cht068_session_refusal_cli_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/lease_test.go",
+        "cmd/toolsd/mcp_test.go",
+        "cmd/toolsd/probe_test.go",
+        "cmd/toolsd/renew_paths_test.go"
+      ]
+    },
+    {
+      "name": "Unwrap",
+      "file": "internal/session/api.go",
+      "line": 163,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 6,
+      "referenced_by": [
+        "internal/lease/errors.go",
+        "internal/lsp/client.go",
+        "internal/lsp/errors.go",
+        "internal/patch/errors.go",
+        "internal/structure/structure_test.go",
+        "internal/textedit/errors.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/structure/structure_test.go"
+      ]
+    },
+    {
+      "name": "RegistryPath",
+      "file": "internal/session/api.go",
+      "line": 261,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 3,
+      "referenced_by": [
+        "internal/lease/lease.go",
+        "internal/lease/lease_test.go",
+        "internal/session/session_test.go"
+      ],
+      "tested_by_count": 2,
+      "tested_by": [
+        "internal/lease/lease_test.go",
+        "internal/session/session_test.go"
+      ]
+    },
+    {
+      "name": "WorktreeRoot",
+      "file": "internal/session/api.go",
+      "line": 265,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 2,
+      "referenced_by": [
+        "internal/session/session.go",
+        "internal/session/session_test.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/session/session_test.go"
+      ]
+    },
+    {
+      "name": "Open",
+      "file": "internal/session/session.go",
+      "line": 38,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 25,
+      "referenced_by": [
+        "cmd/toolsd/cht067_lease_refusal_cli_test.go",
+        "cmd/toolsd/cht068_session_refusal_cli_test.go",
+        "cmd/toolsd/cht098_lsp_battery_test.go",
+        "cmd/toolsd/cht130_apply_lease.go",
+        "cmd/toolsd/cht130_apply_lease_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/fsverbs.go",
+        "cmd/toolsd/fsverbs_perf_test.go",
+        "cmd/toolsd/lease_test.go",
+        "cmd/toolsd/main.go"
+      ],
+      "tested_by_count": 15,
+      "tested_by": [
+        "cmd/toolsd/cht067_lease_refusal_cli_test.go",
+        "cmd/toolsd/cht068_session_refusal_cli_test.go",
+        "cmd/toolsd/cht098_lsp_battery_test.go",
+        "cmd/toolsd/cht130_apply_lease_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/fsverbs_perf_test.go",
+        "cmd/toolsd/lease_test.go",
+        "internal/docsguard/descriptor_examples_test.go",
+        "internal/fsops/fsops_test.go",
+        "internal/hermeticity/guard_test.go"
+      ]
+    },
+    {
+      "name": "Start",
+      "file": "internal/session/session.go",
+      "line": 124,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 27,
+      "referenced_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht060_reaper_test.go",
+        "cmd/toolsd/cht069_unborn_head_cli_test.go",
+        "cmd/toolsd/cht098_lsp_battery_test.go",
+        "cmd/toolsd/cht098_mcp_stdio_test.go",
+        "cmd/toolsd/lsp_aim_test.go",
+        "cmd/toolsd/lsp_test.go",
+        "cmd/toolsd/main.go",
+        "cmd/toolsd/mcp_test.go",
+        "cmd/toolsd/structure_verb.go"
+      ],
+      "tested_by_count": 16,
+      "tested_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht060_reaper_test.go",
+        "cmd/toolsd/cht069_unborn_head_cli_test.go",
+        "cmd/toolsd/cht098_lsp_battery_test.go",
+        "cmd/toolsd/cht098_mcp_stdio_test.go",
+        "cmd/toolsd/lsp_aim_test.go",
+        "cmd/toolsd/lsp_test.go",
+        "cmd/toolsd/mcp_test.go",
+        "cmd/toolsd/testmain_guard_test.go",
+        "internal/diff3/diff3_test.go"
+      ]
+    },
+    {
+      "name": "End",
+      "file": "internal/session/session.go",
+      "line": 248,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 17,
+      "referenced_by": [
+        "cmd/toolsd/lsp_aim_test.go",
+        "cmd/toolsd/lsp_test.go",
+        "cmd/toolsd/main.go",
+        "cmd/toolsd/structure_verb.go",
+        "internal/diff3/diff3.go",
+        "internal/diff3/diff3_test.go",
+        "internal/lsp/api.go",
+        "internal/lsp/client_test.go",
+        "internal/lsp/position_classify.go",
+        "internal/lsp/position_classify_test.go"
+      ],
+      "tested_by_count": 8,
+      "tested_by": [
+        "cmd/toolsd/lsp_aim_test.go",
+        "cmd/toolsd/lsp_test.go",
+        "internal/diff3/diff3_test.go",
+        "internal/lsp/client_test.go",
+        "internal/lsp/position_classify_test.go",
+        "internal/lsp/process_test.go",
+        "internal/session/session_test.go",
+        "internal/structure/structure_test.go"
+      ]
+    },
+    {
+      "name": "List",
+      "file": "internal/session/session.go",
+      "line": 552,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 13,
+      "referenced_by": [
+        "cmd/toolsd/fsverbs.go",
+        "cmd/toolsd/fsverbs_test.go",
+        "cmd/toolsd/main.go",
+        "internal/describe/registry.go",
+        "internal/docsguard/descriptor_examples_test.go",
+        "internal/docsguard/generated_surface.go",
+        "internal/fsops/errors.go",
+        "internal/fsops/fsops.go",
+        "internal/fsops/fsops_test.go",
+        "internal/session/api.go"
+      ],
+      "tested_by_count": 5,
+      "tested_by": [
+        "cmd/toolsd/fsverbs_test.go",
+        "internal/docsguard/descriptor_examples_test.go",
+        "internal/fsops/fsops_test.go",
+        "internal/session/cht069_unborn_head_test.go",
+        "internal/session/session_test.go"
+      ]
+    },
+    {
+      "name": "Search",
+      "file": "internal/structure/search.go",
+      "line": 64,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 6,
+      "referenced_by": [
+        "cmd/toolsd/structure_verb.go",
+        "internal/describe/registry.go",
+        "internal/docsguard/descriptor_examples_test.go",
+        "internal/docsguard/generated_surface.go",
+        "internal/structure/structure.go",
+        "internal/structure/structure_test.go"
+      ],
+      "tested_by_count": 2,
+      "tested_by": [
+        "internal/docsguard/descriptor_examples_test.go",
+        "internal/structure/structure_test.go"
+      ]
+    },
+    {
+      "name": "Complete",
+      "file": "internal/structure/structure.go",
+      "line": 220,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 2,
+      "referenced_by": [
+        "cmd/toolsd/structure_verb.go",
+        "internal/structure/structure_test.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/structure/structure_test.go"
+      ]
+    },
+    {
+      "name": "Complete",
+      "file": "internal/structure/structure.go",
+      "line": 248,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 2,
+      "referenced_by": [
+        "cmd/toolsd/structure_verb.go",
+        "internal/structure/structure_test.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/structure/structure_test.go"
+      ]
+    },
+    {
+      "name": "BinaryPath",
+      "file": "internal/structure/structure.go",
+      "line": 259,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 2,
+      "referenced_by": [
+        "internal/structure/search.go",
+        "internal/structure/structure_test.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/structure/structure_test.go"
+      ]
+    },
+    {
+      "name": "Argv",
+      "file": "internal/structure/structure.go",
+      "line": 304,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 6,
+      "referenced_by": [
+        "cmd/toolsd/usage.go",
+        "internal/metrics/api.go",
+        "internal/structure/search.go",
+        "internal/structure/structure_test.go",
+        "internal/usage/usage.go",
+        "internal/usage/usage_test.go"
+      ],
+      "tested_by_count": 2,
+      "tested_by": [
+        "internal/structure/structure_test.go",
+        "internal/usage/usage_test.go"
+      ]
+    },
+    {
+      "name": "IsGoSelectorCallPattern",
+      "file": "internal/structure/structure.go",
+      "line": 324,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 2,
+      "referenced_by": [
+        "internal/structure/search.go",
+        "internal/structure/structure_test.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/structure/structure_test.go"
+      ]
+    },
+    {
+      "name": "CallPatternParseRootRefusal",
+      "file": "internal/structure/structure.go",
+      "line": 363,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 2,
+      "referenced_by": [
+        "internal/structure/search.go",
+        "internal/structure/structure_test.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/structure/structure_test.go"
+      ]
+    },
+    {
+      "name": "PatternDelimiterRefusal",
+      "file": "internal/structure/structure.go",
+      "line": 410,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 2,
+      "referenced_by": [
+        "internal/structure/search.go",
+        "internal/structure/structure_test.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/structure/structure_test.go"
+      ]
+    },
+    {
+      "name": "Classify",
+      "file": "internal/structure/structure.go",
+      "line": 493,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 3,
+      "referenced_by": [
+        "internal/lease/lease.go",
+        "internal/structure/search.go",
+        "internal/structure/structure_test.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/structure/structure_test.go"
+      ]
+    },
+    {
+      "name": "Error",
+      "file": "internal/textedit/errors.go",
+      "line": 54,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 53,
+      "referenced_by": [
+        "clients/go/toolsdclient/client.gen.go",
+        "clients/typescript/toolsd-client.gen.ts",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht062_install_readme_test.go",
+        "cmd/toolsd/cht067_lease_refusal_cli_test.go",
+        "cmd/toolsd/cht068_session_refusal_cli_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/lease_test.go",
+        "cmd/toolsd/main.go"
+      ],
+      "tested_by_count": 38,
+      "tested_by": [
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht062_install_readme_test.go",
+        "cmd/toolsd/cht067_lease_refusal_cli_test.go",
+        "cmd/toolsd/cht068_session_refusal_cli_test.go",
+        "cmd/toolsd/cht098_probe_battery_test.go",
+        "cmd/toolsd/config_verb_test.go",
+        "cmd/toolsd/lease_test.go",
+        "cmd/toolsd/mcp_test.go",
+        "cmd/toolsd/probe_test.go",
+        "cmd/toolsd/renew_paths_test.go"
+      ]
+    },
+    {
+      "name": "Unwrap",
+      "file": "internal/textedit/errors.go",
+      "line": 62,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 6,
+      "referenced_by": [
+        "internal/lease/errors.go",
+        "internal/lsp/client.go",
+        "internal/lsp/errors.go",
+        "internal/patch/errors.go",
+        "internal/session/api.go",
+        "internal/structure/structure_test.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/structure/structure_test.go"
+      ]
+    },
+    {
+      "name": "Replace",
+      "file": "internal/textedit/textedit.go",
+      "line": 71,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 9,
+      "referenced_by": [
+        "cmd/toolsd/lsp_aim_test.go",
+        "cmd/toolsd/main.go",
+        "internal/describe/registry.go",
+        "internal/patch/patch_test.go",
+        "internal/textedit/errors.go",
+        "internal/textedit/textedit_test.go",
+        "scripts/check_board_ids.py",
+        "scripts/cht149_armc.py",
+        "scripts/stub-lsp.py"
+      ],
+      "tested_by_count": 3,
+      "tested_by": [
+        "cmd/toolsd/lsp_aim_test.go",
+        "internal/patch/patch_test.go",
+        "internal/textedit/textedit_test.go"
+      ]
+    },
+    {
+      "name": "Enabled",
+      "file": "internal/usage/usage.go",
+      "line": 111,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 4,
+      "referenced_by": [
+        "cmd/toolsd/metrics_verb.go",
+        "cmd/toolsd/usage.go",
+        "internal/wiregen/cht055_transport_http_test.go",
+        "internal/wiregen/transport_http.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/wiregen/cht055_transport_http_test.go"
+      ]
+    },
+    {
+      "name": "Caller",
+      "file": "internal/usage/usage.go",
+      "line": 114,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 8,
+      "referenced_by": [
+        "cmd/toolsd/cht183_caller_fallback_test.go",
+        "cmd/toolsd/metrics_verb.go",
+        "cmd/toolsd/status_verb.go",
+        "cmd/toolsd/usage.go",
+        "internal/metrics/api.go",
+        "internal/metrics/metrics.go",
+        "internal/metrics/metrics_test.go",
+        "internal/usage/usage_test.go"
+      ],
+      "tested_by_count": 3,
+      "tested_by": [
+        "cmd/toolsd/cht183_caller_fallback_test.go",
+        "internal/metrics/metrics_test.go",
+        "internal/usage/usage_test.go"
+      ]
+    },
+    {
+      "name": "Settings",
+      "file": "internal/usage/usage.go",
+      "line": 119,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 14,
+      "referenced_by": [
+        "cmd/toolsd/cht061_mcp_write_test.go",
+        "cmd/toolsd/cht095_remote_access_test.go",
+        "cmd/toolsd/cht141_metrics_untagged_test.go",
+        "cmd/toolsd/mcp.go",
+        "cmd/toolsd/metrics_verb.go",
+        "cmd/toolsd/status_cli_test.go",
+        "cmd/toolsd/status_verb.go",
+        "cmd/toolsd/usage.go",
+        "internal/describe/describe.go",
+        "internal/describe/docgen.go"
+      ],
+      "tested_by_count": 6,
+      "tested_by": [
+        "cmd/toolsd/cht061_mcp_write_test.go",
+        "cmd/toolsd/cht095_remote_access_test.go",
+        "cmd/toolsd/cht141_metrics_untagged_test.go",
+        "cmd/toolsd/status_cli_test.go",
+        "internal/describe/registry_test.go",
+        "internal/describe/render_test.go"
+      ]
+    },
+    {
+      "name": "DefaultDestination",
+      "file": "internal/usage/usage.go",
+      "line": 130,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 2,
+      "referenced_by": [
+        "cmd/toolsd/usage.go",
+        "internal/usage/usage_test.go"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "internal/usage/usage_test.go"
+      ]
+    },
+    {
+      "name": "ReadTail",
+      "file": "internal/usage/usage.go",
+      "line": 151,
+      "bucket": "unlinked",
+      "reachable": true,
+      "linked": false,
+      "referenced_by_count": 1,
+      "referenced_by": [
+        "cmd/toolsd/status_verb.go"
+      ],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "AppendRecord",
+      "file": "internal/usage/usage.go",
+      "line": 196,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 3,
+      "referenced_by": [
+        "cmd/toolsd/usage.go",
+        "internal/usage/cht070_conflict_test.go",
+        "internal/usage/usage_test.go"
+      ],
+      "tested_by_count": 2,
+      "tested_by": [
+        "internal/usage/cht070_conflict_test.go",
+        "internal/usage/usage_test.go"
+      ]
+    },
+    {
+      "name": "RedactArgv",
+      "file": "internal/usage/usage.go",
+      "line": 405,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 2,
+      "referenced_by": [
+        "cmd/toolsd/usage_cli_test.go",
+        "internal/usage/usage_test.go"
+      ],
+      "tested_by_count": 2,
+      "tested_by": [
+        "cmd/toolsd/usage_cli_test.go",
+        "internal/usage/usage_test.go"
+      ]
+    },
+    {
+      "name": "is_git_worktree",
+      "file": "qa_discover.py",
+      "line": 22,
+      "bucket": "unlinked",
+      "reachable": true,
+      "linked": false,
+      "referenced_by_count": 0,
+      "referenced_by": [],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "load_ledger",
+      "file": "qa_discover.py",
+      "line": 52,
+      "bucket": "unlinked",
+      "reachable": true,
+      "linked": false,
+      "referenced_by_count": 0,
+      "referenced_by": [],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "ledger_key",
+      "file": "qa_discover.py",
+      "line": 73,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 1,
+      "referenced_by": [
+        "test_qa_discover.py"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "test_qa_discover.py"
+      ]
+    },
+    {
+      "name": "is_due",
+      "file": "qa_discover.py",
+      "line": 92,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 1,
+      "referenced_by": [
+        "test_qa_discover.py"
+      ],
+      "tested_by_count": 1,
+      "tested_by": [
+        "test_qa_discover.py"
+      ]
+    },
+    {
+      "name": "positive_int",
+      "file": "qa_discover.py",
+      "line": 111,
+      "bucket": "unlinked",
+      "reachable": true,
+      "linked": false,
+      "referenced_by_count": 0,
+      "referenced_by": [],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "error",
+      "file": "qa_discover.py",
+      "line": 127,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 155,
+      "referenced_by": [
+        "clients/go/toolsdclient/client.gen.go",
+        "clients/typescript/toolsd-client.gen.ts",
+        "cmd/genwire/main.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/cht060_reaper_test.go",
+        "cmd/toolsd/cht061_mcp_write_test.go",
+        "cmd/toolsd/cht062_install_readme_test.go",
+        "cmd/toolsd/cht066_empty_diff_cli_test.go"
+      ],
+      "tested_by_count": 89,
+      "tested_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/cht060_reaper_test.go",
+        "cmd/toolsd/cht061_mcp_write_test.go",
+        "cmd/toolsd/cht062_install_readme_test.go",
+        "cmd/toolsd/cht066_empty_diff_cli_test.go",
+        "cmd/toolsd/cht067_lease_refusal_cli_test.go",
+        "cmd/toolsd/cht068_session_refusal_cli_test.go",
+        "cmd/toolsd/cht070_usage_conflict_cli_test.go"
+      ]
+    },
+    {
+      "name": "parse_args",
+      "file": "qa_discover.py",
+      "line": 131,
+      "bucket": "unlinked",
+      "reachable": true,
+      "linked": false,
+      "referenced_by_count": 2,
+      "referenced_by": [
+        "scripts/check_board_ids.py",
+        "scripts/reap_stale_jobs.py"
+      ],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "pick_projects",
+      "file": "qa_discover.py",
+      "line": 142,
+      "bucket": "unlinked",
+      "reachable": true,
+      "linked": false,
+      "referenced_by_count": 0,
+      "referenced_by": [],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "main",
+      "file": "qa_discover.py",
+      "line": 201,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 132,
+      "referenced_by": [
+        "cmd/gendocs/main.go",
+        "cmd/genwire/main.go",
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht052_remote_lease_test.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht057_followup_path_test.go",
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/cht058_board_gate_test.go",
+        "cmd/toolsd/cht059_devnull_cli_test.go"
+      ],
+      "tested_by_count": 102,
+      "tested_by": [
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht052_remote_lease_test.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht057_followup_path_test.go",
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/cht058_board_gate_test.go",
+        "cmd/toolsd/cht059_devnull_cli_test.go",
+        "cmd/toolsd/cht060_reaper_test.go",
+        "cmd/toolsd/cht061_mcp_write_test.go"
+      ]
+    },
+    {
+      "name": "parse_args",
+      "file": "scripts/check_board_ids.py",
+      "line": 48,
+      "bucket": "unlinked",
+      "reachable": true,
+      "linked": false,
+      "referenced_by_count": 2,
+      "referenced_by": [
+        "qa_discover.py",
+        "scripts/reap_stale_jobs.py"
+      ],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "read_lines",
+      "file": "scripts/check_board_ids.py",
+      "line": 68,
+      "bucket": "unlinked",
+      "reachable": true,
+      "linked": false,
+      "referenced_by_count": 0,
+      "referenced_by": [],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "load_baseline",
+      "file": "scripts/check_board_ids.py",
+      "line": 78,
+      "bucket": "unlinked",
+      "reachable": true,
+      "linked": false,
+      "referenced_by_count": 0,
+      "referenced_by": [],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "check_board",
+      "file": "scripts/check_board_ids.py",
+      "line": 102,
+      "bucket": "unlinked",
+      "reachable": true,
+      "linked": false,
+      "referenced_by_count": 0,
+      "referenced_by": [],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "check_missing",
+      "file": "scripts/check_board_ids.py",
+      "line": 190,
+      "bucket": "unlinked",
+      "reachable": true,
+      "linked": false,
+      "referenced_by_count": 0,
+      "referenced_by": [],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "check",
+      "file": "scripts/check_board_ids.py",
+      "line": 205,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 55,
+      "referenced_by": [
+        "cmd/genwire/main.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/cht058_board_gate_test.go",
+        "cmd/toolsd/cht069_unborn_head_cli_test.go",
+        "cmd/toolsd/cht086_observability_test.go",
+        "cmd/toolsd/cht095_remote_access_test.go",
+        "cmd/toolsd/cht096_dist_strip_test.go",
+        "cmd/toolsd/cht097_ship_stamp_test.go",
+        "cmd/toolsd/cht098_lsp_battery_test.go"
+      ],
+      "tested_by_count": 30,
+      "tested_by": [
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/cht058_board_gate_test.go",
+        "cmd/toolsd/cht069_unborn_head_cli_test.go",
+        "cmd/toolsd/cht086_observability_test.go",
+        "cmd/toolsd/cht095_remote_access_test.go",
+        "cmd/toolsd/cht096_dist_strip_test.go",
+        "cmd/toolsd/cht097_ship_stamp_test.go",
+        "cmd/toolsd/cht098_lsp_battery_test.go",
+        "cmd/toolsd/cht098_narrate_battery_test.go"
+      ]
+    },
+    {
+      "name": "report",
+      "file": "scripts/check_board_ids.py",
+      "line": 216,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 73,
+      "referenced_by": [
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht058_board_gate_test.go",
+        "cmd/toolsd/cht059_devnull_cli_test.go",
+        "cmd/toolsd/cht060_reaper_test.go",
+        "cmd/toolsd/cht064_stdin_cli_test.go",
+        "cmd/toolsd/cht076_usage_claim_test.go",
+        "cmd/toolsd/cht080_metrics_selfrecord_test.go",
+        "cmd/toolsd/cht081_metrics_empty_json_test.go",
+        "cmd/toolsd/cht084_metrics_nousage_json_test.go",
+        "cmd/toolsd/cht096_dist_strip_test.go"
+      ],
+      "tested_by_count": 43,
+      "tested_by": [
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht058_board_gate_test.go",
+        "cmd/toolsd/cht059_devnull_cli_test.go",
+        "cmd/toolsd/cht060_reaper_test.go",
+        "cmd/toolsd/cht064_stdin_cli_test.go",
+        "cmd/toolsd/cht076_usage_claim_test.go",
+        "cmd/toolsd/cht080_metrics_selfrecord_test.go",
+        "cmd/toolsd/cht081_metrics_empty_json_test.go",
+        "cmd/toolsd/cht084_metrics_nousage_json_test.go",
+        "cmd/toolsd/cht096_dist_strip_test.go"
+      ]
+    },
+    {
+      "name": "write",
+      "file": "scripts/check_board_ids.py",
+      "line": 223,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 106,
+      "referenced_by": [
+        "cmd/genwire/main.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht057_followup_path_test.go",
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/cht058_board_gate_test.go",
+        "cmd/toolsd/cht060_reaper_test.go",
+        "cmd/toolsd/cht061_mcp_write_test.go",
+        "cmd/toolsd/cht064_mcp_schema_test.go",
+        "cmd/toolsd/cht064_stdin_cli_test.go",
+        "cmd/toolsd/cht065_staleness_test.go"
+      ],
+      "tested_by_count": 71,
+      "tested_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht057_followup_path_test.go",
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/cht058_board_gate_test.go",
+        "cmd/toolsd/cht060_reaper_test.go",
+        "cmd/toolsd/cht061_mcp_write_test.go",
+        "cmd/toolsd/cht064_mcp_schema_test.go",
+        "cmd/toolsd/cht064_stdin_cli_test.go",
+        "cmd/toolsd/cht065_staleness_test.go",
+        "cmd/toolsd/cht067_lease_refusal_cli_test.go"
+      ]
+    },
+    {
+      "name": "run_script",
+      "file": "scripts/check_board_ids.py",
+      "line": 228,
+      "bucket": "unlinked",
+      "reachable": true,
+      "linked": false,
+      "referenced_by_count": 0,
+      "referenced_by": [],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "simple_board",
+      "file": "scripts/check_board_ids.py",
+      "line": 238,
+      "bucket": "unlinked",
+      "reachable": true,
+      "linked": false,
+      "referenced_by_count": 0,
+      "referenced_by": [],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "battery",
+      "file": "scripts/check_board_ids.py",
+      "line": 249,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 36,
+      "referenced_by": [
+        "cmd/toolsd/cht052_remote_lease_test.go",
+        "cmd/toolsd/cht057_followup_path_test.go",
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/cht058_board_gate_test.go",
+        "cmd/toolsd/cht071_core_edge_test.go",
+        "cmd/toolsd/cht073_diff_edge_test.go",
+        "cmd/toolsd/cht079_unpinned_test.go",
+        "cmd/toolsd/cht086_observability_test.go",
+        "cmd/toolsd/cht098_lsp_battery_test.go",
+        "cmd/toolsd/cht098_mcp_stdio_test.go"
+      ],
+      "tested_by_count": 30,
+      "tested_by": [
+        "cmd/toolsd/cht052_remote_lease_test.go",
+        "cmd/toolsd/cht057_followup_path_test.go",
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/cht058_board_gate_test.go",
+        "cmd/toolsd/cht071_core_edge_test.go",
+        "cmd/toolsd/cht073_diff_edge_test.go",
+        "cmd/toolsd/cht079_unpinned_test.go",
+        "cmd/toolsd/cht086_observability_test.go",
+        "cmd/toolsd/cht098_lsp_battery_test.go",
+        "cmd/toolsd/cht098_mcp_stdio_test.go"
+      ]
+    },
+    {
+      "name": "main",
+      "file": "scripts/check_board_ids.py",
+      "line": 456,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 132,
+      "referenced_by": [
+        "cmd/gendocs/main.go",
+        "cmd/genwire/main.go",
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht052_remote_lease_test.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht057_followup_path_test.go",
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/cht058_board_gate_test.go",
+        "cmd/toolsd/cht059_devnull_cli_test.go"
+      ],
+      "tested_by_count": 102,
+      "tested_by": [
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht052_remote_lease_test.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht057_followup_path_test.go",
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/cht058_board_gate_test.go",
+        "cmd/toolsd/cht059_devnull_cli_test.go",
+        "cmd/toolsd/cht060_reaper_test.go",
+        "cmd/toolsd/cht061_mcp_write_test.go"
+      ]
+    },
+    {
+      "name": "load_status",
+      "file": "scripts/check_docs_claims.py",
+      "line": 85,
+      "bucket": "unlinked",
+      "reachable": true,
+      "linked": false,
+      "referenced_by_count": 0,
+      "referenced_by": [],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "markdown_files",
+      "file": "scripts/check_docs_claims.py",
+      "line": 104,
+      "bucket": "unlinked",
+      "reachable": true,
+      "linked": false,
+      "referenced_by_count": 0,
+      "referenced_by": [],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "evaluator_comment_lines",
+      "file": "scripts/check_docs_claims.py",
+      "line": 110,
+      "bucket": "unlinked",
+      "reachable": true,
+      "linked": false,
+      "referenced_by_count": 0,
+      "referenced_by": [],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "config_rule_check",
+      "file": "scripts/check_docs_claims.py",
+      "line": 136,
+      "bucket": "unlinked",
+      "reachable": true,
+      "linked": false,
+      "referenced_by_count": 0,
+      "referenced_by": [],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "check",
+      "file": "scripts/check_docs_claims.py",
+      "line": 162,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 55,
+      "referenced_by": [
+        "cmd/genwire/main.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/cht058_board_gate_test.go",
+        "cmd/toolsd/cht069_unborn_head_cli_test.go",
+        "cmd/toolsd/cht086_observability_test.go",
+        "cmd/toolsd/cht095_remote_access_test.go",
+        "cmd/toolsd/cht096_dist_strip_test.go",
+        "cmd/toolsd/cht097_ship_stamp_test.go",
+        "cmd/toolsd/cht098_lsp_battery_test.go"
+      ],
+      "tested_by_count": 30,
+      "tested_by": [
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/cht058_board_gate_test.go",
+        "cmd/toolsd/cht069_unborn_head_cli_test.go",
+        "cmd/toolsd/cht086_observability_test.go",
+        "cmd/toolsd/cht095_remote_access_test.go",
+        "cmd/toolsd/cht096_dist_strip_test.go",
+        "cmd/toolsd/cht097_ship_stamp_test.go",
+        "cmd/toolsd/cht098_lsp_battery_test.go",
+        "cmd/toolsd/cht098_narrate_battery_test.go"
+      ]
+    },
+    {
+      "name": "self_test",
+      "file": "scripts/check_docs_claims.py",
+      "line": 208,
+      "bucket": "unlinked",
+      "reachable": true,
+      "linked": false,
+      "referenced_by_count": 0,
+      "referenced_by": [],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "main",
+      "file": "scripts/check_docs_claims.py",
+      "line": 278,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 132,
+      "referenced_by": [
+        "cmd/gendocs/main.go",
+        "cmd/genwire/main.go",
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht052_remote_lease_test.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht057_followup_path_test.go",
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/cht058_board_gate_test.go",
+        "cmd/toolsd/cht059_devnull_cli_test.go"
+      ],
+      "tested_by_count": 102,
+      "tested_by": [
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht052_remote_lease_test.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht057_followup_path_test.go",
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/cht058_board_gate_test.go",
+        "cmd/toolsd/cht059_devnull_cli_test.go",
+        "cmd/toolsd/cht060_reaper_test.go",
+        "cmd/toolsd/cht061_mcp_write_test.go"
+      ]
+    },
+    {
+      "name": "main",
+      "file": "scripts/fuzzy_apply_foil.py",
+      "line": 18,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 132,
+      "referenced_by": [
+        "cmd/gendocs/main.go",
+        "cmd/genwire/main.go",
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht052_remote_lease_test.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht057_followup_path_test.go",
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/cht058_board_gate_test.go",
+        "cmd/toolsd/cht059_devnull_cli_test.go"
+      ],
+      "tested_by_count": 102,
+      "tested_by": [
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht052_remote_lease_test.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht057_followup_path_test.go",
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/cht058_board_gate_test.go",
+        "cmd/toolsd/cht059_devnull_cli_test.go",
+        "cmd/toolsd/cht060_reaper_test.go",
+        "cmd/toolsd/cht061_mcp_write_test.go"
+      ]
+    },
+    {
+      "name": "count_nonempty_lines",
+      "file": "scripts/qa_board_append.py",
+      "line": 14,
+      "bucket": "unlinked",
+      "reachable": true,
+      "linked": false,
+      "referenced_by_count": 0,
+      "referenced_by": [],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "parse_row",
+      "file": "scripts/qa_board_append.py",
+      "line": 22,
+      "bucket": "unlinked",
+      "reachable": true,
+      "linked": false,
+      "referenced_by_count": 0,
+      "referenced_by": [],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "json_values_equal",
+      "file": "scripts/qa_board_append.py",
+      "line": 31,
+      "bucket": "unlinked",
+      "reachable": true,
+      "linked": false,
+      "referenced_by_count": 0,
+      "referenced_by": [],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "strict_reason",
+      "file": "scripts/qa_board_append.py",
+      "line": 35,
+      "bucket": "unlinked",
+      "reachable": true,
+      "linked": false,
+      "referenced_by_count": 0,
+      "referenced_by": [],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "loose_match",
+      "file": "scripts/qa_board_append.py",
+      "line": 58,
+      "bucket": "unlinked",
+      "reachable": true,
+      "linked": false,
+      "referenced_by_count": 0,
+      "referenced_by": [],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "row_label",
+      "file": "scripts/qa_board_append.py",
+      "line": 74,
+      "bucket": "unlinked",
+      "reachable": true,
+      "linked": false,
+      "referenced_by_count": 0,
+      "referenced_by": [],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "classify_rows",
+      "file": "scripts/qa_board_append.py",
+      "line": 81,
+      "bucket": "unlinked",
+      "reachable": true,
+      "linked": false,
+      "referenced_by_count": 0,
+      "referenced_by": [],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "main",
+      "file": "scripts/qa_board_append.py",
+      "line": 118,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 132,
+      "referenced_by": [
+        "cmd/gendocs/main.go",
+        "cmd/genwire/main.go",
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht052_remote_lease_test.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht057_followup_path_test.go",
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/cht058_board_gate_test.go",
+        "cmd/toolsd/cht059_devnull_cli_test.go"
+      ],
+      "tested_by_count": 102,
+      "tested_by": [
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht052_remote_lease_test.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht057_followup_path_test.go",
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/cht058_board_gate_test.go",
+        "cmd/toolsd/cht059_devnull_cli_test.go",
+        "cmd/toolsd/cht060_reaper_test.go",
+        "cmd/toolsd/cht061_mcp_write_test.go"
+      ]
+    },
+    {
+      "name": "is_live_pid",
+      "file": "scripts/reap_stale_jobs.py",
+      "line": 31,
+      "bucket": "unlinked",
+      "reachable": true,
+      "linked": false,
+      "referenced_by_count": 0,
+      "referenced_by": [],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "record_age_hours",
+      "file": "scripts/reap_stale_jobs.py",
+      "line": 46,
+      "bucket": "unlinked",
+      "reachable": true,
+      "linked": false,
+      "referenced_by_count": 0,
+      "referenced_by": [],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "terminalize_error_string",
+      "file": "scripts/reap_stale_jobs.py",
+      "line": 54,
+      "bucket": "unlinked",
+      "reachable": true,
+      "linked": false,
+      "referenced_by_count": 0,
+      "referenced_by": [],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "atomic_write_json",
+      "file": "scripts/reap_stale_jobs.py",
+      "line": 64,
+      "bucket": "unlinked",
+      "reachable": true,
+      "linked": false,
+      "referenced_by_count": 0,
+      "referenced_by": [],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "build_parser",
+      "file": "scripts/reap_stale_jobs.py",
+      "line": 98,
+      "bucket": "unlinked",
+      "reachable": true,
+      "linked": false,
+      "referenced_by_count": 0,
+      "referenced_by": [],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "main",
+      "file": "scripts/reap_stale_jobs.py",
+      "line": 118,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 132,
+      "referenced_by": [
+        "cmd/gendocs/main.go",
+        "cmd/genwire/main.go",
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht052_remote_lease_test.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht057_followup_path_test.go",
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/cht058_board_gate_test.go",
+        "cmd/toolsd/cht059_devnull_cli_test.go"
+      ],
+      "tested_by_count": 102,
+      "tested_by": [
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht052_remote_lease_test.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht057_followup_path_test.go",
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/cht058_board_gate_test.go",
+        "cmd/toolsd/cht059_devnull_cli_test.go",
+        "cmd/toolsd/cht060_reaper_test.go",
+        "cmd/toolsd/cht061_mcp_write_test.go"
+      ]
+    },
+    {
+      "name": "run",
+      "file": "scripts/render-demo.py",
+      "line": 64,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 133,
+      "referenced_by": [
+        "cmd/gendocs/main.go",
+        "cmd/genwire/main.go",
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht057_followup_path_test.go",
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/cht058_board_gate_test.go",
+        "cmd/toolsd/cht059_devnull_cli_test.go",
+        "cmd/toolsd/cht060_reaper_test.go",
+        "cmd/toolsd/cht065_staleness_test.go"
+      ],
+      "tested_by_count": 96,
+      "tested_by": [
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht057_followup_path_test.go",
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/cht058_board_gate_test.go",
+        "cmd/toolsd/cht059_devnull_cli_test.go",
+        "cmd/toolsd/cht060_reaper_test.go",
+        "cmd/toolsd/cht065_staleness_test.go",
+        "cmd/toolsd/cht070_usage_conflict_cli_test.go",
+        "cmd/toolsd/cht071_core_edge_test.go"
+      ]
+    },
+    {
+      "name": "h",
+      "file": "scripts/render-demo.py",
+      "line": 69,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 21,
+      "referenced_by": [
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/describe_test.go",
+        "cmd/toolsd/lease_test.go",
+        "cmd/toolsd/lsp_aim_test.go",
+        "cmd/toolsd/main.go",
+        "cmd/toolsd/renew_paths_test.go",
+        "internal/describe/registry.go",
+        "internal/diffgen/diffgen.go",
+        "internal/lsp/language.go",
+        "internal/lsp/language_test.go"
+      ],
+      "tested_by_count": 13,
+      "tested_by": [
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/describe_test.go",
+        "cmd/toolsd/lease_test.go",
+        "cmd/toolsd/lsp_aim_test.go",
+        "cmd/toolsd/renew_paths_test.go",
+        "internal/lsp/language_test.go",
+        "internal/lsp/position_classify_test.go",
+        "internal/lsp/position_test.go",
+        "internal/patch/cht156_quoted_header_test.go",
+        "internal/patch/cht158_rename_test.go"
+      ]
+    },
+    {
+      "name": "esc",
+      "file": "scripts/render-demo.py",
+      "line": 176,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 3,
+      "referenced_by": [
+        "cmd/toolsd/cht153_patch_escape_cli_test.go",
+        "cmd/toolsd/cht154_patch_symlink_escape_cli_test.go",
+        "internal/patch/patch.go"
+      ],
+      "tested_by_count": 2,
+      "tested_by": [
+        "cmd/toolsd/cht153_patch_escape_cli_test.go",
+        "cmd/toolsd/cht154_patch_symlink_escape_cli_test.go"
+      ]
+    },
+    {
+      "name": "row",
+      "file": "scripts/render-demo.py",
+      "line": 185,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 101,
+      "referenced_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht057_followup_path_test.go",
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/cht058_board_gate_test.go",
+        "cmd/toolsd/cht059_devnull_cli_test.go",
+        "cmd/toolsd/cht064_mcp_schema_test.go",
+        "cmd/toolsd/cht064_stdin_cli_test.go",
+        "cmd/toolsd/cht065_staleness_test.go",
+        "cmd/toolsd/cht066_empty_diff_cli_test.go",
+        "cmd/toolsd/cht071_core_edge_test.go"
+      ],
+      "tested_by_count": 67,
+      "tested_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht057_followup_path_test.go",
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/cht058_board_gate_test.go",
+        "cmd/toolsd/cht059_devnull_cli_test.go",
+        "cmd/toolsd/cht064_mcp_schema_test.go",
+        "cmd/toolsd/cht064_stdin_cli_test.go",
+        "cmd/toolsd/cht065_staleness_test.go",
+        "cmd/toolsd/cht066_empty_diff_cli_test.go",
+        "cmd/toolsd/cht071_core_edge_test.go"
+      ]
+    },
+    {
+      "name": "read_message",
+      "file": "scripts/stub-lsp.py",
+      "line": 19,
+      "bucket": "unlinked",
+      "reachable": true,
+      "linked": false,
+      "referenced_by_count": 0,
+      "referenced_by": [],
+      "tested_by_count": 0,
+      "tested_by": []
+    },
+    {
+      "name": "send",
+      "file": "scripts/stub-lsp.py",
+      "line": 36,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 7,
+      "referenced_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht132_test.go",
+        "cmd/toolsd/mcp.go",
+        "cmd/toolsd/mcp_test.go",
+        "cmd/toolsd/serve.go",
+        "internal/lsp/api.go",
+        "internal/lsp/client.go"
+      ],
+      "tested_by_count": 3,
+      "tested_by": [
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht132_test.go",
+        "cmd/toolsd/mcp_test.go"
+      ]
+    },
+    {
+      "name": "main",
+      "file": "scripts/stub-lsp.py",
+      "line": 43,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 132,
+      "referenced_by": [
+        "cmd/gendocs/main.go",
+        "cmd/genwire/main.go",
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht052_remote_lease_test.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht057_followup_path_test.go",
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/cht058_board_gate_test.go",
+        "cmd/toolsd/cht059_devnull_cli_test.go"
+      ],
+      "tested_by_count": 102,
+      "tested_by": [
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht052_remote_lease_test.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht057_followup_path_test.go",
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/cht058_board_gate_test.go",
+        "cmd/toolsd/cht059_devnull_cli_test.go",
+        "cmd/toolsd/cht060_reaper_test.go",
+        "cmd/toolsd/cht061_mcp_write_test.go"
+      ]
+    },
+    {
+      "name": "main",
+      "file": "scripts/svg-validate.py",
+      "line": 15,
+      "bucket": "ok",
+      "reachable": true,
+      "linked": true,
+      "referenced_by_count": 132,
+      "referenced_by": [
+        "cmd/gendocs/main.go",
+        "cmd/genwire/main.go",
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht052_remote_lease_test.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht057_followup_path_test.go",
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/cht058_board_gate_test.go",
+        "cmd/toolsd/cht059_devnull_cli_test.go"
+      ],
+      "tested_by_count": 102,
+      "tested_by": [
+        "cmd/toolsd/cht051_settings_test.go",
+        "cmd/toolsd/cht052_remote_lease_test.go",
+        "cmd/toolsd/cht055_serve_cli_test.go",
+        "cmd/toolsd/cht056_wire_contract_test.go",
+        "cmd/toolsd/cht057_followup_path_test.go",
+        "cmd/toolsd/cht057_probe_freshness_test.go",
+        "cmd/toolsd/cht058_board_gate_test.go",
+        "cmd/toolsd/cht059_devnull_cli_test.go",
+        "cmd/toolsd/cht060_reaper_test.go",
+        "cmd/toolsd/cht061_mcp_write_test.go"
+      ]
+    }
+  ],
+  "rules": [
+    "public function: Rust bare `pub fn`, Go exported func/method (leading uppercase), Python `def`/`async def` not starting with `_`, TypeScript/JavaScript declarations inside an `export`",
+    "declared entrypoint: `classify_file` role == `entrypoint` (code-derived, no hand list)",
+    "reachable: the defining file is itself a declared entrypoint, or a file reachable-from-an-entrypoint names the symbol; file reachability is the forward closure of `A names a public symbol of B` from the entrypoints",
+    "reference: lexical identifier occurrence in the file text (comments and strings included) — over-approximate by construction, so `unreachable` is a conservative no-false-positive claim",
+    "linked: a test file (is_test_file rules) names the symbol, or an on-disk COV-2 coverage link targets the symbol's name or file",
+    "test files and generated files define no audited symbol (they are the link source and machine output); their language is still counted in the census"
+  ],
+  "entry_override_missing": null
+}

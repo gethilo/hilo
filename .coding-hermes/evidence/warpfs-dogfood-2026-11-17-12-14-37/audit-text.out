@@ -1,0 +1,122 @@
+audit: 199 public function(s) over 256 file(s) in ~/.hermes/cache/scratch/df49/corpus
+
+entrypoints: 11 declared — files whose role classifies as `entrypoint` via classify_file (filename convention: main.rs/__main__.py/index.js/Program.cs/Main.kt/index.php/main.swift, or an AST-detected main / canonical entry symbol); 11 found
+    cmd/gendocs/main.go
+    cmd/genwire/main.go
+    cmd/toolsd/main.go
+    qa_discover.py
+    scripts/check_board_ids.py
+    scripts/check_docs_claims.py
+    scripts/fuzzy_apply_foil.py
+    scripts/qa_board_append.py
+    scripts/reap_stale_jobs.py
+    scripts/stub-lsp.py
+    scripts/svg-validate.py
+
+unreachable: 5
+    rule: no caller path from a declared entrypoint: no file reachable from an entrypoint names the symbol, and its defining file is not itself an entrypoint (reachability computed from 11 declared entrypoint file(s))
+    - Network  cmd/toolsd/serve.go:299
+    - RemoteAddr  cmd/toolsd/serve.go:327
+    - SetReadDeadline  cmd/toolsd/serve.go:329
+    - SetWriteDeadline  cmd/toolsd/serve.go:330
+    - Bye  internal/scratch/s2.go:3
+
+unlinked: 38
+    rule: reachable from a declared entrypoint, but no test file names the symbol and no COV-2 coverage link targets it (reachability computed from 11 declared entrypoint file(s))
+    - Addr  cmd/toolsd/serve.go:293
+    - LocalAddr  cmd/toolsd/serve.go:326
+    - SetDeadline  cmd/toolsd/serve.go:328
+    - DetectGoModule  internal/lsp/module.go:48
+    - IsGoWorkspace  internal/lsp/module.go:59
+    - AimDescription  internal/lsp/position_classify.go:256
+    - StageRemove  internal/multifile/multifile.go:188
+    - ReadTail  internal/usage/usage.go:151
+    - is_git_worktree  qa_discover.py:22
+    - load_ledger  qa_discover.py:52
+    - positive_int  qa_discover.py:111
+    - parse_args  qa_discover.py:131
+    - pick_projects  qa_discover.py:142
+    - parse_args  scripts/check_board_ids.py:48
+    - read_lines  scripts/check_board_ids.py:68
+    - load_baseline  scripts/check_board_ids.py:78
+    - check_board  scripts/check_board_ids.py:102
+    - check_missing  scripts/check_board_ids.py:190
+    - run_script  scripts/check_board_ids.py:228
+    - simple_board  scripts/check_board_ids.py:238
+    - load_status  scripts/check_docs_claims.py:85
+    - markdown_files  scripts/check_docs_claims.py:104
+    - evaluator_comment_lines  scripts/check_docs_claims.py:110
+    - config_rule_check  scripts/check_docs_claims.py:136
+    - self_test  scripts/check_docs_claims.py:208
+    - count_nonempty_lines  scripts/qa_board_append.py:14
+    - parse_row  scripts/qa_board_append.py:22
+    - json_values_equal  scripts/qa_board_append.py:31
+    - strict_reason  scripts/qa_board_append.py:35
+    - loose_match  scripts/qa_board_append.py:58
+    - row_label  scripts/qa_board_append.py:74
+    - classify_rows  scripts/qa_board_append.py:81
+    - is_live_pid  scripts/reap_stale_jobs.py:31
+    - record_age_hours  scripts/reap_stale_jobs.py:46
+    - terminalize_error_string  scripts/reap_stale_jobs.py:54
+    - atomic_write_json  scripts/reap_stale_jobs.py:64
+    - build_parser  scripts/reap_stale_jobs.py:98
+    - read_message  scripts/stub-lsp.py:19
+
+ok: 156
+    rule: reachable from a declared entrypoint AND carries a coverage link (reachability computed from 11 declared entrypoint file(s))
+    - String  cmd/toolsd/main.go:2146
+    - Set  cmd/toolsd/main.go:2149
+    - String  cmd/toolsd/main.go:2334
+    - Set  cmd/toolsd/main.go:2337
+    - String  cmd/toolsd/main.go:2349
+    - Set  cmd/toolsd/main.go:2352
+    - Accept  cmd/toolsd/serve.go:284
+    - Close  cmd/toolsd/serve.go:292
+    - String  cmd/toolsd/serve.go:300
+    - Read  cmd/toolsd/serve.go:318
+    - Write  cmd/toolsd/serve.go:319
+    - Close  cmd/toolsd/serve.go:321
+    - Path  internal/config/config.go:173
+    - Lookup  internal/config/config.go:211
+    - String  internal/config/config.go:241
+    - Concrete  internal/config/config.go:277
+    - DefaultPath  internal/config/config.go:327
+    - Specs  internal/config/config.go:452
+    - Parse  internal/config/config.go:463
+    - Resolve  internal/config/config.go:666
+    - Registry  internal/describe/render.go:25
+    - Lookup  internal/describe/render.go:34
+    - Text  internal/describe/render.go:46
+    - Full  internal/describe/render.go:83
+    - VerbText  internal/describe/render.go:94
+    - JSON  internal/describe/render.go:164
+    - Merge  internal/diff3/diff3.go:116
+    - Generate  internal/diffgen/diffgen.go:46
+    - Open  internal/fsops/fsops.go:69
+    - Path  internal/fsops/fsops.go:108
+    - Read  internal/fsops/fsops.go:151
+    - Write  internal/fsops/fsops.go:183
+    - MkdirAll  internal/fsops/fsops.go:229
+    - List  internal/fsops/fsops.go:244
+    - DecisionBlock  internal/gendocs/gendocs.go:53
+    - Run  internal/gendocs/gendocs.go:93
+    - Error  internal/lease/errors.go:56
+    - Unwrap  internal/lease/errors.go:70
+    - Error  internal/lease/errors.go:82
+    - Unwrap  internal/lease/errors.go:88
+    … 116 more (use --json for the full list)
+
+unknown: 0 — every source file in the corpus is in a language with a public-function extractor (rust, go, python, typescript, javascript); nothing was left unaudited
+
+census:
+    go: 243 file(s), 148 public fn — tree-sitter go: function_declaration / method_declaration whose name starts uppercase
+    python: 12 file(s), 51 public fn — tree-sitter python: function_definition whose name does not start with `_`
+    typescript: 1 file(s), 0 public fn — tree-sitter ts/js: declarations inside an `export_statement`
+
+rules:
+    - public function: Rust bare `pub fn`, Go exported func/method (leading uppercase), Python `def`/`async def` not starting with `_`, TypeScript/JavaScript declarations inside an `export`
+    - declared entrypoint: `classify_file` role == `entrypoint` (code-derived, no hand list)
+    - reachable: the defining file is itself a declared entrypoint, or a file reachable-from-an-entrypoint names the symbol; file reachability is the forward closure of `A names a public symbol of B` from the entrypoints
+    - reference: lexical identifier occurrence in the file text (comments and strings included) — over-approximate by construction, so `unreachable` is a conservative no-false-positive claim
+    - linked: a test file (is_test_file rules) names the symbol, or an on-disk COV-2 coverage link targets the symbol's name or file
+    - test files and generated files define no audited symbol (they are the link source and machine output); their language is still counted in the census

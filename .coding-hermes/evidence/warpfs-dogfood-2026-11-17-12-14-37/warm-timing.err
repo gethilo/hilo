@@ -1,0 +1,11 @@
+  parsing 100/256 files...
+  parsing 200/256 files...
+  parsing 256/256 files...
+  [timing] test associations: 446.868µs
+  [timing] service calls: 29.789957ms
+  [timing] conformance edges: 1.003139455s
+  [timing] service contracts: 1.02986668s
+  [timing] jsonl dedup write: 11.96103ms
+  [timing] GraphDB::open (incl reconcile): 9.53783785s
+  [timing] insert_edges: 10.4669685s
+timing-run wall=24.15 user=19.53 sys=1.16

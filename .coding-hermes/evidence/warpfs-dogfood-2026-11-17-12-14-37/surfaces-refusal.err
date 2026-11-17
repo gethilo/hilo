@@ -1,0 +1,3 @@
+error: hilo graph surfaces only inventories the Hilo repository itself; ~/.hermes/cache/scratch/df49/corpus is not a Hilo workspace
+Command exited with non-zero status 1
+TIME audit-surfaces wall=0.00s rss=12844kB

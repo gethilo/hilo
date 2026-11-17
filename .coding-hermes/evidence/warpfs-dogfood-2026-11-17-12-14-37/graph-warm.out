@@ -1,0 +1,3 @@
+Discovered 2370 edges across 242 files (3 languages) [all cached, graph unchanged]
+Excluded 4 supported source files (hidden: 4)
+Coverage: 256 files = 242 contribute edges + 0 package facades (__init__.py) + 14 no imports + 0 parse-miss + 0 unreadable + 0 unsupported extension

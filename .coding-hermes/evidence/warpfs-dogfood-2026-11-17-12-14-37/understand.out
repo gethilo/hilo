@@ -1,0 +1,473 @@
+## MAP
+internal/patch/devnull.go →
+  - Op
+  - func (o Op) String() string {
+internal/patch/cht072_roundtrip_test.go →
+  - TestApplyZeroOldStartHunkIsTopInsertion
+  - TestApplyMarkerOnLastPlusChangesTrailingNewline
+  - TestApplyDashLastAtEOFYieldsNewlineTerminated
+internal/patch/cht075_incomplete_section_test.go →
+  - TestParseUnifiedDiffCHT075IncompleteSectionsRefuseTyped
+  - TestParseUnifiedDiffCHT075CompleteSectionsStillAccepted
+internal/patch/cht156_quoted_header_test.go →
+  - TestCHT156GitQuotedPathIsDecoded
+  - TestCHT156DecodedPathAppliesToTheRealName
+  - TestCHT156QuotedTabAndBackslashEscapes
+  - TestCHT156TabAfterClosingQuoteIsATimestamp
+  - TestCHT156UnquotedAndDevNullControlsUnchanged
+  - TestCHT156QuotedDevNullStillClassifiesTheSection
+internal/patch/cht158_rename_test.go →
+  - TestCHT158PureRenameParsesAsRenameOp
+  - TestCHT158RenameWithEditParsesAsRenameOp
+  - TestCHT158PureRenameAppliesUnchanged
+  - TestCHT158RenameWithEditAppliesHunksToNewPath
+  - TestCHT158QuotedRenamePathsAreDecoded
+  - TestCHT158TwoRenamesInOneDiff
+  - TestCHT158RenameHalvesMustPair
+  - TestCHT158MetadataOnlyNonRenameSectionStaysNoop
+  - TestCHT158EditCreateDeleteOpsUnchanged
+internal/patch/cht159_mode_test.go →
+  - cht159WantModeRefusal
+  - TestCHT159ModeOnlySectionRefuses
+  - TestCHT159ModePlusContentSectionRefuses
+  - TestCHT159RefusalMessageNamesTheChange
+  - TestCHT159ExecutableNewFileModeRefuses
+  - TestCHT159NewFileMode100644StillParses
+  - TestCHT159DeletedFileModeStillParses
+  - TestCHT159PlainEditWithModelessIndexStillParses
+internal/patch/cht160_binary_test.go →
+  - TestCHT160GitBinaryPatchRefusesTyped
+  - TestCHT160TextualBinaryMetadataRemainsNoop
+internal/patch/devnull_test.go →
+  - mustParse
+  - TestCHT059CreateFormClassifiesAsCreate
+  - TestCHT059DiffUNewFileClassifiesAsCreate
+  - TestCHT059DeletedFormClassifiesAsDelete
+  - TestCHT059PlainEditKeepsZeroOp
+  - TestCHT059ApplyCreateBuildsContentFromAdditions
+  - TestCHT059ApplyCreateNoNewlineMarkerHonored
+  - TestCHT059ApplyCreateRefusesForeignBodyLines
+  - TestCHT059ApplyCreateAcceptsEmptyBody
+  - TestCHT059ApplyDeleteRemovesOnExactMatch
+  - TestCHT059ApplyDeleteStrictOnMismatch
+  - TestCHT059ApplyDeleteRefusesAdditionLines
+cmd/toolsd/cht130_apply_lease.go →
+  - cht130LeaseConflict
+  - cht130LeaseConflicts
+  - cht130ApplyLeaseGate
+cmd/toolsd/cht130_apply_lease_test.go →
+  - cht130SeedRepo
+  - cht130EditSet
+  - quoteJSON
+  - TestCHT130ApplyRefusesWhenTargetIsLeasedByAnotherHolder
+  - TestCHT130ApplyForceOverridesLeaseCheck
+  - TestCHT130ApplyNoLeaseSucceedsUnchanged
+  - TestCHT130ApplyOwnLeaseIsNotRefused
+  - TestCHT130ApplyForceWithNoLeaseStillSucceeds
+  - TestCHT130TwoAppliesNoLeaseStayLastWriteWins
+cmd/toolsd/cht164_apply_root_test.go →
+  - TestCHT164ApplyHelpAndMCPDocumentRootRule
+  - TestCHT164ApplyRootOverridesEditsetDirectory
+  - TestCHT164ApplyRootRefusesEscapeWithPathOutsideRoot
+  - TestCHT164ApplyStdinRootOverridesWorkingDirectory
+cmd/toolsd/cht153_patch_escape_cli_test.go →
+  - cht153Run
+  - cht153Fixture
+  - cht153RequireEscapeRefusal
+  - TestCHT153RelativeEditEscapeRefused
+  - TestCHT153RelativeCreateEscapeRefused
+  - TestCHT153NestedRelativeEscapeRefused
+  - TestCHT153StdinRelativeEscapeRefused
+  - TestCHT153AbsoluteHeaderStillApplies
+cmd/toolsd/cht154_patch_symlink_escape_cli_test.go →
+  - cht154Fixture
+  - TestCHT154RelativeHeaderThroughSymlinkRefused
+  - TestCHT154CreateThroughSymlinkRefused
+  - TestCHT154SymlinkedFileTargetRefused
+  - TestCHT154ApplyStillRefuses
+  - TestCHT154InRootTargetsStillApply
+
+## SIGNATURES
+cmd/toolsd/main.go:68  type subcommand struct {
+cmd/toolsd/main.go:146  func lookup(name string) (subcommand, bool) {
+cmd/toolsd/main.go:175  func run(args []string, stdout, stderr io.Writer) int {
+cmd/toolsd/main.go:203  func dispatchUsageAware(args []string, stdout, stderr io.Writer, recorder *usageRecorder) (int, string) {
+cmd/toolsd/main.go:263  func wantsHelp(args []string) bool {
+cmd/toolsd/main.go:280  func runHelp(args []string, stdout, stderr io.Writer) int {
+cmd/toolsd/main.go:311  func runDescribe(args []string, stdout, stderr io.Writer) int {
+cmd/toolsd/main.go:345  func runVersion(args []string, stdout, stderr io.Writer) int {
+cmd/toolsd/main.go:376  type diff3Outcome struct {
+cmd/toolsd/main.go:401  type diff3ConflictRegion struct {
+cmd/toolsd/main.go:439  func runDiff3(args []string, stdout, stderr io.Writer, u *usageRecorder) int {
+cmd/toolsd/main.go:614  func splitFileLines(content []byte) ([]string, bool) {
+cmd/toolsd/main.go:629  func patchTarget(root, path string) string {
+cmd/toolsd/main.go:666  func patchTargetEscapes(root, headerPath string) bool {
+cmd/toolsd/main.go:693  func pathOutsideRoot(root, target string) bool {
+cmd/toolsd/main.go:726  func resolvePatchTarget(target string) (string, bool) {
+cmd/toolsd/main.go:771  func splitPathComponents(rest string) []string {
+cmd/toolsd/main.go:793  func patchCommonDir(dirs []string) string {
+cmd/toolsd/main.go:814  func collectPatchPaths(patches []patch.FilePatch) []string {
+cmd/toolsd/main.go:831  func parsePatchArgs(args []string) (root string, positional []string, err error) {
+cmd/toolsd/main.go:858  func firstRelativePatchTarget(patches []patch.FilePatch) (string, bool) {
+cmd/toolsd/main.go:891  func patchAmbiguousTreeRefusal(diffArg, diffDir, target string) string {
+cmd/toolsd/main.go:976  func runPatch(args []string, stdout, stderr io.Writer, u *usageRecorder) int {
+cmd/toolsd/main.go:1310  type applyEdit struct {
+cmd/toolsd/main.go:1332  func applyResolvedKey(dir, path string) string {
+cmd/toolsd/main.go:1402  func runApply(args []string, stdout, stderr io.Writer, u *usageRecorder) int {
+internal/narrate/narrate.go:53  type Format int
+internal/narrate/narrate.go:91  type Options struct {
+internal/narrate/narrate.go:99  type FileSummary struct {
+internal/narrate/narrate.go:108  type Summary struct {
+internal/narrate/narrate.go:137  func Summarize(diff []byte, opts Options) (Summary, error) {
+internal/narrate/narrate.go:182  func Render(s Summary, f Format) ([]byte, error) {
+internal/narrate/narrate.go:211  func diffLines(diff []byte) []string {
+internal/narrate/narrate.go:222  func hasFileHeaders(diff []byte) bool {
+internal/narrate/narrate.go:244  func scanSymbols(diff []byte, patches []patch.FilePatch) [][]string {
+internal/narrate/narrate.go:249  type streamHunk struct {
+internal/narrate/narrate.go:292  func hunkSection(line string) string {
+internal/narrate/narrate.go:303  func countBodyLines(fp patch.FilePatch) (added, removed int) {
+internal/narrate/narrate.go:323  func fileFlags(fp patch.FilePatch) []string {
+internal/narrate/narrate.go:335  func orderedFlags(found map[string]bool) []string {
+internal/narrate/narrate.go:346  func testsTouched(patches []patch.FilePatch) bool {
+internal/narrate/narrate.go:361  func protectedPath(p string) bool {
+internal/narrate/narrate.go:388  func interfaceChange(hunks []patch.Hunk) bool {
+internal/narrate/narrate.go:410  func renderMarkdown(s Summary) string {
+internal/narrate/narrate.go:436  func orNone(joined string) string {
+internal/narrate/narrate.go:444  func yesNo(v bool) string {
+cmd/toolsd/cht130_apply_lease.go:49  type cht130LeaseConflict struct {
+cmd/toolsd/cht130_apply_lease.go:64  func cht130LeaseConflicts(dir string, resolvedKeys []string) (conflicts []cht130LeaseConflict, err error, repo bool) {
+cmd/toolsd/cht130_apply_lease.go:124  func cht130ApplyLeaseGate(dir string, resolvedKeys []string, holder string, force bool, stderr io.Writer) int {
+internal/patch/devnull.go:13  type Op uint8
+internal/patch/devnull.go:35  func (o Op) String() string {
+scripts/fuzzy_apply_foil.py:18  def main() -> int:
+
+## DETAIL
+cmd/toolsd/main.go [provenance=ast_exact, score=0.80]
+… lines 629-640 of 3405 …
+func patchTarget(root, path string) string {
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
+	return filepath.Join(root, path)
+}
+// patchTargetEscapes reports whether a RELATIVE header path resolves outside
+// the patch root. An ABSOLUTE header path is never an escape: it is git-apply
+// address semantics (CHT-117) and resolves verbatim, so the containment rule
+// is stated for the relative spellings only.
+//
+… lines 666-677 of 3405 …
+func patchTargetEscapes(root, headerPath string) bool {
+	if filepath.IsAbs(headerPath) {
+		return false
+	}
+	joined := filepath.Join(root, headerPath)
+	if pathOutsideRoot(root, joined) {
+		return true
+	}
+	resolvedRoot, ok := resolvePatchTarget(root)
+	if !ok {
+		// A root that cannot be resolved (a symlink loop) cannot be proven to
+		// contain anything: refuse rather than write through it.
+… lines 693-704 of 3405 …
+func pathOutsideRoot(root, target string) bool {
+	rel, err := filepath.Rel(root, target)
+	if err != nil {
+		return true
+	}
+	return rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+// maxPatchSymlinkHops bounds how many symlink components resolvePatchTarget
+// will expand before calling the chain a loop. It mirrors the kernel's own
+// limit (40 in Linux) with margin to spare; the exact number does not matter —
+// a chain that long is a loop, not a path.
+… lines 726-737 of 3405 …
+func resolvePatchTarget(target string) (string, bool) {
+	vol := filepath.VolumeName(target)
+	cur := vol + string(filepath.Separator)
+	rest := splitPathComponents(target[len(vol):])
+	hops := 0
+	for len(rest) > 0 {
+		comp := rest[0]
+		rest = rest[1:]
+		next := filepath.Join(cur, comp)
+		info, err := os.Lstat(next)
+		if err != nil {
+			// Nothing at or below this component can be a symlink that must be
+… lines 771-782 of 3405 …
+func splitPathComponents(rest string) []string {
+	var out []string
+	for _, c := range strings.Split(rest, string(filepath.Separator)) {
+		if c != "" {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+// patchCommonDir returns the deepest common ancestor DIRECTORY of the given
+// cleaned absolute directories, component-wise (so "/srv/rooted" never
+… lines 793-804 of 3405 …
+func patchCommonDir(dirs []string) string {
+	if len(dirs) == 0 {
+		return ""
+	}
+	parts := strings.Split(dirs[0], string(filepath.Separator))
+	for _, d := range dirs[1:] {
+		ps := strings.Split(d, string(filepath.Separator))
+		n := 0
+		for n < len(parts) && n < len(ps) && parts[n] == ps[n] {
+			n++
+		}
+		parts = parts[:n]
+… lines 814-825 of 3405 …
+func collectPatchPaths(patches []patch.FilePatch) []string {
+	paths := make([]string, 0, len(patches))
+	for _, fp := range patches {
+		if fp.OldPath != "" {
+			paths = append(paths, fp.OldPath)
+		}
+		paths = append(paths, fp.Path)
+	}
+	return paths
+}
+// parsePatchArgs splits patch's argv into the --root override and the
+… lines 831-842 of 3405 …
+func parsePatchArgs(args []string) (root string, positional []string, err error) {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--root" || a == "-root":
+			if i+1 >= len(args) || args[i+1] == "" {
+				return "", nil, fmt.Errorf("patch: --root requires a directory argument")
+			}
+			i++
+			root = args[i]
+		case strings.HasPrefix(a, "--root=") || strings.HasPrefix(a, "-root="):
+			root = a[strings.Index(a, "=")+1:]
+… lines 858-869 of 3405 …
+func firstRelativePatchTarget(patches []patch.FilePatch) (string, bool) {
+	for _, fp := range patches {
+		if fp.Path != "" && !filepath.IsAbs(fp.Path) {
+			return fp.Path, true
+		}
+		if fp.OldPath != "" && !filepath.IsAbs(fp.OldPath) {
+			return fp.OldPath, true
+		}
+	}
+	return "", false
+}
+… lines 891-902 of 3405 …
+func patchAmbiguousTreeRefusal(diffArg, diffDir, target string) string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Sprintf("patch: cannot determine the working directory to check the target tree: %v", err)
+	}
+	resolve := func(p string) string {
+		if resolved, ok := resolvePatchTarget(p); ok {
+			return resolved
+		}
+		return p
+	}
+	resolvedCwd, resolvedDiffDir := resolve(cwd), resolve(diffDir)
+… lines 976-987 of 3405 …
+func runPatch(args []string, stdout, stderr io.Writer, u *usageRecorder) int {
+	// CHT-164: --root DIR names the target tree explicitly, wherever the
+	// diff lives. The flag is parsed BEFORE the positional check so a
+	// valueless --root is its own named refusal rather than a miscounted
+	// positional, and so the arity error counts only diff-file arguments.
+	rootOverride, diffArgs, err := parsePatchArgs(args)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "toolsd: %v\n", err)
+		return 1
+	}
+	if len(diffArgs) != 1 {
+		_, _ = fmt.Fprintf(stderr, "toolsd: patch requires exactly 1 diff argument: [--root DIR] <diff-file> (got %d)\n", len(diffArgs))
+… lines 1310-1321 of 3405 …
+type applyEdit struct {
+	Path    string  `json:"path"`
+	Content *string `json:"content"`
+}
+// applyResolvedKey is the target IDENTITY an apply entry names, resolved
+// exactly the way internal/multifile.Tx.resolve resolves a staged path:
+// root-joined (only when the entry is not already absolute) and then cleaned.
+// It is the key of the usage claim (CHT-076), so the claim dedupes on the same
+// identity the transaction does.
+//
+// Duplicating the join+Clean here rather than exporting a resolver from
+
+
+internal/patch/cht072_roundtrip_test.go [provenance=ast_exact, score=1.00]
+package patch
+// CHT-072 round-trip defect pins (RED at filing, foreman-authored 2026-09-23).
+//
+// The unified-diff GENERATOR (internal/diffgen, CHT-072) is judged by the
+// acceptance tests in cmd/toolsd, and its contract says EVERY generated diff
+// must round-trip through this package's strict parser + applier. Two apply
+// shapes that GNU/difflib-style generators legitimately emit could not:
+//
+//  1. A "@@ -0,0 +N,C @@" hunk — a pure insertion BEFORE the first line (a
+//     creation from an empty old side, or a prepend). The parser records
+//     OldStart 0; the edit path computed want = OldStart-1 = -1, which
+//     matchAt refuses outright, so the hunk was unappliable at any position.
+//  2. An edit that changes the file's TRAILING-NEWLINE state. Apply
+//     inherited the original's trailing-newline state unconditionally, so a
+//     "\ No newline at end of file" marker on the last "+" line — the only
+//     thing that can say the RESULT loses (or, from a no-newline original,
+//     KEEPS) the final newline — was silently ignored, and a diff that
+//     changes the marker state could never reproduce its target bytes.
+//
+// Both pins assert the STRICT contract; RED at filing for the honest reason
+// that the machinery refused or mis-rendered, never a loosened assertion.
+import "testing"
+// TestApplyZeroOldStartHunkIsTopInsertion pins the GNU -0,0 shape: OldCount 0
+// with OldStart 0 inserts before the first line. The applier must treat a
+// zero OldStart as a pre-file insertion (want position 0) instead of
+// computing OldStart-1 = -1 and refusing.
+func TestApplyZeroOldStartHunkIsTopInsertion(t *testing.T) {
+	fp := FilePatch{Path: "f.txt", Hunks: []Hunk{{
+		OldStart: 0, OldCount: 0,
+		NewStart: 1, NewCount: 2,
+		Lines: []string{"+first", "+second"},
+	}}}
+	got, err := Apply([]byte("old1\nold2\n"), fp, Options{Strict: true})
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if want := "first\nsecond\nold1\nold2\n"; got == nil || string(got) != want {
+		t.Errorf("top insertion = %q, want %q", got, want)
+	}
+}
+// TestApplyMarkerOnLastPlusChangesTrailingNewline pins that the edit path
+// honours a "\ No newline at end of file" marker after the hunk's LAST "+"
+// line: the result's final line loses its newline even when the original had
+// one. (A marker after a "-" line describes the OLD side and is carried by
+// the original's own bytes; the parser already records only the "+" form.)
+func TestApplyMarkerOnLastPlusChangesTrailingNewline(t *testing.T) {
+	fp := FilePatch{Path: "f.txt", Hunks: []Hunk{{
+		OldStart: 1, OldCount: 2,
+		NewStart: 1, NewCount: 2,
+		Lines:               []string{" a", "-B", "+B"},
+		MarkerAfterLastPlus: true,
+	}}}
+	got, err := Apply([]byte("a\nB\n"), fp, Options{Strict: true})
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if want := "a\nB"; got == nil || string(got) != want {
+		t.Errorf("apply with marker = %q, want %q (the final newline must be dropped)", got, want)
+	}
+}
+// TestApplyDashLastAtEOFYieldsNewlineTerminated pins the GNU-faithful rule
+// for a hunk whose body ends on a "-" removal that consumed the original's
+// final line (CHT-072 round-trip; GNU patch measured on all shapes): every
+// retained line precedes the removed final line and carried its own newline,
+// so the result is newline-terminated — the marker GNU emits after that "-"
+// annotates the removed OLD line only and never removes the result's
+// newline. This is the shape old-noNL -> new-NL (a newline ADDED to the
+// file) round-trips through.
+func TestApplyDashLastAtEOFYieldsNewlineTerminated(t *testing.T) {
+	// The judge-repro shape (CHT-072 fuzz): old is newline-less, the
+	// generated diff carries "-b" last with the marker after it, and the
+	// target ("b\n") is newline-terminated.
+	fp := FilePatch{Path: "f.txt", Hunks: []Hunk{{
+		OldStart: 1, OldCount: 2,
+		NewStart: 1, NewCount: 1,
+		Lines: []string{" a", "-b"},
+	}}}
+	got, err := Apply([]byte("a\nb"), fp, Options{Strict: true})
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if want := "a\n"; got == nil || string(got) != want {
+		t.Errorf("dash-last at EOF = %q, want %q (the retained line carried its newline)", got, want)
+	}
+}
+
+internal/narrate/narrate.go [provenance=ast_exact, score=0.80]
+… lines 346-384 of 449 …
+func testsTouched(patches []patch.FilePatch) bool {
+	for _, fp := range patches {
+		if strings.HasSuffix(fp.Path, "_test.go") {
+			return true
+		}
+	}
+	return false
+}
+// protectedPath reports whether a diff path is secret-bearing: basename
+// ".env" or ".env.<anything>", extension .pem/.key/.crt/.p12, basename
+// "id_rsa"/"id_ed25519" (with or without an extension), or any path segment
+// exactly "secrets". The comparison is case-folded so a shouted
+// "ID_RSA"/"SERVER.PEM" is flagged too — for a risk flag, failing closed is
+// the only useful bias.
+func protectedPath(p string) bool {
+	norm := strings.ReplaceAll(p, `\`, "/")
+	base := path.Base(norm)
+	if base == ".env" || strings.HasPrefix(base, ".env.") {
+		return true
+	}
+	ext := path.Ext(base)
+	switch strings.ToLower(ext) {
+	case ".pem", ".key", ".crt", ".p12":
+		return true
+	}
+	stem := strings.TrimSuffix(base, ext)
+	if strings.EqualFold(stem, "id_rsa") || strings.EqualFold(stem, "id_ed25519") {
+		return true
+	}
+	for _, segment := range strings.Split(norm, "/") {
+		if segment == "secrets" {
+			return true
+		}
+	}
+	return false
+}
+// interfaceChange reports whether any hunk ADDS or REMOVES a line whose
+
+
+internal/patch/devnull.go [provenance=ast_exact, score=1.00]
+package patch
+// CHT-059 declarations-only seam. This file carries the TYPE vocabulary the
+// /dev/null diff forms need so the acceptance tests compile and fail for the
+// right reason (assertion failures = RED, not build failure = ERROR). It must
+// stay declarations-only: no parsing, no applying, no behavior. The CHT-059
+// implementation classifies forms in ParseUnifiedDiff and branches in Apply;
+// when that lands, this file may gain doc-comment updates and nothing else.
+// Op classifies what a FilePatch does to its target file. The zero value is
+// OpEdit (a classic content edit), so every diff parsed before CHT-059 keeps
+// meaning what it always meant.
+type Op uint8
+const (
+	// OpEdit applies hunks to an existing file's content (the only form
+	// CHT-003 modeled).
+	OpEdit Op = iota
+	// OpCreate is a creation diff: the old side is /dev/null and the file
+	// did not exist before the patch applies.
+	OpCreate
+	// OpDelete is a deletion diff: the new side is /dev/null and the file
+	// is removed when its content matches the hunk's removals exactly.
+	OpDelete
+	// OpRename is a rename diff: `rename from <old>` / `rename to <new>`
+	// metadata names the source (FilePatch.OldPath) and the destination
+	// (FilePatch.Path), and the section carries hunks only when the content
+	// changed too — a 100%-similarity rename's body is metadata alone
+	// (CHT-158). Declarations-only in the RED commit; the parser does not
+	// classify this op until CHT-158's implementation lands.
+	OpRename
+)
+// String names the op for error messages and diagnostics.
+func (o Op) String() string {
+	switch o {
+	case OpCreate:
+		return "create"
+	case OpDelete:
+		return "delete"
+	case OpRename:
+		return "rename"
+	default:
+		return "edit"
+	}
+}
+// DevNull is the pseudo-path git and diff write where the missing side of a
+// creation or deletion diff would name a file.
+const DevNull = "/dev/null"
+
+

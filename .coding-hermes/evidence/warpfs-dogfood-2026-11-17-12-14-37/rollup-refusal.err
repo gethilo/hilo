@@ -1,0 +1,3 @@
+error: graph rollup is part of the COV coverage model, which is available for the Hilo repository itself only — ~/.hermes/cache/scratch/df49/corpus is not a Hilo workspace (scope: foreign), and no COV inventory is derived for foreign repositories
+Command exited with non-zero status 1
+TIME audit-rollup wall=0.00s rss=12904kB

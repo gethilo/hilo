@@ -1,0 +1,65 @@
+Total edges: 2321 distinct / 2321 raw (edges.jsonl)
+Total files: 245
+File census: 245 files with edges (distinct edge sources) — warm last counted 256 discovered files = 242 contribute + 14 zero-edge (14 no imports + 0 package facades); 245 > 242 means the graph predates the last warm — `hilo graph warm` prunes sources whose file is gone (DF-WARPFS-170)
+Components (14 total):
+  .gitreins: 1298 files, 0 edges
+  .coding-hermes: 195 files, 0 edges
+  internal: 120 files, 981 edges
+  cmd: 112 files, 1288 edges
+  docs: 42 files, 0 edges
+  scripts: 10 files, 41 edges
+  deploy: 6 files, 0 edges
+  .ruff_cache: 3 files, 0 edges
+  .: 2 files, 6 edges
+  e2e-output: 2 files, 0 edges
+  skills: 2 files, 0 edges
+  .github: 1 files, 0 edges
+  api: 1 files, 0 edges
+  clients: 1 files, 2 edges
+Most connected: std:testing
+Conformance: 3 implements, 41 consumes (heuristic extraction — see `hilo graph wiring`)
+Edge types:
+  conformance_of: 3
+  consumes: 41
+  implements: 3
+  imports: 1307
+  tested_by: 935
+  tests: 32
+Orphans (no incoming edges):
+  clients/go/toolsdclient/client.gen.go
+  cmd/gendocs/main.go
+  cmd/genwire/main.go
+  cmd/toolsd/cht051_settings_test.go
+  cmd/toolsd/cht052_remote_lease_test.go
+  cmd/toolsd/cht055_serve_cli_test.go
+  cmd/toolsd/cht056_wire_contract_test.go
+  cmd/toolsd/cht057_followup_path_test.go
+  cmd/toolsd/cht057_probe_freshness_test.go
+  cmd/toolsd/cht058_board_gate_test.go
+  cmd/toolsd/cht059_devnull_cli_test.go
+  cmd/toolsd/cht060_reaper_test.go
+  cmd/toolsd/cht061_mcp_write_test.go
+  cmd/toolsd/cht062_install_readme_test.go
+  cmd/toolsd/cht064_mcp_schema_test.go
+  cmd/toolsd/cht064_seam.go
+  cmd/toolsd/cht064_stdin_cli_test.go
+  cmd/toolsd/cht065_staleness_test.go
+  cmd/toolsd/cht066_empty_diff_cli_test.go
+  cmd/toolsd/cht067_lease_refusal_cli_test.go
+  cmd/toolsd/cht068_session_refusal_cli_test.go
+  cmd/toolsd/cht069_unborn_head_cli_test.go
+  cmd/toolsd/cht070_usage_conflict_cli_test.go
+  cmd/toolsd/cht071_core_edge_test.go
+  cmd/toolsd/cht072_diffgen_red_test.go
+  ... 101 more orphans (use --limit 0 to show all)
+Top dependencies:
+  std:testing: 324
+  std:strings: 311
+  std:os: 267
+  std:path/filepath: 262
+  std:errors: 121
+  std:encoding/json: 119
+  std:bytes: 112
+  std:fmt: 102
+  std:time: 78
+  std:os/exec: 54
