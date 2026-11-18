@@ -840,6 +840,84 @@ only, so on a foreign tree each refuses up front with that limitation named —
 never the missing-artifact instruction that would send the user to
 `graph surfaces`, a command that refuses on this very tree.
 
+### `coverage-links`
+
+Link the repository's test files to the COV-1 contract surfaces with
+evidence (COV-2). A coverage link is a first-class EVIDENCED relation:
+every row carries how it was established (`evidence_kind`), a
+`confidence` (0.0–1.0), and a `direction` — there is no link without
+provenance. The command derives, persists to
+`.vfs/graph/coverage_links.jsonl` (append-only, deduped by `link_id`,
+upgrades in place — a stderr note counts the rows written when anything
+changed), and prints the report as text or JSON:
+
+```bash
+hilo graph coverage-links                       # derive, persist, report
+hilo graph coverage-links --json                # locked JSON shape instead of text
+hilo graph coverage-links --surface <SURFACE>   # one surface, by surface_id or name
+hilo graph coverage-links --unlinked            # only surfaces with no link at all
+```
+
+Requires the COV-1 inventory (`.vfs/graph/surfaces.jsonl` — run
+`hilo graph surfaces` first); a missing inventory is an error naming that
+runbook. Like the rest of the COV chain it is self-hosted-only: on a
+foreign tree it refuses up front (see `surfaces`, above).
+
+- `--json` — print the report as JSON (locked shape: `schema`, `links`,
+  `unlinked`, `cause_census`, `rules`) instead of text.
+- `--surface <SURFACE>` — restrict output to one surface, by `surface_id`
+  or by the human-facing name `graph surfaces` shows (e.g. `graph warm`)
+  — answers "what tests cover this surface". An unknown id or name is a
+  loud error (DF-WARPFS-113: it is almost always a typo), never a
+  success-shaped empty report; a KNOWN surface with zero links keeps the
+  empty-output-with-cause path.
+- `--unlinked` — show only the unlinked set (surfaces with no link at
+  all), each with a cause. This mode only answers — no rows are written.
+
+Each line of `.vfs/graph/coverage_links.jsonl` is one JSON object:
+
+| field | meaning |
+|-------|---------|
+| `link_id` | content-derived sha256 over NUL-framed (`test_file`, `target`) — the same framing `surfaces.jsonl` uses, so a repo path and a surface id cannot collide by concatenation. One row per pair, always. |
+| `test_file` | the test file, repo-relative, `/`-separated |
+| `target` | the covered surface: a `surface_id` from `surfaces.jsonl` when the target resolves to exactly one surface, else the module/file path it was established against |
+| `evidence_kind` | how the link was established (table below) — no link without provenance |
+| `confidence` | 0.0–1.0, defaulting by evidence kind; a stronger layer RAISES it and upgrades the kind instead of duplicating the row, and a weaker re-derivation never lowers it |
+| `direction` | `test_to_target` (the test exercises the target) or `target_to_test` (the target names the test as its witness — reserved for declared mappings written in that direction) |
+
+Evidence kinds, strongest first (the default confidence is an attribute
+of the kind — only an observed-at-runtime link is certain):
+
+| kind | confidence | rule |
+|------|------------|------|
+| `runtime_trace` | 1.0 | the test observed the target at runtime — rows in an optional `.vfs/graph/runtime_trace.jsonl` (each needs only `test_file` + `target`) merge in as this kind and raise an existing link to 1.0 |
+| `declared_mapping` | 0.9 | an explicit human/manifest-declared mapping names the pair |
+| `import` | 0.7 | the test file's AST imports the target — the same `Parser` the graph itself uses, so coverage links and `tested_by` edges always agree on what an import IS |
+| `symbol_name_match` | 0.5 | the test's source names the surface's contract name on a word boundary (names shorter than 4 characters are skipped — too short to be a meaningful match) |
+| `fixture_or_helper` | 0.4 | the test reaches the target through an in-repo fixture/helper it imports (one hop) |
+
+The layers are ADDITIVE and ordered, weakest first: `import`, then
+`symbol_name_match`, then any recorded `runtime_trace`. The merge keeps
+ONE row per (`test_file`, `target`) pair — `link_id` is that identity,
+so confidence and evidence kind are attributes of the link, not its
+identity.
+
+A surface no test reaches never vanishes: it lands in the report's
+unlinked set with a cause derived from what the derivation actually saw
+— `owner file imported by a test but no surface-level evidence`;
+`owner file not imported by any test (declaration-only surface)` for the
+`cli_verb` / `cli_flag` / `ffi_export` / `config_key` kinds (surfaces
+living in files tests cannot import); `no test file imports or names
+this surface` otherwise; `no test files found in repo` on an empty
+corpus. A `cause_census` counts each cause, and test files that
+establish no link at all are counted into it (`test files with no
+derived link`) rather than silently disappearing.
+
+Downstream consumers join through this artifact: `graph test-classes`
+(COV-3) for the per-surface class mix, `graph rollup` (COV-4) for the
+coverage counts, and `graph audit` (COV-5), whose "linked" bucket reads
+on-disk links as one of its two proofs.
+
 ### `test-classes`
 
 Report the test-class taxonomy: how many tests of each **class** exist and,
