@@ -2843,3 +2843,15 @@ tasks:
   status: complete
   created_at: '2026-11-17T15:46:54.809127+00:00'
   completed_at: '2026-11-17T16:13:50.305412+00:00'
+- id: INT-CI-017-V4
+  title: Verify INT-CI-017 apt-mirror fallback remediation at published tip
+  criteria:
+  - 'PROOF: .github/workflows/ci.yml in the judged tree carries apt_retry (3 attempts
+    with backoff) AND explicit archive.ubuntu.com plus security.ubuntu.com fallback
+    sources, with no continue-on-error on any gate step and the Check formatting /
+    Build / Clippy / Test / Install cargo-audit / Advisory gate steps intact. FAILIF:
+    the fallback sources are absent, any gate step is skipped, conditionalized or
+    continue-on-error, or the install step still depends on a single mirror hostname.'
+  status: complete
+  created_at: '2026-11-17T23:12:55.353931+00:00'
+  completed_at: '2026-11-17T23:13:28.933341+00:00'
