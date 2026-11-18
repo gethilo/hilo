@@ -2855,3 +2855,21 @@ tasks:
   status: complete
   created_at: '2026-11-17T23:12:55.353931+00:00'
   completed_at: '2026-11-17T23:13:28.933341+00:00'
+- id: DOC-8
+  title: docs/hilo-cli.md table adds 5 graph subcommands
+  criteria:
+  - grep -c for 'graph gc', 'graph surfaces', 'graph coverage-links', 'graph rollup',
+    'graph wiring' in docs/hilo-cli.md each >= 1 and each row's usage matches the
+    live --help flag lists recorded in the brief.
+  status: complete
+  created_at: '2026-11-18T19:39:55.814501+00:00'
+  completed_at: '2026-11-18T22:28:30.411146+00:00'
+- id: DOC-9
+  title: docs/cli-reference.md gains coverage-links section
+  criteria:
+  - grep -n 'coverage-links' docs/cli-reference.md returns a section header and within
+    grep -A6 all three flags --json --surface --unlinked appear, matching hilo graph
+    coverage-links --help.
+  status: complete
+  created_at: '2026-11-18T19:39:57.531342+00:00'
+  completed_at: '2026-11-18T22:28:31.343219+00:00'
