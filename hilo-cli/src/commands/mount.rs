@@ -1249,9 +1249,15 @@ hilo /tmp/df156-mnt fuse.hilo ro,nosuid,nodev,relatime 0 0
 hilo /tmp/space\\040mnt fuse.hilo ro 0 0
 proc /proc proc rw 0 0
 ";
-        assert!(fuse_mount_entry_present(mounts, Path::new("/tmp/df156-mnt")));
+        assert!(fuse_mount_entry_present(
+            mounts,
+            Path::new("/tmp/df156-mnt")
+        ));
         // Kernel escape decoding: \040 is a literal space in the mountpoint.
-        assert!(fuse_mount_entry_present(mounts, Path::new("/tmp/space mnt")));
+        assert!(fuse_mount_entry_present(
+            mounts,
+            Path::new("/tmp/space mnt")
+        ));
         assert!(!fuse_mount_entry_present(mounts, Path::new("/tmp/other")));
         assert!(!fuse_mount_entry_present(mounts, Path::new("/")));
         // A non-fuse filesystem at the same path is not ours to unmount.
@@ -1262,8 +1268,14 @@ proc /proc proc rw 0 0
 
     #[test]
     fn test_daemon_exit_message_names_durable_log_path() {
-        let msg = daemon_exit_message("/tmp/df156-mnt", Some(Path::new("/home/u/.vfs/logs/mount-daemon.log")));
-        assert!(msg.contains("/tmp/df156-mnt"), "names the mountpoint: {msg}");
+        let msg = daemon_exit_message(
+            "/tmp/df156-mnt",
+            Some(Path::new("/home/u/.vfs/logs/mount-daemon.log")),
+        );
+        assert!(
+            msg.contains("/tmp/df156-mnt"),
+            "names the mountpoint: {msg}"
+        );
         assert!(
             msg.contains("/home/u/.vfs/logs/mount-daemon.log"),
             "names the durable log path: {msg}"
@@ -1271,7 +1283,10 @@ proc /proc proc rw 0 0
         // No env (should not happen — the parent always sets it): degrade to a
         // loud UNKNOWN instead of naming a fabricated path.
         let msg = daemon_exit_message("/tmp/df156-mnt", None);
-        assert!(msg.contains("UNKNOWN"), "missing log path must say UNKNOWN: {msg}");
+        assert!(
+            msg.contains("UNKNOWN"),
+            "missing log path must say UNKNOWN: {msg}"
+        );
     }
 
     // ───────── DF-WARPFS-134: daemon child keeps stderr — persistent log ─────────
