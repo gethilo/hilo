@@ -31,10 +31,15 @@
 //! ## Rules (exact, so a reader can disagree with them)
 //!
 //! - **Public function**: a language-level public/exported *function*
-//!   definition — Rust `pub fn` (a bare `pub`; `pub(crate)`/`pub(super)` are
-//!   NOT public), Go `func`/`func (recv) name` whose name is exported
-//!   (leading uppercase), Python `def`/`async def` whose name does not start
-//!   with `_`, TypeScript/JavaScript declarations inside an `export`.
+//!   definition — Rust `pub fn` (a bare `pub`; `pub(crate)`/`pub(super)`/
+//!   `pub(in …)` are NOT public), Go `func` whose name is exported (leading
+//!   uppercase) and Go `func (recv) name` whose name is exported AND whose
+//!   RECEIVER TYPE is exported (a method on an unexported type is not nameable
+//!   from another package, so an exported method name on it is not public
+//!   surface — DF-WARPFS-174), Python `def`/`async def` whose name does not
+//!   start with `_`, TypeScript/JavaScript declarations inside an `export`.
+//!   Visibility the graph does not model is not invented here: TS/JS model
+//!   exactly `export`, so an exported underscore-prefixed name stays surface.
 //!   Definitions in TEST files are the link source, not the audited surface,
 //!   so they are not enumerated. One row per definition; the name is
 //!   UNQUALIFIED (methods carry their bare name, e.g. `new`).
@@ -58,7 +63,12 @@
 //!   public symbols is textually named by a reachable file", which is
 //!   conservative and produces no false accusation. The cost is a documented
 //!   miss of dead code whose name is common enough to appear incidentally
-//!   elsewhere.
+//!   elsewhere. The NAME SET the reference graph matches against is kept
+//!   deliberately BROADER than the audited surface: every exported-name
+//!   definition is reference evidence even when (DF-WARPFS-174) it is no
+//!   longer public surface. Narrowing the surface therefore shrinks only the
+//!   set of symbols the audit may accuse — it cannot move a remaining symbol
+//!   out of `ok`, and `unreachable` stays a no-false-positive claim.
 //! - **Linked**: some TEST file (the `classify::is_test_file` rules) names the
 //!   symbol, or an on-disk COV-2 coverage link ([`CoverageLink`]) targets the
 //!   symbol's name or defining file. That is COV-2's `symbol_name_match`
@@ -408,8 +418,16 @@ pub fn audit(files: &[(Language, String, String)], root: &str, opts: &AuditOptio
     // Definition site of every public symbol: name → symbol indices.
     let mut symbols: Vec<SymbolAudit> = Vec::new();
     let mut by_name: HashMap<String, Vec<usize>> = HashMap::new();
+    // Broad-rule definition sites: name → every file that defines an
+    // exported-name function/method, receivers unseen. This is the
+    // REFERENCE-GRAPH index — deliberately not narrowed with the surface, or
+    // the entrypoint that reaches a file only through a now-unlisted method
+    // name would lose its edge and a live symbol in that file could collapse
+    // `ok` → `unreachable` (DF-WARPFS-174 invariant).
+    let mut def_files: HashMap<String, BTreeSet<usize>> = HashMap::new();
     // How many public definitions of `name` live in file `i` — used to tell an
     // in-file REFERENCE apart from the definition's own identifier token.
+    // Counted under the broad rule so the premise is unchanged by the fix.
     let mut def_count: HashMap<(usize, String), usize> = HashMap::new();
 
     let mut census_by_lang: BTreeMap<&'static str, (usize, usize, String)> = BTreeMap::new();
@@ -455,11 +473,17 @@ pub fn audit(files: &[(Language, String, String)], root: &str, opts: &AuditOptio
             continue;
         }
 
-        let found = extract_public_functions(*lang, src);
+        // The SURFACE (narrowed, visibility-aware) is what gets audited; the
+        // BROAD name set is what the reference graph matches against. One
+        // parse pass produces both — see `extract_name_sets`.
+        let (found, ref_defs) = extract_name_sets(*lang, src);
         census.1 += found.len();
+        for (name, _) in ref_defs {
+            *def_count.entry((i, name.clone())).or_insert(0) += 1;
+            def_files.entry(name).or_default().insert(i);
+        }
         for (name, line) in found {
             let idx = symbols.len();
-            *def_count.entry((i, name.clone())).or_insert(0) += 1;
             by_name.entry(name.clone()).or_default().push(idx);
             symbols.push(SymbolAudit {
                 name,
@@ -508,6 +532,15 @@ pub fn audit(files: &[(Language, String, String)], root: &str, opts: &AuditOptio
                     }
                 }
             }
+            // File-level edges use the BROAD def-site index: identical to the
+            // pre-narrowing graph, so reachability evidence cannot weaken.
+            if let Some(def_sites) = def_files.get(ident) {
+                for &f in def_sites {
+                    if f != a {
+                        targets.insert(f);
+                    }
+                }
+            }
             let Some(defs) = by_name.get(ident) else {
                 continue;
             };
@@ -516,9 +549,6 @@ pub fn audit(files: &[(Language, String, String)], root: &str, opts: &AuditOptio
                     continue; // a definition is not a cross-file reference
                 }
                 refs[d].insert(a);
-                if let Some(&file_of_def) = file_index.get(symbols[d].file.as_str()) {
-                    targets.insert(file_of_def);
-                }
             }
         }
         edges[a] = targets.into_iter().collect();
@@ -714,7 +744,7 @@ pub fn audit(files: &[(Language, String, String)], root: &str, opts: &AuditOptio
         symbols,
         entry_override_missing,
         rules: vec![
-            "public function: Rust bare `pub fn`, Go exported func/method (leading uppercase), Python `def`/`async def` not starting with `_`, TypeScript/JavaScript declarations inside an `export`".into(),
+            "public function: Rust bare `pub fn` (`pub(crate)`/`pub(super)`/`pub(in …)` excluded), Go exported func and Go exported method whose RECEIVER TYPE is exported (a method on an unexported type is not public surface), Python `def`/`async def` not starting with `_`, TypeScript/JavaScript declarations inside an `export`".into(),
             "declared entrypoint: `classify_file` role == `entrypoint` (code-derived, no hand list)".into(),
             "reachable: the defining file is itself a declared entrypoint, or a file reachable-from-an-entrypoint names the symbol; file reachability is the forward closure of `A names a public symbol of B` from the entrypoints".into(),
             "reference: lexical identifier occurrence in the file text (comments and strings included) — over-approximate by construction, so `unreachable` is a conservative no-false-positive claim".into(),
@@ -730,8 +760,7 @@ fn extractor_rule(lang: Language) -> String {
             "tree-sitter rust: function_item with a bare `pub` visibility_modifier".into()
         }
         Language::Go => {
-            "tree-sitter go: function_declaration / method_declaration whose name starts uppercase"
-                .into()
+            "tree-sitter go: function_declaration whose name starts uppercase; method_declaration whose name starts uppercase AND whose receiver base type is exported".into()
         }
         Language::Python => {
             "tree-sitter python: function_definition whose name does not start with `_`".into()
@@ -768,27 +797,44 @@ fn bucket_rule(bucket: AuditBucket, entrypoint_files: &[String]) -> String {
 
 // ─────────────────────────── public-symbol extraction ───────────────────────
 
+/// One extracted definition list: `(unqualified name, 1-indexed line)`.
+type Definitions = Vec<(String, usize)>;
+
 /// Public function definitions `(name, 1-indexed line)` in `source`.
 ///
 /// Returns an empty vec for a language outside [`AUDIT_LANGUAGES`].
-pub fn extract_public_functions(lang: Language, source: &str) -> Vec<(String, usize)> {
+pub fn extract_public_functions(lang: Language, source: &str) -> Definitions {
+    extract_name_sets(lang, source).0
+}
+
+/// The audited public SURFACE and the BROADER reference-evidence name set,
+/// from a single parse pass.
+///
+/// The reference set applies the pre-DF-WARPFS-174 rule (every exported-name
+/// function/method, receiver unseen): it is the name set the audit's lexical
+/// reference graph was built on, and narrowing it would weaken reachability
+/// evidence — the one direction the fix must never go.
+fn extract_name_sets(lang: Language, source: &str) -> (Definitions, Definitions) {
     let Some(ts_lang) = ts_language(lang) else {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     };
     let mut parser = tree_sitter::Parser::new();
     if parser.set_language(&ts_lang).is_err() {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
     let Some(tree) = parser.parse(source, None) else {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     };
     let bytes = source.as_bytes();
     let mut out = Vec::new();
-    walk(tree.root_node(), bytes, lang, &mut out, false);
+    let mut refs = Vec::new();
+    walk(tree.root_node(), bytes, lang, &mut out, &mut refs, false);
     // Source order (line, then name) — the order a reader sees in the file.
     out.sort_by_key(|a| (a.1, a.0.clone()));
     out.dedup();
-    out
+    refs.sort_by_key(|a| (a.1, a.0.clone()));
+    refs.dedup();
+    (out, refs)
 }
 
 fn ts_language(lang: Language) -> Option<tree_sitter::Language> {
@@ -807,19 +853,27 @@ fn walk(
     source: &[u8],
     lang: Language,
     out: &mut Vec<(String, usize)>,
+    refs_out: &mut Vec<(String, usize)>,
     inside_function: bool,
 ) {
     match lang {
         Language::Rust => {
             if node.kind() == "function_item" && rust_is_public(node, source) {
-                push_name(node, source, out);
+                push_name_both(node, source, out, refs_out);
             }
         }
         Language::Go => {
             if matches!(node.kind(), "function_declaration" | "method_declaration") {
                 if let Some(name) = name_of(node, source) {
-                    if name.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
-                        out.push((name, node.start_position().row + 1));
+                    if is_go_exported(&name) {
+                        // Reference evidence keeps the PRE-narrowing rule (any
+                        // exported name; the receiver is not consulted), so a
+                        // file-level edge never disappears when the surface
+                        // narrows — see `def_files` in `audit`.
+                        refs_out.push((name.clone(), node.start_position().row + 1));
+                        if go_declaration_is_public(node, source) {
+                            out.push((name, node.start_position().row + 1));
+                        }
                     }
                 }
             }
@@ -830,7 +884,9 @@ fn walk(
             if node.kind() == "function_definition" && !inside_function {
                 if let Some(name) = name_of(node, source) {
                     if !name.starts_with('_') {
-                        out.push((name, node.start_position().row + 1));
+                        let line = node.start_position().row + 1;
+                        out.push((name.clone(), line));
+                        refs_out.push((name, line));
                     }
                 }
             }
@@ -838,7 +894,7 @@ fn walk(
         Language::TypeScript | Language::JavaScript if node.kind() == "export_statement" => {
             // Only the declarations DIRECTLY exported are public; a `const`
             // nested inside an exported function body is not.
-            collect_exported(node, source, out);
+            collect_exported(node, source, out, refs_out);
             return;
         }
         _ => {}
@@ -848,12 +904,17 @@ fn walk(
     let mut cursor = node.walk();
     let children: Vec<tree_sitter::Node> = node.children(&mut cursor).collect();
     for child in children {
-        walk(child, source, lang, out, next_inside);
+        walk(child, source, lang, out, refs_out, next_inside);
     }
 }
 
 /// Names declared directly by one `export_statement` (TS/JS).
-fn collect_exported(node: tree_sitter::Node, source: &[u8], out: &mut Vec<(String, usize)>) {
+fn collect_exported(
+    node: tree_sitter::Node,
+    source: &[u8],
+    out: &mut Vec<(String, usize)>,
+    refs_out: &mut Vec<(String, usize)>,
+) {
     let mut cursor = node.walk();
     let children: Vec<tree_sitter::Node> = node.children(&mut cursor).collect();
     for child in children {
@@ -861,13 +922,13 @@ fn collect_exported(node: tree_sitter::Node, source: &[u8], out: &mut Vec<(Strin
             "function_declaration"
             | "generator_function_declaration"
             | "class_declaration"
-            | "abstract_class_declaration" => push_name(child, source, out),
+            | "abstract_class_declaration" => push_name_both(child, source, out, refs_out),
             "lexical_declaration" | "variable_declaration" => {
                 let mut inner = child.walk();
                 let declarators: Vec<tree_sitter::Node> = child.children(&mut inner).collect();
                 for declarator in declarators {
                     if declarator.kind() == "variable_declarator" {
-                        push_name(declarator, source, out);
+                        push_name_both(declarator, source, out, refs_out);
                     }
                 }
             }
@@ -876,9 +937,18 @@ fn collect_exported(node: tree_sitter::Node, source: &[u8], out: &mut Vec<(Strin
     }
 }
 
-fn push_name(node: tree_sitter::Node, source: &[u8], out: &mut Vec<(String, usize)>) {
+/// Surface AND reference evidence in one step (the two sets coincide outside
+/// Go methods).
+fn push_name_both(
+    node: tree_sitter::Node,
+    source: &[u8],
+    out: &mut Vec<(String, usize)>,
+    refs_out: &mut Vec<(String, usize)>,
+) {
     if let Some(name) = name_of(node, source) {
-        out.push((name, node.start_position().row + 1));
+        let line = node.start_position().row + 1;
+        out.push((name.clone(), line));
+        refs_out.push((name, line));
     }
 }
 
@@ -900,6 +970,63 @@ fn rust_is_public(node: tree_sitter::Node, source: &[u8]) -> bool {
     children.iter().any(|c| {
         c.kind() == "visibility_modifier" && c.utf8_text(source).map(str::trim) == Ok("pub")
     })
+}
+
+/// Go's export rule: an identifier is exported exactly when its first
+/// character is an uppercase letter.
+fn is_go_exported(name: &str) -> bool {
+    name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+}
+
+/// DF-WARPFS-174: whether a Go DECLARATION is part of the package's public
+/// surface, beyond its own name.
+///
+/// A `function_declaration` is package-level, so an exported name is the whole
+/// rule. A `method_declaration` is NOT: the method belongs to its receiver
+/// type, so `func (a *connModeAddr) Network()` is unreachable from any other
+/// package even though `Network` is exported — `connModeAddr` is not nameable
+/// outside its package. Counting such methods as public surface advertised
+/// live `net.Addr` / `net.Conn` implementations as dead public API (run 49:
+/// 4 of the 5 `unreachable` entries).
+///
+/// A receiver whose base type cannot be resolved is treated as NOT public: the
+/// audit can only claim visibility it can prove, and dropping a symbol shrinks
+/// the surface rather than adding an accusation.
+fn go_declaration_is_public(node: tree_sitter::Node, source: &[u8]) -> bool {
+    if node.kind() != "method_declaration" {
+        return true;
+    }
+    go_receiver_base_type(node, source).is_some_and(|name| is_go_exported(&name))
+}
+
+/// The base type NAME of a Go method receiver: `*Server` → `Server`,
+/// `connModeConn` → `connModeConn`, `*Pair[K, V]` → `Pair`.
+fn go_receiver_base_type(node: tree_sitter::Node, source: &[u8]) -> Option<String> {
+    let receiver = node.child_by_field_name("receiver")?;
+    let mut cursor = receiver.walk();
+    let params: Vec<tree_sitter::Node> = receiver.children(&mut cursor).collect();
+    let declaration = params
+        .into_iter()
+        .find(|c| c.kind() == "parameter_declaration")?;
+    let ty = declaration.child_by_field_name("type")?;
+    let ident = first_type_identifier(ty)?;
+    let text = ident.utf8_text(source).ok()?.trim();
+    if text.is_empty() {
+        None
+    } else {
+        Some(text.to_string())
+    }
+}
+
+/// The first `type_identifier` in source order under a type node — the base
+/// name of `T`, `*T`, `T[A, B]`.
+fn first_type_identifier(node: tree_sitter::Node) -> Option<tree_sitter::Node> {
+    if node.kind() == "type_identifier" {
+        return Some(node);
+    }
+    let mut cursor = node.walk();
+    let children: Vec<tree_sitter::Node> = node.children(&mut cursor).collect();
+    children.into_iter().find_map(first_type_identifier)
 }
 
 // ─────────────────────────── identifier scan ────────────────────────────────
@@ -1285,6 +1412,205 @@ pub unsafe fn unsafe_exported() {}
         assert_eq!(
             names_of(Language::Go, src),
             vec!["Exported".to_string(), "Method".to_string()]
+        );
+    }
+
+    /// DF-WARPFS-174: a Go METHOD is public surface only when its RECEIVER TYPE
+    /// is exported as well as its name. `func (a *connModeAddr) Network()` has
+    /// an exported name, but no other package can name `connModeAddr`, so the
+    /// method is not reachable from outside its package — counting it as public
+    /// surface is what put live `net.Addr` / `net.Conn` implementations in
+    /// `unreachable` (run 49: 4 of the bucket's 5 entries).
+    #[test]
+    fn go_method_on_unexported_receiver_is_not_public_surface() {
+        let src = "package toolsd\n\
+                   \n\
+                   func Exported() {}\n\
+                   \n\
+                   type connModeAddr struct{}\n\
+                   \n\
+                   func (a connModeAddr) Network() string { return \"tcp\" }\n\
+                   func (a *connModeAddr) String() string { return \"tcp\" }\n\
+                   func (a *connModeAddr) LocalAddr() connModeAddr { return a }\n";
+        assert_eq!(
+            names_of(Language::Go, src),
+            vec!["Exported".to_string()],
+            "methods on an UNEXPORTED receiver type are not public surface"
+        );
+    }
+
+    /// The other half of the same rule: an EXPORTED receiver type keeps its
+    /// exported methods public, including a generic receiver (`*Pair[K, V]`),
+    /// so the fix narrows the surface without erasing legitimate API.
+    #[test]
+    fn go_method_on_exported_receiver_stays_public_surface() {
+        let src = "package toolsd\n\
+                   \n\
+                   type Server struct{}\n\
+                   \n\
+                   func (s *Server) Start() {}\n\
+                   func (s Server) Stop() {}\n\
+                   func (s *Server) stop() {}\n\
+                   \n\
+                   type Pair[K any, V any] struct{}\n\
+                   \n\
+                   func (p *Pair[K, V]) Get() (K, V) { var k K; var v V; return k, v }\n";
+        assert_eq!(
+            names_of(Language::Go, src),
+            vec!["Start".to_string(), "Stop".to_string(), "Get".to_string()],
+            "exported receivers keep their exported methods"
+        );
+    }
+
+    /// DF-WARPFS-174 end to end, in the shape run 49 found: an entrypoint hands
+    /// unexported receiver types to the stdlib as `net.Addr` / `net.Conn`.
+    /// Interface dispatch is invisible to a lexical scan, so those methods can
+    /// never be PROVEN reachable — but they are not public surface either, so
+    /// they must not be advertised as dead public API. The one genuinely dead
+    /// exported function stays in `unreachable`.
+    #[test]
+    fn go_interface_implementations_are_not_reported_as_dead_public_api() {
+        let files = corpus(&[
+            (
+                "cmd/toolsd/main.go",
+                "package main\n\
+                 \n\
+                 import \"net\"\n\
+                 \n\
+                 func main() {\n\
+                 \tvar a net.Addr = connModeAddr{}\n\
+                 \t_ = a\n\
+                 }\n\
+                 \n\
+                 type connModeAddr struct{}\n\
+                 \n\
+                 func (a connModeAddr) Network() string { return \"tcp\" }\n\
+                 func (a connModeAddr) String() string { return \"tcp\" }\n\
+                 \n\
+                 type connModeConn struct{}\n\
+                 \n\
+                 func (c *connModeConn) RemoteAddr() net.Addr { return connModeAddr{} }\n\
+                 func (c *connModeConn) SetReadDeadline(t int64) error { return nil }\n\
+                 func (c *connModeConn) SetWriteDeadline(t int64) error { return nil }\n",
+            ),
+            (
+                "internal/scratch/s2.go",
+                "package scratch\n\nfunc Bye() {}\n",
+            ),
+        ]);
+
+        let report = audit(&files, "", &AuditOptions::default());
+
+        let surface: Vec<(&str, &str)> = report
+            .symbols
+            .iter()
+            .map(|s| (s.name.as_str(), s.file.as_str()))
+            .collect();
+        assert_eq!(
+            report.public_symbols, 1,
+            "only the exported FUNCTION is public surface, got {surface:?}"
+        );
+
+        assert_eq!(
+            report.buckets.unreachable.count,
+            1,
+            "the four dispatch-only methods must not be reported dead: {:?}",
+            report
+                .buckets
+                .unreachable
+                .symbols
+                .iter()
+                .map(|s| (&s.name, &s.file))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            report.buckets.unreachable.symbols[0].name, "Bye",
+            "the genuinely uncalled exported function is still unreachable"
+        );
+        for method in [
+            "Network",
+            "String",
+            "RemoteAddr",
+            "SetReadDeadline",
+            "SetWriteDeadline",
+        ] {
+            assert!(
+                !report.symbols.iter().any(|s| s.name == method),
+                "{method} is not public surface, so it must appear in NO bucket"
+            );
+        }
+    }
+
+    /// Positive control for the invariant: narrowing the surface must not move a
+    /// symbol between the EXISTING buckets in the accusing direction. A method
+    /// on an EXPORTED receiver that nothing names is still genuinely dead public
+    /// API and must still be reported `unreachable`.
+    #[test]
+    fn go_method_on_exported_receiver_with_no_caller_is_still_unreachable() {
+        let files = corpus(&[
+            (
+                "cmd/toolsd/main.go",
+                "package main\n\nfunc main() {\n\tstart()\n}\n\nfunc start() {}\n",
+            ),
+            (
+                "cmd/toolsd/server.go",
+                "package main\n\ntype Server struct{}\n\n\
+                 func (s *Server) Handle() {}\n",
+            ),
+        ]);
+        let report = audit(&files, "", &AuditOptions::default());
+
+        assert_eq!(report.public_symbols, 1, "Handle is public surface");
+        assert_eq!(report.buckets.unreachable.count, 1);
+        assert_eq!(report.buckets.unreachable.symbols[0].name, "Handle");
+    }
+
+    /// DF-WARPFS-174 invariant: narrowing the surface must not silently DROP
+    /// the file-level reference edges the removed names used to carry. Here
+    /// the entrypoint reaches `server.go` ONLY through a method name that is
+    /// no longer public surface (`h.Dial()`), and `Setup` is genuinely alive:
+    /// internally called (in-file reference), test-linked, in a file the
+    /// entrypoint reaches. If the reference graph were narrowed together with
+    /// the surface, the Dial edge would vanish and Setup would collapse
+    /// `ok` → `unreachable` — a false accusation this test forbids.
+    #[test]
+    fn go_narrowed_surface_keeps_file_reference_edges() {
+        let files = corpus(&[
+            (
+                "cmd/app/main.go",
+                "package main\n\nfunc main() {\n\th := &connHandler{}\n\th.Dial()\n}\n",
+            ),
+            (
+                "cmd/app/server.go",
+                "package main\n\ntype connHandler struct{}\n\n\
+                 func (c *connHandler) Dial() {}\n\n\
+                 func Setup() {}\n\n\
+                 func init() { setupHelper() }\n\n\
+                 func setupHelper() { Setup() }\n",
+            ),
+            (
+                "cmd/app/server_test.go",
+                "package main\n\nimport \"testing\"\n\nfunc TestSetup(t *testing.T) {\n\tSetup()\n}\n",
+            ),
+        ]);
+        let report = audit(&files, "", &AuditOptions::default());
+
+        assert_eq!(report.public_symbols, 1, "only Setup is public surface");
+        let setup = report
+            .symbols
+            .iter()
+            .find(|s| s.name == "Setup")
+            .expect("Setup is audited");
+        assert_eq!(
+            setup.bucket,
+            AuditBucket::Ok,
+            "Setup stays ok: the entrypoint's Dial edge keeps server.go reachable, \
+             its in-file caller proves reachability, the test proves the link — \
+             narrowing the surface must not move it to unreachable"
+        );
+        assert!(
+            !report.symbols.iter().any(|s| s.name == "Dial"),
+            "Dial is not public surface"
         );
     }
 
