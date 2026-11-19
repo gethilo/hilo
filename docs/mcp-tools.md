@@ -275,7 +275,14 @@ in the same process as `--mcp`:
 ```bash
 hilo serve --http          # HTTP only
 hilo serve --mcp --http    # both transports, one process
+
+# Override the port when the manifest port is already taken on this host
+hilo serve --http --port 8767
 ```
+
+`--port <PORT>` requires `--http` and outranks both the manifest's
+`interfaces.mcp.port` and the built-in default, so the transport never has to
+move the project manifest just to start beside another service.
 
 Operational endpoint:
 
