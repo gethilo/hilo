@@ -2873,3 +2873,30 @@ tasks:
   status: complete
   created_at: '2026-11-18T19:39:57.531342+00:00'
   completed_at: '2026-11-18T22:28:31.343219+00:00'
+- id: QA-WARPFS-037
+  title: Stale-schema graph caches must not be graded read-only-hot
+  criteria:
+  - grep -q ensure_schema hilo-graph/src/graph.rs; cargo test -p hilo_graph --lib
+    open_read_only_migrates passes; read-only pre-granularity cache migrates or returns
+    actionable error, never raw Binder Error
+  status: complete
+  created_at: '2026-11-19T01:10:13.675607+00:00'
+  completed_at: '2026-11-19T01:10:20.879810+00:00'
+- id: REV-WARPFS-9
+  title: hilo serve --http needs an explicit --port override
+  criteria:
+  - 'cargo test -p hilo-cli --lib explicit_port_overrides_the_manifest passes; live:
+    hilo serve --http --port 8767 binds while 8766 is taken and GET /health returns
+    200'
+  status: complete
+  created_at: '2026-11-19T01:10:14.091263+00:00'
+  completed_at: '2026-11-19T01:10:31.138159+00:00'
+- id: DF-WARPFS-156
+  title: Daemon log must live outside the mount and survive daemon death
+  criteria:
+  - 'cargo test -p hilo-cli --lib daemon_exit_message passes; live: hilo mount <dir>
+    --daemon prints log path under $HOME/.vfs/logs, log stays cat-able after the daemon
+    dies, stale mount is reported or self-healed'
+  status: complete
+  created_at: '2026-11-19T01:10:14.523293+00:00'
+  completed_at: '2026-11-19T01:10:40.865693+00:00'
