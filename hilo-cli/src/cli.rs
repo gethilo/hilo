@@ -555,6 +555,13 @@ struct ServeArgs {
     /// with --mcp; at least one mode is required.
     #[arg(long)]
     http: bool,
+
+    /// TCP port for the HTTP transport (default: 8766, or
+    /// interfaces.mcp.port from the manifest when one is set). Overrides
+    /// the manifest — use it when the default port is already taken on
+    /// the host. Requires --http.
+    #[arg(long, value_name = "PORT", requires = "http")]
+    port: Option<u16>,
 }
 
 #[derive(Subcommand)]
@@ -751,7 +758,7 @@ pub fn run() -> anyhow::Result<()> {
             rollup::run(args.json, &args.by, args.group.as_deref())
         }
         Commands::Graph(GraphCommand::Audit(args)) => audit::run(args.json, args.path.clone()),
-        Commands::Serve(args) => serve::run(args.http, args.mcp),
+        Commands::Serve(args) => serve::run(args.http, args.mcp, args.port),
         Commands::Backend(backend::BackendCommand::Mount(args)) => backend::run_mount(&args),
         Commands::Backend(backend::BackendCommand::List) => backend::run_list(),
         Commands::Backend(backend::BackendCommand::Sync(args)) => backend::run_sync(&args),

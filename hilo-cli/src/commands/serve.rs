@@ -21,9 +21,14 @@ use crate::commands::guard;
 pub const DEFAULT_HTTP_PORT: u16 = 8766;
 
 /// Start the servers selected by the CLI flags.
-pub fn run(http: bool, mcp: bool) -> Result<()> {
+///
+/// `port` is the operator's `--port` value: when present it overrides both
+/// the manifest's `interfaces.mcp.port` and [`DEFAULT_HTTP_PORT`], which is
+/// what makes the HTTP transport startable on a host where the default port
+/// is already taken.
+pub fn run(http: bool, mcp: bool, port: Option<u16>) -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
-    run_in(&cwd, http, mcp)
+    run_in(&cwd, http, mcp, port)
 }
 
 /// Injectable core of [`run`]: the project root is a parameter so the
@@ -36,7 +41,7 @@ pub fn run(http: bool, mcp: bool) -> Result<()> {
 /// instead of telling the operator what was wrong. Refuse up front, naming
 /// `hilo init`. An initialized project with no edges yet stays valid: only
 /// the manifest's presence is required, never graph contents.
-pub fn run_in(root: &Path, http: bool, mcp: bool) -> Result<()> {
+pub fn run_in(root: &Path, http: bool, mcp: bool, port: Option<u16>) -> Result<()> {
     if !http && !mcp {
         anyhow::bail!("No server mode selected. Use --mcp for MCP server, --http for HTTP.");
     }
@@ -46,7 +51,7 @@ pub fn run_in(root: &Path, http: bool, mcp: bool) -> Result<()> {
     hilo_core::logging::init_logging_to(true, std::io::stderr);
 
     if http {
-        let port = resolve_http_port(root);
+        let port = resolve_http_port(root, port);
         let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
         std::thread::spawn(move || {
             if let Err(e) = hilo_mcp::http::run_with_ready(port, Some(ready_tx)) {
@@ -85,9 +90,18 @@ pub fn run_in(root: &Path, http: bool, mcp: bool) -> Result<()> {
     Ok(())
 }
 
-/// Resolve the HTTP port: the manifest's `interfaces.mcp.port` when a
-/// manifest is present and parsable, [`DEFAULT_HTTP_PORT`] otherwise.
-pub fn resolve_http_port(root: &Path) -> u16 {
+/// Resolve the HTTP port, in precedence order: the operator's `--port`
+/// argument, then the manifest's `interfaces.mcp.port` when a manifest is
+/// present and parsable, then [`DEFAULT_HTTP_PORT`].
+///
+/// The explicit argument wins over the manifest because it is the narrower,
+/// more recent instruction — a project manifest shipped with `port: 8766`
+/// must not keep the transport from starting on a host where that port is
+/// taken.
+pub fn resolve_http_port(root: &Path, explicit: Option<u16>) -> u16 {
+    if let Some(port) = explicit {
+        return port;
+    }
     load_manifest(root)
         .map(|m| m.interfaces.mcp.port)
         .unwrap_or(DEFAULT_HTTP_PORT)
@@ -160,7 +174,7 @@ mod tests {
     #[test]
     fn refuse_missing_manifest_names_init() {
         let dir = TempDir::new().unwrap();
-        let err = run_in(dir.path(), false, true).unwrap_err();
+        let err = run_in(dir.path(), false, true, None).unwrap_err();
         let msg = format!("{err:#}");
         assert!(msg.contains("hilo init"), "error must name the fix: {msg}");
         assert!(
@@ -175,7 +189,7 @@ mod tests {
         // from library callers; it must stay a loud usage error.
         let dir = TempDir::new().unwrap();
         init_project(dir.path());
-        let err = run_in(dir.path(), false, false).unwrap_err();
+        let err = run_in(dir.path(), false, false, None).unwrap_err();
         let msg = format!("{err:#}");
         assert!(
             msg.contains("--mcp") && msg.contains("--http"),
@@ -218,19 +232,40 @@ mod tests {
             "version: 2\nproject:\n  name: p\ninterfaces:\n  mcp:\n    port: 9999\n",
         )
         .unwrap();
-        assert_eq!(resolve_http_port(dir.path()), 9999);
+        assert_eq!(resolve_http_port(dir.path(), None), 9999);
     }
 
     #[test]
     fn http_port_defaults_to_8766_when_manifest_omits_it() {
         let dir = TempDir::new().unwrap();
         init_project(dir.path());
-        assert_eq!(resolve_http_port(dir.path()), 8766);
+        assert_eq!(resolve_http_port(dir.path(), None), 8766);
     }
 
     #[test]
     fn http_port_defaults_to_8766_without_a_manifest() {
         let dir = TempDir::new().unwrap();
-        assert_eq!(resolve_http_port(dir.path()), 8766);
+        assert_eq!(resolve_http_port(dir.path(), None), 8766);
+    }
+
+    /// REV-WARPFS-9: `--port` is the narrowest instruction, so it wins over
+    /// a manifest that names a port — the case that matters on a host where
+    /// the manifest's port is already taken.
+    #[test]
+    fn explicit_port_overrides_the_manifest() {
+        let dir = TempDir::new().unwrap();
+        init_project(dir.path());
+        std::fs::write(
+            dir.path().join(".vfs/manifest.yaml"),
+            "version: 2\nproject:\n  name: p\ninterfaces:\n  mcp:\n    port: 9999\n",
+        )
+        .unwrap();
+        assert_eq!(resolve_http_port(dir.path(), Some(8767)), 8767);
+    }
+
+    #[test]
+    fn explicit_port_is_used_without_a_manifest() {
+        let dir = TempDir::new().unwrap();
+        assert_eq!(resolve_http_port(dir.path(), Some(8767)), 8767);
     }
 }
