@@ -2102,6 +2102,28 @@ impl GraphDB {
         rel_filter: Option<&str>,
         direction: Direction,
     ) -> GraphResult<Vec<Edge>> {
+        self.related_with_local(path, rel_filter, direction, None)
+    }
+
+    /// PERF: build the `local:` reverse index ONCE for a batch of per-file
+    /// `related` queries (the BFS in `signal::traverse_and_score` calls this
+    /// once per visited node). Each build is a full SQL scan of the `local:`
+    /// edges plus one disk probe ladder per (importer dir, specifier) pair —
+    /// on a 475-file corpus one build costs ~1,100 `statx` probes, and the
+    /// traversal was paying it 245 times per `hilo graph understand`.
+    pub fn local_spec_resolver(&self) -> Option<LocalSpecResolver> {
+        LocalSpecResolver::from_edges(&self.conn).ok()
+    }
+
+    /// [`Self::related`] with an optional pre-built `local:` index. `None`
+    /// reproduces the historical per-call build exactly.
+    pub fn related_with_local(
+        &self,
+        path: &str,
+        rel_filter: Option<&str>,
+        direction: Direction,
+        local: Option<&LocalSpecResolver>,
+    ) -> GraphResult<Vec<Edge>> {
         if self.degraded {
             return self.related_from_jsonl(path, rel_filter, direction);
         }
@@ -2201,7 +2223,15 @@ impl GraphDB {
         // actually lands on this file (`from ∈ allowed importers`), so
         // same-named nodes from other directories never cross-match.
         if direction == Direction::Reverse {
-            if let Ok(resolver) = crate::resolution::LocalSpecResolver::from_edges(&self.conn) {
+            let built;
+            let resolver = match local {
+                Some(existing) => Some(existing),
+                None => {
+                    built = crate::resolution::LocalSpecResolver::from_edges(&self.conn).ok();
+                    built.as_ref()
+                }
+            };
+            if let Some(resolver) = resolver {
                 let mut keep = resolver.nodes_for(path);
                 keep.sort();
                 keep.dedup();
@@ -5284,6 +5314,66 @@ mod tests {
         let db2 = GraphDB::open(db_path_str).unwrap();
         let count = db2.count_edges().unwrap();
         assert_eq!(count, 2, "re-open must not duplicate edges");
+    }
+
+    #[test]
+    fn related_reverse_without_index_matches_prebuilt_local_resolver() {
+        // PERF-015: `related()` keeps its public signature and its historical
+        // behaviour — it must still answer reverse queries with a per-call
+        // `local:` index build, and that answer must be EXACTLY what the
+        // hoisted single-index form returns. `traverse_and_score` swapped in
+        // the prebuilt form, so a divergence here would silently change
+        // `hilo graph understand` output between the two arms.
+        let dir = tempfile::tempdir().unwrap();
+        let target = touch(dir.path(), "src/widget.ts");
+        touch(dir.path(), "src/widget.test.ts");
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[
+            Edge::new("src/widget.test.ts", "local:./widget", "imports"),
+            Edge::new("src/widget.test.ts", "local:./widget", "tested_by"),
+            Edge::new("src/widget.ts", "pkg:node:path", "imports"),
+        ])
+        .unwrap();
+
+        // Absolute query form (what the BFS hands `related`).
+        let query = target.to_string_lossy().into_owned();
+        let historical = db.related(&query, None, Direction::Reverse).unwrap();
+        assert!(
+            !historical.is_empty(),
+            "premise: the `local:./widget` edges must resolve to the target file, got none"
+        );
+
+        let resolver = db.local_spec_resolver().expect("local: index build");
+        let prebuilt = db
+            .related_with_local(&query, None, Direction::Reverse, Some(&resolver))
+            .unwrap();
+        assert_eq!(
+            historical, prebuilt,
+            "prebuilt local: index must reproduce the historical per-call build"
+        );
+
+        // The rel filter must survive both arms identically (one relaxed
+        // edge + one filtered edge above prove the filter is not a no-op).
+        let filtered_historical = db
+            .related(&query, Some("tested_by"), Direction::Reverse)
+            .unwrap();
+        let filtered_prebuilt = db
+            .related_with_local(
+                &query,
+                Some("tested_by"),
+                Direction::Reverse,
+                Some(&resolver),
+            )
+            .unwrap();
+        assert_eq!(
+            filtered_historical.len(),
+            1,
+            "rel filter must keep one edge"
+        );
+        assert_eq!(
+            filtered_historical, filtered_prebuilt,
+            "rel-filtered reverse query must agree across both arms"
+        );
     }
 
     #[test]
