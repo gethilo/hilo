@@ -672,9 +672,11 @@ IMPLEMENTED** — no code path speaks SSE, and `interfaces.mcp.transport` is acc
 the manifest but never read.
 
 `hilo serve --http` is a separate, non-MCP surface. It binds `interfaces.mcp.port`
-(default 8766) and serves exactly `GET /health` and `GET /metrics`; every other route
-answers `404` naming the stdio transport. Both modes can run in one process
-(`hilo serve --mcp --http`).
+(default 8766) — or the `--port <PORT>` argument, which outranks the manifest — and
+serves exactly `GET /health` and `GET /metrics`; every other route answers `404`
+naming the stdio transport. Both modes can run in one process
+(`hilo serve --mcp --http`). An explicit `--port` exists so the transport can start
+on a host where the manifest's port is already taken.
 
 ### 11.1 Complete Tool Set
 

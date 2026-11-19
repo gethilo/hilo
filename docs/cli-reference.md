@@ -1197,16 +1197,40 @@ before.)
 
 ## `hilo serve`
 
-Start the MCP server for agent integration.
+Start the MCP server (`--mcp`, stdio) and/or the HTTP transport (`--http`).
 
 ```bash
 # Stdio transport (for Claude Desktop, Hermes)
 hilo serve --mcp
+
+# HTTP transport (GET /health, GET /metrics)
+hilo serve --http
+
+# Both transports, one process
+hilo serve --mcp --http
 ```
+
+At least one mode is required; with neither, the command exits with a usage
+error naming both flags.
+
+| Flag | Meaning |
+|------|---------|
+| `--mcp` | MCP server on stdio (newline-delimited JSON-RPC 2.0). stdout carries protocol bytes only; logs go to stderr as JSON. |
+| `--http` | HTTP transport on `0.0.0.0`. Serves exactly `GET /health` and `GET /metrics`; every other route answers `404` naming the stdio transport. The MCP transport is stdio-only — there is no HTTP/SSE MCP endpoint. |
+| `--port <PORT>` | TCP port for `--http` (requires `--http`). |
 
 Run it from inside a Hilo project (`hilo init` first): without a manifest the
 server refuses to start and names `hilo init`, rather than exposing tools
 that can only answer from an empty graph.
+
+The HTTP port is resolved in this order: `--port`, then the manifest's
+`interfaces.mcp.port`, then the default `8766`. The explicit flag wins over
+the manifest so the transport stays startable on a host where the configured
+port is already taken:
+
+```bash
+hilo serve --http --port 8767   # 8766 already bound on this host
+```
 
 ## `hilo backend`
 

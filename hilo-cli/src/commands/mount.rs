@@ -43,6 +43,11 @@ fn resolve_source(source: Option<&str>) -> Result<PathBuf> {
 /// marker so the child branch skips re-daemonizing on both mount paths.
 pub(crate) const DAEMON_CHILD_ENV: &str = "HILO_MOUNT_DAEMONIZED";
 
+/// DF-WARPFS-156: the parent hands the resolved (durable, outside-the-mount)
+/// daemon log path to the detached child via this env var, so the child's
+/// exit message can name the file where its final line is being written.
+pub(crate) const DAEMON_LOG_ENV: &str = "HILO_DAEMON_LOG_PATH";
+
 /// Mount a Hilo read-only FUSE filesystem.
 ///
 /// The backing root is the explicit `source` directory when given, otherwise
@@ -249,7 +254,10 @@ pub fn run_mount(
     };
     println!("Hilo mounted at {}{}", mount_point, trigger_summary);
 
-    daemon::mount(fs, &config).context("FUSE mount failed")?;
+    // Capture (not `?`) so the DF-WARPFS-156 self-heal and exit message run on
+    // the error path too — a daemon that failed mid-mount still leaves a
+    // readable log explaining why.
+    let mount_result = daemon::mount(fs, &config);
 
     // DF-WARPFS-32: the FUSE session has ended (external `fusermount3 -u`,
     // `daemon::unmount`, or a session error). Signal the trigger engine
@@ -266,6 +274,21 @@ pub fn run_mount(
         }
     }
 
+    // DF-WARPFS-156: self-heal a stale mount (the daemon is dead-or-exiting
+    // once the session ends; auto_unmount was suppressed on default mounts),
+    // then print the exit line naming the durable log path. In the detached
+    // daemon child stderr IS the log file, so the message lands where a
+    // post-mortem `cat` will find it.
+    self_heal_stale_mount(Path::new(mount_point));
+    if std::env::var_os(DAEMON_CHILD_ENV).is_some() {
+        if let Err(ref e) = mount_result {
+            eprintln!("[hilo mount] FUSE session ended with error: {e:#}");
+        }
+        let log_path = std::env::var_os(DAEMON_LOG_ENV).map(PathBuf::from);
+        eprintln!("{}", daemon_exit_message(mount_point, log_path.as_deref()));
+    }
+
+    mount_result.context("FUSE mount failed")?;
     Ok(())
 }
 
@@ -371,6 +394,118 @@ fn resolve_daemon_log_path(explicit: Option<&str>, _mount_point: &Path) -> Resul
     }
 }
 
+/// DF-WARPFS-156: does `/proc/self/mounts`-style `text` list a FUSE
+/// filesystem mounted at exactly `mount_point`? Kernel mountpoint fields are
+/// escaped (`\\040` = space, `\\011` = tab, `\\012` = newline, `\\134` =
+/// backslash), so the comparison decodes first. Only `fuse.*` filesystems
+/// match — a foreign (e.g. ext4-overlaid) directory at the same path must
+/// never be lazy-unmounted by the self-heal.
+fn fuse_mount_entry_present(mounts: &str, mount_point: &Path) -> bool {
+    let target = mount_point.to_string_lossy();
+    mounts.lines().any(|line| {
+        let mut fields = line.split(' ');
+        let _device = fields.next();
+        let mp = fields.next().unwrap_or("");
+        let fstype = fields.next().unwrap_or("");
+        let unescaped = mp
+            .replace("\\040", " ")
+            .replace("\\011", "\t")
+            .replace("\\012", "\n")
+            .replace("\\134", "\\");
+        unescaped == target && fstype.starts_with("fuse")
+    })
+}
+
+/// DF-WARPFS-156: the daemon child's final line. The child is detached —
+/// stderr IS the durable log file — so this message is written into the log
+/// itself and must name that file. `None` (env missing) degrades to a loud
+/// UNKNOWN instead of naming a fabricated path.
+fn daemon_exit_message(mount_point: &str, log_path: Option<&Path>) -> String {
+    match log_path {
+        Some(p) => format!(
+            "[hilo mount] daemon exited (mountpoint {mount_point}) — full daemon log: {}",
+            p.display()
+        ),
+        None => format!(
+            "[hilo mount] daemon exited (mountpoint {mount_point}) — daemon log path UNKNOWN ({} not set)",
+            DAEMON_LOG_ENV
+        ),
+    }
+}
+
+/// DF-WARPFS-156: self-heal a stale mount left behind by the daemon.
+///
+/// `auto_unmount` is suppressed on default mounts (DF-WARPFS-6: fuser pairs
+/// it with `allow_other`, which stock fuse.conf forbids), so a daemon that
+/// dies leaves the kernel FUSE mount behind — every path under the
+/// mountpoint then fails with ENOTCONN and needed `umount -l` to clear
+/// (dogfood run 45). By the time this runs, the FUSE session has already
+/// ended (`daemon::mount` returned), so a `hilo` FUSE mount still listed in
+/// `/proc/self/mounts` is stale by definition: lazy-unmount it
+/// (`fusermount3 -u -z` falls back to `umount -l`) so the mountpoint
+/// recovers. Best-effort: any failure is written to the log, never fatal —
+/// a working mount cannot reach this code path (a healthy session blocks
+/// inside `daemon::mount`).
+fn self_heal_stale_mount(mount_point: &Path) {
+    let mounts = match std::fs::read_to_string("/proc/self/mounts") {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!(
+                "[hilo mount] stale-mount self-heal skipped: cannot read /proc/self/mounts: {e}"
+            );
+            return;
+        }
+    };
+    if !fuse_mount_entry_present(&mounts, mount_point) {
+        return;
+    }
+    eprintln!(
+        "[hilo mount] FUSE session ended but {} is still mounted — lazy-unmounting stale mount",
+        mount_point.display()
+    );
+    for helper in ["fusermount3", "fusermount"] {
+        match std::process::Command::new(helper)
+            .arg("-u")
+            .arg("-z")
+            .arg(mount_point)
+            .output()
+        {
+            Ok(out) if out.status.success() => {
+                eprintln!("[hilo mount] stale mount removed via {helper} -u -z");
+                return;
+            }
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                eprintln!("[hilo mount] {helper} -u -z failed: {}", stderr.trim());
+            }
+            Err(e) => eprintln!("[hilo mount] {helper} not runnable: {e}"),
+        }
+    }
+    match std::process::Command::new("umount")
+        .arg("-l")
+        .arg(mount_point)
+        .output()
+    {
+        Ok(out) if out.status.success() => {
+            eprintln!("[hilo mount] stale mount removed via umount -l");
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            eprintln!(
+                "[hilo mount] WARNING: stale mount at {} could not be auto-removed (umount -l: {}) — clear manually: fusermount3 -u -z {}",
+                mount_point.display(),
+                stderr.trim(),
+                mount_point.display()
+            );
+        }
+        Err(e) => eprintln!(
+            "[hilo mount] WARNING: stale mount at {} could not be auto-removed (umount not runnable: {e}) — clear manually: fusermount3 -u -z {}",
+            mount_point.display(),
+            mount_point.display()
+        ),
+    }
+}
+
 /// Build the detached child command for `hilo mount --daemon`.
 ///
 /// Re-executes the current binary with the same mount arguments plus
@@ -405,6 +540,7 @@ fn build_daemon_command(
     }
     cmd.arg("--daemon");
     cmd.env(DAEMON_CHILD_ENV, "1");
+    cmd.env(DAEMON_LOG_ENV, log_path);
     cmd.stdin(Stdio::null()).stdout(Stdio::null());
     // DF-WARPFS-134: stderr is the child's only logging channel. This
     // function cannot set it — the caller opens the log file in the parent
@@ -1080,6 +1216,76 @@ triggers:
                 Some(OsString::from("1"))
             )),
             "daemon child marker env must be set: {envs:?}"
+        );
+    }
+
+    // ───────── DF-WARPFS-156: durable log naming + stale-mount self-heal ─────────
+
+    #[test]
+    fn test_build_daemon_command_passes_log_path_env() {
+        // DF-WARPFS-156: the detached child must know the durable log path so
+        // its exit message can name it (the message goes to stderr, which the
+        // parent attached to the log file).
+        let log = Path::new("/home/user/.vfs/logs/mount-daemon.log");
+        let cmd = build_daemon_command("/tmp/vfs", None, false, false, log, false).unwrap();
+        let envs: Vec<(OsString, Option<OsString>)> = cmd
+            .get_envs()
+            .map(|(k, v)| (k.to_os_string(), v.map(OsString::from)))
+            .collect();
+        assert!(
+            envs.contains(&(
+                OsString::from(DAEMON_LOG_ENV),
+                Some(log.as_os_str().to_os_string())
+            )),
+            "child must receive the resolved log path via {DAEMON_LOG_ENV}: {envs:?}"
+        );
+    }
+
+    #[test]
+    fn test_fuse_mount_entry_present_parses_proc_mounts() {
+        let mounts = "\
+/dev/nvme0n1p2 / ext4 rw,relatime 0 0
+hilo /tmp/df156-mnt fuse.hilo ro,nosuid,nodev,relatime 0 0
+hilo /tmp/space\\040mnt fuse.hilo ro 0 0
+proc /proc proc rw 0 0
+";
+        assert!(fuse_mount_entry_present(
+            mounts,
+            Path::new("/tmp/df156-mnt")
+        ));
+        // Kernel escape decoding: \040 is a literal space in the mountpoint.
+        assert!(fuse_mount_entry_present(
+            mounts,
+            Path::new("/tmp/space mnt")
+        ));
+        assert!(!fuse_mount_entry_present(mounts, Path::new("/tmp/other")));
+        assert!(!fuse_mount_entry_present(mounts, Path::new("/")));
+        // A non-fuse filesystem at the same path is not ours to unmount.
+        let ext4 = "hilo /tmp/df156-mnt ext4 rw 0 0\n";
+        assert!(!fuse_mount_entry_present(ext4, Path::new("/tmp/df156-mnt")));
+        assert!(!fuse_mount_entry_present("", Path::new("/tmp/df156-mnt")));
+    }
+
+    #[test]
+    fn test_daemon_exit_message_names_durable_log_path() {
+        let msg = daemon_exit_message(
+            "/tmp/df156-mnt",
+            Some(Path::new("/home/u/.vfs/logs/mount-daemon.log")),
+        );
+        assert!(
+            msg.contains("/tmp/df156-mnt"),
+            "names the mountpoint: {msg}"
+        );
+        assert!(
+            msg.contains("/home/u/.vfs/logs/mount-daemon.log"),
+            "names the durable log path: {msg}"
+        );
+        // No env (should not happen — the parent always sets it): degrade to a
+        // loud UNKNOWN instead of naming a fabricated path.
+        let msg = daemon_exit_message("/tmp/df156-mnt", None);
+        assert!(
+            msg.contains("UNKNOWN"),
+            "missing log path must say UNKNOWN: {msg}"
         );
     }
 

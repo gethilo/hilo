@@ -1294,7 +1294,9 @@ fn open_disk_connection(path: &str, access: GraphAccess) -> GraphResult<Connecti
 /// streaming and skips the replay — also write-free). Anything else (no DB
 /// file, stale or absent stamp) means the reconcile must INSERT, which a
 /// read-only handle cannot do — the caller falls back to the historical
-/// read-write open.
+/// read-write open. A cache whose schema predates the current one
+/// (pre-0.4, no `granularity` column) is likewise never hot: the migration
+/// is a write, so the read-write fallback must run it (QA-WARPFS-037).
 ///
 /// `probe_rows` is the `edges` row count taken by the caller on a
 /// short-lived READ-ONLY probe connection (shared lock) BEFORE this decision:
@@ -1310,13 +1312,48 @@ fn ro_open_hot(path: &str, spill_watermark: u64, probe_rows: Option<u64>) -> boo
     let Some(jsonl) = Path::new(path).parent().map(|dir| dir.join("edges.jsonl")) else {
         return false;
     };
-    match plan_reconcile(&jsonl, &mut PrefixHasher::new(), probe_rows) {
+    let reconcile_hot = match plan_reconcile(&jsonl, &mut PrefixHasher::new(), probe_rows) {
         Ok(ReconcilePlan::Skip) => true,
         Ok(ReconcilePlan::Ingest { .. }) => {
             jsonl_stat(&jsonl).is_some_and(|(_, size)| size >= spill_watermark)
         }
         Err(_) => false,
+    };
+    if !reconcile_hot {
+        return false;
     }
+    // QA-WARPFS-037: "hot" also requires a cache the CURRENT schema can
+    // actually serve. The granularity migration (GAP-121) is a write, which
+    // a READ_ONLY handle cannot run — a fully-ingested pre-0.4 (five-column)
+    // cache reconciles to Skip yet answers edge queries with a raw DuckDB
+    // Binder Error on the missing column. Grading it hot here would open it
+    // read-only and strand it pre-migration forever, so a stale schema
+    // forces the read-write fallback, where ensure_schema migrates the cache
+    // before any query sees it.
+    cache_schema_is_current(path)
+}
+
+/// Does the DuckDB cache at `path` carry the current `edges` schema
+/// (QA-WARPFS-037)?
+///
+/// Probed on a short-lived READ_ONLY connection (the same shared-lock probe
+/// class the reconcile verification uses). An unopenable or unprobeable
+/// cache answers false: the read-write fallback is the healing path, never a
+/// read-only open that cannot migrate anything.
+fn cache_schema_is_current(path: &str) -> bool {
+    let Ok(cfg) = DuckDbConfig::default().access_mode(AccessMode::ReadOnly) else {
+        return false;
+    };
+    let Ok(conn) = Connection::open_with_flags(path, cfg) else {
+        return false;
+    };
+    conn.query_row(
+        "SELECT count(*) FROM pragma_table_info('edges') WHERE name = 'granularity'",
+        params![],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|count| count > 0)
+    .unwrap_or(false)
 }
 
 /// Would the DuckDB cache at `path` provably agree with the sibling
@@ -6350,6 +6387,96 @@ mod tests {
             "cold open must reconcile from edges.jsonl (via the read-write fallback)"
         );
         assert!(!db.read_only, "cold open downgrades to a read-write handle");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn open_read_only_migrates_a_pre_granularity_five_column_cache() {
+        // QA-WARPFS-037: a cache written before the `granularity` column
+        // existed (pre-0.4: from,to,rel,provenance,confidence) whose
+        // edges.jsonl is fully ingested used to be graded HOT by
+        // ro_open_hot — the reconcile plan alone cannot see the schema
+        // version — and opened READ_ONLY. ensure_schema skips migration on
+        // read-only handles, so every edge query then died with a raw DuckDB
+        // Binder Error naming the internal `granularity` column. The open
+        // must fall back to read-write, run the granularity migration, and
+        // serve queries from the migrated cache.
+        let dir =
+            std::env::temp_dir().join(format!("hilo_qa037_ro_migrate_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let jsonl = dir.join("edges.jsonl");
+        std::fs::write(
+            &jsonl,
+            "{\"from\":\"a.rs\",\"to\":\"b.rs\",\"rel\":\"imports\"}\n",
+        )
+        .unwrap();
+        // A matching legacy PERF-001 stamp (`<mtime-nanos>:<size>`) is the
+        // exact state the defect graded hot: plan_reconcile answers Skip,
+        // so without a schema check the open stayed read-only and the
+        // migration never ran.
+        let (nanos, size) = jsonl_stat(&jsonl).expect("edges.jsonl stat");
+        std::fs::write(dir.join(".last_reconcile"), format!("{nanos}:{size}")).unwrap();
+        // Build the pre-0.4 cache by hand: the five-column edges table with
+        // no `granularity`, holding the one ingested row.
+        let db_path = dir.join("graph.db");
+        {
+            let conn = Connection::open(db_path.to_str().unwrap()).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE edges (\
+                    \"from\" TEXT NOT NULL, \
+                    \"to\" TEXT NOT NULL, \
+                    rel TEXT NOT NULL, \
+                    provenance TEXT NOT NULL DEFAULT 'ast_exact', \
+                    confidence REAL NOT NULL DEFAULT 1.0\
+                 )",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO edges (\"from\", \"to\", rel, provenance, confidence) \
+                 VALUES ('a.rs', 'b.rs', 'imports', 'ast_exact', 1.0)",
+                params![],
+            )
+            .unwrap();
+        }
+        // The mode predicate itself: a stale-schema cache is NOT hot, fresh
+        // stamp or not — the migration is a write a read-only handle cannot
+        // run, so the open must take the read-write path.
+        assert!(
+            !ro_open_hot(db_path.to_str().unwrap(), 1024, Some(1)),
+            "a pre-granularity cache must not be graded hot"
+        );
+        let db = GraphDB::open_read_only(db_path.to_str().unwrap()).unwrap();
+        assert!(
+            !db.read_only,
+            "the stale-schema open falls back to read-write so ensure_schema can migrate the cache"
+        );
+        // Edge queries serve from the migrated cache — never a raw Binder
+        // Error on the internal column name.
+        let edges = db
+            .related("a.rs", None, Direction::Forward)
+            .expect("edge query on the migrated cache");
+        assert_eq!(edges.len(), 1, "the ingested row survives the migration");
+        assert_eq!(edges[0].to, "b.rs");
+        assert_eq!(
+            edges[0].granularity, GRANULARITY_FILE,
+            "a pre-GAP-121 row keeps its historical file-level meaning"
+        );
+        let stats = db.stats().unwrap();
+        assert_eq!(stats.total_edges, 1);
+        // The migration persisted on disk: a fresh connection sees six
+        // columns and the backfilled value.
+        {
+            let conn = Connection::open(db_path.to_str().unwrap()).unwrap();
+            let cols: i64 = conn
+                .query_row(
+                    "SELECT count(*) FROM pragma_table_info('edges')",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(cols, 6, "granularity migration persisted to the cache");
+        }
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -108,6 +108,22 @@ All notable changes to Hilo are documented in this file.
 
 ### Fixed
 
+- **Daemon exit names the durable log; stale mounts self-heal** (DF-WARPFS-156):
+  the run-45 postmortem — daemon dies, mountpoint stays stale-mounted
+  (ENOTCONN on every path), and the banner's "filesystem available" promise
+  is the only artifact left. The parent now passes the resolved log path to
+  the detached child (`HILO_DAEMON_LOG_PATH`), and every daemon exit through
+  the FUSE-session teardown writes a final `[hilo mount] daemon exited
+  (mountpoint …) — full daemon log: <path>` line into that durable log. When
+  the session ends but a `hilo` FUSE mount is still listed in
+  `/proc/self/mounts` (auto_unmount is suppressed on default mounts,
+  DF-WARPFS-6), the child lazy-unmounts it (`fusermount3 -u -z`, falling back
+  to `umount -l`) so the mountpoint recovers instead of needing a manual
+  `umount -l`. Best-effort: failures are logged, never fatal, and a foreign
+  (non-fuse) filesystem at the same path is never touched. A daemon killed by
+  an uncatchable signal still cannot self-heal — by definition — but its log
+  is now always outside the dead mount (DF-WARPFS-63) and readable
+  post-mortem.
 - **Daemon logs moved OUT of the served filesystem; workspace daemon keeps
   its stderr** (DF-WARPFS-63): the DF-WARPFS-134 default placed the mount
   log INSIDE the mounted tree — on a fresh Debian 13 box the FUSE
