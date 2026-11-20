@@ -11,7 +11,11 @@ guards:
   # + hilo_graph lib tests) exceeds 300s under shared-host load; both green
   # runs TIMED OUT at 300, which is a wall-clock limit, not a test failure.
   test_timeout: 900
-  hook_timeout: 600
+  # 600 -> 1200 (DF-WARPFS-178): a hook budget BELOW the test budget guarantees
+  # the gate loses its own race — every commit that fires the hook blocks for
+  # the hook timeout and then fails, training agents to bypass hooks. The hook
+  # wraps the same test command, so its budget must exceed the test budget.
+  hook_timeout: 1200
   # Disabled: the native LSP leg fails open — engine/lsp.py run_lsp_check()
   # returns [] both when the tool is missing on PATH ("not found on PATH -
   # skipping") and when it fails to initialize, and guard_manager.py
@@ -37,9 +41,15 @@ evaluator:
   fast_track: auto
 
 defaults:
-  model: deepseek-v4-pro
-  provider: deepseek-foreman
-  api_key_env: GITREINS_LLM_API_KEY
+  # DOCUMENTATION ONLY — the tier-2 evaluator never reads this block; the judge
+  # lane is resolved from the environment (GITREINS_LLM_BASE_URL/MODEL/API_KEY).
+  # The ambient env names the deepseek lane, whose account 402s every call
+  # (DF-WARPFS-177), so run ALL judges through the repo wrapper, which exports
+  # the funded lane for the invocation:
+  #   bash scripts/gitreins-judge-lane.sh task complete <TASK-ID>
+  model: glm-5.3-flash
+  provider: ollama-cloud
+  api_key_env: OLLAMA_CLOUD_API_KEY
 
 history:
   enabled: true
