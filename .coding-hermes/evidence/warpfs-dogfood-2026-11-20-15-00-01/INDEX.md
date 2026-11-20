@@ -55,3 +55,8 @@ PERF-011's 2.7–8.0s stall does NOT reproduce) · impact 247ms ±61ms · hyperf
 - `bunker-qa.sh collect` failed twice ("ssh probe returned no state") while `bunker exec` answered
   immediately — filed as **QA-WARPFS-045** (the tick's one new row). Agent left intact for the
   collector; harvest or destroy next fire (grep `241bec2a` on board + this dir).
+- Close-time pull (17:45Z, `bunker-ledger-pulled-close-1745Z.jsonl`, 17 rows): the battery
+  progressed past the SKIP — `lint [FAIL]` (owned by QA-WARPFS-035), `tests [UNVERIFIED]`
+  ("native suite exceeded the battery deadline (5400s TERM, +30s KILL) — the suite did NOT
+  finish" — the QA-WARPFS-040 wrapper fired; same slice-too-slow family as QA-WARPFS-043),
+  `docker_build [N/A]`, `compose_config [OK]`. Battery STILL alive at close; agent intact.
