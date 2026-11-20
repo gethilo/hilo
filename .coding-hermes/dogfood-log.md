@@ -2192,3 +2192,65 @@ Third delivery of tick `warpfs-dogfood-2026-11-17-12-14-37` (gateway shows three
 Foreman not woken (read-only lane; `warpfs-foreman` enabled at 21600 s — its next tick picks the rows up).
 
 ---
+## 2026-11-20 — warpfs (Hilo) — SHIPPABLE (run 50; core CLI/graph, tree 838b487+v40)
+
+Tick `warpfs-dogfood-2026-11-20-15-00-01` (first delivery of THIS label, gateway count 1); filed
+from worktree `/home/kara/warpfs-wt-df49` at origin/master tip `08267f3` (shared checkout parked on
+`qa-wtick-20261113-165414`). Promise tested: "a user gives their AI coding agent a pre-built map of
+a codebase — dependencies, blast radius, coverage — without file reads." Real use: the documented
+happy path end-to-end on a real foreign monorepo (heading clone, 374 files) with the release
+binary `/mnt/ssd/caches/hermes-target/release/hilo` (v0.4.1, build v0.4.1-40-g838b487-dirty — the
+Nov-17 fire's build FINISHED after its delivery gave up on it; this fire harvested it).
+
+What worked (arms in `.coding-hermes/evidence/warpfs-dogfood-2026-11-20-15-00-01/use.log` +
+`use2.log`): init 0.15s (hooks installed); cold `graph warm` 28.4s CPU-bound on 374 files with
+LOUD parse-recovery reporting (18 syntax-error recoveries named per file, 3 parse-miss);
+`graph stats` 70ms — 2451 edges / 328 files / 15 components / 963 tested_by edges, honest census
+("... 301 more orphans" note, distinct-vs-raw split); `search`/`understand MAP` work; NEW GAP-121
+surface `graph untested --granularity function` (tree has it since 6a445ad Nov 3): "60 file(s)
+with uncovered public function(s) (202 function(s))" each named file:line in 1.6s — genuinely
+useful, --help documents `--granularity`; COV chain (`surfaces`, `coverage-links`) refuses
+foreign repos with a precise scope message AND correct rc=1 (verified without pipes: rc was 1,
+an early v1 probe misread 0 through a pipe — probe bug, not product). Mount: `hilo mount --daemon`
+banner names the durable log `/home/kara/.vfs/logs/mount-daemon.log`; pre-mount `meta --set
+user.vfs.role=library` on apps/api/src/config.ts IS visible through the mount (`getfattr` returns
+"library"); writes THROUGH the mount rejected EROFS (read-only). Perf (host load 27-34 on 16
+cores — numbers are host-inflated, all sub-second regardless): mount-start 13-25ms, first
+`graph stats` after mount 46-100ms over 8 cold-mount arms; `impact` 247ms ±61ms; hyperfine stats
+96.8ms ±29ms vs run 48's 47.5ms at low load — delta is the host, not the product.
+
+Verdict basis: the CLI/graph core a real user touches first WORKS, fast, low friction
+(time-to-first-success ≈ 30s to a useful map). SHIPPABLE is graded for THIS tree only — the tip's
+Nov 18-20 product changes (13 files/+1634 lines) are NOT in the binary and stay UNVERIFIED:
+DF-WARPFS-70's fix targets the WORKSPACE mount variant (f9efdd7 "pass through workspace mount
+xattrs") and was never exercised (single-mount premise half-1 does not reproduce even pre-fix;
+half-2, EROFS writes, is live — cite DF-WARPFS-70); DF-WARPFS-156/176 self-heal/durability-at-kill
+unverified (stale mount persists until manual `fusermount3 -u` on this tree — premise-shape live);
+REV-WARPFS-9 premise CONFIRMED at this tree (`--port` refused "unexpected argument"; bind on
+taken 8766 fails "Address already in use" and off-by-one's API answered the probes — never trust
+a 200 whose uptime says 3h13m and version says v0.3.0-81 when your process died binding);
+PERF-011 does NOT reproduce (8 arms <0.1s first read). Next fire's exact arms: walkbook v2
+(`walkbook-verify-TIP.sh` in the same evidence dir) against a TIP binary.
+
+Findings: QA-WARPFS-045 filed (P3 bug — bunker-qa.sh collect() ssh-probe false-negative ×2:
+collect aborted "cannot reach agent (ssh probe returned no state)" while `bunker exec` returned
+the 9-row ledger immediately; probe and transport must agree or fall back loudly; family
+DF-WARPFS-143). Already-owned, cited not filed: fresh-install 3600s budget SKIP → QA-WARPFS-043;
+lint-cell go-vet-on-Rust FAIL → QA-WARPFS-035; through-mount EROFS → DF-WARPFS-70; --port absence
+→ REV-WARPFS-9; mount-start stall → PERF-011 (non-reproducing). Observation, not filed (single
+edge case; DF-176's durability work already touches this file): the daemon log is SHARED across
+all mounts — /home/kara/.vfs/logs/mount-daemon.log interleaved entries from /tmp/df156-mnt and
+mnt3 from Nov 18, so concurrent mounts' lines are not attributable per mount.
+
+Install leg: LAUNCHED 15:07Z (bunkerd active, 83% disk, preflight passed) — agent `241bec2a` @
+bunker-mvp, tree c7924af (launcher refuses worktrees; product delta c7924af→tip is 13
+files/+1634 lines — install verdict does NOT cover the tip). Battery ALIVE at close; agent left
+intact for the collector; ledger (9 rows: toolchain 5×OK, fresh-install SKIP at the 3600s cap
+mid-build, lint FAIL go-vet-on-Rust) pulled by hand through exec and committed.
+
+Perf leg measured where it counts (numbers above); no PERF row — nothing slow enough that a user
+would notice, and the host contention makes finer claims dishonest. Foreman not woken (read-only
+lane). Residue: agent 241bec2a (intentional, above); heading clone + logs in /tmp/df49/
+(self-pruning); my own true-tip build left running in the background at close (target
+`/home/kara/warpfs-wt-df49/target` — if it lands, the next fire inherits a tip binary; if not,
+nothing references it).

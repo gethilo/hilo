@@ -1,0 +1,50 @@
+=== R1 COV gate exit codes, no pipes ===
+surfaces rc=1
+error: hilo graph surfaces only inventories the Hilo repository itself; /tmp/df49/heading is not a Hilo workspace
+coverage-links rc=1
+error: graph coverage-links is part of the COV coverage model, which is available for the Hilo repository itself only — /tmp/df49/heading is not a Hilo workspace (scope: foreign), and no COV inventory is derived for foreign repositories
+=== R2 DF-70 arm with a real file (pre-fix binary) ===
+Set user.vfs.role = library on apps/api/src/config.ts
+Recorded in .vfs/annotations.jsonl
+meta-set rc=0
+role: library
+status: stable
+Hilo mount daemonized (pid 1200560) — filesystem available at /tmp/df49/mnt (log: /home/kara/.vfs/logs/mount-daemon.log)
+mount rc=0
+getfattr: Removing leading '/' from absolute path names
+# file: tmp/df49/mnt/apps/api/src/config.ts
+user.vfs.role="library"
+
+getfattr-through-mount rc=0 (DF-70 premise live if attribute absent)
+--- meta WRITE through the mount (pre-fix): 
+error: failed to set xattr user.vfs.role on /tmp/df49/mnt/apps/api/src/config.ts: xattr error: Read-only file system (os error 30)
+meta-through-mount rc=0
+--- durable log (banner path) after daemon kill:
+-rw-rw-r-- 1 kara kara 1315 Nov 18 20:09 /home/kara/.vfs/logs/mount-daemon.log
+[2m2026-11-18T20:10:34.409858Z[0m [32m INFO[0m [2mhilo_fuse::daemon[0m[2m:[0m Hilo mounted successfully
+[hilo mount] daemon exited (mountpoint /tmp/df156-mnt) — full daemon log: /home/kara/.vfs/logs/mount-daemon.log
+[hilo mount] daemon exited (mountpoint mnt3) — full daemon log: /home/kara/.vfs/logs/mount-daemon.log
+--- stale mount state:
+ls-mnt rc=2
+1
+manual unmount rc=0
+=== R3 serve --http on 8766: whose /health? ===
+2584 /home/kara/off-by-one/off-by-one --port 8766 -load-threshold 4 -cron-interval 60s -pi-agent /home/kara/.local/bin/pi-agent -bwrap /usr/bin/bwrap -solve-mem-mb 12288
+hilo-serve EXITED (log:)
+error: HTTP transport failed to bind port 8766: I/O error: Address already in use (os error 98)
+HTTP/1.1 200 OK
+Content-Type: application/json; charset=utf-8
+Date: Fri, 20 Nov 2026 17:30:20 GMT
+Content-Length: 68
+
+{"status":"ok","uptime":"3h13m42s","version":"v0.3.0-81-g30d664a2"}
+---
+metrics_code=200
+=== R4 manifest port knob (pre-fix): interfaces.mcp.port ===
+17:  mcp:
+=== R5 clean perf: mount window without sleep, impact on real path ===
+arm1 mount-start=.013917085s first-stats=.067226777s
+arm2 mount-start=.013825435s first-stats=.077210697s
+arm3 mount-start=.024571198s first-stats=.099508683s
+  Time (mean ± σ):     247.4 ms ±  60.9 ms    [User: 86.4 ms, System: 40.4 ms]
+=== DONE2 ===

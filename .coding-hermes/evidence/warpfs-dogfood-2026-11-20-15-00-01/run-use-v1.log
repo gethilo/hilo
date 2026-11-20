@@ -1,0 +1,216 @@
+=== A0 binary identity ===
+-rwxrwxr-x 2 kara kara 1494091864 Nov 17 10:30 /mnt/ssd/caches/hermes-target/release/hilo
+hilo 0.4.1
+build: v0.4.1-40-g838b487-dirty
+built: 2026-11-17T13:09:14Z
+rc=0
+=== A1 init (foreign repo: heading clone) ===
+Initialized Hilo in /tmp/df49/heading
+  Created post-commit
+  Created post-merge
+Installed git hooks: post-commit, post-merge
+init wall=0.15s user=0.00s sys=0.00s rc=0
+init rc=0
+=== A2 graph warm (cold tree) ===
+  parsing 100/374 files...
+  parsing 200/374 files...
+  parsing 300/374 files...
+  parsing 374/374 files...
+warm wall=28.37s user=23.41s sys=1.49s rc=0
+  parse recovered: apps/web/src/app/admin/page.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/tests/components/option-data-source.test.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/tests/components/ExportPreview.test.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/tests/components/OptionCard.test.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/tests/components/AdminPanel.test.tsx — syntax errors (direct recovery)
+  ... and 13 more parse recovered
+warm rc=0
+=== A3 classify ===
+classify wall=0.49s rc=0
+    unknown        8
+    script         2
+    generated      2
+=== A4 graph queries (documented happy path) ===
+Total edges: 2451 distinct / 2451 raw (edges.jsonl)
+Total files: 328
+File census: 328 files with edges (distinct edge sources) — warm last counted 374 discovered files = 328 contribute + 46 zero-edge (43 no imports + 0 package facades + 3 parse-miss)
+Components (15 total):
+  apps: 214 files, 1835 edges
+  prompts: 140 files, 0 edges
+  packages: 91 files, 521 edges
+  .coding-hermes: 63 files, 0 edges
+  .gitreins: 59 files, 0 edges
+  scripts: 17 files, 68 edges
+  specs: 14 files, 0 edges
+  .: 5 files, 12 edges
+  images: 5 files, 0 edges
+  deploy: 2 files, 0 edges
+  skills: 2 files, 0 edges
+  .qa: 1 files, 0 edges
+  config: 1 files, 0 edges
+  docs: 1 files, 2 edges
+  tests: 1 files, 0 edges
+Most connected: pkg:vitest
+Conformance: 13 implements, 0 consumes (heuristic extraction — see `hilo graph wiring`)
+Edge types:
+  conformance_of: 17
+  implements: 13
+  imports: 1457
+  tested_by: 963
+  tests: 1
+Orphans (no incoming edges):
+  apps/api/scripts/monitor-loop-demo.ts
+  apps/api/src/app.ts
+  apps/api/src/auth/jwt.ts
+  apps/api/src/config.ts
+  apps/api/src/demo/chat-roundtrip-cli.ts
+  apps/api/src/demo/chat-roundtrip.ts
+  apps/api/src/demo/crm-store-cli.ts
+  apps/api/src/index.ts
+  apps/api/src/inventory/curated-flight-data.ts
+  apps/api/src/middleware/auth.ts
+  apps/api/src/middleware/error-handler.ts
+  apps/api/src/middleware/logger.ts
+  apps/api/src/middleware/rate-limit.ts
+  apps/api/src/orchestrator/amadeus-providers.ts
+  apps/api/src/orchestrator/audit-persistence.ts
+  apps/api/src/orchestrator/learned-preferences.ts
+  apps/api/src/orchestrator/live-providers.ts
+  apps/api/src/orchestrator/mock-providers.ts
+  apps/api/src/orchestrator/phases/evacuation.ts
+  apps/api/src/orchestrator/phases/identify-client.ts
+  apps/api/src/orchestrator/phases/monitor-loop.ts
+  apps/api/src/orchestrator/phases/monitor.ts
+  apps/api/src/orchestrator/phases/parse-request.ts
+  apps/api/src/orchestrator/phases/pull-data.ts
+  apps/api/src/orchestrator/phases/rank-options.ts
+  ... 301 more orphans (use --limit 0 to show all)
+Top dependencies:
+  pkg:vitest: 342
+  pkg:node:fs: 122
+  pkg:node:path: 121
+  pkg:node:http: 102
+  local:../../src/config.js: 100
+  local:../../src/orchestrator/types.js: 84
+  pkg:node:url: 84
+  local:../../src/orchestrator/session-store.js: 80
+  local:../../src/app.js: 78
+  pkg:node:os: 69
+stats wall=0.07s rc=0
+error: failed to compute impact: graph error: 'src/main.ts' is not in the graph (no such file and no matching graph node). Accepted id forms: bare repo-relative path (src/main.rs), sys:<header> for system includes, local:<specifier> for project headers and imports (e.g. local:adlist.h), pkg:<crate>
+Command exited with non-zero status 1
+impact wall=1.07s rc=1
+error: failed to query related edges: graph error: 'src/main.ts' is not in the graph (no such file and no matching graph node). Accepted id forms: bare repo-relative path (src/main.rs), sys:<header> for system includes, local:<specifier> for project headers and imports (e.g. local:adlist.h), pkg:<crate>
+Command exited with non-zero status 1
+related wall=0.11s rc=1
+search wall=0.11s rc=0
+0.0325  pkg:@next/eslint-plugin-next  [lexical] [node:pkg]
+         symbols: plugin
+0.0323  apps/web/eslint.config.mjs  [lexical]
+0.0320  pkg:@vitejs/plugin-react  [lexical] [node:pkg]
+         symbols: plugin
+## MAP
+apps/api/src/index.ts →
+  - shutdown
+apps/api/src/app.ts →
+  - createApp
+apps/api/src/auth/jwt.ts →
+  - JwtClaims
+  - MintOptions
+  - JwtError
+  - constructor
+  - b64url
+  - subjectHash
+  - mintJwt
+  - verifyJwt
+=== A5 NEW SURFACE: untested --granularity function (GAP-121) ===
+98 untested file(s):
+  apps/api/scripts/monitor-loop-demo.ts
+  apps/api/src/demo/chat-roundtrip-cli.ts
+  apps/api/src/demo/crm-store-cli.ts
+  apps/api/src/index.ts
+  apps/api/src/middleware/auth.ts
+untested-file wall=0.10s rc=0
+60 file(s) with uncovered public function(s) at function granularity (202 function(s)):
+  apps/api/src/auth/agency.ts (2/3 covered)
+    isProductionEnv  apps/api/src/auth/agency.ts:48
+  apps/api/src/auth/keys.ts (3/6 covered)
+    isProductionEnv  apps/api/src/auth/keys.ts:51
+    notConfiguredMessage  apps/api/src/auth/keys.ts:58
+    isAcceptedToken  apps/api/src/auth/keys.ts:94
+  apps/api/src/config.ts (10/12 covered)
+    publicHostFor  apps/api/src/config.ts:97
+    DEFAULT_PUBLIC_PORT  apps/api/src/config.ts:210
+  apps/api/src/demo/chat-roundtrip.ts (3/4 covered)
+    isOptionUpdate  apps/api/src/demo/chat-roundtrip.ts:45
+  apps/api/src/middleware/error-handler.ts (1/3 covered)
+    createError  apps/api/src/middleware/error-handler.ts:9
+untested-func wall=1.61s rc=0
+--- untested func help presence:
+5
+--- README/doc census for --granularity:
+/tmp/df49/heading/docs/demo-runbook.md:0
+/tmp/df49/heading/docs/spec-drift-register.md:0
+=== A6 COV chain gate on a foreign repo ===
+scope: foreign — /tmp/df49/heading is not a Hilo workspace
+hilo graph surfaces inventories the Hilo repository's own contract surfaces only.
+No target-repo surfaces were derived and nothing was written to .vfs/graph/.
+error: hilo graph surfaces only inventories the Hilo repository itself; /tmp/df49/heading is not a Hilo workspace
+surfaces rc=0
+error: graph coverage-links is part of the COV coverage model, which is available for the Hilo repository itself only — /tmp/df49/heading is not a Hilo workspace (scope: foreign), and no COV inventory is derived for foreign repositories
+coverage-links rc=0
+=== B1 DF-70 pre-mount meta --set, THEN mount ===
+find: ‘src’: No such file or directory
+srcfile=
+error: no such file: 
+meta-set rc=1
+error: no such file: 
+=== B2 mount --daemon ===
+Hilo mount daemonized (pid 1157367) — filesystem available at /tmp/df49/mnt (log: /home/kara/.vfs/logs/mount-daemon.log)
+mount rc=0
+1
+proc/mounts fuse line: 
+hilo on /tmp/df49/mnt type fuse (ro,nosuid,nodev,relatime,user_id=1000,group_id=1000)
+=== B3 through-the-mount reads ===
+AGENTS.md
+CHANGELOG.md
+CODEOWNERS
+CODE_OF_CONDUCT.md
+CONTRIBUTING.md
+GOVERNANCE.md
+LICENSE
+README.md
+ls rc=0
+cat: /tmp/df49/mnt/: Is a directory
+cat rc=0
+=== B4 DF-70 AC: getfattr user.vfs.role through mount ===
+/tmp/df49/mnt/: user.vfs.role: No such attribute
+getfattr rc=1
+=== B5 daemon log location + DF-156/176 AC ===
+=== B6 serve --http --port 8767 (REV-9 AC) ===
+0
+error: unexpected argument '--port' found
+
+Usage: hilo serve --http
+
+For more information, try '--help'.
+health_code=200
+metrics_code=401
+unknown_code=404
+{"status":"ok"}=== B7 DF-156 AC: kill daemon, log readable, stale-mount state ===
+daemon_pid=1157367
+--- after kill: cat the daemon log wherever it lives ---
+--- mountpoint state after daemon death ---
+ls-mnt rc=2 (124=hang/ENOTCONN-blocked, 0=alive)
+6
+hilo /tmp/df49/mnt fuse ro,nosuid,nodev,relatime,user_id=1000,group_id=1000 0 0
+fusermount rc=0
+ls-mnt-after-u rc=0
+=== C1 perf: warm query medians (hyperfine) ===
+  Time (mean ± σ):      96.8 ms ±  28.9 ms    [User: 47.1 ms, System: 27.1 ms]
+=== C2 PERF-011 AC: cold-mount + first graph stats, 5x ===
+arm1 mount=2.029061814s first-stats=.093998970s
+arm2 mount=2.035905388s first-stats=.097045211s
+arm3 mount=2.056182903s first-stats=.063987577s
+arm4 mount=2.021892285s first-stats=.071446332s
+arm5 mount=2.014165385s first-stats=.046558107s
+=== DONE ===
