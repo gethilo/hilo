@@ -81,12 +81,23 @@ pub fn run_mount(
     log_file: Option<&str>,
     source: Option<&str>,
 ) -> Result<()> {
+    // DF-WARPFS-176: the detached daemon child is told apart by the env var
+    // its parent sets. Read once — every branch below (logging init, mount
+    // point validation, banner destination, exit message) keys off it.
+    let daemon_child = std::env::var_os(DAEMON_CHILD_ENV).is_some();
+
     // DF-WARPFS-29: the trigger engine logs fires/failures via `tracing`,
     // which is invisible without a subscriber. Install one (stderr, human
     // format) so `--triggers` mounts surface what is actually happening.
     // RUST_LOG overrides the default `info` filter; serve --mcp does its own
     // init, so this is scoped to run_mount, not main().
-    if triggers {
+    //
+    // DF-WARPFS-176: a detached daemon needs the subscriber even WITHOUT
+    // --triggers — its stderr IS the durable log file (DF-WARPFS-134/156).
+    // Without it a plain `mount --daemon` emitted no tracing event at all,
+    // so the log stayed at 0 bytes for the whole session and a hard-killed
+    // daemon left nothing behind.
+    if durable_stderr_logging(triggers, daemon_child) {
         hilo_core::logging::init_logging_to(false, std::io::stderr);
     }
 
@@ -98,9 +109,23 @@ pub fn run_mount(
 
     // DF-WARPFS-115: validate the mount point BEFORE any success output —
     // the banner promised a mount that then failed with a bare ENOENT.
-    if std::env::var_os(DAEMON_CHILD_ENV).is_none() {
+    //
+    // DF-WARPFS-176: a daemon killed hard (SIGKILL/OOM/host death) can never
+    // run its own exit path, so the kernel keeps the endpoint and EVERY stat
+    // on the mount point fails ENOTCONN. Re-running `hilo mount` for that
+    // directory is the documented recovery, so clear the dead entry here
+    // instead of making the user find fusermount3 by hand.
+    if !daemon_child {
         let mp = Path::new(mount_point);
-        if let Err(e) = std::fs::metadata(mp) {
+        let mut access_err = std::fs::metadata(mp).err();
+        if matches!(access_err.as_ref(), Some(e) if is_stale_fuse_error(e)) {
+            eprintln!(
+                "[hilo mount] {mount_point} is a dead FUSE mount left by a killed daemon (ENOTCONN) — clearing it before mounting"
+            );
+            self_heal_stale_mount(mp);
+            access_err = std::fs::metadata(mp).err();
+        }
+        if let Some(e) = access_err {
             if e.kind() == std::io::ErrorKind::NotFound {
                 anyhow::bail!(
                     "mount point {mount_point} does not exist — create it first (mkdir -p {mount_point})"
@@ -112,7 +137,7 @@ pub fn run_mount(
 
     // Foreground parent of a `--daemon` mount: spawn the detached child and
     // return. The child (see DAEMON_CHILD_ENV) skips this branch.
-    if daemon && std::env::var_os(DAEMON_CHILD_ENV).is_none() {
+    if daemon && !daemon_child {
         // DF-WARPFS-134: the child's only logging channel is stderr. Always
         // hand it a real file: an explicit --log-file when given, otherwise
         // a default log OUTSIDE the mounted tree ($HOME/.vfs/logs —
@@ -229,9 +254,12 @@ pub fn run_mount(
             // non-read-only mount (the tree structure itself stays read-only
             // — there are no create/mkdir/unlink handlers).
             config.read_only = false;
-            println!(
-                "Hilo mounted at {} (stream mode: placeholders materialize on open)",
-                mount_point
+            emit_session_banner(
+                daemon_child,
+                &format!(
+                    "Hilo mounted at {} (stream mode: placeholders materialize on open)",
+                    mount_point
+                ),
             );
             fs.with_stream(state)
         }
@@ -252,7 +280,10 @@ pub fn run_mount(
     } else {
         String::new()
     };
-    println!("Hilo mounted at {}{}", mount_point, trigger_summary);
+    emit_session_banner(
+        daemon_child,
+        &format!("Hilo mounted at {}{}", mount_point, trigger_summary),
+    );
 
     // Capture (not `?`) so the DF-WARPFS-156 self-heal and exit message run on
     // the error path too — a daemon that failed mid-mount still leaves a
@@ -280,7 +311,7 @@ pub fn run_mount(
     // daemon child stderr IS the log file, so the message lands where a
     // post-mortem `cat` will find it.
     self_heal_stale_mount(Path::new(mount_point));
-    if std::env::var_os(DAEMON_CHILD_ENV).is_some() {
+    if daemon_child {
         if let Err(ref e) = mount_result {
             eprintln!("[hilo mount] FUSE session ended with error: {e:#}");
         }
@@ -290,6 +321,50 @@ pub fn run_mount(
 
     mount_result.context("FUSE mount failed")?;
     Ok(())
+}
+
+/// DF-WARPFS-176: does this mount session need the tracing subscriber on
+/// stderr?
+///
+/// Two sessions owe durable output: `--triggers` (the engine reports fires
+/// and failures through `tracing`, DF-WARPFS-29) and any detached daemon
+/// child, whose stderr IS the durable log file (DF-WARPFS-134/156). A
+/// foreground mount keeps the historic behaviour: its banner goes to stdout
+/// and no subscriber is installed.
+fn durable_stderr_logging(triggers: bool, daemon_child: bool) -> bool {
+    triggers || daemon_child
+}
+
+/// DF-WARPFS-176: must the session banner go to stderr instead of stdout?
+///
+/// A detached daemon child is spawned with stdout on `/dev/null` (the parent
+/// only attaches the log file to stderr), so a `println!` banner was thrown
+/// away and the log never recorded that a session started. In a daemon child
+/// every session line must go to stderr; a foreground mount keeps printing
+/// on stdout for scripts and humans.
+fn session_banner_goes_to_stderr(daemon_child: bool) -> bool {
+    daemon_child
+}
+
+/// Emit one session banner line on the stream this session's user reads.
+fn emit_session_banner(daemon_child: bool, line: &str) {
+    if session_banner_goes_to_stderr(daemon_child) {
+        eprintln!("{line}");
+    } else {
+        println!("{line}");
+    }
+}
+
+/// DF-WARPFS-176: is this error the kernel saying "this is a dead FUSE
+/// mount"?
+///
+/// `ENOTCONN` ("Transport endpoint is not connected", 107) is what every
+/// lookup on a mount point returns once the serving daemon died without
+/// unmounting it — the signature of a hard kill, which never reaches the
+/// process's own exit path. Anything else (notably `ENOENT` for a missing
+/// directory, DF-WARPFS-115) is a real user error and must not be "healed".
+fn is_stale_fuse_error(e: &std::io::Error) -> bool {
+    e.raw_os_error() == Some(libc::ENOTCONN)
 }
 
 /// §8: build the stream-mode state for a workspace with registered backends.
@@ -1383,6 +1458,59 @@ proc /proc proc rw 0 0
         assert!(contents.contains("second-write"), "append, not truncate");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ───────── DF-WARPFS-176: daemon log is durable at kill time ─────────
+
+    #[test]
+    fn daemon_child_installs_durable_stderr_logging() {
+        // RED-BEFORE: the subscriber used to be gated on `triggers` alone, so
+        // a plain `hilo mount --daemon` session emitted no tracing event and
+        // the durable log stayed at 0 bytes until the process exited.
+        assert!(
+            durable_stderr_logging(false, true),
+            "a detached daemon's stderr is the log file — it must install the subscriber without --triggers"
+        );
+        assert!(
+            durable_stderr_logging(true, false),
+            "DF-WARPFS-29: --triggers keeps its subscriber on a foreground mount"
+        );
+        assert!(durable_stderr_logging(true, true));
+        assert!(
+            !durable_stderr_logging(false, false),
+            "a plain foreground mount keeps the historic stdout-only behaviour"
+        );
+    }
+
+    #[test]
+    fn daemon_child_banner_goes_to_stderr() {
+        // The parent gives the daemon child stdout=/dev/null and stderr=the
+        // log file, so a stdout banner never reached the durable log.
+        assert!(
+            session_banner_goes_to_stderr(true),
+            "daemon child: the banner must land in the durable log"
+        );
+        assert!(
+            !session_banner_goes_to_stderr(false),
+            "foreground mount: the banner keeps going to stdout"
+        );
+    }
+
+    #[test]
+    fn stale_fuse_error_is_enotconn_only() {
+        // The kill-path self-heal keys on ENOTCONN; every other error must
+        // keep its DF-WARPFS-115 meaning (a missing directory is a user
+        // error, not a dead daemon).
+        assert!(is_stale_fuse_error(&std::io::Error::from_raw_os_error(
+            libc::ENOTCONN
+        )));
+        assert!(!is_stale_fuse_error(&std::io::Error::from_raw_os_error(
+            libc::ENOENT
+        )));
+        assert!(!is_stale_fuse_error(&std::io::Error::from_raw_os_error(
+            libc::EACCES
+        )));
+        assert!(!is_stale_fuse_error(&std::io::Error::other("no errno")));
     }
 
     // ───────── DF-WARPFS-77: manifest sandbox block parsing + wiring ─────────
