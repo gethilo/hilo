@@ -1211,3 +1211,6 @@
 {"id":10173,"timestamp":"2026-11-21T10:43:13","event_type":"task_completed","task_id":"RELEASE-022","actor":"foreman","detail":"{\"status\":\"complete\"}","tick_number":null}
 {"id":10174,"timestamp":"2026-11-21T10:59:41","event_type":"task_completed","task_id":"DF-WARPFS-98","actor":"foreman","detail":"{\"status\":\"complete\"}","tick_number":null}
 {"id":10175,"timestamp":"2026-11-21T11:01:16","event_type":"task_updated","task_id":"DF-WARPFS-118","actor":"foreman","detail":"{\"status\":\"pending\"}","tick_number":null}
+{"id":10176,"timestamp":"2026-11-21T12:15:42","event_type":"task_created","task_id":"RELEASE-024","actor":"foreman","detail":"{\"id\":\"RELEASE-024\",\"status\":\"pending\"}","tick_number":null}
+{"id":10177,"timestamp":"2026-11-21T12:15:47","event_type":"task_updated","task_id":"RELEASE-015","actor":"foreman","detail":"{\"status\":\"blocked\"}","tick_number":null}
+{"id":10178,"timestamp":"2026-11-21T12:15:55","event_type":"task_updated","task_id":"DF-WARPFS-63","actor":"foreman","detail":"{\"status\":\"blocked\"}","tick_number":null}
