@@ -657,6 +657,11 @@ fn traverse_and_score(
 ) -> HashMap<String, (f64, String)> {
     let mut scores: HashMap<String, (f64, String)> = HashMap::new();
 
+    // PERF: one `local:` reverse index for the whole traversal. Building it
+    // per `related(.., Direction::Reverse)` call cost a full SQL scan plus
+    // an on-disk probe ladder for every visited node.
+    let local_index = db.local_spec_resolver();
+
     // Anchors: score 1.0, provenance "ast_exact".
     for anchor in anchors {
         scores.insert(anchor.clone(), (1.0, "ast_exact".to_string()));
@@ -680,7 +685,7 @@ fn traverse_and_score(
                 .unwrap_or_default();
             // Reverse edges: what imports this file?
             let reverse_edges = db
-                .related(&path, None, Direction::Reverse)
+                .related_with_local(&path, None, Direction::Reverse, local_index.as_ref())
                 .unwrap_or_default();
 
             for edge in edges.iter().chain(reverse_edges.iter()) {
