@@ -1205,3 +1205,4 @@
 {"id": 10167, "task_id": "DF-WARPFS-86", "event": null, "ts": null, "actor": "foreman", "detail": "{\"status\":\"complete\"}", "timestamp": "2026-11-21T07:34:41.696775+00:00", "event_type": "task_completed"}
 {"id": 10168, "task_id": "PERF-015", "event": null, "ts": null, "actor": "foreman", "detail": "{\"status\":\"complete\"}", "timestamp": "2026-11-21T08:27:53.274973+00:00", "event_type": "task_completed"}
 {"id": 10169, "task_id": "PERF-017", "event": null, "ts": null, "actor": "foreman", "detail": "{\"id\":\"PERF-017\",\"status\":\"pending\"}", "timestamp": "2026-11-21T08:28:22.968427+00:00", "event_type": "task_created"}
+{"id": 10170, "task_id": "PERF-015", "event": null, "ts": null, "actor": "foreman", "detail": "{\"status\":\"review\"}", "timestamp": "2026-11-21T08:57:32.233553+00:00", "event_type": "task_updated"}
