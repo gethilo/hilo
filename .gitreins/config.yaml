@@ -48,8 +48,6 @@ defaults:
   # the funded lane for the invocation:
   #   bash scripts/gitreins-judge-lane.sh task complete <TASK-ID>
   model: glm-5.3-flash
-  provider: ollama-cloud
-  api_key_env: OLLAMA_CLOUD_API_KEY
 
 history:
   enabled: true
