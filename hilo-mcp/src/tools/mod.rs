@@ -617,11 +617,19 @@ fn graph_related(arguments: &serde_json::Value) -> McpResult<serde_json::Value> 
 /// exists, `GraphDB::open` reconciles it first, so the answer reflects the
 /// real edge set (GAP-096: this used to answer zeros and silently disagree
 /// with the CLI on the same corpus).
+///
+/// DF-WARPFS-72: `total_files` is the DISTINCT EDGE SOURCES census (files with
+/// outgoing edges), not the project's file count. `discovered_files` carries
+/// warm's on-disk discovery census from `.vfs/graph/coverage.json` and is
+/// `null` when the project has not been warmed — a consumer that needs the
+/// project file count must read that field and treat `null` as unknown rather
+/// than falling back to `total_files`.
 fn graph_stats(_arguments: &serde_json::Value) -> McpResult<serde_json::Value> {
     if !graph_data_present() {
         return Ok(serde_json::json!({
             "total_edges": 0,
             "total_files": 0,
+            "discovered_files": null,
             "most_connected": null,
             "orphans": [],
             "edge_types": {}

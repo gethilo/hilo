@@ -49,6 +49,7 @@ dictionary GraphImpactResult {
 
 dictionary GraphStats {
     u32 total_files;
+    u32? discovered_files;
     u32 total_edges;
     u32 unique_relations;
     f64 tested_pct;

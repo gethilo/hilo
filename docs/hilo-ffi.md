@@ -37,7 +37,8 @@ Supporting dictionaries (`MetadataResult`, `SetMetadataResult`,
 
 | Field | Meaning |
 |---|---|
-| `total_files` | Files in the graph |
+| `total_files` | Files **with edges** — the distinct edge-source census the graph answers `impact`/`related` queries about. A file that imports nothing is not in this count (DF-WARPFS-72). |
+| `discovered_files` | Project files `hilo graph warm` discovered on disk, from `.vfs/graph/coverage.json`. `None` before the first warm — the honest answer for "how many files does this project have". Do not substitute `total_files` for it: that number is the edge census and understates the project by its zero-edge files (DF-WARPFS-72). |
 | `total_edges` | Raw edges in the graph |
 | `unique_relations` | Distinct edge relation types |
 | `tested_pct` | Share of graphed files **not** listed by `hilo graph untested` — files that emit a `tested_by` edge (test-shaped) or are covered by one under the pkg:/local: resolution rules. This is an import/emit-derived proxy measured without running any tests, NOT a test-suite coverage percentage; `hilo graph module <dir>` reports the same rule-set scoped to a directory. |

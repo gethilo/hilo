@@ -117,6 +117,9 @@ pub struct GraphStats {
     pub total_edges: i64,
     /// Total number of distinct source FILES in the graph.
     ///
+    /// This is the edge-source census, not the number of files discovered on
+    /// disk. A file with no outgoing edges is not included.
+    ///
     /// DF-WARPFS-163: file nodes only. Graph nodes that merely NAME something
     /// (the `type:`/`iface:` symbol nodes the conformance pass emits, `local:`
     /// import specifiers, `pkg:`/`sys:`/`std:`/`external:` dependencies) are
@@ -124,6 +127,10 @@ pub struct GraphStats {
     /// [`crate::prune::is_file_endpoint`], the crate's one predicate for
     /// "endpoint names a file on disk rather than a graph node".
     pub total_files: i64,
+    /// Number of project files discovered by `graph warm`, when its coverage
+    /// ledger is available. `None` means the project has not been warmed (or
+    /// the ledger is missing or malformed).
+    pub discovered_files: Option<i64>,
     /// Count of distinct real-file `from` values (source files).
     #[serde(skip)]
     pub unique_files: i64,
@@ -2847,9 +2854,23 @@ impl GraphDB {
             components.sort_by(|a, b| b.files.cmp(&a.files).then_with(|| a.name.cmp(&b.name)));
         }
 
+        // The edge census remains cheap and independent of warm. When this
+        // graph belongs to a project, add the warm ledger's discovered-file
+        // count without walking the project again; an absent or malformed
+        // ledger is explicitly unknown.
+        let discovered_files = self.root.as_ref().and_then(|root| {
+            let path = root.join(".vfs").join("graph").join("coverage.json");
+            let body = std::fs::read_to_string(path).ok()?;
+            serde_json::from_str::<serde_json::Value>(&body)
+                .ok()?
+                .get("discovered_files")?
+                .as_i64()
+        });
+
         Ok(GraphStats {
             total_edges,
             total_files: unique_files,
+            discovered_files,
             unique_files,
             unique_dependencies,
             most_connected,
@@ -6281,6 +6302,71 @@ mod tests {
         assert_eq!(
             stats.unique_files, stats.total_files,
             "unique_files and total_files are the same census"
+        );
+    }
+
+    #[test]
+    fn stats_discovered_files_reads_the_warm_ledger_and_is_unknown_without_one() {
+        // DF-WARPFS-72: `total_files` is the distinct EDGE SOURCE census, so a
+        // 2-file project whose second file carries no imports reports 1 and
+        // understates the project. `discovered_files` carries warm's on-disk
+        // census from `.vfs/graph/coverage.json`; an absent or malformed
+        // ledger is `None` (unknown), never a fabricated 0 — a consumer can
+        // tell "not warmed yet" from "the project has zero files".
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        std::fs::create_dir_all(root.join(".vfs").join("graph")).unwrap();
+        let db_path = root.join(".vfs").join("graph").join("graph.db");
+        let db_path = db_path.to_str().unwrap();
+
+        // A disk-backed open derives the repo root from the db path, which is
+        // what makes the ledger readable at all (an in-memory graph has none).
+        {
+            let db = GraphDB::open(db_path).unwrap();
+            db.insert_edges(&[Edge::new("src/lib.rs", "src/util.rs", "imports")])
+                .unwrap();
+            let stats = db.stats().unwrap();
+            assert_eq!(
+                stats.total_files, 1,
+                "only src/lib.rs is an edge source; src/util.rs has no imports"
+            );
+            assert_eq!(
+                stats.discovered_files, None,
+                "no coverage ledger yet: the discovery census is UNKNOWN, not 0"
+            );
+        }
+
+        std::fs::write(
+            root.join(".vfs").join("graph").join("coverage.json"),
+            r#"{"schema":1,"discovered_files":2,"contributes":1,"no_imports":1,"package_facades":0}"#,
+        )
+        .unwrap();
+        {
+            let db = GraphDB::open(db_path).unwrap();
+            let stats = db.stats().unwrap();
+            assert_eq!(
+                stats.discovered_files,
+                Some(2),
+                "the ledger's discovered_files is the project file count"
+            );
+            assert_eq!(
+                stats.total_files, 1,
+                "the edge census keeps its meaning next to the discovery census"
+            );
+        }
+
+        // A corrupt ledger degrades to unknown: it must not fail the query and
+        // must not be read as zero.
+        std::fs::write(
+            root.join(".vfs").join("graph").join("coverage.json"),
+            "{ not json",
+        )
+        .unwrap();
+        let db = GraphDB::open(db_path).unwrap();
+        assert_eq!(
+            db.stats().unwrap().discovered_files,
+            None,
+            "a malformed ledger is unknown, not an error and not 0"
         );
     }
 

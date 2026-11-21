@@ -2141,19 +2141,41 @@ pub fn run_stats(limit: usize) -> Result<()> {
         }
         None => println!("Total edges: {}", stats.total_edges),
     }
-    println!("Total files: {}", stats.total_files);
+    // DF-WARPFS-72: two different counts, both labelled. `Total files with
+    // edges` is the distinct edge-source census the graph can answer queries
+    // over; `Total files discovered` is warm's on-disk discovery census. A
+    // file with no imports is discovered but never becomes an edge source, so
+    // an unlabelled single "Total files" line read as "the project has N
+    // files" and understated the project by exactly its zero-edge files.
+    match stats.discovered_files {
+        Some(discovered) => println!("Total files discovered: {discovered}"),
+        // DF-WARPFS-72: never fabricate the discovery census. Without a warm
+        // ledger the cheap query path knows only the edge census, so say the
+        // number is unknown and name the command that produces it.
+        None => println!(
+            "Total files discovered: unknown (no coverage ledger yet — run `hilo graph warm` to build the discovery census)"
+        ),
+    }
+    println!("Total files with edges: {}", stats.total_files);
     // DF-WARPFS-43: reconcile the edge-derived census against warm's own
-    // end-of-warm accounting. The census (and Total files above) counts
-    // DISTINCT edge sources in the graph; warm's Coverage line counts every
-    // discovered file. Zero-edge files never enter the census, so the two
-    // numbers disagree by design on most trees — surface both definitions
+    // end-of-warm accounting. The census (and Total files with edges above)
+    // counts DISTINCT edge sources in the graph; warm's Coverage line counts
+    // every discovered file. Zero-edge files never enter the census, so the
+    // two numbers disagree by design on most trees — surface both definitions
     // and the delta instead of two headline numbers that look contradictory.
     // DF-WARPFS-170: warm prunes sources whose file is gone, so a census that
     // is still ahead of the ledger now means the graph predates the last warm
     // (or was never warmed), not that the inventory is permanently stale.
-    if let Ok(ledger_body) =
-        std::fs::read_to_string(cwd.join(".vfs").join("graph").join(COVERAGE_LEDGER))
-    {
+    // DF-WARPFS-72: read the ledger from the RESOLVED project root — the same
+    // root `stats.discovered_files` derives from the graph db path — so the
+    // headline number and this reconcile block can never read two different
+    // ledgers when the command runs from a subdirectory.
+    if let Ok(ledger_body) = std::fs::read_to_string(
+        project_root
+            .join(".vfs")
+            .join("graph")
+            .join(COVERAGE_LEDGER),
+    ) {
         if let Ok(ledger) = serde_json::from_str::<serde_json::Value>(&ledger_body) {
             let discovered = ledger.get("discovered_files").and_then(|v| v.as_u64());
             let contributes = ledger.get("contributes").and_then(|v| v.as_u64());

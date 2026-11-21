@@ -265,7 +265,8 @@ hilo graph stats
 
 # Output:
 # Total edges: 202 distinct / 292 raw (edges.jsonl)
-# Total files: 81
+# Total files discovered: 90
+# Total files with edges: 81
 # File census: 81 files with edges (distinct edge sources) — warm last counted 90 discovered files = 82 contribute + 8 zero-edge (7 no imports + 1 package facades); the census is missing contributors (stale or truncated graph cache — run `hilo graph warm`)
 # Components (6 total):
 #   src: 61 files, 180 edges
@@ -286,17 +287,29 @@ one entry per top-level directory, counted by distinct files and by the
 edges whose source file lives inside it. Root-level files (no directory)
 aggregate under `.`. Graph nodes that are not files (`pkg:`, `sys:`, `std:`,
 `external:` resolved dependencies, `local:` import specifiers, `type:` /
-`iface:` symbol nodes) never appear in the roster, and `Total files` counts
-that same file set — a `.` component therefore means root-level *files*
+`iface:` symbol nodes) never appear in the roster, and `Total files with edges`
+counts that same file set — a `.` component therefore means root-level *files*
 exist, never that symbol nodes were bucketed at the repo root
 (DF-WARPFS-163). The header always shows the full component count; the list is
 capped like the orphans list by `--limit` (default 25), with a
 `... N more components (use --limit 0 to show all)` trailer — pass
 `--limit 0` to print every component.
 
-The `File census` line reconciles `Total files` with the coverage
+The two file headlines answer two different questions (DF-WARPFS-72).
+`Total files with edges` is the graph's edge-source census: files the graph can
+answer `impact`/`related` queries about. `Total files discovered` is the
+project's on-disk file count as `hilo graph warm` discovered it, read from
+`.vfs/graph/coverage.json`; it is the number to quote when asked "how many
+files does this project have". A file with no imports is discovered but never
+an edge source, so on most trees the discovered count is the larger one — with
+only one headline number the project looked smaller than it is. Before the
+first `hilo graph warm` there is no discovery census, and the line says so
+(`Total files discovered: unknown (no coverage ledger yet — …)`) rather than
+printing a fabricated count.
+
+The `File census` line reconciles `Total files with edges` with the coverage
 accounting `hilo graph warm` prints at the end of every run (persisted in
-`.vfs/graph/coverage.json`). `Total files` is a census of distinct file
+`.vfs/graph/coverage.json`). `Total files with edges` is a census of distinct file
 sources in the graph — symbol and dependency nodes are edge sources too, but
 they are not files and are not counted (DF-WARPFS-163); warm's Coverage line
 counts every discovered file — zero-edge files (no imports, package facades,

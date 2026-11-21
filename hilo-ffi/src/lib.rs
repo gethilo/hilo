@@ -86,6 +86,11 @@ pub struct GraphImpactResult {
 /// patterns, not from running a test suite.
 pub struct GraphStats {
     pub total_files: u32,
+    /// DF-WARPFS-72: project files discovered by `graph warm`. `None` when no
+    /// coverage ledger exists yet. `total_files` remains the edge-source
+    /// census (files with outgoing edges), so a project whose second file has
+    /// no imports reports `total_files = 1` and `discovered_files = 2`.
+    pub discovered_files: Option<u32>,
     pub total_edges: u32,
     pub unique_relations: u32,
     /// Share of graphed files NOT reported by `untested_files_at` (the same
@@ -376,6 +381,7 @@ impl HiloHandle {
         };
         Ok(GraphStats {
             total_files: stats.total_files as u32,
+            discovered_files: stats.discovered_files.map(|n| n as u32),
             total_edges: stats.total_edges as u32,
             unique_relations: stats.edge_types.len() as u32,
             tested_pct,

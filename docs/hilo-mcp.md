@@ -35,7 +35,7 @@ way).
 | `vfs_get_metadata` | `{path, keys?}` | `{path, size, mtime, backend, hash, xattrs}` | Read `user.vfs.*` xattrs plus file stats for a file |
 | `vfs_set_metadata` | `{path, key, value}` | `{success, path, key, value, previous_value}` | Set one `user.vfs.*` xattr, returning the previous value |
 | `vfs_graph_related` | `{path, relation?, direction?}` | array of `{from, to, relation, scope, provenance, confidence}` | Forward (outgoing) or reverse (incoming) dependency edges |
-| `vfs_graph_stats` | `{}` | `{total_edges, total_files, edge_types, orphans, most_connected}` | Aggregate statistics about the dependency graph |
+| `vfs_graph_stats` | `{}` | `{total_edges, total_files, discovered_files, edge_types, orphans, most_connected}` | Aggregate statistics about the dependency graph. `total_files` is the edge-source census; `discovered_files` is warm's on-disk file count and is `null` before the first warm (DF-WARPFS-72) |
 | `vfs_graph_untested` | `{}` | `{files, total}` | Files with import edges but no `tested_by` edges |
 | `vfs_graph_module` | `{module_name}` | `{module, files, edges_count, test_coverage_pct}` | Per-module file listing and test coverage |
 | `vfs_graph_impact` | `{path, max_depth?}` | `{dependents, review_set, total, max_depth_reached}` — `review_set` is the full CLI answer (`hilo graph impact`, GAP-117): the queried file first (scope `self`), then its dependents (scopes `file`/`crate`), then the forward/reverse neighbourhood (scopes `dependency`/`link`); every row carries a `scope` field, and `total` counts unique paths across `dependents` and `review_set` | Files that depend on this file, directly or transitively, plus the CLI's full review set |

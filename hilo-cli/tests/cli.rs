@@ -1258,8 +1258,167 @@ fn graph_stats_without_ledger_prints_no_census_block() {
         "no census block without a ledger:\n{stdout}"
     );
     assert!(
-        stdout.contains("Total files: 1"),
-        "base stats output must be intact:\n{stdout}"
+        stdout.contains("Total files with edges: 1"),
+        "the edge census is still reported (labelled):\n{stdout}"
+    );
+    // DF-WARPFS-72: without a ledger the discovery census must be named as
+    // UNKNOWN — printing a fabricated 0 or silently echoing the edge census
+    // would re-create the misleading single number this row exists for.
+    assert!(
+        stdout.contains("Total files discovered: unknown"),
+        "an unwarmed project must say the discovery census is unknown:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("Total files:"),
+        "no bare unlabelled `Total files:` headline:\n{stdout}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn graph_stats_reports_the_real_file_count_of_a_two_file_project() {
+    // DF-WARPFS-72 acceptance, verbatim: "in a fresh 2-file project,
+    // `hilo graph stats` prints a Total files count of 2 even when only one
+    // file has an import edge". `src/util.rs` carries no imports, so it never
+    // becomes an edge SOURCE and the edge census alone says 1 — the discovery
+    // census from warm's ledger is what carries the project's real 2.
+    let dir = unique_tempdir("stats-two-file-census");
+    fs::create_dir_all(dir.join("src")).expect("failed to create src");
+    // The Cargo manifest is what gives the Rust extractor its crate context —
+    // without it the `use crate::util;` below emits no edge at all and the
+    // graph stays empty (verified live, DF-WARPFS-72).
+    fs::write(
+        dir.join("Cargo.toml"),
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .expect("failed to write Cargo.toml");
+    fs::write(
+        dir.join("src/lib.rs"),
+        "mod util;\n\nuse crate::util;\n\npub fn run() -> usize {\n    util::twice(2)\n}\n",
+    )
+    .expect("failed to write src/lib.rs");
+    fs::write(
+        dir.join("src/util.rs"),
+        "pub fn twice(n: usize) -> usize {\n    n * 2\n}\n",
+    )
+    .expect("failed to write src/util.rs");
+
+    let init = hilo_cmd()
+        .arg("init")
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn hilo init");
+    assert!(
+        init.status.success(),
+        "hilo init failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    let warm = hilo_cmd()
+        .args(["graph", "warm"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn graph warm");
+    assert!(
+        warm.status.success(),
+        "graph warm failed: {}",
+        String::from_utf8_lossy(&warm.stderr)
+    );
+
+    let stats = hilo_cmd()
+        .args(["graph", "stats"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn graph stats");
+    assert!(
+        stats.status.success(),
+        "graph stats failed: {}",
+        String::from_utf8_lossy(&stats.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&stats.stdout);
+    assert!(
+        stdout.contains("Total files discovered: 2"),
+        "the 2-file project must headline 2 discovered files:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Total files with edges: 1"),
+        "and name the edge census separately (util.rs has no imports):\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("Total files:"),
+        "no bare unlabelled `Total files:` headline:\n{stdout}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn graph_stats_headlines_cannot_diverge_from_the_warm_ledger() {
+    // DF-WARPFS-72 criterion 3: the two headline counts `graph stats` prints
+    // are exactly the two numbers warm's ledger records — discovered files and
+    // contributors. A tree with BOTH edge-less and edge-ful files is the case
+    // where a silent divergence is possible, so both are asserted against the
+    // ledger written by the same run's warm.
+    let dir = unique_tempdir("stats-ledger-parity");
+    fs::write(
+        dir.join("app.py"),
+        "import helper\n\ndef run():\n    helper.go()\n",
+    )
+    .expect("failed to write app.py");
+    fs::write(
+        dir.join("helper.py"),
+        "import os\n\ndef go():\n    os.path.join('x')\n",
+    )
+    .expect("failed to write helper.py");
+    // Zero-edge: discovered by warm, never an edge source.
+    fs::write(dir.join("constants.py"), "MAX = 1\n").expect("failed to write constants.py");
+
+    for args in [vec!["init"], vec!["graph", "warm"]] {
+        let out = hilo_cmd()
+            .args(&args)
+            .current_dir(&dir)
+            .output()
+            .expect("failed to spawn hilo");
+        assert!(
+            out.status.success(),
+            "hilo {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    let ledger: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(dir.join(".vfs/graph/coverage.json"))
+            .expect("warm must persist the coverage ledger"),
+    )
+    .expect("coverage ledger must be valid JSON");
+    let discovered = ledger["discovered_files"]
+        .as_u64()
+        .expect("ledger must carry discovered_files");
+    let contributes = ledger["contributes"]
+        .as_u64()
+        .expect("ledger must carry contributes");
+    assert_eq!(
+        (discovered, contributes),
+        (3, 2),
+        "fixture premise: 3 discovered files, 2 of which emit edges"
+    );
+
+    let stats = hilo_cmd()
+        .args(["graph", "stats"])
+        .current_dir(&dir)
+        .output()
+        .expect("failed to spawn graph stats");
+    assert!(
+        stats.status.success(),
+        "graph stats failed: {}",
+        String::from_utf8_lossy(&stats.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&stats.stdout);
+    assert!(
+        stdout.contains(&format!("Total files discovered: {discovered}")),
+        "stats' discovered headline must equal the ledger's discovered_files ({discovered}):\n{stdout}"
+    );
+    assert!(
+        stdout.contains(&format!("Total files with edges: {contributes}")),
+        "stats' edge census must equal the ledger's contributes ({contributes}):\n{stdout}"
     );
     let _ = fs::remove_dir_all(&dir);
 }
