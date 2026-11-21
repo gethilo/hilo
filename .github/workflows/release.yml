@@ -1,0 +1,125 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Publishing the release and its assets needs to create/modify the release.
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+# Never race two tag pushes onto the same release; a re-pushed tag replaces
+# the bundle in place.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-bundle:
+    name: Build & attach release bundle (x86_64-linux)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Install system dependencies
+        # libfuse3-dev + attr are the hilo_fuse build inputs, pkg-config finds
+        # them. OpenSSL is vendored by default (hilo_backends), so libssl-dev
+        # is not installed here; see .github/workflows/ci.yml for why CI keeps
+        # it installed anyway.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfuse3-dev attr pkg-config
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-release-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-release-cargo-
+
+      - name: Resolve release version from the tag
+        id: ver
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          case "$tag" in
+            v*) version="${tag#v}" ;;
+            *)
+              echo "::error::ref '$tag' is not a v<version> tag; refusing to package"
+              exit 1
+              ;;
+          esac
+
+          # The asset name states the version, so it must match the crate the
+          # binary comes from. A mismatch would ship a mislabelled download.
+          crate_version=$(sed -n 's/^version = "\(.*\)"$/\1/p' hilo-cli/Cargo.toml | head -1)
+          if [ "$crate_version" != "$version" ]; then
+            echo "::error::tag '$tag' does not match hilo-cli version '$crate_version'"
+            exit 1
+          fi
+
+          # The asset name states the architecture too.
+          arch=$(uname -m)
+          if [ "$arch" != "x86_64" ]; then
+            echo "::error::runner architecture '$arch' is not x86_64; the bundle name would lie"
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build release binary
+        # ch:trace row=RELEASE-024 spec=docs/releasing.md#tag-and-release-assets wave=none:serial test=.github/workflows/release.yml::Build-release-binary doc=docs/releasing.md evidence=none:tag-push-required witness=none:hosted-run-required verdict=none:open-finding commit=none:not-shipped memory=none:not-written
+        run: scripts/build-hilo.sh -p hilo-cli
+
+      - name: Strip binary
+        run: strip target/release/hilo
+
+      - name: Smoke-test the built binary
+        run: target/release/hilo --version
+
+      - name: Package tarball and checksum
+        id: pkg
+        run: |
+          set -euo pipefail
+          version="${{ steps.ver.outputs.version }}"
+          name="hilo-v${version}-x86_64-linux"
+          stage="$(mktemp -d)"
+          install -m 0755 target/release/hilo "$stage/hilo"
+          tar -C "$stage" -czf "${name}.tar.gz" hilo
+
+          # Sidecar must carry the basename only so `sha256sum -c` works from
+          # the directory the user downloaded into.
+          sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256"
+          if grep -q '/' "${name}.tar.gz.sha256"; then
+            echo "::error::checksum sidecar contains a path, not a basename"
+            exit 1
+          fi
+
+          ls -l "${name}.tar.gz" "${name}.tar.gz.sha256"
+          echo "tarball=${name}.tar.gz" >> "$GITHUB_OUTPUT"
+          echo "checksum=${name}.tar.gz.sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Attach bundle to the GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          files: |
+            ${{ steps.pkg.outputs.tarball }}
+            ${{ steps.pkg.outputs.checksum }}
+          fail_on_unmatched_files: true
