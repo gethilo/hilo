@@ -2664,18 +2664,16 @@ tasks:
   created_at: '2026-11-03T07:52:30.274446+00:00'
   completed_at: '2026-11-16T15:49:43.873884+00:00'
 - id: PERF-015
-  title: 'Hoist local: spec resolver to one build per BFS traversal'
+  title: 'hoist the local: resolver index to one build per graph understand traversal
+    (PERF-015)'
   criteria:
-  - 'PASS: one local: reverse index per traversal - instrumented eprintln counter
-    inside LocalSpecResolver::from_edges prints at most 1 build for one hilo graph
-    understand invocation (HEAD a002ddb2 measured 245), counter not shipped. PASS:
-    same-command A/B on same corpus reports patched mean <= 0.75s vs baseline 1.432s
-    and stdout byte-identical for 3 task strings. PASS: no new staleness window -
-    index built per traversal, never stored on GraphDB or process-global. PASS: related()
-    keeps public signature and historical behavior when no index supplied; cargo test
-    -p hilo_graph --lib and scripts/rust-lint.sh green.'
+  - 'PASS: eprintln build counter in LocalSpecResolver::from_edges prints at most
+    1 build per hilo graph understand invocation (baseline 245 at a002ddb2), hyperfine
+    A/B patched mean <= 0.75s vs baseline 1.432s on the same corpus with byte-identical
+    stdout, index is per-traversal not per-process, related(...) signature kept, cargo
+    test -p hilo_graph --lib and scripts/rust-lint.sh green'
   status: in_progress
-  created_at: '2026-11-04T05:55:47.356580+00:00'
+  created_at: '2026-11-21T05:12:40.001649+00:00'
 - id: QA-WARPFS-032
   title: Fix S3 proxy-disconnect test hang
   criteria:
@@ -2964,3 +2962,38 @@ tasks:
   status: complete
   created_at: '2026-11-20T16:42:32.194009+00:00'
   completed_at: '2026-11-20T17:36:38.164269+00:00'
+- id: DF-WARPFS-179
+  title: Remove two ignored defaults.* keys from .gitreins/config.yaml
+  criteria:
+  - gitreins config-validate in the worktree prints zero WARN lines (the two ignored
+    defaults.provider / defaults.api_key_env keys are removed)
+  status: complete
+  created_at: '2026-11-21T05:12:20.767313+00:00'
+  completed_at: '2026-11-21T06:18:27.441972+00:00'
+- id: DF-WARPFS-72
+  title: graph stats Total files must count all project files, not only edge-bearing
+    files
+  criteria:
+  - 'PASS: in a fresh 2-file project where only one file has an import edge, hilo
+    graph stats prints Total files: 2 (edge-less files included in the count)'
+  status: complete
+  created_at: '2026-11-21T05:12:31.298120+00:00'
+  completed_at: '2026-11-21T06:48:38.909153+00:00'
+- id: DF-WARPFS-86
+  title: Kotlin graph understand must not emit bare keyword placeholders as named
+    symbols
+  criteria:
+  - 'PASS: hilo graph understand on the recorded Table.kt corpus returns JSON with
+    zero entries whose name is exactly fun, class, or val (jq census over .symbols)'
+  status: complete
+  created_at: '2026-11-21T05:12:32.431171+00:00'
+  completed_at: '2026-11-21T07:08:58.372365+00:00'
+- id: README-4
+  title: README gitignore-documented entry set must equal the hilo init managed set
+  criteria:
+  - 'PASS: README.md names no coverage.json gitignore entry (grep count 0) unless
+    HILO_MANAGED_IGNORE_ENTRIES gained it in the same change, and a scratch hilo init
+    .gitignore matches the README''s named set with no extra and no missing entries'
+  status: complete
+  created_at: '2026-11-21T05:12:38.826602+00:00'
+  completed_at: '2026-11-21T06:32:55.318190+00:00'
