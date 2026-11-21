@@ -55,8 +55,31 @@ this dependency gate and must use the exact CI-verified commit.
 
 ## Tag and release assets
 
-After all checks pass, create an annotated tag named `vX.Y.Z`. The release
-bundle is produced with `scripts/build-hilo.sh -p hilo-cli` and consists of
-the versioned tarball and its matching `.sha256` checksum. Tagging, uploading,
-and publishing are separate releng actions; this procedure does not perform
-them.
+After all checks pass, create an annotated tag named `vX.Y.Z` on the exact
+CI-verified commit and push it:
+
+```bash
+git tag -a vX.Y.Z -m "hilo vX.Y.Z"
+git push origin vX.Y.Z
+```
+
+Pushing the tag is the packaging step. `.github/workflows/release.yml` builds
+the release binary with `scripts/build-hilo.sh -p hilo-cli` (that script is a
+cargo wrapper — it builds the binary, it does not package anything), strips it,
+and produces the bundle `hilo-vX.Y.Z-x86_64-linux.tar.gz` together with a
+basename-only `hilo-vX.Y.Z-x86_64-linux.tar.gz.sha256` sidecar, then attaches
+both to the GitHub release for that tag. The workflow refuses to package when
+the tag does not match the `hilo-cli` package version or when the runner is not
+`x86_64`, so a shipped asset name cannot misstate what it contains.
+
+Verifying a downloaded bundle:
+
+```bash
+curl -fLO https://github.com/gethilo/hilo/releases/download/vX.Y.Z/hilo-vX.Y.Z-x86_64-linux.tar.gz
+curl -fLO https://github.com/gethilo/hilo/releases/download/vX.Y.Z/hilo-vX.Y.Z-x86_64-linux.tar.gz.sha256
+sha256sum -c hilo-vX.Y.Z-x86_64-linux.tar.gz.sha256
+```
+
+Cutting the tag itself remains a releng decision: the workflow packages and
+publishes whatever `v*` tag it is given, so the tag must point at a CI-green
+commit.
