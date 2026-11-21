@@ -1367,8 +1367,10 @@ fn extract_symbols_from_ast(node: tree_sitter::Node, source: &[u8], lang: Langua
                     "class_declaration",
                     "object_declaration",
                     "interface_declaration",
+                    "companion_object",
+                    "property_declaration",
                 ],
-                extract_generic_signature,
+                extract_kotlin_signature,
             );
         }
         Language::Php => {
@@ -2291,6 +2293,55 @@ fn extract_ruby_signature(node: tree_sitter::Node, source: &[u8]) -> Option<Symb
         name,
         line,
         signature: trimmed.to_string(),
+    })
+}
+
+/// Kotlin signature extractor (the DF-WARPFS-35 guard for `.kt`).
+///
+/// Read declaration names from Kotlin's AST, not from keyword-shaped text.
+/// Properties put their identifier inside a variable_declaration instead of
+/// a name field; unnamed companion objects have no declared name to emit.
+fn extract_kotlin_signature(node: tree_sitter::Node, source: &[u8]) -> Option<Symbol> {
+    let name_node = if node.kind() == "property_declaration" {
+        let mut cursor = node.walk();
+        let variable = node
+            .named_children(&mut cursor)
+            .find(|child| child.kind() == "variable_declaration")?;
+        let mut cursor = variable.walk();
+        let identifier = variable
+            .named_children(&mut cursor)
+            .find(|child| child.kind() == "identifier")?;
+        identifier
+    } else {
+        node.child_by_field_name("name")?
+    };
+    let name = name_node.utf8_text(source).ok()?.trim();
+    if name.is_empty() {
+        return None;
+    }
+
+    let text = node.utf8_text(source).ok()?;
+    let line = node.start_position().row + 1;
+
+    // Stop at the AST body, not a default argument's `=` or lambda's `{`.
+    let mut cursor = node.walk();
+    let body_start = node.named_children(&mut cursor).find_map(|child| {
+        matches!(
+            child.kind(),
+            "function_body" | "class_body" | "enum_class_body"
+        )
+        .then_some(child.start_byte() - node.start_byte())
+    });
+    let header = &text[..body_start.unwrap_or(text.len())];
+    let signature = header.split_whitespace().collect::<Vec<_>>().join(" ");
+    if signature.is_empty() {
+        return None;
+    }
+
+    Some(Symbol {
+        name: name.to_string(),
+        line,
+        signature,
     })
 }
 
@@ -5346,6 +5397,113 @@ use crate::private::Hidden;
             !names.contains(&"Hidden"),
             "private use must not be a symbol, got {names:?}"
         );
+    }
+
+    #[test]
+    fn kotlin_symbols_use_declared_names_not_keywords() {
+        let source = r#"
+class Table {
+    val title = "hello"
+    var size: Int = 0
+    fun insert(value: String) = value
+    fun count(): Int = 1
+    public fun named(query: String): List<Int> {
+        return emptyList()
+    }
+    override fun toString(): String = "Table"
+    companion object Factory {
+        val defaultName = "table"
+        fun create() = Table()
+    }
+}
+class Other {
+    companion object {
+        fun fallback() = Table()
+    }
+}
+
+interface FieldSet {
+    val source: ColumnSet
+    fun describe(s: String, qb: String)
+}
+
+object Registry {
+    val instances = mutableListOf<Table>()
+    fun register(table: Table) {}
+}
+
+open class BaseTable<T>(name: String?) {
+    open fun isEmpty(): Boolean = false
+}
+
+class TypedTable<T : Any>(name: String?) : BaseTable<T>(name) {
+    fun <T> first(): T? = null
+}
+"#;
+        let symbols = extract_symbols("Table.kt", source);
+        let names: Vec<&str> = symbols.iter().map(|s| s.name.as_str()).collect();
+        assert!(
+            names.iter().all(|name| ![
+                "fun",
+                "class",
+                "val",
+                "interface",
+                "object",
+                "open",
+                "override"
+            ]
+            .contains(name)),
+            "keyword placeholders must not be symbol names: {names:?}"
+        );
+        for expected in [
+            "Table",
+            "title",
+            "size",
+            "insert",
+            "count",
+            "named",
+            "toString",
+            "Factory",
+            "defaultName",
+            "create",
+            "fallback",
+            "FieldSet",
+            "source",
+            "describe",
+            "Registry",
+            "instances",
+            "register",
+            "BaseTable",
+            "isEmpty",
+            "TypedTable",
+            "first",
+        ] {
+            assert!(names.contains(&expected), "missing {expected}: {names:?}");
+        }
+    }
+
+    #[test]
+    fn kotlin_multiline_declaration_has_real_name_and_line() {
+        // The declaration spans lines; the name must come from the AST name
+        // field, not the first line of the node text.
+        let source = r#"
+class Wrapper {
+    fun
+        wrapped(a: Int = 1, b: Int): Int =
+            a + b
+}
+"#;
+        let symbols = extract_symbols("Wrapper.kt", source);
+        assert_eq!(symbols.len(), 2, "{symbols:?}");
+        assert_eq!(symbols[1].name, "wrapped", "{symbols:?}");
+        assert_eq!(symbols[1].line, 3, "{symbols:?}");
+        assert!(
+            symbols[1]
+                .signature
+                .contains("wrapped(a: Int = 1, b: Int): Int"),
+            "{symbols:?}"
+        );
+        assert!(!symbols[1].signature.contains("a + b"), "{symbols:?}");
     }
 
     #[test]
