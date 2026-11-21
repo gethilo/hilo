@@ -36,6 +36,64 @@ fn resolve_source(source: Option<&str>) -> Result<PathBuf> {
     }
 }
 
+/// REV-WARPFS-016: the remedy quoted by every containment refusal.
+const FIX_HINT: &str =
+    "mount to a directory outside the served tree instead (e.g. /mnt/vfs/<name>)";
+
+/// REV-WARPFS-016: refuse a mount point that overlaps the served tree.
+///
+/// `hilo mount mnt` from inside the repository (the source defaults to the
+/// current directory) used to mount, appear in `/proc/mounts`, and then hang
+/// every access: the daemon sat in `request_wait_answer`, reading its own
+/// FUSE mount as its backing tree (`ls mnt` had forked and never returned).
+/// The same binary serving the same tree mounted to a directory OUTSIDE the
+/// source is fine, so the defect is containment, not FUSE.
+///
+/// Three overlaps are unusable, and each is refused HERE — before any FUSE
+/// session or daemon child exists:
+///
+/// - the mount point IS the source (a tree mounted over itself);
+/// - the mount point is INSIDE the source (the reported deadlock: the daemon
+///   walks into its own mount while serving it);
+/// - the source is INSIDE the mount point (mounting a parent shadows the
+///   backing root and recurses the same way).
+///
+/// The mount point exists by the time this runs (DF-WARPFS-115), so it is
+/// canonicalized first: a symlink pointing back into the served tree is
+/// caught too. `source` is already canonical — `resolve_source` canonicalizes
+/// an explicit source and `current_dir()` is resolved by the OS.
+fn ensure_mountpoint_outside_source(source: &Path, mount_point: &Path) -> Result<()> {
+    let resolved = mount_point.canonicalize().with_context(|| {
+        format!(
+            "mount refused: cannot resolve mount point {} (missing, or an unreachable dead FUSE mount) for served source {} — {FIX_HINT}",
+            mount_point.display(),
+            source.display()
+        )
+    })?;
+    if resolved == source {
+        anyhow::bail!(
+            "mount refused: mount point {} equals the served source {} — mounting a tree over itself would make the daemon read its own mount; {FIX_HINT}",
+            resolved.display(),
+            source.display()
+        );
+    }
+    if resolved.starts_with(source) {
+        anyhow::bail!(
+            "mount refused: mount point {} is inside the served source {} — mounting it would make the daemon read its own mount and every access would hang; {FIX_HINT}",
+            resolved.display(),
+            source.display()
+        );
+    }
+    if source.starts_with(&resolved) {
+        anyhow::bail!(
+            "mount refused: mount point {} is an ancestor of the served source {} — mounting it would shadow the backing tree and recurse the same way; {FIX_HINT}",
+            resolved.display(),
+            source.display()
+        );
+    }
+    Ok(())
+}
+
 /// Environment variable set on the re-executed child of a `--daemon` mount.
 /// Lets the child run the normal blocking mount path without re-daemonizing.
 ///
@@ -134,6 +192,13 @@ pub fn run_mount(
             return Err(e).with_context(|| format!("cannot access mount point {mount_point}"));
         }
     }
+
+    // REV-WARPFS-016: refuse an in-tree mount point HERE — before the daemon
+    // spawn below (so a `--daemon` parent refuses while no child exists) and
+    // outside the `!daemon_child` block above (the re-executed child skips
+    // that block, and it must never start a FUSE session on its own mount
+    // either). Failure is side-effect free: nothing mounted, nothing spawned.
+    ensure_mountpoint_outside_source(&current_dir, Path::new(mount_point))?;
 
     // Foreground parent of a `--daemon` mount: spawn the detached child and
     // return. The child (see DAEMON_CHILD_ENV) skips this branch.
@@ -1013,6 +1078,104 @@ mod tests {
         );
         assert!(msg.contains("does not exist"));
         assert!(msg.contains("mkdir -p"));
+    }
+
+    // ────── REV-WARPFS-016: an in-tree mount point is refused before FUSE ──────
+
+    /// pid-unique scratch root under the OS temp dir (same naming idiom as the
+    /// DF-WARPFS-144/115 tests above), returned canonicalized so comparisons
+    /// against the guard's canonicalized mount point are stable.
+    fn scratch_root(tag: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("hilo-rev016-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        root.canonicalize().expect("scratch root canonicalizes")
+    }
+
+    /// The refusal contract: "mount refused" leads, both paths are named.
+    fn assert_refusal_names_both_paths(err: &anyhow::Error, mount_point: &Path, source: &Path) {
+        let msg = format!("{err:#}");
+        assert!(
+            msg.starts_with("mount refused"),
+            "the first two words must be `mount refused`: {msg}"
+        );
+        assert!(
+            msg.contains(&mount_point.display().to_string()),
+            "message must name the mount point {}: {msg}",
+            mount_point.display()
+        );
+        assert!(
+            msg.contains(&source.display().to_string()),
+            "message must name the served source {}: {msg}",
+            source.display()
+        );
+    }
+
+    #[test]
+    fn ensure_mountpoint_refuses_equal_paths() {
+        let root = scratch_root("equal");
+        let err = ensure_mountpoint_outside_source(&root, &root)
+            .expect_err("a mount point equal to the served source must be refused");
+        assert_refusal_names_both_paths(&err, &root, &root);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn ensure_mountpoint_refuses_nested_path() {
+        // The reported deadlock: `cd repo && mkdir mnt && hilo mount mnt`.
+        let root = scratch_root("nested");
+        let mnt = root.join("mnt");
+        std::fs::create_dir_all(&mnt).unwrap();
+        let err = ensure_mountpoint_outside_source(&root, &mnt)
+            .expect_err("a mount point inside the served source must be refused");
+        assert_refusal_names_both_paths(&err, &mnt, &root);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn ensure_mountpoint_refuses_ancestor_path() {
+        // Mounting a parent of the served tree shadows the backing root and
+        // recurses into the mount exactly like the nested case.
+        let root = scratch_root("ancestor");
+        let source = root.join("corpus");
+        std::fs::create_dir_all(&source).unwrap();
+        let err = ensure_mountpoint_outside_source(&source, &root)
+            .expect_err("a mount point that is an ancestor of the source must be refused");
+        assert_refusal_names_both_paths(&err, &root, &source);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn ensure_mountpoint_accepts_sibling_path() {
+        // AC2: the documented /mnt/vfs style usage — a mount point next to the
+        // served tree, under the same parent, is legitimate and unchanged.
+        let root = scratch_root("sibling");
+        let source = root.join("corpus");
+        let mnt = root.join("mnt");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::create_dir_all(&mnt).unwrap();
+        ensure_mountpoint_outside_source(&source, &mnt)
+            .expect("a sibling mount point (outside the served tree) must pass");
+        // An entirely unrelated directory is accepted too.
+        let elsewhere = scratch_root("elsewhere");
+        ensure_mountpoint_outside_source(&source, &elsewhere)
+            .expect("an unrelated directory must pass");
+        let _ = std::fs::remove_dir_all(&elsewhere);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn ensure_mountpoint_missing_path_is_refused() {
+        // The daemon CHILD never runs the DF-WARPFS-115 metadata block, so the
+        // guard itself must fail closed on a mount point it cannot resolve.
+        let root = scratch_root("missing");
+        let missing = root.join("does-not-exist");
+        let err = ensure_mountpoint_outside_source(&root, &missing)
+            .expect_err("an unresolvable mount point must be refused");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("mount refused"), "{msg}");
+        assert!(msg.contains("does-not-exist"), "{msg}");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     // ───────── DF-WARPFS-59: plugin declarations warn, never silence ─────────
