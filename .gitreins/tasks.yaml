@@ -2997,3 +2997,70 @@ tasks:
   status: complete
   created_at: '2026-11-21T05:12:38.826602+00:00'
   completed_at: '2026-11-21T06:32:55.318190+00:00'
+- id: DOC-6
+  title: docs/mcp-tools.md documents 17 of 18 served MCP tools; add vfs_graph_audit
+  criteria:
+  - docs/mcp-tools.md has a vfs_graph_audit section matching page format and the documented
+    set equals the 18 registered tools
+  status: in_progress
+  created_at: '2026-11-21T19:28:54.499712+00:00'
+- id: DOC-7
+  title: root SKILL.md says 17 tools in 5 places; server serves 18
+  criteria:
+  - no stale 17-tool claims remain in SKILL.md; every count matches the 18 registered
+    MCP tools
+  status: in_progress
+  created_at: '2026-11-21T19:28:55.795388+00:00'
+- id: DOC-10
+  title: hilo backend sync --backend selector undocumented in cli-reference and hilo-cli
+  criteria:
+  - cli-reference.md sync section and the hilo-cli.md row document the --backend selector
+    per source
+  status: in_progress
+  created_at: '2026-11-21T19:28:56.864250+00:00'
+- id: DOC-11
+  title: operator env-var surface has no home; HILO_WARM_TIMING in zero docs
+  criteria:
+  - docs/environment.md exists and covers every HILO_ env var found in source, marking
+    internal-only ones
+  status: in_progress
+  created_at: '2026-11-21T19:28:58.114226+00:00'
+- id: DOC-12
+  title: repo lacks docs/traceability-doctrine.md required by fleet traceability contract
+  criteria:
+  - docs/traceability-doctrine.md exists and satisfies the fleet traceability contract
+    for this repo
+  status: in_progress
+  created_at: '2026-11-21T19:28:59.282706+00:00'
+- id: DOC-13
+  title: hilo-mcp.md and hilo-cli.md claim --mcp is the only serve mode; --http is
+    shipped
+  criteria:
+  - no only-implemented-mode claims remain; both docs describe the shipped --http
+    serve mode per source
+  status: in_progress
+  created_at: '2026-11-21T19:29:00.439621+00:00'
+- id: README-5
+  title: README omits shipped serve --http and sandbox entry points
+  criteria:
+  - README documents serve --http and the sandbox mount entry points per source
+  status: in_progress
+  created_at: '2026-11-21T19:29:01.692336+00:00'
+- id: REV-WARPFS-015
+  title: file-form impact/related/untested return empty on PEP 420 namespace roots
+  criteria:
+  - on a PEP 420 namespace fixture, file-form impact/related/untested match pkg-form
+    results; regression test added; hilo-graph tests green
+  status: complete
+  created_at: '2026-11-21T19:29:02.890256+00:00'
+  completed_at: '2026-11-22T06:32:51.460328+00:00'
+- id: REV-WARPFS-017
+  title: make release must honor CARGO_TARGET_DIR (strip resolves the artifact cargo
+    produced)
+  criteria:
+  - CARGO_TARGET_DIR=/tmp/hilo-warpfs-target make release exits 0 with a stripped
+    binary under that target dir; make release with the variable unset exits 0 with
+    a stripped binary under target/; only the Makefile release target changes
+  status: complete
+  created_at: '2026-11-22T07:04:40.554185+00:00'
+  completed_at: '2026-11-22T10:02:36.024748+00:00'
