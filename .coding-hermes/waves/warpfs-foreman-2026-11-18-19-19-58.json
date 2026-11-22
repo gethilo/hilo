@@ -1,0 +1,71 @@
+{
+  "wave_id": "warpfs-foreman-2026-11-18-19-19-58",
+  "resumes_wave": "warpfs-foreman-2026-11-17-22-42-44",
+  "project": "warpfs",
+  "created_at": "2026-11-18T19:40:00-05:00",
+  "base_sha": "bef0d1e5fdcbd03a1ea96fb35b5d6a0fd1cf1059",
+  "base_ref": "origin/master",
+  "budget": 5,
+  "note": "RESUME of the crashed 22:42 wave. Prior tick's workers died before any commit; worktrees carry partial uncommitted work (REV-WARPFS-9 cli.rs+serve.rs, DOC-8 hilo-cli.md). Workers re-dispatched in the SAME worktrees/branches with resume-mode briefs. DF-WARPFS-173 dropped from the wave (already complete on master, residue repaired in bef0d1e). DOC-12 deferred (budget exhausted, P4). Board residue adopted+pushed in bef0d1e.",
+  "rows": [
+    {
+      "row": "QA-WARPFS-037",
+      "branch": "wt/QA-WARPFS-037",
+      "worktree": "/home/kara/worktrees/warpfs-QA-WARPFS-037-2026-11-17-22-42-44",
+      "scope": "hilo-graph/src/graph.rs + ro migration test",
+      "brief": "/tmp/brief-warpfs-QA-WARPFS-037-20261118.txt"
+    },
+    {
+      "row": "DF-WARPFS-156",
+      "branch": "wt/DF-WARPFS-156-r2",
+      "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-156-2026-11-17-22-42-44",
+      "scope": "hilo-fuse/src + hilo-cli mount",
+      "brief": "/tmp/brief-warpfs-DF-WARPFS-156-20261118.txt"
+    },
+    {
+      "row": "REV-WARPFS-9",
+      "branch": "wt/REV-WARPFS-9",
+      "worktree": "/home/kara/worktrees/warpfs-REV-WARPFS-9-2026-11-17-22-42-44",
+      "scope": "hilo-cli serve --port",
+      "brief": "/tmp/brief-warpfs-REV-WARPFS-9-20261118.txt"
+    },
+    {
+      "row": "DOC-8",
+      "branch": "wt/DOC-8",
+      "worktree": "/home/kara/worktrees/warpfs-DOC-8-2026-11-17-22-42-44",
+      "scope": "docs/hilo-cli.md",
+      "brief": "/tmp/brief-warpfs-DOC-8-20261118.txt"
+    },
+    {
+      "row": "DOC-9",
+      "branch": "wt/DOC-9",
+      "worktree": "/home/kara/worktrees/warpfs-DOC-9-2026-11-17-22-42-44",
+      "scope": "docs/cli-reference.md",
+      "brief": "/tmp/brief-warpfs-DOC-9-20261118.txt"
+    }
+  ],
+  "deferred": [
+    {
+      "row": "DOC-12",
+      "reason": "wave budget 5 exhausted; P4 ranks last"
+    }
+  ],
+  "dropped": [
+    {
+      "row": "DF-WARPFS-173",
+      "reason": "already complete on master (84c02670); crashed session's in_progress flip repaired in bef0d1e"
+    }
+  ],
+  "status": "finished",
+  "in_flight": [
+    "QA-WARPFS-037",
+    "DF-WARPFS-156",
+    "REV-WARPFS-9",
+    "DOC-8",
+    "DOC-9"
+  ],
+  "worker_model": "openai/gpt-6.1-terra",
+  "worker_provider": "xkiro",
+  "finished_at": "2026-11-20T16:35:00-05:00",
+  "recovery_note": "closed by recovery tick warpfs-foreman-2026-11-20-16-20-32: every worker row terminal on master (DF-WARPFS-173/156/157/158/159/161/168/169/170/171/172-partial, QA-WARPFS-037, REV-WARPFS-9, DOC-8, DOC-9 verified complete in tasks.jsonl); DOC-12 deferred by budget (P4) and remains an open board row \u2014 nothing to recover"
+}

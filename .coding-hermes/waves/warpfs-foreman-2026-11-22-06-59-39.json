@@ -1,0 +1,27 @@
+{
+  "scheduler_tick": "warpfs-foreman-2026-11-22-06-59-39",
+  "wave_budget": 2,
+  "composed_at": "2026-11-22T07:05:00-05:00",
+  "workers": [
+    {
+      "task_id": "REV-WARPFS-017",
+      "repo": "gethilo/hilo",
+      "worktree": "/home/kara/worktrees/warpfs-REV-WARPFS-017",
+      "branch": "wt/REV-WARPFS-017",
+      "model": "glm-5.3-flash",
+      "provider": "zai-glm",
+      "summary": "Makefile release target must honor CARGO_TARGET_DIR when stripping/ls-ing target/release/hilo; gate both directions"
+    },
+    {
+      "task_id": "DF-WARPFS-180",
+      "repo": "totalwindupflightsystems/gitreins (cross-repo fix; warpfs board row)",
+      "worktree": "/home/kara/gitreins-wt-DFW180",
+      "branch": "ops/df-warpfs-180-guard-config",
+      "model": "glm-5.3-flash",
+      "provider": "zai-glm",
+      "summary": "task-complete judge path drops repo guard config (Judge built without guard_config at cli.py:2570); pass load_config + land upstream test_timeout default 180->1200"
+    }
+  ],
+  "independence": "different repositories, different worktrees, no shared files; no depends_on edges between rows",
+  "merge_order": "serial after both workers exit; each merge gated"
+}

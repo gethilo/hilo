@@ -1,0 +1,1 @@
+{"key": "/warpfs/facts/warpfs-2026-11-16-03", "domain": "event", "content": "Test write of /sync/write-test-2026-11-16 successful. Verified via recall with exact key recall. ID: 0ccff87a-f93b-42a4-a602-076fea99c7d1", "attributes": {"tick_number": 52, "verdict": "PASS", "domain": "config", "content": "test content", "timestamp": "2026-11-16T22:19:45.675Z"}

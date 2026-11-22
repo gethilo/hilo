@@ -1,0 +1,66 @@
+{
+  "wave_id": "warpfs-foreman-2026-11-17-22-42-44",
+  "project": "warpfs",
+  "created_at": "2026-11-18T03:42:44Z",
+  "base_sha": "d228606",
+  "base_ref": "origin/master",
+  "budget": 7,
+  "workdir_control": "/home/kara/warpfs-wt-warpfs-foreman-2026-11-17-22-42-44-control",
+  "note": "canonical checkout /home/kara/warpfs sits on stranded branch qa-wtick-20261113-165414 (9 ahead / 29 behind); wave cut from origin/master d228606 per foreman clause 8/15",
+  "rows": [
+    {
+      "row": "DF-WARPFS-173",
+      "branch": "wt/DF-WARPFS-173",
+      "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-173-2026-11-17-22-42-44",
+      "scope": "hilo-graph/src/resolution.rs"
+    },
+    {
+      "row": "QA-WARPFS-037",
+      "branch": "wt/QA-WARPFS-037",
+      "worktree": "/home/kara/worktrees/warpfs-QA-WARPFS-037-2026-11-17-22-42-44",
+      "scope": "hilo-graph/src/duckdb.rs + graph.rs"
+    },
+    {
+      "row": "DF-WARPFS-156",
+      "branch": "wt/DF-WARPFS-156-r2",
+      "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-156-2026-11-17-22-42-44",
+      "scope": "hilo-fuse/src + hilo-cli mount"
+    },
+    {
+      "row": "REV-WARPFS-9",
+      "branch": "wt/REV-WARPFS-9",
+      "worktree": "/home/kara/worktrees/warpfs-REV-WARPFS-9-2026-11-17-22-42-44",
+      "scope": "hilo-cli serve"
+    },
+    {
+      "row": "DOC-8",
+      "branch": "wt/DOC-8",
+      "worktree": "/home/kara/worktrees/warpfs-DOC-8-2026-11-17-22-42-44",
+      "scope": "docs/hilo-cli.md"
+    },
+    {
+      "row": "DOC-9",
+      "branch": "wt/DOC-9",
+      "worktree": "/home/kara/worktrees/warpfs-DOC-9-2026-11-17-22-42-44",
+      "scope": "docs/cli-reference.md"
+    },
+    {
+      "row": "DOC-12",
+      "branch": "wt/DOC-12",
+      "worktree": "/home/kara/worktrees/warpfs-DOC-12-2026-11-17-22-42-44",
+      "scope": "docs/traceability-doctrine.md"
+    }
+  ],
+  "status": "finished",
+  "in_flight": [
+    "DF-WARPFS-173",
+    "QA-WARPFS-037",
+    "DF-WARPFS-156",
+    "REV-WARPFS-9",
+    "DOC-8",
+    "DOC-9",
+    "DOC-12"
+  ],
+  "finished_at": "2026-11-20T16:35:00-05:00",
+  "recovery_note": "closed by recovery tick warpfs-foreman-2026-11-20-16-20-32: every worker row terminal on master (DF-WARPFS-173/156/157/158/159/161/168/169/170/171/172-partial, QA-WARPFS-037, REV-WARPFS-9, DOC-8, DOC-9 verified complete in tasks.jsonl); DOC-12 deferred by budget (P4) and remains an open board row \u2014 nothing to recover"
+}

@@ -1,0 +1,18 @@
+{
+  "wave_id": "warpfs-foreman-2026-11-21-04-59-57",
+  "created_at": "2026-11-21T05:20Z",
+  "budget": 5,
+  "workers": [
+    {"row": "DF-WARPFS-179", "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-179", "branch": "wt/DF-WARPFS-179", "brief": "/tmp/warpfs-tick0459-brief-DF-WARPFS-179.md", "model": "openai/gpt-6.1-terra", "provider": "xkiro", "note": "fresh worktree"},
+    {"row": "DF-WARPFS-86", "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-86", "branch": "wt/DF-WARPFS-86", "brief": "/tmp/warpfs-tick0459-brief-DF-WARPFS-86.md", "model": "openai/gpt-6.1-terra", "provider": "xkiro", "note": "fresh worktree"},
+    {"row": "README-4", "worktree": "/home/kara/worktrees/warpfs-README-4", "branch": "wt/README-4", "brief": "/tmp/warpfs-tick0459-brief-README-4.md", "model": "openai/gpt-6.1-terra", "provider": "xkiro", "note": "fresh worktree"},
+    {"row": "DF-WARPFS-72", "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-72", "branch": "wt/DF-WARPFS-72", "brief": "/tmp/warpfs-tick0459-brief-DF-WARPFS-72-resume.md", "model": "openai/gpt-6.1-terra", "provider": "xkiro", "note": "RESUME — crashed prior session left unstaged WIP (graph.rs+docs+cli.rs) at stale base 4c2da03"}
+  ],
+  "stewardship": [
+    {"row": "PERF-015", "mode": "foreman-stewarded-closeout", "reason": "clause-15 crashed-session continuation: code landed b251f51 on wt/PERF-015 (pushed), judge cdce615c FAIL = measured proof missing; foreman note names the next action (warm-target build, counter proof, hyperfine A/B, stdout identity, merge). NOTE: contested worktree carries a STAGED REVERT of the fix; benching b251f51 itself from a detached worktree instead."}
+  ],
+  "closed_before_dispatch": [
+    {"row": "INT-CI-018", "evidence": "judge 89f4fbf8 PASS + CI 44787858137 success on c95a08c"},
+    {"row": "INT-CI-017", "evidence": "verification-only: exact-SHA run 44850621519 all steps success; census artifact .coding-hermes/board/ci-44850621519-step-census.json"}
+  ]
+}

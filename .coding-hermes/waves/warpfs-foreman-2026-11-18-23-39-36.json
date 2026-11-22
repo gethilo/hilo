@@ -1,0 +1,70 @@
+{
+  "wave_id": "warpfs-foreman-2026-11-18-23-39-36",
+  "resumes_wave": "warpfs-foreman-2026-11-18-22-21-56",
+  "project": "warpfs",
+  "created_at": "2026-11-18T19:10:00-05:00",
+  "base_sha": "dd944ee",
+  "base_ref": "origin/master",
+  "budget": 4,
+  "wave_size": 4,
+  "worker_model": "openai/gpt-6.1-terra",
+  "worker_provider": "xkiro",
+  "control_worktree": "/home/kara/worktrees/warpfs-foreman-2026-11-18-23-39-36-control",
+  "death_cause_found": "ALL prior code-worker deaths (11-17 5/5, 11-18 QA-037 x2) traced to COLD cargo builds: none of the three code worktrees had any target/ dir, /var/tmp/hermes-cargo-target empty; libduckdb-sys cold compile ~1h50m exceeds worker patience. Docs workers (DOC-8/9) succeeded because they never build. FIX this tick: seeded each code worktree with a hardlink clone (cp -al) of the canonical 47G warm target; cargo check -p hilo_graph verified 8.12s. Briefs now mandate COMMIT-EARLY (commit verified partial before further work) so a killed worker can no longer strand 130-line uncommitted diffs.",
+  "rows": [
+    {
+      "row": "QA-WARPFS-037",
+      "branch": "wt/QA-WARPFS-037",
+      "worktree": "/home/kara/worktrees/warpfs-QA-WARPFS-037-2026-11-17-22-42-44",
+      "brief": "/tmp/wfs-233936-brief-QA-WARPFS-037.txt",
+      "log": "/tmp/wfs-233936-QA-WARPFS-037-worker.log",
+      "state": "resume-in-place over verified partial (ro_open_hot schema gate + regression test, compiles)"
+    },
+    {
+      "row": "DF-WARPFS-156",
+      "branch": "wt/DF-WARPFS-156-r2",
+      "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-156-2026-11-17-22-42-44",
+      "brief": "/tmp/wfs-233936-brief-DF-WARPFS-156.txt",
+      "log": "/tmp/wfs-233936-DF-WARPFS-156-worker.log",
+      "state": "resume-in-place over partial (mount.rs +193, uncompiled)"
+    },
+    {
+      "row": "REV-WARPFS-9",
+      "branch": "wt/REV-WARPFS-9",
+      "worktree": "/home/kara/worktrees/warpfs-REV-WARPFS-9-2026-11-17-22-42-44",
+      "brief": "/tmp/wfs-233936-brief-REV-WARPFS-9.txt",
+      "log": "/tmp/wfs-233936-REV-WARPFS-9-worker.log",
+      "state": "resume-in-place over partial (cli.rs --port + serve.rs precedence, uncompiled)"
+    },
+    {
+      "row": "DOC-12",
+      "branch": "wt/DOC-12",
+      "worktree": "/home/kara/worktrees/warpfs-DOC-12-2026-11-17-22-42-44",
+      "brief": "/tmp/wfs-233936-brief-DOC-12.txt",
+      "log": "/tmp/wfs-233936-DOC-12-worker.log",
+      "state": "fresh dispatch (docs-only, no cargo); reuses existing worktree, ff-merged to dd944ee in step 0"
+    }
+  ],
+  "independence_check": "QA-037 scopes hilo-graph/src/graph.rs; DF-156 scopes hilo-cli/src/commands/mount.rs + CHANGELOG.md; REV-9 scopes hilo-cli/src/{cli.rs,commands/serve.rs}; DOC-12 scopes docs/traceability-doctrine.md (new file). QA-037 vs the two hilo-cli rows: disjoint crates. DF-156 and REV-9 both touch hilo-cli crate but disjoint files (mount.rs vs cli.rs+serve.rs) and separate worktrees; CHANGELOG.md touched only by DF-156. No depends_on edges between the four rows (verified from tasks.jsonl on origin/master).",
+  "merge_order": [
+    "QA-WARPFS-037",
+    "DF-WARPFS-156",
+    "REV-WARPFS-9",
+    "DOC-12"
+  ],
+  "merge_gate": "per-merge into control worktree at origin/master: git merge --no-ff wt/<branch>; scoped gates on MERGED tree (cargo check -p <crate>, cargo test -p <crate>, fmt, clippy); gitreins task complete per task AFTER merge commit exists (tier1-only close expected: judge lane deepseek 402 unfunded); push after each green merge",
+  "board_track_parallel": [
+    "INT-CI-017 verification-close (premise disproven 2026-11-12, CI green evidence)",
+    "CI health check",
+    "board events + closeouts"
+  ],
+  "status": "finished",
+  "in_flight": [
+    "QA-WARPFS-037",
+    "DF-WARPFS-156",
+    "REV-WARPFS-9",
+    "DOC-12"
+  ],
+  "finished_at": "2026-11-20T16:35:00-05:00",
+  "recovery_note": "closed by recovery tick warpfs-foreman-2026-11-20-16-20-32: every worker row terminal on master (DF-WARPFS-173/156/157/158/159/161/168/169/170/171/172-partial, QA-WARPFS-037, REV-WARPFS-9, DOC-8, DOC-9 verified complete in tasks.jsonl); DOC-12 deferred by budget (P4) and remains an open board row \u2014 nothing to recover"
+}

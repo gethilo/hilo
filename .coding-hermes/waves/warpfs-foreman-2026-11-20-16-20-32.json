@@ -1,0 +1,31 @@
+{
+  "tick_id": "warpfs-foreman-2026-11-20-16-20-32",
+  "created_at": "2026-11-20T16:45:00-05:00",
+  "workdir": "/home/kara/warpfs",
+  "published_base": "origin/master@943d1eb",
+  "wave_budget": 1,
+  "recovery_leg": {
+    "manifest_recovered": "warpfs-foreman-2026-11-20-08-33-11",
+    "outcome": "close-only: DF-WARPFS-176 already merged (237b80c) and closed with tier-2 PASS; worktree reaped, branch deleted; 5 stale resume-chain manifests closed (all worker rows terminal, DOC-12 deferred as open row)"
+  },
+  "workers": [
+    {
+      "task_id": "INT-CI-018",
+      "worktree": "/home/kara/worktrees/warpfs-INT-CI-018",
+      "branch": "wt/INT-CI-018",
+      "base_sha": "943d1eb",
+      "model": "openai/gpt-6.1-terra",
+      "provider": "xkiro",
+      "brief": "/tmp/warpfs-tick1620-brief-INT-CI-018.md",
+      "status": "landed",
+      "commit": "508e966 (original) -> 3c39598 (rebased onto fc7808f)",
+      "merge": "005e00e (no-ff); tip c95a08c after dogfood-addendum merge; pushed 8ee2906..c95a08c",
+      "verdict": "tier-2 PASS 27e2629f (--scan-root worktree-bound); first FAIL 3d0490e9 kept as record",
+      "served_seat": "openai/gpt-6.1-terra @ xkiro refused HTTP 402 wallet-empty (agent.log 11:47:53); gateway fallback deepseek-v4p1-flash-1017-spot @ fireworks (session local-0b002d45), disclosed",
+      "ci": "exact-head run 44787858137 on c95a08c (pending at manifest close)"
+    }
+  ],
+  "notes": "Single-slot wave (WAVE_BUDGET=1). CI red on master 44693691782 = advisory gate wasmtime/wasmtime-wasi 49.0.5, patched >=49.0.6 in 49.x (path hilo-cli -> hilo_plugins -> extism 1.41.0). Sibling leg live in warpfs-wt-df49 (separate worktree, no shared paths).",
+  "finished_at": "2026-11-20T18:05:00-05:00",
+  "recovery": "recovery leg completed first: DF-WARPFS-176 close-only verified + worktree/branch reaped; 6 stale manifests closed"
+}

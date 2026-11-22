@@ -1,0 +1,25 @@
+{
+  "wave_id": "warpfs-foreman-2026-11-21-19-22-54",
+  "created_at": "2026-11-21T19:30Z",
+  "budget": 9,
+  "base": "origin/master@e85565b",
+  "worker_model": "openai/gpt-6.1-terra",
+  "worker_provider": "xkiro",
+  "independence_note": "file-scope audit: DOC-10 and DOC-13 both touch docs/hilo-cli.md but disjoint sections (sync row vs serve-mode rows); no other file overlap between workers",
+  "shared_verification_binary": "/home/kara/warpfs/target/debug/hilo (built from e85565b; PATH hilo is stale v0.3.0-293 and must not be trusted)",
+  "excluded_this_tick": [
+    {"row": "QA-WARPFS-026", "reason": "fix lives in ~/.hermes/scripts/bunker-qa.sh — shared fleet harness outside this repo; no worktree flow; candidate for foreman-direct after wave"},
+    {"row": "QA-WARPFS-040", "reason": "qa-run.sh also external shared harness; excluded to avoid same-function collisions"}
+  ],
+  "workers": [
+    {"row": "DOC-6", "worktree": "/home/kara/worktrees/warpfs-DOC-6", "branch": "wt/DOC-6", "brief": "/tmp/warpfs-tick1922-brief-DOC-6.md"},
+    {"row": "DOC-7", "worktree": "/home/kara/worktrees/warpfs-DOC-7", "branch": "wt/DOC-7", "brief": "/tmp/warpfs-tick1922-brief-DOC-7.md"},
+    {"row": "DOC-10", "worktree": "/home/kara/worktrees/warpfs-DOC-10", "branch": "wt/DOC-10", "brief": "/tmp/warpfs-tick1922-brief-DOC-10.md"},
+    {"row": "DOC-11", "worktree": "/home/kara/worktrees/warpfs-DOC-11", "branch": "wt/DOC-11", "brief": "/tmp/warpfs-tick1922-brief-DOC-11.md"},
+    {"row": "DOC-12", "worktree": "/home/kara/worktrees/warpfs-DOC-12", "branch": "wt/DOC-12", "brief": "/tmp/warpfs-tick1922-brief-DOC-12.md"},
+    {"row": "DOC-13", "worktree": "/home/kara/worktrees/warpfs-DOC-13", "branch": "wt/DOC-13", "brief": "/tmp/warpfs-tick1922-brief-DOC-13.md"},
+    {"row": "README-5", "worktree": "/home/kara/worktrees/warpfs-README-5", "branch": "wt/README-5", "brief": "/tmp/warpfs-tick1922-brief-README-5.md"},
+    {"row": "REV-WARPFS-015", "worktree": "/home/kara/worktrees/warpfs-REV-WARPFS-015", "branch": "wt/REV-WARPFS-015", "brief": "/tmp/warpfs-tick1922-brief-REV-WARPFS-015.md"},
+    {"row": "REV-WARPFS-017", "worktree": "/home/kara/worktrees/warpfs-REV-WARPFS-017", "branch": "wt/REV-WARPFS-017", "brief": "/tmp/warpfs-tick1922-brief-REV-WARPFS-017.md"}
+  ]
+}

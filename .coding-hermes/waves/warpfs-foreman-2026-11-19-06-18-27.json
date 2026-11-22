@@ -1,0 +1,43 @@
+{
+  "tick": "warpfs-foreman-2026-11-19-06-18-27",
+  "project": "warpfs",
+  "repo": "/home/kara/warpfs",
+  "base_ref": "origin/master",
+  "base_sha": "40462fe",
+  "wave_budget": 12,
+  "composed": 2,
+  "canonical_workdir_state": "branch qa-wtick-20261113-165414 (ahead 9 / behind 45); tracked tree clean, untracked .coding-hermes/waves+evidence only. Known defect QA-WARPFS-042. All work done in isolated worktrees from origin/master.",
+  "workers": [
+    {
+      "task_id": "DF-WARPFS-177",
+      "also_addresses": [
+        "DF-WARPFS-178"
+      ],
+      "priority": "P1",
+      "title": "gitreins judge can never pass: config names a provider 0.21.0 ignores and the fallback account returns 402; hook_timeout(600) < test_timeout(900)",
+      "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-177",
+      "branch": "wt/DF-WARPFS-177",
+      "files": [
+        ".gitreins/config.yaml"
+      ],
+      "model": "openai/gpt-6.1-terra",
+      "provider": "xkiro"
+    },
+    {
+      "task_id": "DF-WARPFS-174",
+      "priority": "P2",
+      "title": "graph audit unreachable bucket reports live interface implementations as dead; 31/199 'public symbols' are not public surface",
+      "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-174",
+      "branch": "wt/DF-WARPFS-174",
+      "files": [
+        "hilo-graph/src/audit.rs"
+      ],
+      "model": "openai/gpt-6.1-terra",
+      "provider": "xkiro"
+    }
+  ],
+  "independence_check": "no shared files; no depends_on edges on either row (verified from origin/master board rows); different crates/domains",
+  "status": "finished",
+  "finished_at": "2026-11-20T16:35:00-05:00",
+  "recovery_note": "closed by recovery tick warpfs-foreman-2026-11-20-16-20-32: every worker row terminal on master (DF-WARPFS-173/156/157/158/159/161/168/169/170/171/172-partial, QA-WARPFS-037, REV-WARPFS-9, DOC-8, DOC-9 verified complete in tasks.jsonl); DOC-12 deferred by budget (P4) and remains an open board row \u2014 nothing to recover"
+}

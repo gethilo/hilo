@@ -1,0 +1,58 @@
+{
+  "wave_id": "warpfs-foreman-2026-11-18-22-21-56",
+  "resumes_wave": "warpfs-foreman-2026-11-18-19-19-58",
+  "project": "warpfs",
+  "created_at": "2026-11-18T22:45:00-05:00",
+  "base_sha": "bef0d1e5fdcbd03a1ea96fb35b5d6a0fd1cf1059",
+  "base_ref": "origin/master",
+  "budget": 1,
+  "control_worktree": "/home/kara/worktrees/warpfs-foreman-2026-11-18-22-21-56-control",
+  "note": "Stewardship tick for the crashed 11-17/11-18 wave. COLLECTED: DOC-8 (6053acf, merge 15b4b5f) + DOC-9 (662524f, merge 77139f0) merged to origin/master + pushed (dd944ee board pass); tier1-only PASS verdicts 44f2630c/b29c328a (judge lane deepseek 402 unfunded; command-shaped criteria, doc-only exception). RESUMED IN FLIGHT: QA-WARPFS-037 re-dispatched in place (pid 3603613, openai/gpt-6.1-terra @ xkiro) over preserved +129-line partial fix. STILL DEAD/PENDING RESUME: DF-WARPFS-156 (P2, partial mount.rs+CHANGELOG uncommitted) and REV-WARPFS-9 (P3, partial cli.rs+serve.rs uncommitted) - workers died before commit; WAVE_BUDGET=1 spent on QA-WARPFS-037. Next tick: collect QA-WARPFS-037, then resume DF-156, then REV-9.",
+  "rows": [
+    {
+      "row": "DOC-8",
+      "outcome": "closed",
+      "commit": "6053acf",
+      "merge": "15b4b5f",
+      "judge": "tier1-only PASS 44f2630c",
+      "board_event": 10130
+    },
+    {
+      "row": "DOC-9",
+      "outcome": "closed",
+      "commit": "662524f",
+      "merge": "77139f0",
+      "judge": "tier1-only PASS b29c328a",
+      "board_event": 10131
+    },
+    {
+      "row": "QA-WARPFS-037",
+      "outcome": "open",
+      "state": "worker re-dispatched in place, in flight",
+      "board_event": 10132
+    },
+    {
+      "row": "DF-WARPFS-156",
+      "outcome": "deferred",
+      "reason": "budget 1 spent; partial uncommitted work preserved"
+    },
+    {
+      "row": "REV-WARPFS-9",
+      "outcome": "deferred",
+      "reason": "budget 1 spent; partial uncommitted work preserved"
+    },
+    {
+      "row": "DOC-12",
+      "outcome": "deferred",
+      "reason": "carried from 11-18 manifest: budget, P4 ranks last"
+    }
+  ],
+  "status": "finished",
+  "in_flight": [
+    "QA-WARPFS-037"
+  ],
+  "worker_model": "openai/gpt-6.1-terra",
+  "worker_provider": "xkiro",
+  "finished_at": "2026-11-20T16:35:00-05:00",
+  "recovery_note": "closed by recovery tick warpfs-foreman-2026-11-20-16-20-32: every worker row terminal on master (DF-WARPFS-173/156/157/158/159/161/168/169/170/171/172-partial, QA-WARPFS-037, REV-WARPFS-9, DOC-8, DOC-9 verified complete in tasks.jsonl); DOC-12 deferred by budget (P4) and remains an open board row \u2014 nothing to recover"
+}
