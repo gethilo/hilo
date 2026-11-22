@@ -83,6 +83,16 @@ impl Direction {
     }
 }
 
+/// PERF: an in-memory view of the edges table captured by ONE scan
+/// ([`GraphDB::related_snapshot`]). Keyed by exact `from` / `to` endpoint
+/// string, so it answers the same `WHERE "from|to" = ?` queries the `related`
+/// family runs against DuckDB — see that method for why the snapshot must
+/// not outlive a single query batch.
+pub struct RelatedSnapshot {
+    forward: HashMap<String, Vec<Edge>>,
+    reverse: HashMap<String, Vec<Edge>>,
+}
+
 /// Manages the DuckDB graph database at `.vfs/graph/graph.db`.
 pub struct GraphDB {
     conn: Connection,
@@ -2157,6 +2167,166 @@ impl GraphDB {
         LocalSpecResolver::from_edges(&self.conn).ok()
     }
 
+    /// The reverse-lookup target set for one file path: the path itself, the
+    /// `pkg:<crate>` nodes it may be imported under (GAP-034), and the
+    /// basename-seed `pkg:<stem>` node for basename-imported Python modules
+    /// (GAP-104-R2). Shared by `related` (SQL) and the snapshot variant
+    /// below so both paths cannot drift.
+    fn reverse_targets_for(&self, path: &str) -> Vec<String> {
+        // GAP-034: reverse lookups on a file must also match dependents that
+        // target the file's crate `pkg:<name>` node — the parser emits pkg:
+        // edges, not file→file edges, so a plain `WHERE "to" = <file>`
+        // returns nothing for files that are only imported as part of their
+        // crate. Symbol nodes (`pkg:...`/`sys:...`) resolve to None.
+        // DF-WARPFS-55: the resolver is anchored at the graph's root (falling
+        // back to the CWD walk only when no root was derived), so the same
+        // reverse query answers identically from any CWD.
+        let mut targets = Vec::new();
+        let mut resolver = PkgResolver::new();
+        let anchored = self
+            .root
+            .as_ref()
+            .map(|root| crate::resolution::AnchoredRoot::new(root.clone()));
+        let pkgs = match anchored.as_ref() {
+            Some(root) => resolver.pkg_nodes_at(root, path),
+            None => resolver.pkg_node(path).into_iter().collect(),
+        };
+        targets.extend(pkgs);
+        // GAP-104-R2: a basename-imported Python module's dependents
+        // target the bare `pkg:<stem>` node (evidence-gated: the dotted
+        // node must be orphaned), so the reverse lookup must include it.
+        if let Some(root) = anchored {
+            if let Some(bare) = crate::basename_import::basename_seed_node(
+                crate::basename_import::EdgeEvidence::Db(&self.conn),
+                root.as_root(),
+                path,
+            ) {
+                if !targets.contains(&bare) {
+                    targets.push(bare);
+                }
+            }
+        }
+        targets
+    }
+
+    /// PERF: one full scan of the edges table, kept as forward (`from`-keyed)
+    /// and reverse (`to`-keyed) edge lists so a batch of per-node `related`
+    /// lookups can be answered from memory. The BFS in
+    /// `signal::traverse_and_score` ran one DuckDB query per visited node
+    /// and direction — each call re-plans over the same small table, and on
+    /// a 475-file corpus 645 such queries cost ~0.55 s, more than one full
+    /// scan of every edge. Like [`Self::local_spec_resolver`], the snapshot
+    /// lives only inside the caller's query loop: a warm, FUSE write-through
+    /// or mount trigger mutating edges in another process is picked up by
+    /// the next invocation, and no cache outlives the query.
+    pub fn related_snapshot(&self) -> GraphResult<RelatedSnapshot> {
+        if self.degraded {
+            return Err(GraphError::Other(
+                "related_snapshot is unavailable on a degraded graph".to_string(),
+            ));
+        }
+        let sql = "SELECT \"from\", \"to\", rel, provenance, confidence, granularity FROM edges";
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map([], |row| {
+            Ok(Edge {
+                from: row.get::<_, String>(0)?,
+                to: row.get::<_, String>(1)?,
+                rel: row.get::<_, String>(2)?,
+                provenance: row.get::<_, String>(3)?,
+                confidence: row.get::<_, f64>(4)?,
+                granularity: row
+                    .get::<_, Option<String>>(5)?
+                    .unwrap_or_else(|| GRANULARITY_FILE.to_string()),
+            })
+        })?;
+        let mut snap = RelatedSnapshot {
+            forward: HashMap::new(),
+            reverse: HashMap::new(),
+        };
+        for row in rows {
+            let edge = row?;
+            snap.forward
+                .entry(edge.from.clone())
+                .or_default()
+                .push(edge.clone());
+            let to = edge.to.clone();
+            snap.reverse.entry(to).or_default().push(edge);
+        }
+        Ok(snap)
+    }
+
+    /// `related(path, None, Direction::Forward)` answered from a snapshot.
+    /// Callers must pass the same `path` semantics as `related` (an exact
+    /// file or node string); the snapshot is keyed by exact endpoint string,
+    /// matching the `WHERE "from" = ?` behavior it replaces.
+    pub fn related_forward_snapshot(
+        &self,
+        snap: &RelatedSnapshot,
+        path: &str,
+    ) -> GraphResult<Vec<Edge>> {
+        if self.degraded {
+            return self.related(path, None, Direction::Forward);
+        }
+        Ok(snap.forward.get(path).cloned().unwrap_or_default())
+    }
+
+    /// `related_with_local(path, None, Direction::Reverse, local)` answered
+    /// from a snapshot. The target computation (pkg: / basename-seed nodes)
+    /// and the `local:` importer filter run exactly as in the SQL path; only
+    /// the per-target `WHERE "to" = ?` scans are replaced by in-memory list
+    /// lookups over the SAME rows (the snapshot is one scan of the same
+    /// table, so per-target filtering preserves order and content).
+    ///
+    /// `rel_filter` is not supported here — the snapshot variant exists only
+    /// for the understand BFS, which never filters; callers that need a
+    /// filter must use [`Self::related`].
+    pub fn related_reverse_snapshot(
+        &self,
+        snap: &RelatedSnapshot,
+        path: &str,
+        local: Option<&LocalSpecResolver>,
+    ) -> GraphResult<Vec<Edge>> {
+        if self.degraded {
+            return self.related(path, None, Direction::Reverse);
+        }
+
+        let mut targets: Vec<String> = vec![path.to_string()];
+        targets.extend(self.reverse_targets_for(path));
+
+        let mut edges = Vec::new();
+        for target in &targets {
+            if let Some(list) = snap.reverse.get(target) {
+                edges.extend(list.iter().cloned());
+            }
+        }
+
+        // GAP-069: identical importer filter to the SQL path (see
+        // `related_with_local` for why `from ∈ allowed importers`).
+        let built;
+        let resolver = match local {
+            Some(existing) => Some(existing),
+            None => {
+                built = crate::resolution::LocalSpecResolver::from_edges(&self.conn).ok();
+                built.as_ref()
+            }
+        };
+        if let Some(resolver) = resolver {
+            let mut keep = resolver.nodes_for(path);
+            keep.sort();
+            keep.dedup();
+            for (node, importers) in keep {
+                if let Some(list) = snap.reverse.get(&node) {
+                    for edge in list {
+                        if importers.contains(&edge.from) {
+                            edges.push(edge.clone());
+                        }
+                    }
+                }
+            }
+        }
+        Ok(edges)
+    }
+
     /// [`Self::related`] with an optional pre-built `local:` index. `None`
     /// reproduces the historical per-call build exactly.
     pub fn related_with_local(
@@ -2175,40 +2345,9 @@ impl GraphDB {
             Direction::Reverse => "\"to\"",
         };
 
-        // GAP-034: reverse lookups on a file must also match dependents that
-        // target the file's crate `pkg:<name>` node — the parser emits pkg:
-        // edges, not file→file edges, so a plain `WHERE "to" = <file>`
-        // returns nothing for files that are only imported as part of their
-        // crate. Symbol nodes (`pkg:...`/`sys:...`) resolve to None.
-        // DF-WARPFS-55: the resolver is anchored at the graph's root (falling
-        // back to the CWD walk only when no root was derived), so the same
-        // reverse query answers identically from any CWD.
         let mut targets: Vec<String> = vec![path.to_string()];
         if direction == Direction::Reverse {
-            let mut resolver = PkgResolver::new();
-            let anchored = self
-                .root
-                .as_ref()
-                .map(|root| crate::resolution::AnchoredRoot::new(root.clone()));
-            let pkgs = match anchored.as_ref() {
-                Some(root) => resolver.pkg_nodes_at(root, path),
-                None => resolver.pkg_node(path).into_iter().collect(),
-            };
-            targets.extend(pkgs);
-            // GAP-104-R2: a basename-imported Python module's dependents
-            // target the bare `pkg:<stem>` node (evidence-gated: the dotted
-            // node must be orphaned), so the reverse lookup must include it.
-            if let Some(root) = anchored {
-                if let Some(bare) = crate::basename_import::basename_seed_node(
-                    crate::basename_import::EdgeEvidence::Db(&self.conn),
-                    root.as_root(),
-                    path,
-                ) {
-                    if !targets.contains(&bare) {
-                        targets.push(bare);
-                    }
-                }
-            }
+            targets.extend(self.reverse_targets_for(path));
         }
 
         let mut edges = Vec::new();
@@ -5489,6 +5628,78 @@ mod tests {
         assert_eq!(
             filtered_historical, filtered_prebuilt,
             "rel-filtered reverse query must agree across both arms"
+        );
+    }
+
+    #[test]
+    fn related_snapshot_matches_the_per_node_sql_queries() {
+        // PERF-017: the BFS in `signal::traverse_and_score` now answers its
+        // per-node `related` calls from `related_snapshot()` (one full scan
+        // keyed by `from`/`to`) instead of one DuckDB query per visited node.
+        // The snapshot arm must answer IDENTICALLY to the historical SQL arm
+        // for both directions — same edges, same order — or `hilo graph
+        // understand` output changes between the two arms. Seeded with the
+        // same families the BFS sees: file→file, `pkg:` crate nodes and a
+        // TS `local:` specifier pair.
+        let dir = tempfile::tempdir().unwrap();
+        let target = touch(dir.path(), "src/widget.ts");
+        touch(dir.path(), "src/widget.test.ts");
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[
+            Edge::new("src/widget.test.ts", "local:./widget", "imports"),
+            Edge::new("src/widget.test.ts", "local:./widget", "tested_by"),
+            Edge::new("other/main.ts", "local:../src/widget", "imports"),
+            Edge::new("src/widget.ts", "pkg:node:path", "imports"),
+            Edge::new("src/widget.ts", "src/other.ts", "imports"),
+            Edge::new("src/widget.ts", "pkg:node:path", "tested_by"),
+        ])
+        .unwrap();
+
+        let snap = db.related_snapshot().unwrap();
+
+        // Forward arm: every seeded `from` endpoint must agree.
+        for from in ["src/widget.ts", "src/widget.test.ts", "other/main.ts"] {
+            let sql_arm = db.related(from, None, Direction::Forward).unwrap();
+            let snapshot_arm = db.related_forward_snapshot(&snap, from).unwrap();
+            assert_eq!(
+                sql_arm, snapshot_arm,
+                "snapshot forward must reproduce the SQL answer for {from}"
+            );
+        }
+        // An endpoint with no outgoing edges answers empty, not an error.
+        assert!(db
+            .related_forward_snapshot(&snap, "src/missing.ts")
+            .unwrap()
+            .is_empty());
+
+        // Reverse arm, prebuilt `local:` index (the understand form).
+        let resolver = db.local_spec_resolver().expect("local: index build");
+        let query = target.to_string_lossy().into_owned();
+        let sql_arm = db
+            .related_with_local(&query, None, Direction::Reverse, Some(&resolver))
+            .unwrap();
+        assert!(
+            !sql_arm.is_empty(),
+            "premise: the local: specifier edges must resolve to the target, got none"
+        );
+        let snapshot_arm = db
+            .related_reverse_snapshot(&snap, &query, Some(&resolver))
+            .unwrap();
+        assert_eq!(
+            sql_arm, snapshot_arm,
+            "snapshot reverse must reproduce the SQL answer for {query}"
+        );
+
+        // A `pkg:`-targeted reverse lookup agrees too (the crate-node class).
+        let sql_pkg = db
+            .related_with_local("pkg:node:path", None, Direction::Reverse, Some(&resolver))
+            .unwrap();
+        let snap_pkg = db
+            .related_reverse_snapshot(&snap, "pkg:node:path", Some(&resolver))
+            .unwrap();
+        assert_eq!(
+            sql_pkg, snap_pkg,
+            "snapshot reverse must reproduce the SQL answer for pkg:node:path"
         );
     }
 

@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::GraphResult;
 use crate::graph::{Direction, GraphDB};
-use crate::parser::{Language, Parser};
+use crate::parser::Language;
 use crate::provenance::Provenance;
 use crate::resolution::{candidate_paths, lexical_normalize};
 
@@ -662,6 +662,13 @@ fn traverse_and_score(
     // an on-disk probe ladder for every visited node.
     let local_index = db.local_spec_resolver();
 
+    // PERF-017: one scan of the whole edges table (`related_snapshot`,
+    // ~7 ms on a 475-file corpus) replaces the 645 per-node DuckDB edge
+    // queries the BFS used to run (each re-plans over the same small
+    // table). On a degraded graph the build fails and the traversal falls
+    // back to the per-node queries unchanged.
+    let snapshot = db.related_snapshot().ok();
+
     // Anchors: score 1.0, provenance "ast_exact".
     for anchor in anchors {
         scores.insert(anchor.clone(), (1.0, "ast_exact".to_string()));
@@ -680,13 +687,21 @@ fn traverse_and_score(
             }
 
             // Forward edges: what does this file import?
-            let edges = db
-                .related(&path, None, Direction::Forward)
-                .unwrap_or_default();
+            let edges = match snapshot.as_ref() {
+                Some(snap) => db.related_forward_snapshot(snap, &path).unwrap_or_default(),
+                None => db
+                    .related(&path, None, Direction::Forward)
+                    .unwrap_or_default(),
+            };
             // Reverse edges: what imports this file?
-            let reverse_edges = db
-                .related_with_local(&path, None, Direction::Reverse, local_index.as_ref())
-                .unwrap_or_default();
+            let reverse_edges = match snapshot.as_ref() {
+                Some(snap) => db
+                    .related_reverse_snapshot(snap, &path, local_index.as_ref())
+                    .unwrap_or_default(),
+                None => db
+                    .related_with_local(&path, None, Direction::Reverse, local_index.as_ref())
+                    .unwrap_or_default(),
+            };
 
             for edge in edges.iter().chain(reverse_edges.iter()) {
                 let neighbor = if edge.from == path {
@@ -1219,13 +1234,15 @@ fn extract_symbols(path: &str, source: &str) -> Vec<Symbol> {
         None => return Vec::new(),
     };
 
-    let mut parser = match Parser::for_language(lang) {
-        Ok(p) => p,
-        Err(_) => return Vec::new(),
-    };
-
-    parser.parse_imports(path, source).ok(); // Warm up the parser
-
+    // PERF-017: the `Parser::for_language` + discarded `parse_imports` call
+    // that used to sit here ran a FULL tree-sitter parse of the file in
+    // addition to the direct parse below, and threw the first result away
+    // (`.ok()`, never read). Its only comment ("Warm up the parser") names no
+    // mechanism and no state survives — `hilo_parser::Parser` is dropped
+    // here and the symbol pass uses its own `tree_sitter::Parser`. Dropping
+    // the redundant parse halves the cost of `extract_symbols` with no
+    // output change: the `ts_lang` match below fails closed for any
+    // language without a grammar, exactly as `for_language` failing did.
     // Use tree-sitter directly for symbol extraction.
     let mut ts_parser = tree_sitter::Parser::new();
     let ts_lang = match lang {
