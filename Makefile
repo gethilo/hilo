@@ -27,10 +27,14 @@ check:
 # The build goes through scripts/build-hilo.sh, which wraps cargo and names
 # likely-OOM (SIGABRT/SIGKILL) cc-rs failures on <=4GB agents with the
 # low-memory recipe (DF-WARPFS-142); exit codes are cargo's, unchanged.
+# REV-WARPFS-017: the wrapper inherits CARGO_TARGET_DIR, so the artefact
+# path below follows it too (default target/ when unset).
+TARGET_DIR := $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),target)
+
 release:
 	scripts/build-hilo.sh -p hilo-cli
-	strip target/release/hilo
-	ls -lh target/release/hilo
+	strip $(TARGET_DIR)/release/hilo
+	ls -lh $(TARGET_DIR)/release/hilo
 
 fmt:
 	cargo fmt --all
