@@ -364,6 +364,46 @@ impl PkgResolver {
         name.map(|name| format!("pkg:{name}"))
     }
 
+    /// Return the traditional node and, for Python, a graph-root-relative
+    /// namespace alias. The latter never incorporates host path components.
+    pub fn pkg_nodes_at(&mut self, root: &AnchoredRoot, path: &str) -> Vec<String> {
+        let mut nodes: Vec<String> = self.pkg_node_at(root, path).into_iter().collect();
+        if !path.ends_with(".py") || is_symbol_node(path) {
+            return nodes;
+        }
+        let resolved = root.resolve(path);
+        let Ok(relative) = Path::new(&resolved).strip_prefix(root.as_root()) else {
+            return nodes;
+        };
+        let mut parts = Vec::new();
+        for component in relative.components() {
+            match component {
+                Component::Normal(name) => match name.to_str() {
+                    Some(name) => parts.push(name.to_string()),
+                    None => return nodes,
+                },
+                Component::CurDir => (),
+                _ => return nodes,
+            }
+        }
+        let Some(filename) = parts.pop() else {
+            return nodes;
+        };
+        let Some(stem) = filename.strip_suffix(".py") else {
+            return nodes;
+        };
+        if stem != "__init__" {
+            parts.push(stem.to_string());
+        }
+        if !parts.is_empty() && parts.iter().all(|part| !part.is_empty()) {
+            let alias = format!("pkg:{}", parts.join("."));
+            if !nodes.contains(&alias) {
+                nodes.push(alias);
+            }
+        }
+        nodes
+    }
+
     /// Resolve a `.go` path to its `pkg:<import path>` node, if the file
     /// lives under a Go module. Non-Go paths and symbol nodes return `None`
     /// without touching the filesystem; a `.go` file with no `go.mod`

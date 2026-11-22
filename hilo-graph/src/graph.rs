@@ -2095,13 +2095,11 @@ impl GraphDB {
                 .root
                 .as_ref()
                 .map(|root| crate::resolution::AnchoredRoot::new(root.clone()));
-            let pkg = match anchored.as_ref() {
-                Some(root) => resolver.pkg_node_at(root, path),
-                None => resolver.pkg_node(path),
+            let pkgs = match anchored.as_ref() {
+                Some(root) => resolver.pkg_nodes_at(root, path),
+                None => resolver.pkg_node(path).into_iter().collect(),
             };
-            if let Some(pkg) = pkg {
-                targets.push(pkg);
-            }
+            targets.extend(pkgs);
         }
 
         let mut edges = Vec::new();
@@ -2192,13 +2190,11 @@ impl GraphDB {
                 .root
                 .as_ref()
                 .map(|root| crate::resolution::AnchoredRoot::new(root.clone()));
-            let pkg = match anchored.as_ref() {
-                Some(root) => resolver.pkg_node_at(root, path),
-                None => resolver.pkg_node(path),
+            let pkgs = match anchored.as_ref() {
+                Some(root) => resolver.pkg_nodes_at(root, path),
+                None => resolver.pkg_node(path).into_iter().collect(),
             };
-            if let Some(pkg) = pkg {
-                targets.push(pkg);
-            }
+            targets.extend(pkgs);
             // GAP-104-R2: a basename-imported Python module's dependents
             // target the bare `pkg:<stem>` node (evidence-gated: the dotted
             // node must be orphaned), so the reverse lookup must include it.
@@ -2689,10 +2685,13 @@ impl GraphDB {
         // (Python, Go). The Cargo crate node is coarser than a `.rs` file,
         // so a crate-level `tested_by` target must never cover crate
         // members. See the doc comment above.
-        if let Some(node) = resolver.pkg_node(&root.join(file).to_string_lossy()) {
-            if tested.contains(&node) {
-                return true;
-            }
+        let anchored = crate::resolution::AnchoredRoot::new(root);
+        if resolver
+            .pkg_nodes_at(&anchored, file)
+            .iter()
+            .any(|node| tested.contains(node))
+        {
+            return true;
         }
         // GAP-104-R2: basename-imported Python modules. A test that
         // sys.path-inserts the module's own directory and imports by bare
@@ -4184,6 +4183,65 @@ mod tests {
             resolver.pkg_node_at(&root, "util.py").as_deref(),
             Some("pkg:util")
         );
+    }
+
+    #[test]
+    fn namespace_root_file_form_impact_matches_pkg_form() {
+        let dir = tempfile::tempdir().unwrap();
+        for file in [
+            "app/core/engine.py",
+            "app/core/pipeline.py",
+            "tests/test_pipeline.py",
+        ] {
+            touch(dir.path(), file);
+        }
+        let db_path = dir.path().join(".vfs/graph/graph.db");
+        std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
+        let db = GraphDB::open(&db_path.to_string_lossy()).unwrap();
+        db.insert_edges(&[
+            Edge::new("app/core/pipeline.py", "pkg:app.core.engine", "imports"),
+            Edge::new("tests/test_pipeline.py", "pkg:app.core.pipeline", "imports"),
+            Edge::new(
+                "tests/test_pipeline.py",
+                "pkg:app.core.pipeline",
+                "tested_by",
+            ),
+        ])
+        .unwrap();
+        let file = db.impact_or_parse("app/core/pipeline.py", 10).unwrap();
+        let pkg = db.impact_or_parse("pkg:app.core.pipeline", 10).unwrap();
+        assert!(file.iter().any(|row| row.path == "tests/test_pipeline.py"));
+        assert!(pkg
+            .iter()
+            .any(|row| row.path == "tests/test_pipeline.py" && row.depth == 1));
+        let review = db.review_or_parse("app/core/pipeline.py", 10).unwrap();
+        assert!(review
+            .iter()
+            .any(|row| row.path == "tests/test_pipeline.py"));
+        let reverse = db
+            .related("app/core/pipeline.py", None, Direction::Reverse)
+            .unwrap();
+        assert!(reverse
+            .iter()
+            .any(|edge| edge.from == "tests/test_pipeline.py"));
+        assert!(!db
+            .untested_files_at(dir.path())
+            .unwrap()
+            .contains(&"app/core/pipeline.py".to_string()));
+        assert!(db
+            .impact_or_parse("app/core/engine.py", 10)
+            .unwrap()
+            .iter()
+            .any(|row| row.path == "app/core/pipeline.py"));
+        let root = crate::resolution::AnchoredRoot::new(dir.path());
+        let mut resolver = PkgResolver::new();
+        assert!(resolver
+            .pkg_nodes_at(&root, "app/core/pipeline.py")
+            .contains(&"pkg:app.core.pipeline".to_string()));
+        assert!(!resolver
+            .pkg_nodes_at(&root, "../outside.py")
+            .iter()
+            .any(|node| node.contains("..")));
     }
 
     #[test]

@@ -555,6 +555,39 @@ pub(crate) fn compute_impact_streaming(
             collect_streamed(pkg_exact, &mut cx, depth, crate_kind);
             collect_streamed(pkg_family, &mut cx, depth, crate_kind);
         }
+        // Additional root-relative Python aliases are distinct targets; keep
+        // their provenance and hop accounting separate from the legacy node.
+        if !path.starts_with("pkg:") {
+            if let Some(root) = anchored {
+                for alias in resolver
+                    .pkg_nodes_at(root, &path)
+                    .into_iter()
+                    .filter(|node| Some(node.as_str()) != pkg_target.as_deref())
+                {
+                    let mut matches = Vec::new();
+                    scan(&mut |edge| {
+                        if edge.to == alias
+                            || edge.to.starts_with(&format!("{alias}::"))
+                            || edge.to.starts_with(&format!("{alias}_"))
+                            || edge.to.starts_with(&format!("{alias}."))
+                        {
+                            matches.push(edge);
+                        }
+                        true
+                    })?;
+                    collect_streamed(
+                        matches,
+                        &mut cx,
+                        depth,
+                        MatchKind {
+                            scope: SCOPE_CRATE,
+                            extra: u32::from(file_query),
+                            via: Some(&alias),
+                        },
+                    );
+                }
+            }
+        }
         // GAP-104-R2: basename-imported Python modules — the same evidence
         // rule as the cached BFS, computed from the same streaming scan: the
         // bare node is targeted and the dotted node is not. The bare node's
@@ -740,16 +773,14 @@ pub fn compute_impact_at(
         // resolved from a file) must also match `pkg:<name>::<member>` and
         // `pkg:<name>_<sibling>` edges — exact matching alone misses
         // brace-expanded imports (6/148 on serde).
-        let pkg_target = if path.starts_with("pkg:") {
-            // The path is already a bare pkg node: the exact-match query
-            // above covered `to = <path>`; only the family remains.
-            Some(path.clone())
+        let pkg_targets = if path.starts_with("pkg:") {
+            vec![path.clone()]
         } else if let Some(root) = anchored {
-            resolver.pkg_node_at(root, &path)
+            resolver.pkg_nodes_at(root, &path)
         } else {
-            resolver.pkg_node(&path)
+            resolver.pkg_node(&path).into_iter().collect()
         };
-        if let Some(pkg) = pkg_target {
+        for pkg in pkg_targets {
             // GAP-083: rows matched through a `pkg:<crate>` node of a FILE
             // query are crate-scoped and cost one extra hop (the file→crate
             // hop), so `depth == 1` stays strictly "true file-level importer".
@@ -967,16 +998,14 @@ pub fn compute_impact_with_external(
         // file→file edges). Symbol nodes resolve to None.
         // GAP-048: also match the crate family (`pkg:<name>::<member>` and
         // `pkg:<name>_<sibling>` edges) via the Rust-side family filter.
-        let pkg_target = if path.starts_with("pkg:") {
-            // Bare pkg node queried directly: the exact-match query above
-            // already covered `to = <path>`; only the family remains.
-            Some(path.clone())
+        let pkg_targets = if path.starts_with("pkg:") {
+            vec![path.clone()]
         } else if let Some(root) = anchored.as_ref() {
-            resolver.pkg_node_at(root, &path)
+            resolver.pkg_nodes_at(root, &path)
         } else {
-            resolver.pkg_node(&path)
+            resolver.pkg_node(&path).into_iter().collect()
         };
-        if let Some(pkg) = pkg_target {
+        for pkg in pkg_targets {
             // GAP-083: rows matched through a `pkg:<crate>` node of a FILE
             // query are crate-scoped and cost one extra hop (the file→crate
             // hop), so `depth == 1` stays strictly "true file-level importer".
