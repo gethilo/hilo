@@ -1,0 +1,18 @@
+{"project": "hilo", "cell": "target-binding", "status": "OK", "detail": "target=<unset> runner=<unset> repo=hilo identity_source=origin-remote remote=git@github.com:gethilo/hilo.git head=ca3043ae908ba606ea5604153cd2bc95e9baedf4 evidence_project=hilo", "ts": "2026-11-23T18:54:24Z"}
+{"project": "hilo", "cell": "launch", "status": "OK", "detail": "agent=7b01b53f server=bunker-las-03 ttl=4h cpu=4.0 memory=default script_bytes=190159 \u2014 battery started detached (qa-run.sh); phase B: bunker-qa.sh collect --evidence /tmp/bunker-qa-evidence-20261123T185424Z-901520.jsonl", "ts": "2026-11-23T18:58:20Z"}
+{"project": "hilo", "cell": "toolchain-bootstrap", "status": "OK", "detail": "go 1.27.4 installed (discovered; ~/tools/go; floor=none ambient=absent installed=1.27.4)", "ts": "2026-11-23T18:58:50.976182+00:00"}
+{"project": "hilo", "cell": "toolchain-bootstrap", "status": "OK", "detail": "rust stable installed (~/tools/cargo + ~/tools/rustup)", "ts": "2026-11-23T18:59:30.822422+00:00"}
+{"project": "hilo", "cell": "toolchain-bootstrap", "status": "OK", "detail": "system gcc/g++ toolchain (~/tools/bin wrappers -> gcc/g++) \u2014 preferred over zig-cc for C++ cgo deps (MCP-008)", "ts": "2026-11-23T18:59:41.269251+00:00"}
+{"project": "hilo", "cell": "toolchain-bootstrap", "status": "OK", "detail": "make available (preinstalled) \u2014 GNU Make 4.4.1", "ts": "2026-11-23T18:59:41.298066+00:00"}
+{"project": "hilo", "cell": "toolchain-bootstrap", "status": "OK", "detail": "jq present (/usr/bin/jq)", "ts": "2026-11-23T18:59:41.325198+00:00"}
+{"project": "hilo", "cell": "toolchain-bootstrap", "status": "OK", "detail": "go+node ready", "ts": "2026-11-23T18:59:41.367331+00:00"}
+{"project": "hilo", "cell": "fresh-install", "status": "OK", "detail": "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 11m 38s; no artifact expected for [cargo build --workspace] \u2014 a compile/dependency-install leg ships code, not binaries (set QA_EXPECTED_ARTIFACT=<name> to assert one)", "ts": "2026-11-23T19:11:20.493855+00:00"}
+{"project": "hilo", "cell": "lint", "status": "FAIL", "detail": "rc=1 cmd=[go vet ./...] \u2014 pattern ./...: directory prefix . does not contain main module or its selected dependencies|", "ts": "2026-11-23T19:11:20.567320+00:00"}
+{"project": "hilo", "cell": "tests", "status": "OK", "detail": " (rc=0)", "ts": "2026-11-23T19:16:48.488260+00:00"}
+{"project": "hilo", "cell": "docker_build", "status": "N/A", "detail": "no Dockerfile trigger", "ts": "2026-11-23T19:16:48.523255+00:00"}
+{"project": "hilo", "cell": "compose_config", "status": "OK", "detail": "docker compose -f ./docker-compose.yml config (rc=0, runner=docker cli plugin)", "ts": "2026-11-23T19:16:48.666887+00:00"}
+{"project": "hilo", "cell": "toolchain-bootstrap", "status": "OK", "detail": "compose plugin installed (~/.docker/cli-plugins/docker-compose)", "ts": "2026-11-23T19:16:59.219846+00:00"}
+{"project": "hilo", "cell": "toolchain-bootstrap", "status": "OK", "detail": "buildx plugin installed (github.com/docker/buildx v0.39.1 334b63fe2bb0f0e89a8fd067704a0d113f57ec25)", "ts": "2026-11-23T19:17:16.647196+00:00"}
+{"project": "hilo", "cell": "toolchain-bootstrap", "status": "OK", "detail": "HARNESS-COMPOSE=ok (docker compose version passes)", "ts": "2026-11-23T19:17:16.788339+00:00"}
+{"project": "hilo", "cell": "toolchain-bootstrap", "status": "OK", "detail": "HARNESS_NODE=ok (node v22.23.4, npm 10.9.9)", "ts": "2026-11-23T19:17:16.914256+00:00"}
+{"project": "hilo", "cell": "ci-pass", "status": "OK", "detail": "act: 1 jobs green \u2014 act_result=pass rc=0 (1 triggerable workflow(s)) jq=/usr/bin/jq", "ts": "2026-11-23T19:45:06.827383+00:00"}

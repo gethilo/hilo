@@ -2354,3 +2354,61 @@ freshly-compiled suite; no product row filed. Full attribution:
 .coding-hermes/evidence/warpfs-dogfood-2026-11-23-18-36-23/
 delivery3-guard-red-attribution.txt. Commit bypassed with hand-graded
 lanes: secrets PASS (guard gitleaks clean), boardctl validate rc=0 OK.
+## 2026-11-23 — warpfs (Hilo) — no-op provenance — delivery 4
+
+Delivery 4 of tick `warpfs-dogfood-2026-11-23-18-36-23` (inbound dispatches
+13:36:55, 14:09:57, 14:25:58 and 14:43:28 -05 host-local — a fourth fire of
+one label, a scheduler/gateway dispatch re-fire, not a product defect; no
+product row filed, the tick report is the owning surface). Census note for
+the next fire: a raw log grep can show a fifth inbound line at 13:36:57 on
+chat 4471b56e — that is the off-by-one-docs tick's first delivery (same
+18-36-23 UTC scheduler instant; it only surfaces in a warpfs grep as the
+-A1 neighbour of the 13:36:55 warpfs line), not a fifth warpfs dispatch.
+This delivery's own fire is the 14:43:28 dispatch: turn 1 pinned
+openai/gpt-6.1-terra @ custom, API call #1 served glm-5.3-flash @
+zai-glm-default (silent seat fallback; the session env block reflects the
+served seat).
+
+Parity proof: local HEAD == origin/master == 1418fa2 (`git rev-list
+--left-right --count HEAD...origin/master` = `0 0`; product files in `git
+diff --name-only 1418fa2..origin/master`: 0), so the product delta since
+delivery 3's record commit is empty — no re-walk licensed. An unchanged
+tree re-driven measures the host; with loadavg 54.42 (17/3998 runnable) at
+census time the perf leg was additionally not re-measured.
+
+Install leg re-check (the one thing still open in flight): `bunker-qa.sh
+collect --evidence /tmp/bunker-qa-evidence-20261123T185424Z-901520.jsonl`
+re-run at 14:46 -05 — collector reported `synced 16 evidence row(s)`,
+battery STILL RUNNING on agent 7b01b53f @ bunker-las-03, no
+qa-run.finished marker, agent left intact for the collector. The DELTA vs
+delivery 3's 14:28 collect is one new cell: `ci-pass OK` at 19:45:06Z
+("act: 1 jobs green — act_result=pass rc=0 (1 triggerable workflow(s))").
+Snapshot committed as
+.coding-hermes/evidence/warpfs-dogfood-2026-11-23-18-36-23/bunker-ledger-collect-d4.jsonl
+(18 rows: launch OK, target-binding OK, toolchain-bootstrap OK x10,
+fresh-install OK, tests OK, compose_config OK, docker_build N/A, lint FAIL
+owned by QA-WARPFS-035, ci-pass OK). All previously graded cells stand as
+delivery 2 graded them; ci-pass is new evidence. The battery has been in
+flight ~52 min at this collect.
+
+Board census at this delivery: tasks.jsonl 506 rows, events.jsonl 1249
+events, jq parses all 506 ids, zero duplicate ids; zero rows stamped with
+this tick id (deliveries 1-3 filed none — the run-51 record lives in the
+log and docs, not the board); working-copy board mtime 14:07 -05 predates
+delivery 3's commit.
+
+Residue scan: no warpfs/hilo serve process and no product listener on this
+host. The `cargo test --release -p hilo_graph --lib` process tree (pid
+745430, started 13:44 -05, cc1plus children under /tmp/hilo-warpfs-target)
+is the sibling foreman wave's build documented by delivery 3 — left
+running, not this lane's residue.
+
+Sibling state left untouched (attributed, not mine): uncommitted board +
+.gitreins/tasks.yaml + .vfs/graph/edges.jsonl edits and the untracked
+.coding-hermes/evidence/df-warpfs-91-crashed-wave-20261116/ salvage
+(documented by delivery 2).
+
+Deliberately NOT walked: workspace-mount xattr EOPNOTSUPP on a current-tip
+binary stays owned by DF-WARPFS-70; DF-WARPFS-156/176 durability-at-kill
+stays owned by those rows. Both are the (b) OWNED class — a walk proves
+nothing the owner's row does not.
