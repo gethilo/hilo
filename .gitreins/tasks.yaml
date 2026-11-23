@@ -2663,17 +2663,6 @@ tasks:
   status: complete
   created_at: '2026-11-03T07:52:30.274446+00:00'
   completed_at: '2026-11-16T15:49:43.873884+00:00'
-- id: PERF-015
-  title: 'hoist the local: resolver index to one build per graph understand traversal
-    (PERF-015)'
-  criteria:
-  - 'PASS: eprintln build counter in LocalSpecResolver::from_edges prints at most
-    1 build per hilo graph understand invocation (baseline 245 at a002ddb2), hyperfine
-    A/B patched mean <= 0.75s vs baseline 1.432s on the same corpus with byte-identical
-    stdout, index is per-traversal not per-process, related(...) signature kept, cargo
-    test -p hilo_graph --lib and scripts/rust-lint.sh green'
-  status: in_progress
-  created_at: '2026-11-21T05:12:40.001649+00:00'
 - id: QA-WARPFS-032
   title: Fix S3 proxy-disconnect test hang
   criteria:
@@ -2696,14 +2685,6 @@ tasks:
   status: complete
   created_at: '2026-11-09T13:02:41.631189+00:00'
   completed_at: '2026-11-09T23:30:00.000000+00:00'
-- id: RELEASE-020
-  title: v0.4.1 RustSec dependency remediation
-  criteria:
-  - 'Implement RELEASE-020: eliminate runtime-reachable RustSec advisories, upgrade
-    extism/wasmtime, keep the workspace green, and add the release advisory gate;
-    preserve the exact board acceptance criteria.'
-  status: in_progress
-  created_at: '2026-11-10T10:21:58.346213+00:00'
 - id: RELEASE-018
   title: Repair ambient Cargo paths and rust-lint attribution
   criteria:
@@ -2997,55 +2978,6 @@ tasks:
   status: complete
   created_at: '2026-11-21T05:12:38.826602+00:00'
   completed_at: '2026-11-21T06:32:55.318190+00:00'
-- id: DOC-6
-  title: docs/mcp-tools.md documents 17 of 18 served MCP tools; add vfs_graph_audit
-  criteria:
-  - docs/mcp-tools.md has a vfs_graph_audit section matching page format and the documented
-    set equals the 18 registered tools
-  status: in_progress
-  created_at: '2026-11-21T19:28:54.499712+00:00'
-- id: DOC-7
-  title: root SKILL.md says 17 tools in 5 places; server serves 18
-  criteria:
-  - no stale 17-tool claims remain in SKILL.md; every count matches the 18 registered
-    MCP tools
-  status: in_progress
-  created_at: '2026-11-21T19:28:55.795388+00:00'
-- id: DOC-10
-  title: hilo backend sync --backend selector undocumented in cli-reference and hilo-cli
-  criteria:
-  - cli-reference.md sync section and the hilo-cli.md row document the --backend selector
-    per source
-  status: in_progress
-  created_at: '2026-11-21T19:28:56.864250+00:00'
-- id: DOC-11
-  title: operator env-var surface has no home; HILO_WARM_TIMING in zero docs
-  criteria:
-  - docs/environment.md exists and covers every HILO_ env var found in source, marking
-    internal-only ones
-  status: in_progress
-  created_at: '2026-11-21T19:28:58.114226+00:00'
-- id: DOC-12
-  title: repo lacks docs/traceability-doctrine.md required by fleet traceability contract
-  criteria:
-  - docs/traceability-doctrine.md exists and satisfies the fleet traceability contract
-    for this repo
-  status: in_progress
-  created_at: '2026-11-21T19:28:59.282706+00:00'
-- id: DOC-13
-  title: hilo-mcp.md and hilo-cli.md claim --mcp is the only serve mode; --http is
-    shipped
-  criteria:
-  - no only-implemented-mode claims remain; both docs describe the shipped --http
-    serve mode per source
-  status: in_progress
-  created_at: '2026-11-21T19:29:00.439621+00:00'
-- id: README-5
-  title: README omits shipped serve --http and sandbox entry points
-  criteria:
-  - README documents serve --http and the sandbox mount entry points per source
-  status: in_progress
-  created_at: '2026-11-21T19:29:01.692336+00:00'
 - id: REV-WARPFS-015
   title: file-form impact/related/untested return empty on PEP 420 namespace roots
   criteria:
