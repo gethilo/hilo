@@ -2264,7 +2264,7 @@ Tick `warpfs-dogfood-2026-11-23-18-36-23`. Binary v0.4.1-125-g675e6ed-dirty; rep
 Workspace mount read probe initially compared the wrong backing tree. Corrected control: xattr on actual backing tree was visible through mount; through-mount xattr write returned EOPNOTSUPP on the older binary. Related existing row DF-WARPFS-70; current-tip behavior unverified. Initial unsupported recurrence rows were withdrawn before commit. The inherited daemon-kill probe did not find a PID and does not prove logging on kill.
 
 Fresh-machine install battery launched on bunker-las-03, agent 7b01b53f, evidence `/tmp/bunker-qa-evidence-20261123T185424Z-901520.jsonl`. Collection returned RUNNING with six synced rows; no completed install cell. Agent left intact; installation unverified. Run report: `docs/dogfood/2026-11-23-run51-workspace-mount.md`; evidence `.coding-hermes/evidence/warpfs-dogfood-2026-11-23-18-36-23/`.
-{marker}
+## 2026-11-23 — warpfs (Hilo) — run 51 delta (delivery 2)
 
 Delivery 2 of tick `warpfs-dogfood-2026-11-23-18-36-23` (inbound dispatches
 13:36:55 and 14:09:57 -05 — a re-fire, not a second run). Delivery 1 completed
