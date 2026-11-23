@@ -1677,42 +1677,173 @@ fn extract_haskell_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
 
 // ── Erlang ──────────────────────────────────────────────────────────
 
-fn extract_erlang_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
-    // `-include_lib("eunit/include/eunit.hrl").` and `-include("records.hrl").`
-    //
-    // DF-WARPFS-88: this must match ONLY the precise `pp_include` /
-    // `pp_include_lib` directive nodes. The old implementation substring-
-    // probed every AST span (`text.contains("-include(")`) and then grabbed
-    // the first quoted run inside the matched span — but an include
-    // directive is visible in the text of every ANCESTOR span up to the
-    // whole-file root, so on cowboy the first quote in the matched span was
-    // `"AS IS"` inside the ISC/BSD license comment, minting a
-    // `local:AS IS` node with 16 phantom edges (8 of them bogus
-    // `tested_by`). The directive node's span is exactly the
-    // `-include...("path")` form, so comment text can never leak into a
-    // path; the quoted `string` field child carries the path itself.
-    if matches!(node.kind(), "pp_include" | "pp_include_lib") {
-        let mut cursor = node.walk();
-        for child in node.children_by_field_name("file", &mut cursor) {
-            // Only quoted string literals name a file; macro names
-            // (`?INCLUDE(...)`-style vars) are not paths.
-            if child.kind() != "string" {
-                continue;
-            }
-            let raw = child.utf8_text(source).unwrap_or("");
-            let path = raw.trim_matches('"').trim();
-            if !path.is_empty() {
-                paths.push(format!("local:{path}"));
-            }
+/// Structural dependencies harvested from one Erlang source unit (DF-WARPFS-91).
+///
+/// Erlang has no import list. A module's real dependencies live in its
+/// attributes — `-behaviour(gen_server).`, `-import(lists, [...]).`,
+/// `-include("x.hrl").` — and in the module qualifier of every *remote*
+/// reference: `Mod:fun(...)` calls, `fun Mod:fun/2` captures, and
+/// `Mod:type()` in specs/types. Those are the edges the graph needs for
+/// impact analysis; filename conventions carry none of that information,
+/// which is why the warm pass reported "no imports" for almost every
+/// cowboy `.erl`. The grammar-based extractor below is the whole fix —
+/// no warning fallback is offered because real extraction IS feasible via
+/// the tree-sitter-erlang grammar that is already a workspace dependency.
+///
+/// An edge is only minted when the module is a literal atom. `M:F(...)` and
+/// `?SERVER:start()` name their module at runtime, so they are not edges.
+#[derive(Default)]
+struct ErlangRefs {
+    /// `-module(m).` — a file is never its own dependency.
+    own_module: Option<String>,
+    /// Dependency paths in source order, deduplicated.
+    paths: Vec<String>,
+    seen: HashSet<String>,
+}
+
+impl ErlangRefs {
+    fn push(&mut self, path: String) {
+        if self.seen.insert(path.clone()) {
+            self.paths.push(path);
         }
-        return;
+    }
+
+    /// Edge to another Erlang module, unless it is this unit's own module.
+    fn push_module(&mut self, module: &str) {
+        if module.is_empty() || self.own_module.as_deref() == Some(module) {
+            return;
+        }
+        self.push(format!("pkg:{module}"));
+    }
+}
+
+fn extract_erlang_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+    let mut refs = ErlangRefs {
+        own_module: erlang_own_module(node, source),
+        ..ErlangRefs::default()
+    };
+    erlang_walk(node, source, &mut refs);
+    paths.extend(refs.paths);
+}
+
+/// The name in a `-module(m).` attribute, needed before the walk so that a
+/// module's references to itself never become edges.
+fn erlang_own_module(node: Node, source: &[u8]) -> Option<String> {
+    if node.kind() == "module_attribute" {
+        let mut cursor = node.walk();
+        let names: Vec<Node> = node.children_by_field_name("name", &mut cursor).collect();
+        return erlang_module_atom(&names, source);
     }
     let children: Vec<Node> = {
         let mut c = node.walk();
         node.children(&mut c).collect()
     };
     for child in children {
-        extract_erlang_imports(child, source, paths);
+        if let Some(name) = erlang_own_module(child, source) {
+            return Some(name);
+        }
+    }
+    None
+}
+
+/// Resolve a `_name` field group to a module name when it is a literal atom.
+///
+/// `_name` also admits vars (`M`) and macro calls (`?SERVER`); neither names
+/// a module statically, so guessing one would mint edges to modules that do
+/// not exist. Quoted atoms (`'net-sup'`) are unwrapped to their bare name.
+/// Some field shapes wrap the name — `external_fun`'s `module` field holds a
+/// `module` node whose `name` field carries the atom (grammar
+/// `-0.19.0/src/node-types.json`, `external_fun`), so strip that wrapper.
+fn erlang_module_atom(field: &[Node], source: &[u8]) -> Option<String> {
+    let mut node: Node = *field.first()?;
+    if node.kind() == "module" {
+        let mut cursor = node.walk();
+        node = node.children_by_field_name("name", &mut cursor).next()?;
+    }
+    if node.kind() != "atom" {
+        return None;
+    }
+    let raw = node.utf8_text(source).ok()?.trim();
+    let name = raw.trim_matches('\'');
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_string())
+    }
+}
+
+fn erlang_walk(node: Node, source: &[u8], refs: &mut ErlangRefs) {
+    match node.kind() {
+        // `-include_lib("eunit/include/eunit.hrl").` and `-include("records.hrl").`
+        //
+        // DF-WARPFS-88: this must match ONLY the precise `pp_include` /
+        // `pp_include_lib` directive nodes. The old implementation substring-
+        // probed every AST span (`text.contains("-include(")`) and then grabbed
+        // the first quoted run inside the matched span — but an include
+        // directive is visible in the text of every ANCESTOR span up to the
+        // whole-file root, so on cowboy the first quote in the matched span was
+        // `"AS IS"` inside the ISC/BSD license comment, minting a
+        // `local:AS IS` node with 16 phantom edges (8 of them bogus
+        // `tested_by`). The directive node's span is exactly the
+        // `-include...("path")` form, so comment text can never leak into a
+        // path; the quoted `string` field child carries the path itself.
+        "pp_include" | "pp_include_lib" => {
+            let mut cursor = node.walk();
+            for child in node.children_by_field_name("file", &mut cursor) {
+                // Only quoted string literals name a file; macro names
+                // (`?INCLUDE(...)`-style vars) are not paths.
+                if child.kind() != "string" {
+                    continue;
+                }
+                let raw = child.utf8_text(source).unwrap_or("");
+                let path = raw.trim_matches('"').trim();
+                if !path.is_empty() {
+                    refs.push(format!("local:{path}"));
+                }
+            }
+            return;
+        }
+        // `-behaviour(gen_server).` / `-behavior(supervisor).`: the callback
+        // contract this module implements — a real dependency on the
+        // behaviour module.
+        "behaviour_attribute" => {
+            let mut cursor = node.walk();
+            let names: Vec<Node> = node.children_by_field_name("name", &mut cursor).collect();
+            if let Some(module) = erlang_module_atom(&names, source) {
+                refs.push_module(&module);
+            }
+            return;
+        }
+        // `-import(lists, [reverse/1]).`
+        "import_attribute" => {
+            let mut cursor = node.walk();
+            let names: Vec<Node> = node.children_by_field_name("module", &mut cursor).collect();
+            if let Some(module) = erlang_module_atom(&names, source) {
+                refs.push_module(&module);
+            }
+            return;
+        }
+        // Every remote reference — `Mod:fun(Args)`, `fun Mod:fun/2`,
+        // `Mod:type()` in a spec/type — names its module statically. The
+        // grammar exposes call/type qualifiers as a `remote_module` node and
+        // fun captures (`fun cowboy_loop:init/2`) as an `external_fun` node;
+        // both carry the qualifier in their `module` field.
+        "remote_module" | "external_fun" => {
+            let mut cursor = node.walk();
+            let names: Vec<Node> = node.children_by_field_name("module", &mut cursor).collect();
+            if let Some(module) = erlang_module_atom(&names, source) {
+                refs.push_module(&module);
+            }
+            return;
+        }
+        _ => {}
+    }
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        erlang_walk(child, source, refs);
     }
 }
 
@@ -2911,6 +3042,129 @@ use anyhow::{bail, Context as _};
             "-include_lib(\"eunit/include/eunit.hrl\").\n-module(myapp).\n",
         );
         assert!(imports.iter().any(|p| p.contains("eunit.hrl")));
+    }
+
+    #[test]
+    fn erlang_behaviour_attributes() {
+        // DF-WARPFS-91: both spellings (`behaviour`/`behavior`) name a
+        // callback contract — a real dependency on the behaviour module.
+        let imports = parse(
+            Language::Erlang,
+            "-module(cowboy_example_worker).\n\
+             -behaviour(gen_server).\n\
+             -behavior(supervisor).\n",
+        );
+        assert!(imports.contains(&"pkg:gen_server".into()));
+        assert!(imports.contains(&"pkg:supervisor".into()));
+        assert!(
+            !imports.contains(&"pkg:cowboy_example_worker".into()),
+            "a module is not its own dependency: {imports:?}"
+        );
+    }
+
+    #[test]
+    fn erlang_cross_module_calls() {
+        let imports = parse(
+            Language::Erlang,
+            "-module(myapp).\n\
+             reply(Req) -> cowboy_req:reply(200, #{}, <<\"ok\">>, Req).\n\
+             read(Path) -> file:read_file(Path).\n\
+             nested(Req) -> cowboy_req:set_resp_header(<<\"x\">>, cowboy_http:opts(), Req).\n",
+        );
+        assert!(imports.contains(&"pkg:cowboy_req".into()));
+        assert!(imports.contains(&"pkg:file".into()));
+        assert!(imports.contains(&"pkg:cowboy_http".into()));
+        // Deduplicated: cowboy_req is referenced twice, emitted once.
+        assert_eq!(imports.iter().filter(|p| *p == "pkg:cowboy_req").count(), 1);
+    }
+
+    #[test]
+    fn erlang_remote_refs_in_specs_and_fun_captures() {
+        let imports = parse(
+            Language::Erlang,
+            "-module(myapp).\n\
+             -spec opts() -> cowboy_http:opts().\n\
+             start(Opts) -> myapp_sup:start_link(fun cowboy_loop:init/2, Opts).\n\
+             read(P) when is_integer(P) -> myapp_types:kw(P);\n\
+             read(P) -> myapp_types:read(P).\n",
+        );
+        assert!(imports.contains(&"pkg:cowboy_http".into()));
+        assert!(imports.contains(&"pkg:myapp_sup".into()));
+        assert!(imports.contains(&"pkg:cowboy_loop".into()));
+        assert!(imports.contains(&"pkg:myapp_types".into()));
+    }
+
+    #[test]
+    fn erlang_import_attribute() {
+        let imports = parse(
+            Language::Erlang,
+            "-module(myapp).\n-import(lists, [reverse/1, foldl/3]).\n",
+        );
+        assert!(imports.contains(&"pkg:lists".into()));
+    }
+
+    #[test]
+    fn erlang_dynamic_and_non_code_refs_are_not_edges() {
+        // `M:F(...)` and `?SERVER:start()` resolve their module at runtime,
+        // and text inside comments/strings is not source — none may mint edges.
+        let imports = parse(
+            Language::Erlang,
+            "-module(myapp).\n\
+             call(M, F) -> M:F().\n\
+             boot() -> ?SERVER:start().\n\
+             %% cowboy_req:reply/4 appears in this comment only\n\
+             doc() -> \"gen_server:start_link/3\".\n",
+        );
+        assert!(
+            imports.is_empty(),
+            "no static module reference here: {imports:?}"
+        );
+    }
+
+    #[test]
+    fn erlang_includes_and_calls_together() {
+        // A realistic header-bearing module: include + behaviour + call edges
+        // coexist, and each is emitted once.
+        let imports = parse(
+            Language::Erlang,
+            "-module(cowboy_stream_h).\n\
+             -behaviour(cowboy_stream).\n\
+             -include(\"cowboy_stream.hrl\").\n\
+             data(Pid, Data) -> cowboy_stream:data(Pid, Data).\n",
+        );
+        assert!(imports.contains(&"local:cowboy_stream.hrl".into()));
+        assert!(imports.contains(&"pkg:cowboy_stream".into()));
+        assert_eq!(imports.len(), 2, "unexpected extra edges: {imports:?}");
+    }
+
+    #[test]
+    fn erlang_license_comment_leaks_no_edge() {
+        // DF-WARPFS-88 regression guard, kept for DF-WARPFS-91: a cowboy-style
+        // ISC/BSD license header contains the quoted run "AS IS" and mentions
+        // real module qualifiers in prose. The extractor matches ONLY
+        // pp_include/pp_include_lib directive nodes, so no comment text can
+        // become an edge — but if the phantom ever returns, this fails.
+        let imports = parse(
+            Language::Erlang,
+            "%% Copyright (c) 2011-2026, Loïc Hoguin <essen@ninenines.eu>\n\
+             %%\n\
+             %% Permission to use, copy, modify, and/or distribute this software\n\
+             %% is subject to the terms of the ISC License, provided that the\n\
+             %% above copyright notice and this permission notice appear in all\n\
+             %% copies (\"AS IS\", WITHOUT WARRANTY OF ANY KIND).\n\
+             %%\n\
+             -module(cowboy_machine).\n\
+             -include(\"cowboy.hrl\").\n\
+             handler(Req) -> cowboy_req:reply(200, Req).\n",
+        );
+        assert!(imports.contains(&"local:cowboy.hrl".into()));
+        assert!(imports.contains(&"pkg:cowboy_req".into()));
+        for path in &imports {
+            assert!(
+                !path.contains("AS IS") && !path.contains("Permission"),
+                "license text leaked into an edge: {path}"
+            );
+        }
     }
 
     #[test]
