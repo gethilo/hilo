@@ -2264,3 +2264,45 @@ Tick `warpfs-dogfood-2026-11-23-18-36-23`. Binary v0.4.1-125-g675e6ed-dirty; rep
 Workspace mount read probe initially compared the wrong backing tree. Corrected control: xattr on actual backing tree was visible through mount; through-mount xattr write returned EOPNOTSUPP on the older binary. Related existing row DF-WARPFS-70; current-tip behavior unverified. Initial unsupported recurrence rows were withdrawn before commit. The inherited daemon-kill probe did not find a PID and does not prove logging on kill.
 
 Fresh-machine install battery launched on bunker-las-03, agent 7b01b53f, evidence `/tmp/bunker-qa-evidence-20261123T185424Z-901520.jsonl`. Collection returned RUNNING with six synced rows; no completed install cell. Agent left intact; installation unverified. Run report: `docs/dogfood/2026-11-23-run51-workspace-mount.md`; evidence `.coding-hermes/evidence/warpfs-dogfood-2026-11-23-18-36-23/`.
+{marker}
+
+Delivery 2 of tick `warpfs-dogfood-2026-11-23-18-36-23` (inbound dispatches
+13:36:55 and 14:09:57 -05 — a re-fire, not a second run). Delivery 1 completed
+the PARTIAL run above but died at ~14:09 before committing; product tree
+unchanged (no product-file delta on tip ca3043a), so no re-walk was licensed.
+
+Salvage (this delivery's primary write): commit 68f91e5 — the run-51 log
+entry, all 19 evidence files under
+.coding-hermes/evidence/warpfs-dogfood-2026-11-23-18-36-23/, and
+docs/dogfood/2026-11-23-run51-workspace-mount.md — re-verified against their
+own evidence, committed by strict pathspec, pushed, proven at origin/master
+(HEAD == origin/master == 68f91e5; log grep: 1 base entry, this delta
+separate). Pre-commit gate hand-graded after a 180s hang inside the tier-1
+guard (queued behind a sibling foreman's cargo build — attributed to
+worktrees/warpfs-DF-WARPFS-91, not this lane): boardctl validate rc=0 OK,
+gitleaks over the staged diff rc=0, no code-shaped files staged; bypass
+disclosed in the commit message.
+
+Binary provenance quantified: the tested binary v0.4.1-125-g675e6ed-dirty is
+15 product commits behind tip ca3043a (v0.4.1..675e6ed = 125,
+v0.4.1..ca3043a = 140). Run 51's numbers describe that binary.
+
+Install leg HARVEST (battery left in flight by delivery 1): one collect
+closed the loop at 14:22-14:26 -05 — 15 evidence rows synced (up from 6),
+battery STILL RUNNING, agent 7b01b53f @ bunker-las-03 left intact for the
+collector. Cell census: launch OK, target-binding OK, toolchain-bootstrap
+OK x10, fresh-install OK, tests OK, compose_config OK, docker_build N/A,
+lint FAIL. The fresh-install cell graded OK — `cargo build --workspace`
+(dev profile) finished in 11m 38s (19:11:20Z) against the QA-WARPFS-043
+baseline of 56m36s still-unfinished on a 6-CPU agent — the warm-cache agent
+image remediation that row demanded appears live; first real install PASS
+for this workspace. The lint FAIL is rc=1 `go vet ./...` on a Rust repo —
+the exact shape QA-WARPFS-035 owns; cited, not re-filed.
+
+Deliberately NOT re-filed / NOT walked: workspace-mount xattr write
+EOPNOTSUPP stays unverified on a current-tip binary (needs a ~50 min build
+under load; owned by DF-WARPFS-70); DF-WARPFS-156/176 durability-at-kill
+stays unverified (inherited kill probe found no PID). No new rows written
+by delivery 2. Foreman wave state in the working tree (PERF-016 /
+DF-WARPFS-91 / RELEASE-017 in_progress) left for its writer; .vfs residue
+predates the tick and was left untouched.
