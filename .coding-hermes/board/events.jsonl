@@ -1235,3 +1235,4 @@
 {"id": 10197, "timestamp": "2026-11-22T12:50:00Z", "event_type": "task_created", "task_id": "INT-CI-020", "actor": "foreman", "detail": "{\"id\":\"INT-CI-020\",\"status\":\"pending\"}", "tick_number": null}
 {"id": 10198, "timestamp": "2026-11-22T14:13:09Z", "event_type": "task_completed", "task_id": "PERF-017", "actor": "foreman", "detail": "{\"status\":\"complete\"}", "tick_number": null}
 {"id": 10199, "timestamp": "2026-11-22T20:00:22Z", "event_type": "task_completed", "task_id": "INT-CI-020", "actor": "foreman", "detail": "{\"status\":\"complete\"}", "tick_number": null}
+{"id": 10200, "timestamp": "2026-11-22T20:22:39Z", "event_type": "task_created", "task_id": "INF-CI-021", "actor": "foreman", "detail": "{\"id\":\"INF-CI-021\",\"status\":\"pending\"}", "tick_number": null}
