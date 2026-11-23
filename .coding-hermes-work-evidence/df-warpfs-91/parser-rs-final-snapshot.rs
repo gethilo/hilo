@@ -1,0 +1,3410 @@
+//! AST parsing with tree-sitter and static HCL scanning for 27 languages.
+//!
+//! Supports Go, Python, TypeScript, Rust, JavaScript, Java, C, C++, Ruby,
+//! C#, Kotlin, PHP, Swift, Elixir, Haskell, Erlang, Scala, Zig, Lua, Dart,
+//! Clojure, OCaml, R, Julia, Elm, and Nim.
+//! Each language gets a dedicated extraction function that understands its
+//! specific import/dependency syntax.
+
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+
+use hilo_metadata::inventory::Edge;
+use tree_sitter::{Node, Parser as TsParser};
+
+use crate::error::GraphResult;
+
+/// Languages supported by the multi-language parser.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Language {
+    Go,
+    Python,
+    TypeScript,
+    Rust,
+    JavaScript,
+    Java,
+    C,
+    Cpp,
+    Ruby,
+    CSharp,
+    Kotlin,
+    Php,
+    Swift,
+    Elixir,
+    Haskell,
+    Erlang,
+    Scala,
+    Zig,
+    Lua,
+    Dart,
+    Clojure,
+    OCaml,
+    R,
+    Julia,
+    Elm,
+    Nim,
+    Terraform,
+}
+
+impl Language {
+    /// Detect language from a file extension.
+    ///
+    /// `.mjs`/`.cjs` are JavaScript, not a language of their own: the ESM/CJS
+    /// module flavours share tree-sitter's JS grammar, and `resolution.rs`
+    /// already probes both as first-class JS. They were missing from this
+    /// table, which made every `.mjs`/`.cjs` file invisible to discovery.
+    pub fn from_extension(ext: &str) -> Option<Self> {
+        match ext {
+            "go" => Some(Language::Go),
+            "py" => Some(Language::Python),
+            "ts" | "tsx" => Some(Language::TypeScript),
+            "rs" => Some(Language::Rust),
+            "js" | "jsx" | "mjs" | "cjs" => Some(Language::JavaScript),
+            "java" => Some(Language::Java),
+            "c" => Some(Language::C),
+            // DF-WARPFS-75: a C header is a C compilation unit for the
+            // purposes of dependency extraction — it carries its own
+            // `#include` directives and every one of them is a real edge.
+            // `.h` used to resolve to NO language, so `collect_source_files`
+            // pruned every header before it could be parsed and not one edge
+            // in any C graph ever had a header as its `from` (redis corpus:
+            // 3235 edges, 0 header sources, `server.h` carried 53 includes
+            // and appeared only as a target). Same table the classify command
+            // already uses (`hilo-cli` SOURCE_EXTS maps `h` -> C).
+            "h" => Some(Language::C),
+            "cpp" | "cc" | "cxx" | "hpp" | "hxx" => Some(Language::Cpp),
+            "rb" => Some(Language::Ruby),
+            "cs" => Some(Language::CSharp),
+            "kt" | "kts" => Some(Language::Kotlin),
+            "php" | "phtml" => Some(Language::Php),
+            "swift" => Some(Language::Swift),
+            "ex" | "exs" => Some(Language::Elixir),
+            "hs" | "lhs" => Some(Language::Haskell),
+            "erl" | "hrl" => Some(Language::Erlang),
+            "scala" | "sc" => Some(Language::Scala),
+            "zig" => Some(Language::Zig),
+            "lua" => Some(Language::Lua),
+            "dart" => Some(Language::Dart),
+            "clj" | "cljs" | "cljc" | "edn" => Some(Language::Clojure),
+            "ml" | "mli" => Some(Language::OCaml),
+            "r" | "R" => Some(Language::R),
+            "jl" => Some(Language::Julia),
+            "elm" => Some(Language::Elm),
+            "nim" => Some(Language::Nim),
+            "tf" | "hcl" => Some(Language::Terraform),
+            _ => None,
+        }
+    }
+
+    /// All extensions this parser handles.
+    pub fn all_extensions() -> &'static [&'static str] {
+        &[
+            "go", "py", "ts", "tsx", "rs", "js", "jsx", "mjs", "cjs", "java", "c", "h", "cpp",
+            "cc", "cxx", "rb", "cs", "kt", "kts", "php", "phtml", "swift", "ex", "exs", "hs",
+            "lhs", "erl", "hrl", "scala", "sc", "zig", "lua", "dart", "clj", "cljs", "cljc", "edn",
+            "ml", "mli", "r", "jl", "elm", "nim", "tf", "hcl",
+        ]
+    }
+
+    /// Detect a language from a full path, including Terraform's `.tf.json`.
+    pub fn from_path(path: &Path) -> Option<Self> {
+        let name = path.file_name()?.to_str()?;
+        if name.ends_with(".tf.json") {
+            return Some(Language::Terraform);
+        }
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .and_then(Self::from_extension)
+    }
+}
+
+/// Multi-language parser that extracts dependency edges from source files.
+///
+/// Construct with [`Parser::for_language`] and reuse across files of the same
+/// language by calling [`Parser::parse_imports`] for each source file.
+pub struct Parser {
+    parser: Option<TsParser>,
+    language: Language,
+}
+
+/// Why a source file's syntax tree could not be used directly (DF-WARPFS-85).
+///
+/// Reported per file so a file that contributes nothing is named with a
+/// reason instead of landing silently in the "no imports" bucket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParseMiss {
+    /// The grammar returned a tree, but it carries `ERROR`/missing nodes —
+    /// the bytes are not valid source for this grammar (a build template
+    /// `.kt` whose `package` header holds `${...}` placeholders is the
+    /// canonical case).
+    SyntaxErrors,
+    /// tree-sitter returned no tree at all.
+    NoTree,
+}
+
+impl ParseMiss {
+    /// Stable lowercase tag used in coverage output and the parse cache.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ParseMiss::SyntaxErrors => "syntax errors",
+            ParseMiss::NoTree => "no parse tree",
+        }
+    }
+}
+
+/// How imports were recovered from a file whose own syntax tree was unusable
+/// (DF-WARPFS-85).
+///
+/// Every tier keeps the Kotlin parser from dropping a real `import` statement
+/// because an unrelated part of the file failed to parse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportRecovery {
+    /// The tree carried errors, but its import nodes were still usable.
+    Direct,
+    /// The tree collapsed the whole file into one `ERROR` node. Build templates
+    /// do this from their `${...}` package header, so a placeholder-neutralised
+    /// copy is re-parsed and its import nodes are used.
+    RepairedTemplate,
+    /// No usable tree even after repair (`#parse(...)` directives, unknown
+    /// syntax): top-level `import` lines are scanned lexically.
+    LexicalScan,
+}
+
+impl ImportRecovery {
+    /// Stable lowercase tag used in coverage output and the parse cache.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ImportRecovery::Direct => "direct",
+            ImportRecovery::RepairedTemplate => "repaired template",
+            ImportRecovery::LexicalScan => "lexical scan",
+        }
+    }
+}
+
+/// One file's parse: the edges it declares plus how the parse went.
+///
+/// Returned by [`Parser::parse_imports_detailed`]; [`Parser::parse_imports`]
+/// is the edge-only wrapper for callers that do not need the diagnostics.
+#[derive(Debug, Clone)]
+pub struct ImportParse {
+    /// Edges declared by the file, `rel = "imports"` (plus `tested_by` for
+    /// test files).
+    pub edges: Vec<Edge>,
+    /// `Some` when the file's syntax tree carried errors. Set even when the
+    /// imports were recovered, so a repair is never silent.
+    pub parse_miss: Option<ParseMiss>,
+    /// How the imports were recovered when the tree was directly unusable.
+    /// `None` when the tree parsed cleanly (or yielded no imports at all).
+    pub recovery: Option<ImportRecovery>,
+}
+
+impl ImportParse {
+    /// A parse with no diagnostics: the tree was clean.
+    fn clean(edges: Vec<Edge>) -> Self {
+        ImportParse {
+            edges,
+            parse_miss: None,
+            recovery: None,
+        }
+    }
+}
+
+// ── Language detection ──────────────────────────────────────────────
+
+impl Parser {
+    /// Parse `source` into a tree-sitter syntax tree without interpreting
+    /// it as imports. Used by auxiliary analyses (e.g. conformance
+    /// extraction) that need raw AST access through the same grammar table.
+    /// Returns `None` for languages without a tree-sitter parser (Terraform)
+    /// or when parsing fails to produce a tree.
+    pub fn parse_tree(&mut self, source: &[u8]) -> Option<tree_sitter::Tree> {
+        self.parser.as_mut()?.parse(source, None)
+    }
+
+    /// Create a new [`Parser`] for the given language.
+    pub fn for_language(language: Language) -> GraphResult<Self> {
+        if language == Language::Terraform {
+            return Ok(Parser {
+                parser: None,
+                language,
+            });
+        }
+        let mut parser = TsParser::new();
+        let lang = match language {
+            Language::Go => tree_sitter_go::LANGUAGE.into(),
+            Language::Python => tree_sitter_python::LANGUAGE.into(),
+            Language::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            Language::Rust => tree_sitter_rust::LANGUAGE.into(),
+            Language::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
+            Language::Java => tree_sitter_java::LANGUAGE.into(),
+            Language::C => tree_sitter_c::LANGUAGE.into(),
+            Language::Cpp => tree_sitter_cpp::LANGUAGE.into(),
+            Language::Ruby => tree_sitter_ruby::LANGUAGE.into(),
+            Language::CSharp => tree_sitter_c_sharp::LANGUAGE.into(),
+            Language::Kotlin => tree_sitter_kotlin_ng::LANGUAGE.into(),
+            Language::Php => tree_sitter_php::LANGUAGE_PHP.into(),
+            Language::Swift => tree_sitter_swift::LANGUAGE.into(),
+            Language::Elixir => tree_sitter_elixir::LANGUAGE.into(),
+            Language::Haskell => tree_sitter_haskell::LANGUAGE.into(),
+            Language::Erlang => tree_sitter_erlang::LANGUAGE.into(),
+            Language::Scala => tree_sitter_scala::LANGUAGE.into(),
+            Language::Zig => tree_sitter_zig::LANGUAGE.into(),
+            Language::Lua => tree_sitter_lua::LANGUAGE.into(),
+            Language::Dart => tree_sitter_dart::LANGUAGE.into(),
+            Language::Clojure => tree_sitter_clojure::LANGUAGE.into(),
+            Language::OCaml => tree_sitter_ocaml::LANGUAGE_OCAML.into(),
+            Language::R => tree_sitter_r::LANGUAGE.into(),
+            Language::Julia => tree_sitter_julia::LANGUAGE.into(),
+            Language::Elm => tree_sitter_elm::LANGUAGE.into(),
+            Language::Nim => tree_sitter_nim::language(),
+            Language::Terraform => unreachable!("Terraform uses the static HCL scanner"),
+        };
+        parser.set_language(&lang)?;
+        Ok(Parser {
+            parser: Some(parser),
+            language,
+        })
+    }
+
+    /// Parse a source file and return the dependency edges it declares.
+    ///
+    /// Each import/include/require declaration produces one [`Edge`] with
+    /// `rel = "imports"`. The `from` field is `file_path`, and `to` is the
+    /// classified dependency target with a language-appropriate prefix.
+    ///
+    /// Edge-only wrapper over [`Parser::parse_imports_detailed`] for callers
+    /// that do not need the per-file parse diagnostics.
+    pub fn parse_imports(&mut self, file_path: &str, source: &str) -> GraphResult<Vec<Edge>> {
+        Ok(self.parse_imports_detailed(file_path, source)?.edges)
+    }
+
+    /// Parse a source file into its edges PLUS the diagnostics that let a
+    /// caller account for a file which produced nothing (DF-WARPFS-85).
+    ///
+    /// `parse_miss` names the files whose syntax tree carried errors, and
+    /// `recovery` records how the imports were still obtained. Before this,
+    /// a build-template file that the grammar collapsed into a single `ERROR`
+    /// node was indistinguishable from a file with no imports at all, so its
+    /// real `import` statements were silently dropped from the graph.
+    pub fn parse_imports_detailed(
+        &mut self,
+        file_path: &str,
+        source: &str,
+    ) -> GraphResult<ImportParse> {
+        if self.language == Language::Terraform {
+            return Ok(ImportParse::clean(
+                crate::terraform::parse(file_path, source).edges,
+            ));
+        }
+        let tree = match self
+            .parser
+            .as_mut()
+            .expect("tree-sitter language parser")
+            .parse(source.as_bytes(), None)
+        {
+            Some(tree) => tree,
+            // DF-WARPFS-85: a missing tree used to be a hard error that
+            // aborted the whole warm. It is now a per-file diagnostic, so one
+            // unparseable file cannot cost the rest of the corpus its edges.
+            None => {
+                return Ok(ImportParse {
+                    edges: Vec::new(),
+                    parse_miss: Some(ParseMiss::NoTree),
+                    recovery: None,
+                })
+            }
+        };
+
+        let parse_miss = tree
+            .root_node()
+            .has_error()
+            .then_some(ParseMiss::SyntaxErrors);
+        let mut recovery: Option<ImportRecovery> = None;
+        // A lexically recovered import is a real statement, but the grammar
+        // could not confirm its structure — it enters the graph at the
+        // lexical trust level rather than as ground truth.
+        let mut lexical_only = false;
+        let mut paths: Vec<String> = Vec::new();
+        match self.language {
+            Language::Go => {
+                let module = crate::resolution::go_module_path_for_file(Path::new(file_path));
+                extract_go_imports(
+                    tree.root_node(),
+                    source.as_bytes(),
+                    &mut paths,
+                    module.as_deref(),
+                )
+            }
+            Language::Python => {
+                let ctx = PythonImportCtx::build(file_path);
+                extract_python_imports(tree.root_node(), source.as_bytes(), &mut paths, &ctx)
+            }
+            Language::TypeScript | Language::JavaScript => {
+                extract_js_imports(tree.root_node(), source.as_bytes(), &mut paths);
+            }
+            Language::Rust => {
+                let ctx = RustModuleCtx::build(file_path);
+                extract_rust_imports(tree.root_node(), source.as_bytes(), &mut paths, &ctx)
+            }
+            Language::Java => extract_java_imports(tree.root_node(), source.as_bytes(), &mut paths),
+            Language::C | Language::Cpp => {
+                extract_c_imports(tree.root_node(), source.as_bytes(), &mut paths)
+            }
+            Language::Ruby => extract_ruby_imports(tree.root_node(), source.as_bytes(), &mut paths),
+            Language::CSharp => {
+                extract_csharp_imports(tree.root_node(), source.as_bytes(), &mut paths)
+            }
+            Language::Kotlin => {
+                extract_kotlin_imports(tree.root_node(), source.as_bytes(), &mut paths)
+            }
+            Language::Php => extract_php_imports(tree.root_node(), source.as_bytes(), &mut paths),
+            Language::Swift => {
+                extract_swift_imports(tree.root_node(), source.as_bytes(), &mut paths)
+            }
+            Language::Elixir => {
+                extract_elixir_imports(tree.root_node(), source.as_bytes(), &mut paths)
+            }
+            Language::Haskell => {
+                extract_haskell_imports(tree.root_node(), source.as_bytes(), &mut paths)
+            }
+            Language::Erlang => {
+                extract_erlang_imports(tree.root_node(), source.as_bytes(), &mut paths)
+            }
+            Language::Scala => {
+                extract_scala_imports(tree.root_node(), source.as_bytes(), &mut paths)
+            }
+            Language::Zig => extract_zig_imports(tree.root_node(), source.as_bytes(), &mut paths),
+            Language::Lua => extract_lua_imports(tree.root_node(), source.as_bytes(), &mut paths),
+            Language::Dart => extract_dart_imports(tree.root_node(), source.as_bytes(), &mut paths),
+            Language::Clojure => {
+                extract_clojure_imports(tree.root_node(), source.as_bytes(), &mut paths)
+            }
+            Language::OCaml => {
+                extract_ocaml_imports(tree.root_node(), source.as_bytes(), &mut paths)
+            }
+            Language::R => extract_r_imports(tree.root_node(), source.as_bytes(), &mut paths),
+            Language::Julia => {
+                extract_julia_imports(tree.root_node(), source.as_bytes(), &mut paths)
+            }
+            Language::Elm => extract_elm_imports(tree.root_node(), source.as_bytes(), &mut paths),
+            Language::Nim => extract_nim_imports(tree.root_node(), source.as_bytes(), &mut paths),
+            Language::Terraform => unreachable!("handled before tree-sitter parsing"),
+        }
+
+        // DF-WARPFS-85: a Kotlin build template (`package ${package}.db`) is
+        // not valid Kotlin, and the grammar responds by swallowing the WHOLE
+        // file into one `ERROR` node — including the real imports below the
+        // header. Recover them: first from a placeholder-neutralised copy
+        // (still AST nodes), then — for templates whose header breaks in some
+        // other way — from the source lines themselves.
+        if self.language == Language::Kotlin && paths.is_empty() && parse_miss.is_some() {
+            if let Some(repaired) = neutralise_template_placeholders(source) {
+                if let Some(repaired_tree) = self
+                    .parser
+                    .as_mut()
+                    .expect("tree-sitter language parser")
+                    .parse(repaired.as_bytes(), None)
+                {
+                    extract_kotlin_imports(
+                        repaired_tree.root_node(),
+                        repaired.as_bytes(),
+                        &mut paths,
+                    );
+                }
+            }
+            if !paths.is_empty() {
+                recovery = Some(ImportRecovery::RepairedTemplate);
+            } else {
+                paths = scan_kotlin_import_lines(source);
+                if !paths.is_empty() {
+                    recovery = Some(ImportRecovery::LexicalScan);
+                    lexical_only = true;
+                }
+            }
+        } else if parse_miss.is_some() && !paths.is_empty() {
+            // The tree had errors, yet its import nodes survived: say so
+            // instead of pretending the file parsed cleanly.
+            recovery = Some(ImportRecovery::Direct);
+        }
+
+        // A file the grammar could not repair and that declares no imports
+        // keeps its `parse_miss` diagnostic, so the caller files it under
+        // parse-miss instead of the clean "no imports" bucket. A cleanly
+        // parsed file reports no miss at all.
+        let (provenance, confidence) = if lexical_only {
+            ("lexical", 0.3)
+        } else {
+            ("ast_exact", 1.0)
+        };
+
+        // GAP-052: a test file's imports are also coverage edges. Emit
+        // `tested_by` (test → target) alongside `imports` for every unique
+        // target so `graph untested`, module coverage stats, and impact see
+        // what the test suite exercises. Without this, no code path ever
+        // writes `tested_by` and every production file reads as "untested".
+        let is_test = crate::classify::is_test_file(file_path);
+        let mut edges: Vec<Edge> = Vec::with_capacity(paths.len());
+        let mut tested_targets: HashSet<String> = HashSet::new();
+        for path in paths {
+            edges.push(Edge {
+                from: file_path.to_string(),
+                to: path.clone(),
+                rel: "imports".to_string(),
+                provenance: provenance.to_string(),
+                confidence,
+                granularity: "file".to_string(),
+            });
+            if is_test && tested_targets.insert(path.clone()) {
+                edges.push(Edge {
+                    from: file_path.to_string(),
+                    to: path,
+                    rel: "tested_by".to_string(),
+                    provenance: provenance.to_string(),
+                    confidence,
+                    granularity: "file".to_string(),
+                });
+            }
+        }
+        Ok(ImportParse {
+            edges,
+            parse_miss,
+            recovery,
+        })
+    }
+}
+
+// ── Go ──────────────────────────────────────────────────────────────
+fn extract_go_imports(node: Node, source: &[u8], paths: &mut Vec<String>, module: Option<&str>) {
+    if node.kind() == "import_spec" {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "interpreted_string_literal" {
+                if let Ok(text) = child.utf8_text(source) {
+                    let cleaned = text.trim_matches('"');
+                    paths.push(classify_go(cleaned, module));
+                }
+            }
+        }
+        return;
+    }
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        extract_go_imports(child, source, paths, module);
+    }
+}
+
+fn classify_go(path: &str, module: Option<&str>) -> String {
+    let internal = module.is_some_and(|root| path == root || path.starts_with(&format!("{root}/")));
+    if internal || path.contains('.') {
+        format!("pkg:{path}")
+    } else {
+        format!("std:{path}")
+    }
+}
+
+// ── Python ──────────────────────────────────────────────────────────
+
+/// Path-aware context for Python import extraction (GAP-076).
+///
+/// Importers are stored with repo-relative paths, so "where am I in the
+/// package tree" is not derivable from the source text alone: it needs the
+/// same filesystem walk [`crate::resolution::python_module_for_file`] does
+/// when a consumer resolves a *file* to a node.
+struct PythonImportCtx {
+    /// Dotted module of the importing file (`src/flask/config.py` →
+    /// `flask.config`), or `None` when the file is not a member of any
+    /// package (standalone script).
+    module: Option<String>,
+    /// Whether the importing file is a package `__init__.py`, whose module
+    /// name IS the package (`flask/__init__.py` → `flask`).
+    is_init: bool,
+}
+
+impl PythonImportCtx {
+    fn build(file_path: &str) -> Self {
+        let path = Path::new(file_path);
+        Self {
+            module: python_importing_module(path),
+            is_init: path.file_name().and_then(|n| n.to_str()) == Some("__init__.py"),
+        }
+    }
+}
+
+/// The dotted module of the file doing the importing.
+///
+/// [`crate::resolution::python_module_for_file`] is the single authority
+/// (GAP-082): since its PEP 420 support it already climbs past namespace
+/// directories to the nearest regular package, so `src/flask/sansio/app.py`
+/// resolves to `flask.sansio.app` exactly as a consumer resolving that file
+/// to a node will. Before GAP-082 this wrapper carried a private copy of
+/// that fallback walk; two divergent implementations of the same walk was
+/// the defect class this row closed, so the copy is gone — this is now only
+/// a named alias at the parser's call site.
+fn python_importing_module(file: &Path) -> Option<String> {
+    crate::resolution::python_module_for_file(file)
+}
+
+/// Resolve a relative Python import's raw module text to its absolute
+/// dotted module (GAP-076), e.g. `".sansio.app"` in `flask/config.py` →
+/// `"flask.sansio.app"`.
+///
+/// `raw` is the module as written (`.config`, `..json`, or `.` for
+/// `from . import x`), `importing_module` is the dotted module of the file
+/// doing the importing, and `is_init` marks a package `__init__.py` (whose
+/// module is already the package).
+///
+/// Returns `None` for absolute text and for a relative import that climbs
+/// above the top-level package — nothing extra to emit in either case.
+fn resolve_python_relative_module(
+    raw: &str,
+    importing_module: &str,
+    is_init: bool,
+) -> Option<String> {
+    let level = raw.chars().take_while(|c| *c == '.').count();
+    if level == 0 {
+        return None;
+    }
+    let rest = &raw[level..];
+
+    // The package containing the importing file: for a plain module the
+    // last component is the module itself; for `__init__.py` the module is
+    // the package.
+    let mut components: Vec<&str> = importing_module.split('.').collect();
+    if !is_init {
+        components.pop()?;
+    }
+
+    // `level - 1` further components are consumed by the leading dots.
+    let climb = level - 1;
+    if components.len() < climb {
+        return None;
+    }
+    components.truncate(components.len() - climb);
+    if components.is_empty() {
+        return None;
+    }
+
+    let base = components.join(".");
+    if rest.is_empty() {
+        Some(base)
+    } else {
+        Some(format!("{base}.{rest}"))
+    }
+}
+
+fn extract_python_imports(
+    node: Node,
+    source: &[u8],
+    paths: &mut Vec<String>,
+    ctx: &PythonImportCtx,
+) {
+    match node.kind() {
+        "import_statement" | "import_from_statement" => {
+            let text = node.utf8_text(source).unwrap_or("");
+            let module = text
+                .strip_prefix("import ")
+                .or_else(|| text.strip_prefix("from "))
+                .unwrap_or(text)
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .trim_matches('"');
+            if !module.is_empty() {
+                // GAP-091: a relative import ships ONLY its resolved absolute
+                // module node. GAP-076 also kept the raw specifier as written
+                // (`pkg:.config`, `pkg:..json.provider`), but that string is a
+                // pseudo-node no consumer can open or resolve: it entered the
+                // search/understand corpus as a first-class document,
+                // outranked the real `src/flask/config.py` for its own module
+                // name, and spent the understand() MAP budget on '(no
+                // symbols extracted)' anchor lines. Nothing keys on the raw
+                // form — impact recall is carried entirely by the resolved
+                // node (GAP-076's other half, unchanged). Absolute imports
+                // and every other language are untouched.
+                if module.starts_with('.') {
+                    if let Some(importing) = ctx.module.as_deref() {
+                        if let Some(resolved) =
+                            resolve_python_relative_module(module, importing, ctx.is_init)
+                        {
+                            paths.push(format!("pkg:{resolved}"));
+                        }
+                    }
+                } else {
+                    paths.push(format!("pkg:{module}"));
+                }
+            }
+            return;
+        }
+        _ => {}
+    }
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        extract_python_imports(child, source, paths, ctx);
+    }
+}
+
+// ── JavaScript / TypeScript ─────────────────────────────────────────
+
+fn extract_js_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+    if node.kind() == "import_statement" {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "string" {
+                if let Ok(text) = child.utf8_text(source) {
+                    let cleaned = text.trim_matches('"').trim_matches('\'');
+                    paths.push(classify_js(cleaned));
+                }
+            }
+        }
+        return;
+    }
+    // require() calls
+    if node.kind() == "call_expression" {
+        let text = node.utf8_text(source).unwrap_or("");
+        if text.starts_with("require(") {
+            if let Some(arg) = text
+                .strip_prefix("require(")
+                .and_then(|s| s.strip_suffix(")"))
+            {
+                let cleaned = arg.trim().trim_matches('"').trim_matches('\'');
+                if !cleaned.is_empty() {
+                    paths.push(classify_js(cleaned));
+                }
+            }
+        }
+        return;
+    }
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        extract_js_imports(child, source, paths);
+    }
+}
+
+fn classify_js(path: &str) -> String {
+    if path.starts_with('.') || path.starts_with('/') {
+        format!("local:{path}")
+    } else {
+        format!("pkg:{path}")
+    }
+}
+
+// ── Rust ────────────────────────────────────────────────────────────
+
+/// Per-crate module context used to resolve intra-crate Rust imports
+/// (`use commands::init;`, `use crate::commands::init;`) to concrete file
+/// paths instead of `pkg:` pseudo-nodes (GAP-043).
+///
+/// The parser emits file→file edges when the imported path names a module
+/// declared in this crate; external crates keep their `pkg:` edges.
+struct RustModuleCtx {
+    /// Crate-root modules (`mod x;` in src/main.rs / src/lib.rs) — used for
+    /// `crate::`-prefixed absolute paths.
+    root: HashMap<String, String>,
+    /// Root modules plus modules declared in the ancestor `mod.rs` files of
+    /// the file being parsed (innermost wins) — used for bare relative paths.
+    local: HashMap<String, String>,
+}
+
+impl RustModuleCtx {
+    /// Build the module context for `file_path`, or an empty context when
+    /// the file does not live under a Cargo package (resolution then falls
+    /// back to `pkg:` edges, preserving pre-GAP-043 behaviour).
+    fn build(file_path: &str) -> Self {
+        let mut ctx = RustModuleCtx {
+            root: HashMap::new(),
+            local: HashMap::new(),
+        };
+        let Some(pkg_dir) = rust_package_dir(file_path) else {
+            return ctx;
+        };
+        let src_dir = pkg_dir.join("src");
+        let root_file = if src_dir.join("main.rs").is_file() {
+            src_dir.join("main.rs")
+        } else {
+            src_dir.join("lib.rs")
+        };
+        if root_file.is_file() {
+            collect_rust_modules(&root_file, &src_dir, &mut ctx.root);
+            ctx.local = ctx.root.clone();
+        }
+        // Ancestor mod.rs chain: modules declared in the file's enclosing
+        // module files are visible as bare paths from this file. Innermost
+        // declarations shadow outer ones (inserted last).
+        let parent = Path::new(file_path).parent().unwrap_or(Path::new(""));
+        let mut chain: Vec<PathBuf> = Vec::new();
+        let mut dir = Some(parent.to_path_buf());
+        while let Some(d) = dir {
+            if d == src_dir {
+                break;
+            }
+            chain.push(d.clone());
+            dir = d.parent().map(Path::to_path_buf);
+        }
+        for d in chain.iter().rev() {
+            let mod_file = d.join("mod.rs");
+            if mod_file.is_file() {
+                collect_rust_modules(&mod_file, d, &mut ctx.local);
+            }
+        }
+        ctx
+    }
+}
+
+/// Walk up from `file` to the nearest directory containing a `Cargo.toml`
+/// with a `[package]` section (the crate root). Workspace-root manifests
+/// are skipped. Returns `None` when no package manifest is found.
+fn rust_package_dir(file: &str) -> Option<PathBuf> {
+    let mut dir = Path::new(file).parent()?.to_path_buf();
+    loop {
+        let manifest = dir.join("Cargo.toml");
+        if manifest.is_file() {
+            if let Ok(text) = std::fs::read_to_string(&manifest) {
+                if text.lines().any(|l| l.trim().starts_with("[package]")) {
+                    return Some(dir);
+                }
+            }
+        }
+        dir = dir.parent()?.to_path_buf();
+    }
+}
+
+/// Parse `mod_file` for file-backed module declarations (`mod x;`) and map
+/// each name to its resolved file path (`<base>/x.rs` or `<base>/x/mod.rs`).
+/// Inline modules (`mod x { ... }`) and declarations with no backing file
+/// are skipped.
+fn collect_rust_modules(mod_file: &Path, base_dir: &Path, map: &mut HashMap<String, String>) {
+    let Ok(source) = std::fs::read_to_string(mod_file) else {
+        return;
+    };
+    let mut ts = tree_sitter::Parser::new();
+    if ts.set_language(&tree_sitter_rust::LANGUAGE.into()).is_err() {
+        return;
+    }
+    let Some(tree) = ts.parse(&source, None) else {
+        return;
+    };
+    collect_rust_mod_items(tree.root_node(), &source, base_dir, map);
+}
+
+fn collect_rust_mod_items(
+    node: Node,
+    source: &str,
+    base_dir: &Path,
+    map: &mut HashMap<String, String>,
+) {
+    if node.kind() == "mod_item" {
+        // Inline `mod x { ... }` has a body; file-backed `mod x;` does not.
+        if node.child_by_field_name("body").is_none() {
+            if let Some(name_node) = node.child_by_field_name("name") {
+                if let Ok(name) = name_node.utf8_text(source.as_bytes()) {
+                    let as_file = base_dir.join(format!("{name}.rs"));
+                    let as_dir = base_dir.join(name).join("mod.rs");
+                    let target = if as_file.is_file() {
+                        Some(as_file)
+                    } else if as_dir.is_file() {
+                        Some(as_dir)
+                    } else {
+                        None
+                    };
+                    if let Some(t) = target {
+                        map.insert(name.to_string(), t.to_string_lossy().into_owned());
+                    }
+                }
+            }
+        }
+        return;
+    }
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        collect_rust_mod_items(child, source, base_dir, map);
+    }
+}
+
+/// Resolve a Rust use path to the concrete file it imports, when the first
+/// segment names a local module. `from_crate_root` selects the crate-root
+/// map (`crate::`-prefixed absolute paths) vs the file's local map (bare
+/// paths). Deeper segments descend into module directories; resolution
+/// stops at the nearest existing file. Returns `None` for external paths.
+fn resolve_rust_path(ctx: &RustModuleCtx, path: &str, from_crate_root: bool) -> Option<String> {
+    let path = path.trim();
+    if path.is_empty() {
+        return None;
+    }
+    let segments: Vec<&str> = path.split("::").filter(|s| !s.is_empty()).collect();
+    let first = *segments.first()?;
+    let entry = if from_crate_root {
+        ctx.root.get(first)
+    } else {
+        ctx.local.get(first)
+    }?
+    .clone();
+    let mut current = PathBuf::from(entry);
+    for seg in &segments[1..] {
+        let is_plain_file = current.file_name().and_then(|n| n.to_str()) != Some("mod.rs");
+        if is_plain_file {
+            // A plain `x.rs` cannot contain file-backed submodules.
+            break;
+        }
+        let dir = current.parent()?;
+        let as_file = dir.join(format!("{seg}.rs"));
+        let as_dir = dir.join(seg).join("mod.rs");
+        if as_file.is_file() {
+            current = as_file;
+        } else if as_dir.is_file() {
+            current = as_dir;
+        } else {
+            break;
+        }
+    }
+    Some(current.to_string_lossy().into_owned())
+}
+
+fn extract_rust_imports(node: Node, source: &[u8], paths: &mut Vec<String>, ctx: &RustModuleCtx) {
+    if node.kind() == "use_declaration" {
+        let text = node.utf8_text(source).unwrap_or("");
+        let mut trimmed = strip_rust_use_visibility(text);
+        if let Some(rest) = trimmed.strip_prefix("use ") {
+            trimmed = rest;
+        }
+        let trimmed = trimmed.trim();
+        if trimmed.contains('{') {
+            // Brace groups: expand to one edge per symbol (`use foo::{a, b}`
+            // → pkg:foo::a, pkg:foo::b) instead of leaking the raw group
+            // text (`pkg:{...}` garbage) into the graph. Local module
+            // symbols resolve to file paths (GAP-043).
+            for symbol in expand_rust_use_group(trimmed) {
+                push_rust_symbol_edge(&symbol, paths, ctx);
+            }
+        } else {
+            let path = strip_rust_alias(trimmed).trim_end_matches(';').trim();
+            let first = path.split("::").next().unwrap_or(path);
+            if first == "crate" {
+                // `use crate::...` — absolute within this crate: resolve to
+                // the module's file, skip when unresolvable.
+                if let Some(target) = resolve_rust_path(ctx, &path["crate".len()..], true) {
+                    paths.push(target);
+                }
+            } else if first == "self" || first == "super" {
+                // Local pseudo-prefixes: skipped (unchanged behaviour).
+            } else if let Some(target) = resolve_rust_path(ctx, path, false) {
+                // Bare path naming a local module: file→file edge.
+                paths.push(target);
+            } else if !first.is_empty() {
+                // External crate: keep the pkg: pseudo-node.
+                paths.push(format!("pkg:{first}"));
+            }
+        }
+        return;
+    }
+    // extern crate declarations
+    if node.kind() == "extern_crate_declaration" {
+        let text = node.utf8_text(source).unwrap_or("");
+        if let Some(name) = text.strip_prefix("extern crate ") {
+            let cleaned = name.trim().trim_matches(';');
+            if !cleaned.is_empty() {
+                paths.push(format!("pkg:{cleaned}"));
+            }
+        }
+        return;
+    }
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        extract_rust_imports(child, source, paths, ctx);
+    }
+}
+
+/// Strip a leading visibility modifier (`pub`, `pub(crate)`, `pub(super)`,
+/// `pub(in path)`) from a Rust `use` declaration body.
+fn strip_rust_use_visibility(text: &str) -> &str {
+    let t = text.trim();
+    if let Some(rest) = t.strip_prefix("pub(crate) ") {
+        rest
+    } else if let Some(rest) = t.strip_prefix("pub(super) ") {
+        rest
+    } else if let Some(rest) = t.strip_prefix("pub(in ") {
+        // `pub(in path) use ...` — skip past the closing paren.
+        match rest.find(')') {
+            Some(end) => rest[end + 1..].trim(),
+            None => rest,
+        }
+    } else if let Some(rest) = t.strip_prefix("pub ") {
+        rest
+    } else {
+        t
+    }
+}
+
+/// Strip a `as Alias` suffix (`use foo::Bar as Baz;` → `foo::Bar`).
+fn strip_rust_alias(path: &str) -> &str {
+    path.split(" as ").next().unwrap_or(path).trim()
+}
+
+/// Emit one edge per expanded use-symbol: file→file for local modules,
+/// `pkg:` for external crates; skips local pseudo-prefixes
+/// (`crate`/`self`/`super`) and empty/alias-only segments.
+fn push_rust_symbol_edge(symbol: &str, paths: &mut Vec<String>, ctx: &RustModuleCtx) {
+    let symbol = strip_rust_alias(symbol).trim_end_matches(';').trim();
+    if symbol.is_empty() {
+        return;
+    }
+    let first = symbol.split("::").next().unwrap_or(symbol);
+    if first == "crate" {
+        // `use crate::x::y` — absolute path within this crate.
+        if let Some(target) = resolve_rust_path(ctx, &symbol["crate".len()..], true) {
+            paths.push(target);
+        }
+        return;
+    }
+    if first == "self" || first == "super" {
+        return;
+    }
+    if let Some(target) = resolve_rust_path(ctx, symbol, false) {
+        paths.push(target);
+    } else {
+        paths.push(format!("pkg:{symbol}"));
+    }
+}
+
+/// Expand a Rust `use` tree body into full paths, expanding `{...}` groups
+/// into one path per symbol. Nested groups are expanded recursively.
+///
+/// `use foo::{a, b}`      → ["foo::a", "foo::b"]
+/// `use {a, b}`           → ["a", "b"]
+/// `use foo::{a::{x, y}}` → ["foo::a::x", "foo::a::y"]
+/// `use foo::{self, Bar}` → ["foo", "foo::Bar"]
+fn expand_rust_use_group(tree: &str) -> Vec<String> {
+    let tree = tree.trim().trim_end_matches(';').trim();
+    if !tree.contains('{') {
+        return vec![strip_rust_alias(tree).to_string()];
+    }
+    let open = tree.find('{').unwrap();
+    let prefix = tree[..open].trim().trim_end_matches(':').trim();
+    // Find the matching close brace, respecting nesting.
+    let mut depth = 0usize;
+    let mut close = None;
+    for (i, ch) in tree[open..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    close = Some(open + i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let close = close.unwrap_or(tree.len() - 1);
+    let body = &tree[open + 1..close];
+    let mut out = Vec::new();
+    for item in split_rust_use_items(body) {
+        let item = item.trim();
+        if item.is_empty() {
+            continue;
+        }
+        if item.contains('{') {
+            for sub in expand_rust_use_group(item) {
+                out.push(join_rust_use_path(prefix, &sub));
+            }
+        } else if item == "self" || item == "*" {
+            // `self`/glob refer to the parent path itself.
+            if !prefix.is_empty() {
+                out.push(prefix.to_string());
+            }
+        } else {
+            out.push(join_rust_use_path(prefix, strip_rust_alias(item)));
+        }
+    }
+    out
+}
+
+/// Join a group prefix and an item path, handling a bare group (`{a, b}`).
+fn join_rust_use_path(prefix: &str, item: &str) -> String {
+    if prefix.is_empty() {
+        item.to_string()
+    } else {
+        format!("{prefix}::{item}")
+    }
+}
+
+/// Split a `{...}` group body on top-level commas (nesting-aware).
+fn split_rust_use_items(body: &str) -> Vec<&str> {
+    let mut items = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    for (i, ch) in body.char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => depth -= 1,
+            ',' if depth == 0 => {
+                items.push(&body[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    items.push(&body[start..]);
+    items
+}
+
+// ── Java ────────────────────────────────────────────────────────────
+
+fn extract_java_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+    if node.kind() == "import_declaration" {
+        let text = node.utf8_text(source).unwrap_or("");
+        let path = text
+            .strip_prefix("import ")
+            .unwrap_or(text)
+            .trim_end_matches(';')
+            .trim();
+        if !path.is_empty() {
+            paths.push(format!("pkg:{path}"));
+        }
+        return;
+    }
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        extract_java_imports(child, source, paths);
+    }
+}
+
+// ── C / C++ ─────────────────────────────────────────────────────────
+
+fn extract_c_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+    if node.kind() == "preproc_include" {
+        if let Some(target) = c_include_target(node, source) {
+            paths.push(target);
+        }
+        return;
+    }
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        extract_c_imports(child, source, paths);
+    }
+}
+
+/// The single dependency a `#include` directive names, or `None` for a
+/// directive with no usable operand.
+///
+/// The operand is read from the directive's own `path` field rather than by
+/// trimming the whole directive: the grammar exposes it as a `string_literal`
+/// (quoted → `local:`) or a `system_lib_string` (angle-bracketed → `sys:`),
+/// and both tokens end at their own closing delimiter. Reading them is immune
+/// to everything that surrounds a real directive in the wild — a trailing
+/// annotation (`#include "rax.h"     /* Radix tree */`, redis writes this on
+/// dozens of lines), arbitrary whitespace after the `#` (`#   include
+/// <stdint.h>`, every conditional include in redis) and indentation inside
+/// `#if` blocks. The historical whole-directive trim fused all of it onto the
+/// operand (`local:rax.h"     /* Radix tree */`), producing a node no other
+/// edge and no query can ever name — the real dependency silently vanished
+/// from the graph (DF-WARPFS-75: 34 such `.c` edges existed before headers
+/// were parsed at all, and `server.h`'s include of `rax.h` was one of them).
+///
+/// Macro-only directives (`#include FOO`, `#include FOO(x)`) keep the
+/// historical whole-directive trim, delimiter and prefix rule included, so
+/// nothing that used to produce an edge stops producing one.
+fn c_include_target(node: Node, source: &[u8]) -> Option<String> {
+    if let Some(path) = node.child_by_field_name("path") {
+        match path.kind() {
+            "string_literal" => {
+                let name = path.utf8_text(source).unwrap_or("").trim_matches('"');
+                return (!name.is_empty()).then(|| format!("local:{name}"));
+            }
+            "system_lib_string" => {
+                let name = path
+                    .utf8_text(source)
+                    .unwrap_or("")
+                    .trim_start_matches('<')
+                    .trim_end_matches('>');
+                return (!name.is_empty()).then(|| format!("sys:{name}"));
+            }
+            _ => {}
+        }
+    }
+
+    let text = node.utf8_text(source).unwrap_or("");
+    let cleaned = text
+        .strip_prefix("#include")
+        .unwrap_or(text)
+        .trim()
+        .trim_matches('"')
+        .trim_matches('<')
+        .trim_matches('>');
+    if cleaned.is_empty() {
+        return None;
+    }
+    let prefix = if text.contains('"') { "local" } else { "sys" };
+    Some(format!("{prefix}:{cleaned}"))
+}
+
+// ── Ruby ────────────────────────────────────────────────────────────
+
+fn extract_ruby_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+    if node.kind() == "call" {
+        let text = node.utf8_text(source).unwrap_or("");
+        if text.starts_with("require ") {
+            let cleaned = text
+                .strip_prefix("require ")
+                .unwrap_or("")
+                .trim()
+                .trim_matches('"')
+                .trim_matches('\'');
+            if !cleaned.is_empty() {
+                paths.push(format!("pkg:{cleaned}"));
+            }
+        }
+    }
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        extract_ruby_imports(child, source, paths);
+    }
+}
+
+// ── C# ─────────────────────────────────────────────────────────────
+
+fn extract_csharp_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+    if node.kind() == "using_directive" {
+        let text = node.utf8_text(source).unwrap_or("");
+        // `using System;` or `using System.IO;` or `using static System.Math;`
+        let trimmed = text
+            .strip_prefix("using ")
+            .unwrap_or(text)
+            .trim_start_matches("static ")
+            .trim()
+            .trim_end_matches(';')
+            .trim();
+        if !trimmed.is_empty() {
+            paths.push(format!("pkg:{trimmed}"));
+        }
+        return;
+    }
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        extract_csharp_imports(child, source, paths);
+    }
+}
+
+// ── Kotlin ─────────────────────────────────────────────────────────
+
+/// Identifier substituted for a build-template `${...}` placeholder so a
+/// template file can still be parsed as Kotlin (DF-WARPFS-85).
+const KOTLIN_TEMPLATE_PLACEHOLDER: &str = "HiloTemplatePlaceholder";
+
+/// Neutralise `${...}` build-template placeholders (`package ${package}.db`)
+/// so the grammar sees valid Kotlin.
+///
+/// Only `${...}` spans are rewritten. In valid Kotlin those appear inside
+/// string templates, where a bare identifier is still a valid expression, so
+/// the rewrite never makes a parseable file unparseable. Returns `None` when
+/// the source carries no placeholder (nothing to repair).
+fn neutralise_template_placeholders(source: &str) -> Option<String> {
+    if !source.contains("${") {
+        return None;
+    }
+    let mut out = String::with_capacity(source.len());
+    let mut rest = source;
+    let mut changed = false;
+    while let Some(start) = rest.find("${") {
+        let Some(close) = rest[start..].find('}') else {
+            break;
+        };
+        out.push_str(&rest[..start]);
+        out.push_str(KOTLIN_TEMPLATE_PLACEHOLDER);
+        rest = &rest[start + close + 1..];
+        changed = true;
+    }
+    out.push_str(rest);
+    changed.then_some(out)
+}
+
+/// Last-resort import recovery for a Kotlin file whose syntax tree is unusable
+/// even after placeholder repair (DF-WARPFS-85).
+///
+/// Kotlin imports are one-per-line top-level declarations, so a line scan is
+/// unambiguous once comments are out of the way. Block comments are peeled
+/// with nesting (Kotlin's block comments nest), line comments and trailing
+/// semicolons are dropped, and `as` aliases are stripped — the same target
+/// shape the AST extractor emits.
+fn scan_kotlin_import_lines(source: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+    for line in strip_kotlin_block_comments(source).lines() {
+        let line = line.trim();
+        // A line comment or a block-comment remnant (`* ...`, `*/`) is not a
+        // declaration.
+        if line.starts_with("//") || line.starts_with('*') || line.starts_with("/*") {
+            continue;
+        }
+        let Some(after_keyword) = line.strip_prefix("import") else {
+            continue;
+        };
+        // `import` must be a whole keyword: `important()` is not an import.
+        if !after_keyword.starts_with(char::is_whitespace) {
+            continue;
+        }
+        let path_part = after_keyword
+            .split("//")
+            .next()
+            .unwrap_or(after_keyword)
+            .trim()
+            .trim_end_matches(';')
+            .trim()
+            .split(" as ")
+            .next()
+            .unwrap_or_default()
+            .trim();
+        if kotlin_import_path_is_plausible(path_part) {
+            paths.push(format!("pkg:{path_part}"));
+        }
+    }
+    paths
+}
+
+/// Does `path` look like a Kotlin import target (dotted identifier, `*`
+/// wildcard, backticked segment)? Guards the lexical scanner against
+/// prose that happens to start with "import".
+fn kotlin_import_path_is_plausible(path: &str) -> bool {
+    !path.is_empty()
+        && path
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '_' | '.' | '*' | '`'))
+        && path
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_alphanumeric() || c == '`')
+}
+
+/// Replace `/* ... */` spans (nesting-aware, Kotlin block comments nest) with
+/// spaces, preserving newlines so line numbers stay aligned.
+fn strip_kotlin_block_comments(source: &str) -> String {
+    let bytes = source.as_bytes();
+    let mut out = String::with_capacity(source.len());
+    let mut depth = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if depth == 0 && bytes[i..].starts_with(b"/*") {
+            depth = 1;
+            out.push_str("  ");
+            i += 2;
+            continue;
+        }
+        if depth > 0 {
+            if bytes[i..].starts_with(b"/*") {
+                depth += 1;
+                out.push_str("  ");
+                i += 2;
+                continue;
+            }
+            if bytes[i..].starts_with(b"*/") {
+                depth -= 1;
+                out.push_str("  ");
+                i += 2;
+                continue;
+            }
+            out.push(if bytes[i] == b'\n' { '\n' } else { ' ' });
+            i += 1;
+            continue;
+        }
+        // Copy one UTF-8 character verbatim.
+        let ch = source[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
+
+fn extract_kotlin_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+    if node.kind() == "import" || node.kind() == "import_header" {
+        let text = node.utf8_text(source).unwrap_or("");
+        let trimmed = text.strip_prefix("import ").unwrap_or(text).trim();
+        // Take everything up to the first " as " alias
+        let path_part = trimmed.split(" as ").next().unwrap_or(trimmed).trim();
+        if !path_part.is_empty() {
+            paths.push(format!("pkg:{path_part}"));
+        }
+        return;
+    }
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        extract_kotlin_imports(child, source, paths);
+    }
+}
+
+// ── PHP ────────────────────────────────────────────────────────────
+
+fn extract_php_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+    // Unbracketed `namespace Foo;` is a sibling of the declarations it
+    // governs, while bracketed namespaces own their declarations as a body.
+    // Walk program siblings in source order so both forms carry the namespace
+    // into the following class/interface nodes.
+    let mut namespace = String::new();
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if child.kind() == "namespace_definition" {
+            namespace = child
+                .child_by_field_name("name")
+                .and_then(|name| name.utf8_text(source).ok())
+                .map(|name| name.trim().trim_matches('\\').to_string())
+                .unwrap_or_default();
+        }
+        extract_php_imports_in_namespace(child, source, paths, &namespace);
+    }
+}
+
+fn extract_php_imports_in_namespace(
+    node: Node,
+    source: &[u8],
+    paths: &mut Vec<String>,
+    current_namespace: &str,
+) {
+    // A PHP file can contain multiple bracketed namespaces. Keep the namespace
+    // attached to the subtree where it is declared instead of deriving it from
+    // the file path (which is not authoritative for PHP).
+    let namespace = if node.kind() == "namespace_definition" {
+        node.child_by_field_name("name")
+            .and_then(|name| name.utf8_text(source).ok())
+            .map(|name| name.trim().trim_matches('\\').to_string())
+            .unwrap_or_default()
+    } else {
+        current_namespace.to_string()
+    };
+
+    // PHP uses `use` and `use ... as ...` for class imports.
+    // The grammar exposes these as `namespace_use_declaration` or `use_declaration`.
+    if node.kind() == "namespace_use_declaration" || node.kind() == "use_declaration" {
+        let text = node.utf8_text(source).unwrap_or("");
+        // Strip `use ` prefix and trailing `;`
+        let trimmed = text
+            .strip_prefix("use ")
+            .unwrap_or(text)
+            .trim()
+            .trim_end_matches(';')
+            .trim();
+        // Handle function/const prefixes: `use function foo\\bar;` or `use const FOO;`
+        let path_part = if trimmed.starts_with("function ") || trimmed.starts_with("const ") {
+            trimmed.split_whitespace().nth(1).unwrap_or(trimmed)
+        } else {
+            // Handle grouped imports: `use Foo\\{Bar, Baz};` — take the outer namespace
+            trimmed
+                .split('{')
+                .next()
+                .unwrap_or(trimmed)
+                .trim()
+                .trim_end_matches('\\')
+        };
+        if !path_part.is_empty() {
+            paths.push(format!("pkg:{path_part}"));
+        }
+        return;
+    }
+
+    // `base_clause` is an extends reference and `class_interface_clause` is
+    // an implements reference. Their named children are only PHP class names,
+    // so handling these nodes avoids accidentally treating method calls,
+    // declarations, or keywords as dependencies.
+    if node.kind() == "base_clause" || node.kind() == "class_interface_clause" {
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            let reference = child.utf8_text(source).unwrap_or("");
+            if let Some(reference) = qualify_php_class_reference(reference, &namespace) {
+                paths.push(format!("pkg:{reference}"));
+            }
+        }
+        return;
+    }
+
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        extract_php_imports_in_namespace(child, source, paths, &namespace);
+    }
+}
+
+/// Qualify a PHP inheritance/interface name without rewriting already
+/// qualified names. `self`, `parent`, and `static` are language references,
+/// not dependency class nodes, so they are intentionally omitted.
+fn qualify_php_class_reference(reference: &str, namespace: &str) -> Option<String> {
+    let reference = reference.trim();
+    if reference.is_empty()
+        || reference.eq_ignore_ascii_case("self")
+        || reference.eq_ignore_ascii_case("parent")
+        || reference.eq_ignore_ascii_case("static")
+    {
+        return None;
+    }
+    if reference.starts_with('\\') || reference.contains('\\') {
+        if let Some(relative) = reference.strip_prefix("namespace\\") {
+            return Some(if namespace.is_empty() {
+                relative.to_string()
+            } else {
+                format!("{namespace}\\{relative}")
+            });
+        }
+        return Some(reference.to_string());
+    }
+    if namespace.is_empty() {
+        Some(reference.to_string())
+    } else {
+        Some(format!("{namespace}\\{reference}"))
+    }
+}
+
+/// Return the first named PHP declaration's fully-qualified class node.
+///
+/// PHP's namespace declaration is the authoritative source of this identity;
+/// Composer/PSR-4 path conventions are not required for query-time resolution.
+pub(crate) fn php_declared_class(source: &str) -> Option<String> {
+    let mut parser = Parser::for_language(Language::Php).ok()?;
+    let tree = parser.parser.as_mut()?.parse(source.as_bytes(), None)?;
+    let root = tree.root_node();
+    if root.kind() == "program" {
+        let mut namespace = String::new();
+        let mut cursor = root.walk();
+        for child in root.named_children(&mut cursor) {
+            if child.kind() == "namespace_definition" {
+                namespace = child
+                    .child_by_field_name("name")
+                    .and_then(|name| name.utf8_text(source.as_bytes()).ok())
+                    .map(|name| name.trim().trim_matches('\\').to_string())
+                    .unwrap_or_default();
+            }
+            if let Some(class_name) = find_php_declared_class(child, source.as_bytes(), &namespace)
+            {
+                return Some(class_name);
+            }
+        }
+        None
+    } else {
+        find_php_declared_class(root, source.as_bytes(), "")
+    }
+}
+
+fn find_php_declared_class(node: Node, source: &[u8], current_namespace: &str) -> Option<String> {
+    let namespace = if node.kind() == "namespace_definition" {
+        node.child_by_field_name("name")
+            .and_then(|name| name.utf8_text(source).ok())
+            .map(|name| name.trim().trim_matches('\\').to_string())
+            .unwrap_or_default()
+    } else {
+        current_namespace.to_string()
+    };
+
+    if matches!(
+        node.kind(),
+        "class_declaration" | "interface_declaration" | "trait_declaration" | "enum_declaration"
+    ) {
+        if let Some(name) = node
+            .child_by_field_name("name")
+            .and_then(|name| name.utf8_text(source).ok())
+        {
+            return qualify_php_class_reference(name, &namespace);
+        }
+    }
+
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if let Some(class_name) = find_php_declared_class(child, source, &namespace) {
+            return Some(class_name);
+        }
+    }
+    None
+}
+
+// ── Swift ──────────────────────────────────────────────────────────
+
+fn extract_swift_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+    if node.kind() == "import_declaration" {
+        let text = node.utf8_text(source).unwrap_or("");
+        // `import Foundation` or `@testable import MyModule` or `import func Foundation.print`
+        let trimmed = text
+            .strip_prefix("@testable ")
+            .unwrap_or(text)
+            .strip_prefix("import ")
+            .unwrap_or(text)
+            .trim();
+        // Take everything up to the first dot (module name only, not submodule.func)
+        let module = trimmed.split('.').next().unwrap_or(trimmed).trim();
+        if !module.is_empty() {
+            paths.push(format!("pkg:{module}"));
+        }
+        return;
+    }
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        extract_swift_imports(child, source, paths);
+    }
+}
+
+// ── Elixir ──────────────────────────────────────────────────────────
+
+fn extract_elixir_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+    // DF-WARPFS-89: the call-reference emission dedupes across the WHOLE
+    // file walk — one edge per (file, module) even if the module is called
+    // twenty times — so the dedupe set lives at file scope, not per node.
+    let mut seen = HashSet::new();
+    extract_elixir_imports_walk(node, source, paths, &mut seen);
+}
+
+fn extract_elixir_imports_walk(
+    node: Node,
+    source: &[u8],
+    paths: &mut Vec<String>,
+    seen: &mut HashSet<String>,
+) {
+    // Elixir uses `alias`, `import`, `require`, and `use` keywords.
+    // These appear as `call` nodes where the function name is the keyword.
+    // DF-WARPFS-89: a qualified remote call (`Plug.Conn.get(conn, "/")`)
+    // is also a `call` node — per the grammar its `target` field holds a
+    // `dot` whose `left` is the receiver — so the receiver's module path
+    // is a reference the file depends on even with no keyword line.
+    if node.kind() == "call" {
+        let text = node.utf8_text(source).unwrap_or("");
+        let mut keyword_hit = false;
+        for keyword in &["alias ", "import ", "require ", "use "] {
+            if let Some(rest) = text.strip_prefix(keyword) {
+                keyword_hit = true;
+                // Take module path up to first space/comma (handles `alias Foo.Bar, as: B`)
+                let path = rest.split([',', ' ']).next().unwrap_or(rest).trim();
+                if !path.is_empty() {
+                    paths.push(format!("pkg:{path}"));
+                }
+            }
+        }
+        if !keyword_hit {
+            if let Some(target) = node.child_by_field_name("target") {
+                if target.kind() == "dot" {
+                    // The receiver is the outermost `left` (the grammar's
+                    // `alias` token already covers the full dotted module
+                    // path: `Plug.Conn.Utils` is one alias node, so
+                    // `Plug.Conn.Utils.parse/1` yields the module
+                    // `Plug.Conn.Utils` with the function dropped).
+                    let mut recv = target;
+                    while recv.kind() == "dot" {
+                        match recv.child_by_field_name("left") {
+                            Some(l) => recv = l,
+                            None => break,
+                        }
+                    }
+                    if recv.kind() == "alias" {
+                        // Module references start with an UPPERCASE segment
+                        // (variables and lowercase dot-chains are excluded
+                        // by construction). Single-segment receivers are
+                        // skipped: a bare alias (`Map.get/2`, or a call
+                        // through an `alias .., as: C` shorthand) may name
+                        // a stdlib/stashed module or a local shorthand, and
+                        // emitting it would fabricate `pkg:C`-style nodes.
+                        let recv_text = recv.utf8_text(source).unwrap_or("");
+                        if recv_text.starts_with(|c: char| c.is_ascii_uppercase())
+                            && recv_text.contains('.')
+                            && seen.insert(recv_text.to_string())
+                        {
+                            paths.push(format!("pkg:{recv_text}"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        extract_elixir_imports_walk(child, source, paths, seen);
+    }
+}
+
+// ── Haskell ─────────────────────────────────────────────────────────
+
+fn extract_haskell_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+    // `import` node: `import qualified Data.Map as Map`
+    if node.kind() == "import" {
+        let text = node.utf8_text(source).unwrap_or("");
+        // Strip `import` prefix
+        let rest = text.strip_prefix("import").unwrap_or(text).trim();
+        // Skip `qualified` keyword
+        let rest = rest.strip_prefix("qualified").unwrap_or(rest).trim();
+        // Take module name up to first space (handles `as`, hiding, etc.)
+        let module = rest.split_whitespace().next().unwrap_or("");
+        if !module.is_empty() {
+            paths.push(format!("pkg:{module}"));
+        }
+        return;
+    }
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        extract_haskell_imports(child, source, paths);
+    }
+}
+
+// ── Erlang ──────────────────────────────────────────────────────────
+
+/// Structural dependencies harvested from one Erlang source unit (DF-WARPFS-91).
+///
+/// Erlang has no import list. A module's real dependencies live in its
+/// attributes — `-behaviour(gen_server).`, `-import(lists, [...]).`,
+/// `-include("x.hrl").` — and in the module qualifier of every *remote*
+/// reference: `Mod:fun(...)` calls, `fun Mod:fun/2` captures, and
+/// `Mod:type()` in specs/types. Those are the edges the graph needs for
+/// impact analysis; filename conventions carry none of that information,
+/// which is why the warm pass reported "no imports" for almost every
+/// cowboy `.erl`. The grammar-based extractor below is the whole fix —
+/// no warning fallback is offered because real extraction IS feasible via
+/// the tree-sitter-erlang grammar that is already a workspace dependency.
+///
+/// An edge is only minted when the module is a literal atom. `M:F(...)` and
+/// `?SERVER:start()` name their module at runtime, so they are not edges.
+#[derive(Default)]
+struct ErlangRefs {
+    /// `-module(m).` — a file is never its own dependency.
+    own_module: Option<String>,
+    /// Dependency paths in source order, deduplicated.
+    paths: Vec<String>,
+    seen: HashSet<String>,
+}
+
+impl ErlangRefs {
+    fn push(&mut self, path: String) {
+        if self.seen.insert(path.clone()) {
+            self.paths.push(path);
+        }
+    }
+
+    /// Edge to another Erlang module, unless it is this unit's own module.
+    fn push_module(&mut self, module: &str) {
+        if module.is_empty() || self.own_module.as_deref() == Some(module) {
+            return;
+        }
+        self.push(format!("pkg:{module}"));
+    }
+}
+
+fn extract_erlang_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+    let mut refs = ErlangRefs {
+        own_module: erlang_own_module(node, source),
+        ..ErlangRefs::default()
+    };
+    erlang_walk(node, source, &mut refs);
+    paths.extend(refs.paths);
+}
+
+/// The name in a `-module(m).` attribute, needed before the walk so that a
+/// module's references to itself never become edges.
+fn erlang_own_module(node: Node, source: &[u8]) -> Option<String> {
+    if node.kind() == "module_attribute" {
+        let mut cursor = node.walk();
+        let names: Vec<Node> = node.children_by_field_name("name", &mut cursor).collect();
+        return erlang_module_atom(&names, source);
+    }
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        if let Some(name) = erlang_own_module(child, source) {
+            return Some(name);
+        }
+    }
+    None
+}
+
+/// Resolve a `_name` field group to a module name when it is a literal atom.
+///
+/// `_name` also admits vars (`M`) and macro calls (`?SERVER`); neither names
+/// a module statically, so guessing one would mint edges to modules that do
+/// not exist. Quoted atoms (`'net-sup'`) are unwrapped to their bare name.
+/// Some field shapes wrap the name — `external_fun`'s `module` field holds a
+/// `module` node whose `name` field carries the atom (grammar
+/// `-0.19.0/src/node-types.json`, `external_fun`), so strip that wrapper.
+fn erlang_module_atom(field: &[Node], source: &[u8]) -> Option<String> {
+    let mut node: Node = *field.first()?;
+    if node.kind() == "module" {
+        let mut cursor = node.walk();
+        node = node.children_by_field_name("name", &mut cursor).next()?;
+    }
+    if node.kind() != "atom" {
+        return None;
+    }
+    let raw = node.utf8_text(source).ok()?.trim();
+    let name = raw.trim_matches('\'');
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_string())
+    }
+}
+
+fn erlang_walk(node: Node, source: &[u8], refs: &mut ErlangRefs) {
+    match node.kind() {
+        // `-include_lib("eunit/include/eunit.hrl").` and `-include("records.hrl").`
+        //
+        // DF-WARPFS-88: this must match ONLY the precise `pp_include` /
+        // `pp_include_lib` directive nodes. The old implementation substring-
+        // probed every AST span (`text.contains("-include(")`) and then grabbed
+        // the first quoted run inside the matched span — but an include
+        // directive is visible in the text of every ANCESTOR span up to the
+        // whole-file root, so on cowboy the first quote in the matched span was
+        // `"AS IS"` inside the ISC/BSD license comment, minting a
+        // `local:AS IS` node with 16 phantom edges (8 of them bogus
+        // `tested_by`). The directive node's span is exactly the
+        // `-include...("path")` form, so comment text can never leak into a
+        // path; the quoted `string` field child carries the path itself.
+        "pp_include" | "pp_include_lib" => {
+            let mut cursor = node.walk();
+            for child in node.children_by_field_name("file", &mut cursor) {
+                // Only quoted string literals name a file; macro names
+                // (`?INCLUDE(...)`-style vars) are not paths.
+                if child.kind() != "string" {
+                    continue;
+                }
+                let raw = child.utf8_text(source).unwrap_or("");
+                let path = raw.trim_matches('"').trim();
+                if !path.is_empty() {
+                    refs.push(format!("local:{path}"));
+                }
+            }
+            return;
+        }
+        // `-behaviour(gen_server).` / `-behavior(supervisor).`: the callback
+        // contract this module implements — a real dependency on the
+        // behaviour module.
+        "behaviour_attribute" => {
+            let mut cursor = node.walk();
+            let names: Vec<Node> = node.children_by_field_name("name", &mut cursor).collect();
+            if let Some(module) = erlang_module_atom(&names, source) {
+                refs.push_module(&module);
+            }
+            return;
+        }
+        // `-import(lists, [reverse/1]).`
+        "import_attribute" => {
+            let mut cursor = node.walk();
+            let names: Vec<Node> = node.children_by_field_name("module", &mut cursor).collect();
+            if let Some(module) = erlang_module_atom(&names, source) {
+                refs.push_module(&module);
+            }
+            return;
+        }
+        // Every remote reference — `Mod:fun(Args)`, `fun Mod:fun/2`,
+        // `Mod:type()` in a spec/type — names its module statically. The
+        // grammar exposes call/type qualifiers as a `remote_module` node and
+        // fun captures (`fun cowboy_loop:init/2`) as an `external_fun` node;
+        // both carry the qualifier in their `module` field.
+        "remote_module" | "external_fun" => {
+            let mut cursor = node.walk();
+            let names: Vec<Node> = node.children_by_field_name("module", &mut cursor).collect();
+            if let Some(module) = erlang_module_atom(&names, source) {
+                refs.push_module(&module);
+            }
+            return;
+        }
+        _ => {}
+    }
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        erlang_walk(child, source, refs);
+    }
+}
+
+// ── Scala ───────────────────────────────────────────────────────────
+
+fn extract_scala_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+    if node.kind() == "import_declaration" {
+        let text = node.utf8_text(source).unwrap_or("");
+        // `import scala.collection.mutable._` or `import akka.actor.{Props, Actor}`
+        let rest = text.strip_prefix("import").unwrap_or(text).trim();
+        // Take path up to first `{` (grouped import) or end, then trim trailing dots/whitespace
+        let path = rest.split('{').next().unwrap_or(rest).trim();
+        let path = path.trim_end_matches('.').trim();
+        if !path.is_empty() {
+            paths.push(format!("pkg:{path}"));
+        }
+        return;
+    }
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        extract_scala_imports(child, source, paths);
+    }
+}
+
+// ── Zig ─────────────────────────────────────────────────────────────
+
+fn extract_zig_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+    // Zig uses `@import("module")` builtin calls
+    let text = node.utf8_text(source).unwrap_or("");
+    if text.contains("@import(") {
+        if let Some(start) = text.find("@import(\"") {
+            let rest = &text[start + 9..];
+            if let Some(end) = rest.find('"') {
+                let path = &rest[..end];
+                if !path.is_empty() {
+                    paths.push(format!("local:{path}"));
+                }
+            }
+        }
+    }
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        extract_zig_imports(child, source, paths);
+    }
+}
+
+// ── Lua ─────────────────────────────────────────────────────────────
+
+fn extract_lua_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+    // `require("module")` or `require 'module'`
+    let text = node.utf8_text(source).unwrap_or("");
+    if text.starts_with("require") {
+        // Find quoted argument
+        for quote in &['"', '\''] {
+            let prefix = format!("require({quote}");
+            if let Some(rest) = text.strip_prefix(&prefix) {
+                if let Some(end) = rest.find(*quote) {
+                    let path = rest[..end].trim();
+                    if !path.is_empty() {
+                        paths.push(format!("pkg:{path}"));
+                    }
+                    return;
+                }
+            }
+            // Handle `require 'module'` (space instead of paren)
+            let prefix = format!("require {quote}");
+            if let Some(rest) = text.strip_prefix(&prefix) {
+                if let Some(end) = rest.find(*quote) {
+                    let path = rest[..end].trim();
+                    if !path.is_empty() {
+                        paths.push(format!("pkg:{path}"));
+                    }
+                    return;
+                }
+            }
+        }
+    }
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        extract_lua_imports(child, source, paths);
+    }
+}
+
+// ── Dart ────────────────────────────────────────────────────────────
+
+fn extract_dart_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+    // `import 'package:foo/bar.dart';` or `import '../utils.dart';`
+    // `export 'dart:async';`
+    if node.kind() == "import" || node.kind() == "import_or_export" {
+        let text = node.utf8_text(source).unwrap_or("");
+        let rest = text
+            .strip_prefix("import ")
+            .or_else(|| text.strip_prefix("export "))
+            .unwrap_or(text);
+        // Find quoted path
+        for quote in &['"', '\''] {
+            if let Some(start) = rest.find(*quote) {
+                let after = &rest[start + 1..];
+                if let Some(end) = after.find(*quote) {
+                    let path = &after[..end];
+                    if !path.is_empty() {
+                        // package: → pkg:, dart: → std:, relative → local:
+                        let classified = if path.starts_with("package:") {
+                            let stripped = path.strip_prefix("package:").unwrap_or(path);
+                            format!("pkg:{stripped}")
+                        } else if path.starts_with("dart:") {
+                            let stripped = path.strip_prefix("dart:").unwrap_or(path);
+                            format!("std:{stripped}")
+                        } else {
+                            format!("local:{path}")
+                        };
+                        paths.push(classified);
+                        break;
+                    }
+                }
+            }
+        }
+        return;
+    }
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        extract_dart_imports(child, source, paths);
+    }
+}
+
+// ── Clojure ────────────────────────────────────────────────────────
+
+fn extract_clojure_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+    // Clojure: `require` / `use` in `ns` form, or standalone calls.
+    // `(ns my.namespace (:require [clojure.string :as str]))`
+    // `(require '[clojure.set :as s])`
+    // `(use '[clojure.java.io :only [file]])`
+    // `(import '[java.util Date Calendar])`
+    //
+    // The grammar uses s-expression nodes: list_lit, sym_lit, vec_lit, str_lit.
+    // We walk looking for list_lit nodes whose first child sym_lit is
+    // require/use/import, then extract namespace/package from args.
+    if node.kind() == "list_lit" {
+        let text = node.utf8_text(source).unwrap_or("");
+        // Standalone: `(require ...)`, `(use ...)`, `(import ...)`
+        let trimmed = text.trim_start_matches('(').trim();
+        if let Some(rest) = trimmed.strip_prefix("require ") {
+            extract_clojure_lib(rest, paths);
+            return;
+        }
+        if let Some(rest) = trimmed.strip_prefix("use ") {
+            extract_clojure_lib(rest, paths);
+            return;
+        }
+        if let Some(rest) = trimmed.strip_prefix("import ") {
+            extract_clojure_import(rest, paths);
+            return;
+        }
+        // Inside ns: `(:require ...)`, `(:use ...)`, `(:import ...)`
+        if let Some(rest) = trimmed.strip_prefix(":require ") {
+            extract_clojure_lib(rest, paths);
+            return;
+        }
+        if let Some(rest) = trimmed.strip_prefix(":use ") {
+            extract_clojure_lib(rest, paths);
+            return;
+        }
+        if let Some(rest) = trimmed.strip_prefix(":import ") {
+            extract_clojure_import(rest, paths);
+            return;
+        }
+        // `(ns my.namespace ...)` — walk children to find nested require/use/import
+        if trimmed.starts_with("ns ") || trimmed.starts_with("ns\t") {
+            let children: Vec<Node> = {
+                let mut c = node.walk();
+                node.children(&mut c).collect()
+            };
+            for child in children {
+                extract_clojure_imports(child, source, paths);
+            }
+            return;
+        }
+    }
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        extract_clojure_imports(child, source, paths);
+    }
+}
+
+/// Extract namespace from a `require`/`use` body.
+/// Handles: `[clojure.string :as str]`, `clojure.set`, `[clojure.core :refer [join]]`
+/// Multiple specs: `[a.b :as ab] [c.d :as cd]`
+fn extract_clojure_lib(rest: &str, paths: &mut Vec<String>) {
+    // Each `[ns ...]` vector or bare symbol is one require spec.
+    // Split on `[` to isolate each spec, take only the first valid symbol.
+    // Handle bare symbols (not in vectors): `[clojure.set :as s]` vs `clojure.set`
+    // For `[ns1 :as a] [ns2 :as b]`, split on `[` gives:
+    //   "", "ns1 :as a] ", "ns2 :as b]"
+    for segment in rest.split('[') {
+        let segment = segment.trim();
+        // Skip segments that follow :refer/:only keywords — these are
+        // function lists, not namespace specs: `[clojure.set :refer [union]]`
+        if segment.starts_with(':') {
+            continue;
+        }
+        // If the segment before this one contained :refer or :only at the end,
+        // it's a function list. Check by looking at whether the preceding
+        // segment (before the last `[`) ended with a keyword.
+        // Simpler: just check if this segment's first token looks like a
+        // function name (short, no dots) AND it's not the first segment.
+        // But the cleanest fix: skip segments that don't look like namespaces.
+        // Namespaced Clojure libs use dots: `clojure.string`, `my-app.core`.
+        // Bare function names like `union`, `str` are not namespaces.
+        for token in segment.split([' ', '\t', '\n', '\r', ']']) {
+            let token = token.trim_matches('\'');
+            if token.is_empty() || token.starts_with(':') {
+                continue;
+            }
+            if token
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '.' || c == '-' || c == '_')
+            {
+                classify_clojure_ns(token, paths);
+                break; // Only first valid symbol per spec
+            }
+        }
+    }
+}
+
+/// Extract package from an `import` body: `[java.util Date Calendar]`
+fn extract_clojure_import(rest: &str, paths: &mut Vec<String>) {
+    // Form: `[package.Class Name ...]` or `'package.Class`
+    for token in rest.split(['[', ']', '{', '}', ' ', '\t', '\n', '\r']) {
+        let token = token.trim_matches('\'');
+        if token.is_empty() {
+            continue;
+        }
+        if token.starts_with(':') {
+            continue;
+        }
+        // First symbol is the package/class path
+        if token
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '.' || c == '_' || c == '$')
+        {
+            paths.push(format!("pkg:{token}"));
+            break;
+        }
+    }
+}
+
+fn classify_clojure_ns(ns: &str, paths: &mut Vec<String>) {
+    // Clojure require/use namespaces are typically dotted paths
+    // (e.g. `clojure.string`, `my-app.core`). Bare single-word names
+    // without dots are likely aliases or referred function names
+    // (from `:refer [name]`), not real namespaces.
+    if ns.contains('.') && !ns.starts_with('-') {
+        paths.push(format!("pkg:{ns}"));
+    }
+    // Skip bare names — they're not namespace specs
+}
+
+// ── OCaml ──────────────────────────────────────────────────────────
+
+fn extract_ocaml_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+    // OCaml: `open Module`, `include Module`, `#load "module"` (for scripts)
+    // The grammar exposes `open_module` / `include_module` node kinds.
+    // We match on the node kind and extract the module path from children.
+    if node.kind() == "open_module" || node.kind() == "include_module" {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "module_path" {
+                if let Ok(text) = child.utf8_text(source) {
+                    let module_name = text.trim();
+                    if !module_name.is_empty() {
+                        paths.push(format!("pkg:{module_name}"));
+                    }
+                }
+            }
+        }
+        return;
+    }
+    // `#load "module.cma"` and `#use "file.ml"` directives
+    let text = node.utf8_text(source).unwrap_or("");
+    if text.starts_with("#load ") || text.starts_with("#use ") {
+        if let Some(start) = text.find('"') {
+            if let Some(end) = text[start + 1..].find('"') {
+                let path = &text[start + 1..start + 1 + end];
+                if !path.is_empty() {
+                    paths.push(format!("local:{path}"));
+                }
+            }
+        }
+        return;
+    }
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        extract_ocaml_imports(child, source, paths);
+    }
+}
+
+// ── R ──────────────────────────────────────────────────────────────
+
+fn extract_r_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+    // R uses `library(pkg)`, `require(pkg)`, and `source("file.R")`.
+    // These appear as `call` nodes.
+    if node.kind() == "call" {
+        let text = node.utf8_text(source).unwrap_or("");
+        for func in &["library(", "require("] {
+            if let Some(rest) = text.strip_prefix(func) {
+                // Extract package name (may be quoted or bare)
+                let cleaned = rest
+                    .trim()
+                    .trim_end_matches(')')
+                    .trim()
+                    .trim_matches('"')
+                    .trim_matches('\'')
+                    .split([',', ' '])
+                    .next()
+                    .unwrap_or("")
+                    .trim();
+                if !cleaned.is_empty() {
+                    paths.push(format!("pkg:{cleaned}"));
+                }
+                return;
+            }
+        }
+        if let Some(rest) = text.strip_prefix("source(") {
+            let cleaned = rest.trim().trim_end_matches(')').trim();
+            for quote in &['"', '\''] {
+                if let Some(s) = cleaned.strip_prefix(*quote) {
+                    if let Some(end) = s.find(*quote) {
+                        let path = &s[..end];
+                        if !path.is_empty() {
+                            paths.push(format!("local:{path}"));
+                        }
+                        return;
+                    }
+                }
+            }
+            return;
+        }
+    }
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        extract_r_imports(child, source, paths);
+    }
+}
+
+// ── Julia ──────────────────────────────────────────────────────────
+
+fn extract_julia_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+    // Julia: `using Module`, `import Module`, `using Module: name`,
+    // `import Module: name`, `include("file.jl")`
+    // The grammar exposes `using_statement`, `import_statement`, `using`,
+    // `import`, `import_path` node kinds.
+    let text = node.utf8_text(source).unwrap_or("");
+    // `include("file.jl")` — a call expression
+    if text.starts_with("include(") || text.starts_with("include ") {
+        if let Some(start) = text.find('"') {
+            if let Some(end) = text[start + 1..].find('"') {
+                let path = &text[start + 1..start + 1 + end];
+                if !path.is_empty() {
+                    paths.push(format!("local:{path}"));
+                }
+                return;
+            }
+        }
+    }
+    // `using Package` / `import Package` / `using Package: name1, name2`
+    if node.kind() == "using_statement"
+        || node.kind() == "import_statement"
+        || node.kind() == "using"
+        || node.kind() == "import"
+    {
+        let rest = text
+            .strip_prefix("using")
+            .or_else(|| text.strip_prefix("import"))
+            .unwrap_or(text)
+            .trim();
+        // Take module path up to `:` or whitespace
+        let module = rest.split([':', ' ', '\t', '\n']).next().unwrap_or("");
+        if !module.is_empty()
+            && module != "using"
+            && module != "import"
+            && module.chars().next().is_some_and(|c| c.is_alphabetic())
+        {
+            paths.push(format!("pkg:{module}"));
+        }
+        return;
+    }
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        extract_julia_imports(child, source, paths);
+    }
+}
+
+// ── Elm ────────────────────────────────────────────────────────────
+
+fn extract_elm_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+    // Elm: `import Module exposing (..)` / `import Module as M`
+    // The grammar exposes `import_clause` node kind.
+    if node.kind() == "import_clause" || node.kind() == "import" {
+        let text = node.utf8_text(source).unwrap_or("");
+        let rest = text.strip_prefix("import ").unwrap_or(text).trim();
+        // Take module name up to first space (handles `exposing`, `as`)
+        let module = rest.split_whitespace().next().unwrap_or("");
+        if !module.is_empty() {
+            paths.push(format!("pkg:{module}"));
+        }
+        return;
+    }
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        extract_elm_imports(child, source, paths);
+    }
+}
+
+// ── Nim ────────────────────────────────────────────────────────────
+
+fn extract_nim_imports(node: Node, source: &[u8], paths: &mut Vec<String>) {
+    // Nim: `import module`, `import module1, module2`, `import module as alias`,
+    // `from module import ident1, ident2`, `import module except: ident`
+    // Classify std/ prefixes as "std:", everything else as "pkg:".
+
+    if node.kind() == "import_statement" {
+        let text = node.utf8_text(source).unwrap_or("");
+        let body = text.strip_prefix("import ").unwrap_or(text).trim();
+        // Split on commas to handle `import a, b, c`
+        for part in body.split(',') {
+            let part = part.trim();
+            // Skip `except` clause content: "module except: ident"
+            let module = part.split("except").next().unwrap_or(part).trim();
+            // Handle `as` alias: "module as alias"
+            let name = module.split_whitespace().next().unwrap_or(module).trim();
+            if !name.is_empty() && name.chars().next().is_some_and(|c| c.is_alphabetic()) {
+                if name.starts_with("std/") {
+                    let stripped = name.strip_prefix("std/").unwrap_or(name);
+                    paths.push(format!("std:{stripped}"));
+                } else {
+                    paths.push(format!("pkg:{name}"));
+                }
+            }
+        }
+        return;
+    }
+
+    // `from module import ident1, ident2`
+    if node.kind() == "import_from_statement" {
+        // The module is in a child with field_name "module"
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "identifier" || child.kind() == "dot_expression" {
+                if let Ok(text) = child.utf8_text(source) {
+                    let name = text.trim();
+                    if !name.is_empty() {
+                        if name.starts_with("std/") {
+                            let stripped = name.strip_prefix("std/").unwrap_or(name);
+                            paths.push(format!("std:{stripped}"));
+                        } else {
+                            paths.push(format!("pkg:{name}"));
+                        }
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    let children: Vec<Node> = {
+        let mut c = node.walk();
+        node.children(&mut c).collect()
+    };
+    for child in children {
+        extract_nim_imports(child, source, paths);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(lang: Language, source: &str) -> Vec<String> {
+        let mut p = Parser::for_language(lang).unwrap();
+        p.parse_imports("test.ext", source)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.to)
+            .collect()
+    }
+
+    #[test]
+    fn terraform_path_detection_includes_json_variant() {
+        assert_eq!(
+            Language::from_path(Path::new("main.tf")),
+            Some(Language::Terraform)
+        );
+        assert_eq!(
+            Language::from_path(Path::new("modules/api/main.hcl")),
+            Some(Language::Terraform)
+        );
+        assert_eq!(
+            Language::from_path(Path::new("main.tf.json")),
+            Some(Language::Terraform)
+        );
+        assert_eq!(Language::from_path(Path::new("main.json")), None);
+    }
+
+    #[test]
+    fn parse_imports_emits_tested_by_for_test_files() {
+        // GAP-052: a test file's imports double as coverage edges — emit
+        // `tested_by` (test → target) alongside `imports` so `graph untested`
+        // and module coverage see what the suite exercises. Non-test files
+        // must NOT emit `tested_by`.
+        let mut p = Parser::for_language(Language::Rust).unwrap();
+        let edges = p
+            .parse_imports("tests/integration.rs", "use serde::Serialize;\n")
+            .unwrap();
+        let imports: Vec<&str> = edges
+            .iter()
+            .filter(|e| e.rel == "imports")
+            .map(|e| e.to.as_str())
+            .collect();
+        let tested: Vec<&str> = edges
+            .iter()
+            .filter(|e| e.rel == "tested_by")
+            .map(|e| e.to.as_str())
+            .collect();
+        assert!(!imports.is_empty(), "test file must still emit imports");
+        assert_eq!(
+            tested.len(),
+            imports.len(),
+            "every unique import of a test file must also be a tested_by edge"
+        );
+        assert!(
+            tested.iter().all(|t| imports.contains(t)),
+            "tested_by targets must match import targets"
+        );
+
+        // Non-test files: imports only.
+        let mut p2 = Parser::for_language(Language::Rust).unwrap();
+        let edges2 = p2
+            .parse_imports("src/lib.rs", "use serde::Serialize;\n")
+            .unwrap();
+        assert!(edges2.iter().all(|e| e.rel == "imports"));
+        assert_eq!(edges2.len(), 1);
+    }
+
+    #[test]
+    fn go_classification() {
+        assert_eq!(classify_go("fmt", None), "std:fmt");
+        assert_eq!(
+            classify_go("github.com/foo/bar", None),
+            "pkg:github.com/foo/bar"
+        );
+        assert_eq!(
+            classify_go("probea/util", Some("probea")),
+            "pkg:probea/util"
+        );
+        assert_eq!(classify_go("fmt", Some("probea")), "std:fmt");
+    }
+
+    #[test]
+    fn go_imports() {
+        let imports = parse(Language::Go, "package p\nimport \"fmt\"\nimport \"os\"");
+        assert!(imports.contains(&"std:fmt".into()));
+        assert!(imports.contains(&"std:os".into()));
+    }
+
+    #[test]
+    fn go_imports_use_module_path_for_single_word_modules() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("go.mod"), "module probea\n").unwrap();
+        let app = dir.path().join("app/main.go");
+        std::fs::create_dir_all(app.parent().unwrap()).unwrap();
+        let mut parser = Parser::for_language(Language::Go).unwrap();
+        let imports = parser
+            .parse_imports(
+                &app.to_string_lossy(),
+                "package main\nimport \"probea/util\"\nimport \"fmt\"\n",
+            )
+            .unwrap();
+        let targets: Vec<&str> = imports.iter().map(|edge| edge.to.as_str()).collect();
+        assert!(targets.contains(&"pkg:probea/util"));
+        assert!(targets.contains(&"std:fmt"));
+        assert!(!targets.contains(&"std:probea/util"));
+    }
+
+    #[test]
+    fn python_imports() {
+        let imports = parse(
+            Language::Python,
+            "import os\nfrom collections import defaultdict",
+        );
+        assert!(imports.contains(&"pkg:os".into()));
+        assert!(imports.contains(&"pkg:collections".into()));
+    }
+
+    /// GAP-076: the relative-import resolver is a PURE function — this unit
+    /// test needs no filesystem, no parser, and no graph. It pins the dot
+    /// walk (`level - 1` climbs above the importing file's own package) and
+    /// the two inputs that have no answer at all.
+    #[test]
+    fn resolve_python_relative_module_walks_dots_and_rejects_impossible_climbs() {
+        // Level 1 from a plain module inside package `flask`: the package of
+        // `flask/app.py` is `flask`, so `.config` means `flask.config`. The
+        // importing module must be the plain MODULE (a file), not the
+        // package: see the boundary case at the end for `"flask"` itself.
+        assert_eq!(
+            resolve_python_relative_module(".config", "flask.app", false).as_deref(),
+            Some("flask.config")
+        );
+        // Level 2 from a nested module: `..config` in `flask.sansio.app` →
+        // package `flask.sansio`, climb one → `flask`.
+        assert_eq!(
+            resolve_python_relative_module("..config", "flask.sansio.app", false).as_deref(),
+            Some("flask.config")
+        );
+        // Level 1 from an `__init__.py`: the module IS the package, so no
+        // component is consumed by the dot — `flask/__init__.py` doing
+        // `from .json.provider import X` means `flask.json.provider`.
+        assert_eq!(
+            resolve_python_relative_module(".json.provider", "flask", true).as_deref(),
+            Some("flask.json.provider")
+        );
+        // Same rule one level down: `flask/json/__init__.py` doing
+        // `from .provider import X` is `flask.json.provider` too.
+        assert_eq!(
+            resolve_python_relative_module(".provider", "flask.json", true).as_deref(),
+            Some("flask.json.provider")
+        );
+        // Empty rest: `from . import helpers` → the package itself.
+        assert_eq!(
+            resolve_python_relative_module(".", "flask.config", false).as_deref(),
+            Some("flask")
+        );
+        // Absolute text is not our business.
+        assert_eq!(
+            resolve_python_relative_module("os", "flask.config", false),
+            None
+        );
+        // Climbing above the top-level package has no answer.
+        assert_eq!(resolve_python_relative_module("...x", "flask", true), None);
+        // Boundary kept honest: with `is_init = false` the input `flask` is a
+        // TOP-LEVEL module (`flask.py`), whose enclosing package is the
+        // (empty) root — so `.config` must answer None rather than fabricate
+        // a `flask.config` that does not exist.
+        assert_eq!(
+            resolve_python_relative_module(".config", "flask", false),
+            None
+        );
+    }
+
+    #[test]
+    fn ts_imports() {
+        let imports = parse(
+            Language::TypeScript,
+            "import { foo } from './utils';\nimport express from 'express';",
+        );
+        assert!(imports.contains(&"local:./utils".into()));
+        assert!(imports.contains(&"pkg:express".into()));
+    }
+
+    #[test]
+    fn rust_imports() {
+        let imports = parse(
+            Language::Rust,
+            "use std::collections::HashMap;\nuse serde::Serialize;",
+        );
+        assert!(imports.contains(&"pkg:std".into()));
+        assert!(imports.contains(&"pkg:serde".into()));
+    }
+
+    #[test]
+    fn rust_use_brace_groups_expand_per_symbol() {
+        let imports = parse(
+            Language::Rust,
+            r#"use {serde::Serialize, anyhow::Context as Ctx};
+use std::{collections::HashMap, io::{Read, Write}};
+use foo::{self, Bar};
+use crate::{grep_matcher, globset};
+"#,
+        );
+        // Bare group: one edge per symbol.
+        assert!(imports.contains(&"pkg:serde::Serialize".into()));
+        // Alias stripped, symbol path kept.
+        assert!(imports.contains(&"pkg:anyhow::Context".into()));
+        // Prefixed + nested groups expand recursively.
+        assert!(imports.contains(&"pkg:std::collections::HashMap".into()));
+        assert!(imports.contains(&"pkg:std::io::Read".into()));
+        assert!(imports.contains(&"pkg:std::io::Write".into()));
+        // `self` item resolves to the parent path.
+        assert!(imports.contains(&"pkg:foo".into()));
+        assert!(imports.contains(&"pkg:foo::Bar".into()));
+        // `crate::` groups are local — skipped entirely.
+        assert!(!imports.contains(&"pkg:crate".into()));
+        // The core regression: no raw group text may leak into edge targets.
+        assert!(imports.iter().all(|p| !p.starts_with("pkg:{")));
+    }
+
+    #[test]
+    fn rust_pub_use_visibility_and_alias_stripped() {
+        let imports = parse(
+            Language::Rust,
+            r#"pub use serde_json as json;
+pub(crate) use self::imp::*;
+pub(super) use crate::flags::{A, B};
+use anyhow::{bail, Context as _};
+"#,
+        );
+        // Visibility + alias stripped, first segment kept for single paths.
+        assert!(imports.contains(&"pkg:serde_json".into()));
+        // Local pseudo-prefixes never become pkg edges.
+        assert!(!imports.contains(&"pkg:self".into()));
+        assert!(!imports.contains(&"pkg:crate".into()));
+        assert!(!imports.contains(&"pkg:pub".into()));
+        // Group symbols under a pub(crate)-prefixed path still expand.
+        assert!(imports.contains(&"pkg:anyhow::bail".into()));
+        assert!(imports.contains(&"pkg:anyhow::Context".into()));
+        // No raw group / visibility garbage in any edge target.
+        assert!(imports
+            .iter()
+            .all(|p| !p.contains('{') && !p.contains("pub")));
+    }
+
+    /// Parse `source` as Rust with `file_path` as the file's path, so the
+    /// intra-crate module context resolves against real fixtures on disk.
+    fn parse_rust_at(file_path: &str, source: &str) -> Vec<String> {
+        let mut p = Parser::for_language(Language::Rust).unwrap();
+        p.parse_imports(file_path, source)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.to)
+            .collect()
+    }
+
+    /// Write a fixture crate (Cargo.toml + module files) inside `dir` and
+    /// return the absolute path of the main source file.
+    fn write_rust_crate(dir: &Path, main: &str) -> String {
+        std::fs::create_dir_all(dir.join("src/commands")).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"fixture-cli\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("src/main.rs"), main).unwrap();
+        std::fs::write(
+            dir.join("src/commands/mod.rs"),
+            "pub mod init;\npub mod plugin;\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("src/commands/init.rs"), "pub fn init() {}\n").unwrap();
+        std::fs::write(dir.join("src/commands/plugin.rs"), "pub fn plugin() {}\n").unwrap();
+        dir.join("src/main.rs").to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn rust_intra_crate_bare_path_resolves_to_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = write_rust_crate(
+            dir.path(),
+            "mod commands;\nuse commands::init;\nuse clap::Parser;\n",
+        );
+        let imports = parse_rust_at(&main, &std::fs::read_to_string(&main).unwrap());
+        let commands_init = dir.path().join("src/commands/init.rs");
+        assert!(
+            imports.contains(&commands_init.to_string_lossy().into_owned()),
+            "bare `use commands::init` must resolve to commands/init.rs, got: {imports:?}"
+        );
+        // External crates keep their pkg: pseudo-node.
+        assert!(imports.contains(&"pkg:clap".into()));
+    }
+
+    #[test]
+    fn rust_intra_crate_brace_group_expands_to_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = write_rust_crate(dir.path(), "mod commands;\nuse commands::{init, plugin};\n");
+        let imports = parse_rust_at(&main, &std::fs::read_to_string(&main).unwrap());
+        let init = dir.path().join("src/commands/init.rs");
+        let plugin = dir.path().join("src/commands/plugin.rs");
+        assert!(
+            imports.contains(&init.to_string_lossy().into_owned()),
+            "group symbol init must resolve to a file, got: {imports:?}"
+        );
+        assert!(
+            imports.contains(&plugin.to_string_lossy().into_owned()),
+            "group symbol plugin must resolve to a file, got: {imports:?}"
+        );
+        assert!(
+            imports.iter().all(|p| !p.starts_with("pkg:commands")),
+            "no pkg:commands pseudo-node may survive resolution, got: {imports:?}"
+        );
+    }
+
+    #[test]
+    fn rust_crate_absolute_path_resolves_to_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = write_rust_crate(dir.path(), "mod commands;\nuse crate::commands::init;\n");
+        let imports = parse_rust_at(&main, &std::fs::read_to_string(&main).unwrap());
+        let init = dir.path().join("src/commands/init.rs");
+        assert!(
+            imports.contains(&init.to_string_lossy().into_owned()),
+            "`use crate::commands::init` must resolve to a file, got: {imports:?}"
+        );
+        assert!(!imports.contains(&"pkg:crate".into()));
+    }
+
+    #[test]
+    fn rust_sibling_module_visible_from_nested_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let _main = write_rust_crate(dir.path(), "mod commands;\n");
+        let plugin = dir.path().join("src/commands/plugin.rs");
+        std::fs::write(&plugin, "use init::Init;\n").unwrap();
+        let imports = parse_rust_at(
+            &plugin.to_string_lossy(),
+            &std::fs::read_to_string(&plugin).unwrap(),
+        );
+        let init = dir.path().join("src/commands/init.rs");
+        assert!(
+            imports.contains(&init.to_string_lossy().into_owned()),
+            "sibling `use init::...` inside commands/plugin.rs must resolve to commands/init.rs, got: {imports:?}"
+        );
+    }
+
+    #[test]
+    fn rust_without_cargo_manifest_keeps_pkg_fallback() {
+        // No Cargo.toml on the walk up → empty module context → pkg: edges.
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src/main.rs");
+        std::fs::create_dir_all(src.parent().unwrap()).unwrap();
+        std::fs::write(&src, "use commands::init;\nuse serde::Serialize;\n").unwrap();
+        let imports = parse_rust_at(
+            &src.to_string_lossy(),
+            &std::fs::read_to_string(&src).unwrap(),
+        );
+        assert!(imports.contains(&"pkg:commands".into()), "{imports:?}");
+        assert!(imports.contains(&"pkg:serde".into()), "{imports:?}");
+    }
+
+    #[test]
+    fn java_imports() {
+        let imports = parse(
+            Language::Java,
+            "import java.util.List;\nimport com.foo.Bar;",
+        );
+        assert!(imports.contains(&"pkg:java.util.List".into()));
+        assert!(imports.contains(&"pkg:com.foo.Bar".into()));
+    }
+
+    #[test]
+    fn c_includes() {
+        let imports = parse(Language::C, "#include <stdio.h>\n#include \"local.h\"");
+        assert!(imports.contains(&"sys:stdio.h".into()));
+        assert!(imports.contains(&"local:local.h".into()));
+    }
+
+    /// DF-WARPFS-75 follow-through: redis writes trailing annotations after
+    /// include operands (`#include "rax.h"     /* Radix tree */`) and spaces
+    /// after the `#` inside conditional blocks (`#   include <stdint.h>`).
+    /// Trimming the whole directive welded both onto the operand — a target
+    /// no query could ever name, which is what kept `server.h`'s include of
+    /// `rax.h` invisible even once headers were parsed. The operand now comes
+    /// from the directive's own `path` field.
+    #[test]
+    fn c_include_with_annotation_or_spacing_keeps_only_the_operand() {
+        let imports = parse(
+            Language::C,
+            "#include \"rax.h\"     /* Radix tree */\n\
+             #include <sds.h> /* use sds.h from hiredis */\n\
+             #include \"plain.h\"\n\
+             #include <float.h>  // for INFINITY\n\
+             #  include <stdint.h>\n\
+             #   include \"lzf.h\"\n",
+        );
+        for expected in [
+            "local:rax.h",
+            "sys:sds.h",
+            "local:plain.h",
+            "sys:float.h",
+            "sys:stdint.h",
+            "local:lzf.h",
+        ] {
+            assert!(
+                imports.contains(&expected.to_string()),
+                "`{expected}` missing: {imports:?}"
+            );
+        }
+        assert!(
+            imports
+                .iter()
+                .all(|p| !p.contains(' ') && !p.contains('"') && !p.contains('>')),
+            "no operand may carry an annotation or spacing: {imports:?}"
+        );
+        assert_eq!(imports.len(), 6, "one edge per directive: {imports:?}");
+    }
+
+    /// The macro-only fallback is unchanged: a directive with no quoted or
+    /// angle-bracketed operand keeps the historical whole-directive trim and
+    /// the `sys:` prefix, so no previously-emitted edge disappears.
+    #[test]
+    fn c_include_macro_operand_keeps_historical_form() {
+        let imports = parse(Language::C, "#include REDIS_STATIC_FOO\n");
+        assert_eq!(imports, vec!["sys:REDIS_STATIC_FOO".to_string()]);
+    }
+
+    /// DF-WARPFS-75: a header is a SOURCE, not just a target. Resolving a
+    /// `.h` path must yield a language (the fix), and that language's parser
+    /// must emit every `#include` the header declares with the header as the
+    /// edge's `from`. Pre-fix `Language::from_path` returned `None` for every
+    /// `.h`, so `collect_source_files` pruned the header before it could ever
+    /// be parsed and no C graph contained a header-sourced edge.
+    #[test]
+    fn c_header_is_a_source_of_its_own_includes() {
+        let language = Language::from_path(Path::new("src/server.h"))
+            .expect(".h must resolve to a language or discovery prunes it");
+        assert_eq!(language, Language::C);
+
+        let mut parser = Parser::for_language(language).unwrap();
+        let edges = parser
+            .parse_imports("src/server.h", "#include \"rax.h\"\n#include <stdio.h>\n")
+            .unwrap();
+
+        let froms: Vec<&str> = edges.iter().map(|e| e.from.as_str()).collect();
+        assert!(
+            !edges.is_empty() && froms.iter().all(|f| *f == "src/server.h"),
+            "every include a header declares is sourced AT the header: {edges:?}"
+        );
+        let tos: Vec<&str> = edges.iter().map(|e| e.to.as_str()).collect();
+        assert!(tos.contains(&"local:rax.h"), "{edges:?}");
+        assert!(tos.contains(&"sys:stdio.h"), "{edges:?}");
+    }
+
+    #[test]
+    fn ruby_requires() {
+        let imports = parse(Language::Ruby, "require 'json'\nrequire_relative 'helper'");
+        assert!(imports.contains(&"pkg:json".into()));
+        // require_relative not yet handled — that's fine for Phase 1
+    }
+
+    #[test]
+    fn empty_file() {
+        let imports = parse(Language::Go, "// just a comment\npackage p");
+        assert!(imports.is_empty());
+    }
+
+    #[test]
+    fn language_from_extension() {
+        assert_eq!(Language::from_extension("go"), Some(Language::Go));
+        assert_eq!(Language::from_extension("py"), Some(Language::Python));
+        assert_eq!(Language::from_extension("ts"), Some(Language::TypeScript));
+        assert_eq!(Language::from_extension("rs"), Some(Language::Rust));
+        assert_eq!(Language::from_extension("js"), Some(Language::JavaScript));
+        assert_eq!(Language::from_extension("mjs"), Some(Language::JavaScript));
+        assert_eq!(Language::from_extension("cjs"), Some(Language::JavaScript));
+        assert_eq!(Language::from_extension("java"), Some(Language::Java));
+        assert_eq!(Language::from_extension("c"), Some(Language::C));
+        // DF-WARPFS-75: a header is a document, not just a target.
+        assert_eq!(Language::from_extension("h"), Some(Language::C));
+        assert_eq!(
+            Language::from_path(Path::new("src/rax.h")),
+            Some(Language::C)
+        );
+        assert_eq!(Language::from_extension("cpp"), Some(Language::Cpp));
+        assert_eq!(Language::from_extension("rb"), Some(Language::Ruby));
+        assert_eq!(Language::from_extension("cs"), Some(Language::CSharp));
+        assert_eq!(Language::from_extension("kt"), Some(Language::Kotlin));
+        assert_eq!(Language::from_extension("kts"), Some(Language::Kotlin));
+        assert_eq!(Language::from_extension("php"), Some(Language::Php));
+        assert_eq!(Language::from_extension("phtml"), Some(Language::Php));
+        assert_eq!(Language::from_extension("swift"), Some(Language::Swift));
+        assert_eq!(Language::from_extension("ex"), Some(Language::Elixir));
+        assert_eq!(Language::from_extension("exs"), Some(Language::Elixir));
+        assert_eq!(Language::from_extension("hs"), Some(Language::Haskell));
+        assert_eq!(Language::from_extension("erl"), Some(Language::Erlang));
+        assert_eq!(Language::from_extension("scala"), Some(Language::Scala));
+        assert_eq!(Language::from_extension("zig"), Some(Language::Zig));
+        assert_eq!(Language::from_extension("lua"), Some(Language::Lua));
+        assert_eq!(Language::from_extension("dart"), Some(Language::Dart));
+        assert_eq!(Language::from_extension("clj"), Some(Language::Clojure));
+        assert_eq!(Language::from_extension("cljs"), Some(Language::Clojure));
+        assert_eq!(Language::from_extension("ml"), Some(Language::OCaml));
+        assert_eq!(Language::from_extension("mli"), Some(Language::OCaml));
+        assert_eq!(Language::from_extension("r"), Some(Language::R));
+        assert_eq!(Language::from_extension("jl"), Some(Language::Julia));
+        assert_eq!(Language::from_extension("elm"), Some(Language::Elm));
+        assert_eq!(Language::from_extension("nim"), Some(Language::Nim));
+        assert_eq!(Language::from_extension("txt"), None);
+    }
+
+    /// `all_extensions` is the user-visible list (the `graph warm` "no source
+    /// files found" message prints it), so it must name every extension
+    /// [`Language::from_extension`] resolves — the two tables drifting apart
+    /// is how `.mjs`/`.cjs` stayed undiscovered while `resolution.rs` already
+    /// treated them as first-class JS.
+    #[test]
+    fn all_extensions_agree_with_from_extension() {
+        let extensions = Language::all_extensions();
+        for required in ["js", "jsx", "mjs", "cjs"] {
+            assert!(
+                extensions.contains(&required),
+                "`all_extensions` must list `{required}`"
+            );
+        }
+        for ext in extensions {
+            assert!(
+                Language::from_extension(ext).is_some(),
+                "every listed extension must resolve to a language: {ext}"
+            );
+        }
+    }
+
+    #[test]
+    fn csharp_imports() {
+        let imports = parse(
+            Language::CSharp,
+            "using System;\nusing System.IO;\nusing static System.Math;\n",
+        );
+        assert!(imports.contains(&"pkg:System".into()));
+        assert!(imports.contains(&"pkg:System.IO".into()));
+        assert!(imports.contains(&"pkg:System.Math".into()));
+    }
+
+    #[test]
+    fn kotlin_imports() {
+        let imports = parse(
+            Language::Kotlin,
+            "import kotlin.collections.List\nimport kotlinx.coroutines.*\n",
+        );
+        assert!(imports.contains(&"pkg:kotlin.collections.List".into()));
+        assert!(imports.contains(&"pkg:kotlinx.coroutines.*".into()));
+    }
+
+    #[test]
+    fn php_imports() {
+        let imports = parse(
+            Language::Php,
+            "<?php\nuse App\\Models\\User;\nuse function array_map;\nuse const PHP_INT_MAX;\n",
+        );
+        assert!(imports.contains(&"pkg:App\\Models\\User".into()));
+    }
+
+    #[test]
+    fn php_same_namespace_class_references() {
+        let imports = parse(
+            Language::Php,
+            "<?php\nnamespace Example\\Command;\nclass Child extends BaseCommand implements Runnable {}\n",
+        );
+        assert!(imports.contains(&"pkg:Example\\Command\\BaseCommand".into()));
+        assert!(imports.contains(&"pkg:Example\\Command\\Runnable".into()));
+        assert!(!imports.contains(&"pkg:BaseCommand".into()));
+    }
+
+    #[test]
+    fn swift_imports() {
+        let imports = parse(
+            Language::Swift,
+            "import Foundation\nimport UIKit\n@testable import MyModule\n",
+        );
+        assert!(imports.contains(&"pkg:Foundation".into()));
+        assert!(imports.contains(&"pkg:UIKit".into()));
+        assert!(imports.contains(&"pkg:MyModule".into()));
+    }
+
+    #[test]
+    fn elixir_imports() {
+        let imports = parse(
+            Language::Elixir,
+            "alias MyApp.Repo\nimport Ecto.Query\nuse GenServer\n",
+        );
+        assert!(imports.contains(&"pkg:MyApp.Repo".into()));
+        assert!(imports.contains(&"pkg:Ecto.Query".into()));
+        assert!(imports.contains(&"pkg:GenServer".into()));
+    }
+
+    #[test]
+    fn elixir_qualified_remote_call_references_module() {
+        // DF-WARPFS-89: a file whose ONLY reference to a module is a
+        // qualified remote call (`Plug.Conn.get(conn, "/")`) must still
+        // become a dependent of that module node.
+        let imports = parse(
+            Language::Elixir,
+            "defmodule B do\n  def f(conn) do\n    Plug.Conn.get(conn, \"/\")\n  end\nend\n",
+        );
+        assert!(imports.contains(&"pkg:Plug.Conn".into()));
+    }
+
+    #[test]
+    fn elixir_defmodule_name_is_not_a_reference() {
+        // The module being DEFINED is not a reference to itself: the
+        // `defmodule Plug.Conn do` line must not fabricate an import edge.
+        let imports = parse(
+            Language::Elixir,
+            "defmodule Plug.Conn do\n  def get(conn, key), do: conn[key]\nend\n",
+        );
+        assert!(
+            imports.iter().all(|p| !p.contains("Plug.Conn")),
+            "defmodule's own name leaked into references: {imports:?}"
+        );
+    }
+
+    #[test]
+    fn elixir_lowercase_and_bare_alias_receivers_add_nothing() {
+        // Variables (`conn.get`), lowercase-rooted dot-chains
+        // (`m.Utils.parse`) and single-segment bare aliases (`Map.get`,
+        // `Enum.map` — possibly `as:` shorthands) must not fabricate nodes.
+        let imports = parse(
+            Language::Elixir,
+            "defmodule T do\n  def f(conn, m) do\n    conn.get(\"k\")\n    m.Utils.parse(\"x\")\n    Map.get(%{}, :a)\n    Enum.map([1], & &1)\n  end\nend\n",
+        );
+        assert!(
+            imports.is_empty(),
+            "non-module receivers produced edges: {imports:?}"
+        );
+    }
+
+    #[test]
+    fn elixir_remote_calls_dedupe_and_emit_full_module_path() {
+        // One edge per (file, module) even when the module is called
+        // repeatedly, and the emitted node is the full MODULE part with
+        // the function dropped: Plug.Conn.Utils.parse -> pkg:Plug.Conn.Utils.
+        let imports = parse(
+            Language::Elixir,
+            "defmodule T do\n  def go(x) do\n    Plug.Conn.Utils.parse(x)\n  end\n  def go2(x) do\n    Plug.Conn.get(x, \"a\")\n    Plug.Conn.get(x, \"b\")\n    Plug.Conn.fetch_query_params(x)\n  end\nend\n",
+        );
+        assert_eq!(
+            imports
+                .iter()
+                .filter(|p| *p == "pkg:Plug.Conn.Utils")
+                .count(),
+            1,
+            "repeated/nested references not deduped: {imports:?}"
+        );
+        assert_eq!(
+            imports.iter().filter(|p| *p == "pkg:Plug.Conn").count(),
+            1,
+            "repeated calls of one module not deduped: {imports:?}"
+        );
+    }
+
+    #[test]
+    fn elixir_alias_as_shorthand_call_yields_no_bare_node() {
+        // Keyword path unchanged (`alias Plug.Conn, as: C` -> pkg:Plug.Conn
+        // exactly once); a call through the shorthand (`C.get/2`) must NOT
+        // fabricate a bogus `pkg:C` node.
+        let imports = parse(
+            Language::Elixir,
+            "defmodule A do\n  alias Plug.Conn, as: C\n  def f(conn) do\n    C.get(conn, \"/\")\n  end\nend\n",
+        );
+        assert_eq!(
+            imports.iter().filter(|p| *p == "pkg:Plug.Conn").count(),
+            1,
+            "keyword alias behaviour changed: {imports:?}"
+        );
+        assert!(
+            !imports.contains(&"pkg:C".into()),
+            "shorthand receiver fabricated a bare node: {imports:?}"
+        );
+    }
+
+    #[test]
+    fn haskell_imports() {
+        let imports = parse(
+            Language::Haskell,
+            "import qualified Data.Map as Map\nimport Control.Monad\n",
+        );
+        assert!(imports.contains(&"pkg:Data.Map".into()));
+        assert!(imports.contains(&"pkg:Control.Monad".into()));
+    }
+
+    #[test]
+    fn erlang_includes() {
+        let imports = parse(
+            Language::Erlang,
+            "-include_lib(\"eunit/include/eunit.hrl\").\n-module(myapp).\n",
+        );
+        assert!(imports.iter().any(|p| p.contains("eunit.hrl")));
+    }
+
+    #[test]
+    fn erlang_behaviour_attributes() {
+        // DF-WARPFS-91: both spellings (`behaviour`/`behavior`) name a
+        // callback contract — a real dependency on the behaviour module.
+        let imports = parse(
+            Language::Erlang,
+            "-module(cowboy_example_worker).\n\
+             -behaviour(gen_server).\n\
+             -behavior(supervisor).\n",
+        );
+        assert!(imports.contains(&"pkg:gen_server".into()));
+        assert!(imports.contains(&"pkg:supervisor".into()));
+        assert!(
+            !imports.contains(&"pkg:cowboy_example_worker".into()),
+            "a module is not its own dependency: {imports:?}"
+        );
+    }
+
+    #[test]
+    fn erlang_cross_module_calls() {
+        let imports = parse(
+            Language::Erlang,
+            "-module(myapp).\n\
+             reply(Req) -> cowboy_req:reply(200, #{}, <<\"ok\">>, Req).\n\
+             read(Path) -> file:read_file(Path).\n\
+             nested(Req) -> cowboy_req:set_resp_header(<<\"x\">>, cowboy_http:opts(), Req).\n",
+        );
+        assert!(imports.contains(&"pkg:cowboy_req".into()));
+        assert!(imports.contains(&"pkg:file".into()));
+        assert!(imports.contains(&"pkg:cowboy_http".into()));
+        // Deduplicated: cowboy_req is referenced twice, emitted once.
+        assert_eq!(imports.iter().filter(|p| *p == "pkg:cowboy_req").count(), 1);
+    }
+
+    #[test]
+    fn erlang_remote_refs_in_specs_and_fun_captures() {
+        let imports = parse(
+            Language::Erlang,
+            "-module(myapp).\n\
+             -spec opts() -> cowboy_http:opts().\n\
+             start(Opts) -> myapp_sup:start_link(fun cowboy_loop:init/2, Opts).\n\
+             read(P) when is_integer(P) -> myapp_types:kw(P);\n\
+             read(P) -> myapp_types:read(P).\n",
+        );
+        assert!(imports.contains(&"pkg:cowboy_http".into()));
+        assert!(imports.contains(&"pkg:myapp_sup".into()));
+        assert!(imports.contains(&"pkg:cowboy_loop".into()));
+        assert!(imports.contains(&"pkg:myapp_types".into()));
+    }
+
+    #[test]
+    fn erlang_import_attribute() {
+        let imports = parse(
+            Language::Erlang,
+            "-module(myapp).\n-import(lists, [reverse/1, foldl/3]).\n",
+        );
+        assert!(imports.contains(&"pkg:lists".into()));
+    }
+
+    #[test]
+    fn erlang_dynamic_and_non_code_refs_are_not_edges() {
+        // `M:F(...)` and `?SERVER:start()` resolve their module at runtime,
+        // and text inside comments/strings is not source — none may mint edges.
+        let imports = parse(
+            Language::Erlang,
+            "-module(myapp).\n\
+             call(M, F) -> M:F().\n\
+             boot() -> ?SERVER:start().\n\
+             %% cowboy_req:reply/4 appears in this comment only\n\
+             doc() -> \"gen_server:start_link/3\".\n",
+        );
+        assert!(
+            imports.is_empty(),
+            "no static module reference here: {imports:?}"
+        );
+    }
+
+    #[test]
+    fn erlang_includes_and_calls_together() {
+        // A realistic header-bearing module: include + behaviour + call edges
+        // coexist, and each is emitted once.
+        let imports = parse(
+            Language::Erlang,
+            "-module(cowboy_stream_h).\n\
+             -behaviour(cowboy_stream).\n\
+             -include(\"cowboy_stream.hrl\").\n\
+             data(Pid, Data) -> cowboy_stream:data(Pid, Data).\n",
+        );
+        assert!(imports.contains(&"local:cowboy_stream.hrl".into()));
+        assert!(imports.contains(&"pkg:cowboy_stream".into()));
+        assert_eq!(imports.len(), 2, "unexpected extra edges: {imports:?}");
+    }
+
+    #[test]
+    fn erlang_license_comment_leaks_no_edge() {
+        // DF-WARPFS-88 regression guard, kept for DF-WARPFS-91: a cowboy-style
+        // ISC/BSD license header contains the quoted run "AS IS" and mentions
+        // real module qualifiers in prose. The extractor matches ONLY
+        // pp_include/pp_include_lib directive nodes, so no comment text can
+        // become an edge — but if the phantom ever returns, this fails.
+        let imports = parse(
+            Language::Erlang,
+            "%% Copyright (c) 2011-2026, Loïc Hoguin <essen@ninenines.eu>\n\
+             %%\n\
+             %% Permission to use, copy, modify, and/or distribute this software\n\
+             %% is subject to the terms of the ISC License, provided that the\n\
+             %% above copyright notice and this permission notice appear in all\n\
+             %% copies (\"AS IS\", WITHOUT WARRANTY OF ANY KIND).\n\
+             %%\n\
+             -module(cowboy_machine).\n\
+             -include(\"cowboy.hrl\").\n\
+             handler(Req) -> cowboy_req:reply(200, Req).\n",
+        );
+        assert!(imports.contains(&"local:cowboy.hrl".into()));
+        assert!(imports.contains(&"pkg:cowboy_req".into()));
+        for path in &imports {
+            assert!(
+                !path.contains("AS IS") && !path.contains("Permission"),
+                "license text leaked into an edge: {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn scala_imports() {
+        let imports = parse(
+            Language::Scala,
+            "import scala.collection.mutable._\nimport akka.actor.{Props, Actor}\n",
+        );
+        assert!(imports.contains(&"pkg:scala.collection.mutable._".into()));
+        assert!(imports.contains(&"pkg:akka.actor".into()));
+    }
+
+    #[test]
+    fn zig_imports() {
+        let imports = parse(
+            Language::Zig,
+            "const std = @import(\"std\");\nconst foo = @import(\"foo.zig\");\n",
+        );
+        assert!(imports.contains(&"local:std".into()));
+        assert!(imports.contains(&"local:foo.zig".into()));
+    }
+
+    #[test]
+    fn lua_imports() {
+        let imports = parse(
+            Language::Lua,
+            "local json = require(\"json\")\nlocal utils = require 'utils'\n",
+        );
+        assert!(imports.contains(&"pkg:json".into()));
+        assert!(imports.contains(&"pkg:utils".into()));
+    }
+
+    #[test]
+    fn dart_imports() {
+        let imports = parse(
+            Language::Dart,
+            "import 'package:flutter/material.dart';\nimport 'dart:async';\nimport '../utils.dart';\n",
+        );
+        assert!(imports.contains(&"pkg:flutter/material.dart".into()));
+        assert!(imports.contains(&"std:async".into()));
+        assert!(imports.contains(&"local:../utils.dart".into()));
+    }
+
+    #[test]
+    fn clojure_imports() {
+        let imports = parse(
+            Language::Clojure,
+            "(ns my-app.core\n  (:require [clojure.string :as str]\n            [clojure.set :refer [union]])\n  (:import [java.util Date Calendar]))\n(require '[clojure.java.io :as io])\n",
+        );
+        assert!(imports.contains(&"pkg:clojure.string".into()));
+        assert!(imports.contains(&"pkg:clojure.set".into()));
+        assert!(imports.contains(&"pkg:java.util".into()));
+        assert!(imports.contains(&"pkg:clojure.java.io".into()));
+    }
+
+    #[test]
+    fn ocaml_imports() {
+        let imports = parse(
+            Language::OCaml,
+            "open Base\nopen Stdio\ninclude Comparable\n#load \"unix.cma\"\n",
+        );
+        assert!(imports.contains(&"pkg:Base".into()));
+        assert!(imports.contains(&"pkg:Stdio".into()));
+        assert!(imports.contains(&"pkg:Comparable".into()));
+    }
+
+    #[test]
+    fn r_imports() {
+        let imports = parse(
+            Language::R,
+            "library(ggplot2)\nrequire(dplyr)\nsource(\"utils.R\")\n",
+        );
+        assert!(imports.contains(&"pkg:ggplot2".into()));
+        assert!(imports.contains(&"pkg:dplyr".into()));
+        assert!(imports.contains(&"local:utils.R".into()));
+    }
+
+    #[test]
+    fn julia_imports() {
+        let imports = parse(
+            Language::Julia,
+            "using DataFrames\nusing Statistics: mean, std\nimport Dates\ninclude(\"helper.jl\")\n",
+        );
+        assert!(imports.contains(&"pkg:DataFrames".into()));
+        assert!(imports.contains(&"pkg:Statistics".into()));
+        assert!(imports.contains(&"pkg:Dates".into()));
+        assert!(imports.contains(&"local:helper.jl".into()));
+    }
+
+    #[test]
+    fn elm_imports() {
+        let imports = parse(
+            Language::Elm,
+            "module Main exposing (main)\nimport Html\nimport Browser\nimport Json.Decode as D exposing (Decoder)\n",
+        );
+        assert!(imports.contains(&"pkg:Html".into()));
+        assert!(imports.contains(&"pkg:Browser".into()));
+        assert!(imports.contains(&"pkg:Json.Decode".into()));
+    }
+
+    #[test]
+    fn nim_imports() {
+        let imports = parse(
+            Language::Nim,
+            "import std/os\nimport strutils, sequtils\nimport tables as tbl\nfrom std/os import walkDir\nimport std/math except: PI\n",
+        );
+        assert!(imports.contains(&"std:os".into()));
+        assert!(imports.contains(&"pkg:strutils".into()));
+        assert!(imports.contains(&"pkg:sequtils".into()));
+        assert!(imports.contains(&"pkg:tables".into()));
+        assert!(imports.contains(&"std:os".into()));
+        assert!(imports.contains(&"std:math".into()));
+    }
+
+    // ── DF-WARPFS-85: Kotlin template imports + parse-miss reporting ──
+
+    /// The reported bug: a maven/velocity-style template header
+    /// (`package ${package}.db`) is not valid Kotlin, and tree-sitter used to
+    /// swallow the WHOLE file into one ERROR node — the real imports below it
+    /// vanished and the file landed in the "no imports" bucket.
+    #[test]
+    fn kotlin_template_package_header_still_yields_imports() {
+        let source = "package ${package}.db\n\n\
+                      import org.jetbrains.exposed.v1.core.Table\n\n\
+                      object Cities : Table(\"cities\") {\n    val id = integer(\"id\")\n}\n";
+        let mut p = Parser::for_language(Language::Kotlin).unwrap();
+        let parsed = p
+            .parse_imports_detailed("src/test/resources/Cities.kt", source)
+            .unwrap();
+
+        let imported: Vec<&Edge> = parsed.edges.iter().filter(|e| e.rel == "imports").collect();
+        assert!(
+            !imported.is_empty(),
+            "a template .kt with a real import must produce an import edge"
+        );
+        assert!(
+            imported
+                .iter()
+                .any(|e| e.to == "pkg:org.jetbrains.exposed.v1.core.Table"),
+            "the declared table import must be an edge target, got: {imported:?}"
+        );
+        // The original source really is unparseable — the recovery is
+        // reported, never silently passed off as a clean parse.
+        assert_eq!(parsed.parse_miss, Some(ParseMiss::SyntaxErrors));
+        assert_eq!(parsed.recovery, Some(ImportRecovery::RepairedTemplate));
+    }
+
+    /// A template that breaks in a way placeholder repair cannot fix still
+    /// yields its imports: Kotlin imports are top-level one-liners, so the
+    /// lexical tier recovers them — and only them (a commented-out import
+    /// stays out).
+    #[test]
+    fn kotlin_template_unknown_directive_imports_recovered_lexically() {
+        let source = "package com.example\n\n\
+                      /* generated table\n\
+                      import org.example.hidden.Ghost\n\
+                      */\n\
+                      #parse(\"header.kt\")\n\
+                      import org.jetbrains.exposed.v1.core.Table as T;\n";
+        let mut p = Parser::for_language(Language::Kotlin).unwrap();
+        let parsed = p
+            .parse_imports_detailed("src/test/resources/Users.kt", source)
+            .unwrap();
+
+        let targets: Vec<&str> = parsed
+            .edges
+            .iter()
+            .filter(|e| e.rel == "imports")
+            .map(|e| e.to.as_str())
+            .collect();
+        assert_eq!(
+            targets,
+            vec!["pkg:org.jetbrains.exposed.v1.core.Table"],
+            "aliased import recovered, commented-out import dropped"
+        );
+        assert_eq!(parsed.parse_miss, Some(ParseMiss::SyntaxErrors));
+        assert_eq!(parsed.recovery, Some(ImportRecovery::LexicalScan));
+        // A lexical recovery is not ground truth: it never claims ast_exact.
+        assert!(parsed.edges.iter().all(|e| e.provenance == "lexical"));
+    }
+
+    /// A file the grammar cannot repair and that declares no imports is a
+    /// parse miss with a reason — not a clean zero-edge file.
+    #[test]
+    fn kotlin_unparseable_file_without_imports_reports_parse_miss() {
+        let source = "###PACKAGE###\n\n@parse directive garbage (({\n";
+        let mut p = Parser::for_language(Language::Kotlin).unwrap();
+        let parsed = p
+            .parse_imports_detailed("src/test/resources/Broken.kt", source)
+            .unwrap();
+        assert!(parsed.edges.is_empty());
+        assert_eq!(parsed.parse_miss, Some(ParseMiss::SyntaxErrors));
+        assert_eq!(parsed.recovery, None);
+        assert_eq!(ParseMiss::SyntaxErrors.as_str(), "syntax errors");
+    }
+
+    /// A clean Kotlin file carries no diagnostic at all, so warm keeps
+    /// classifying it as an ordinary "no imports" file.
+    #[test]
+    fn kotlin_clean_file_reports_no_parse_miss() {
+        let mut p = Parser::for_language(Language::Kotlin).unwrap();
+        let parsed = p
+            .parse_imports_detailed(
+                "src/main/kotlin/App.kt",
+                "package com.example\n\nfun main() {}\n",
+            )
+            .unwrap();
+        assert!(parsed.edges.is_empty());
+        assert_eq!(parsed.parse_miss, None);
+        assert_eq!(parsed.recovery, None);
+    }
+
+    /// Placeholder neutralisation must be a no-op for placeholder-free source
+    /// and must only rewrite the `${...}` spans it finds.
+    #[test]
+    fn kotlin_template_placeholder_neutralisation_is_targeted() {
+        assert_eq!(
+            neutralise_template_placeholders("package com.example\n"),
+            None
+        );
+        assert_eq!(
+            neutralise_template_placeholders("package ${package}.db\n// ${ keep }\n"),
+            Some(format!(
+                "package {KOTLIN_TEMPLATE_PLACEHOLDER}.db\n// {KOTLIN_TEMPLATE_PLACEHOLDER}\n"
+            ))
+        );
+    }
+
+    /// The lexical tier must not invent imports: nested block comments (Kotlin
+    /// nests them), line comments, and non-ASCII text are all skipped.
+    #[test]
+    fn kotlin_lexical_scan_skips_comments_and_handles_utf8() {
+        let source = "/* outer é /* nested */\nimport org.example.Hidden\n*/\n\
+                      // import org.example.LineComment\n\
+                      import org.example.Real as R\n\
+                      fun main() { println(\"é\") }\n\
+                      importantThing()\n";
+        assert_eq!(
+            scan_kotlin_import_lines(source),
+            vec!["pkg:org.example.Real".to_string()]
+        );
+    }
+}
