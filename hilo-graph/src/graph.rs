@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
-use duckdb::{params, AccessMode, Config as DuckDbConfig, Connection};
+use duckdb::{params, params_from_iter, AccessMode, Config as DuckDbConfig, Connection, ToSql};
 use hilo_core::manifest::{DuckDbPerf, Manifest};
 use hilo_metadata::inventory::{Edge, GRANULARITY_FILE};
 
@@ -315,6 +315,53 @@ const READ_BLOCK_BYTES: usize = 64 * 1024;
 const INSERT_EDGE_SQL: &str =
     "INSERT OR IGNORE INTO edges (\"from\", \"to\", rel, provenance, confidence, granularity) VALUES (?, ?, ?, ?, ?, ?)";
 
+/// Column list shared by the single-row and multi-row (bulk) insert SQL, so
+/// the two statement shapes cannot drift apart (PERF-016).
+const INSERT_EDGE_COLUMNS: &str = "\"from\", \"to\", rel, provenance, confidence, granularity";
+
+/// Rows per multi-row `INSERT OR IGNORE` statement in the bulk write path
+/// (PERF-016). 256 rows x 6 columns = 1536 bound parameters per prepared
+/// statement — large enough to amortize the per-execute DuckDB overhead that
+/// cost ~4.5 ms per edge row-by-row on the whole-corpus cold path, small
+/// enough to keep one statement's parse/bind memory bounded.
+const BULK_INSERT_ROWS_PER_STATEMENT: usize = 256;
+
+/// Insert `edges` with batched multi-row `INSERT OR IGNORE` statements
+/// (PERF-016).
+///
+/// Semantics are identical to [`INSERT_EDGE_SQL`] executed row-by-row: every
+/// row is executed exactly once (duplicates already present in the table are
+/// ignored by the unique index, duplicates WITHIN a batch are ignored the
+/// same way — DuckDB evaluates the unique constraint per inserted row), and
+/// the returned count is the number of rows EXECUTED, not the number of rows
+/// changed. The per-transaction bounding stays the caller's job (see
+/// [`insert_edge_chunk`] / [`insert_edge_chunk_until`]).
+fn insert_edges_multi_row(conn: &Connection, edges: &[Edge]) -> GraphResult<usize> {
+    let mut executed = 0;
+    for batch in edges.chunks(BULK_INSERT_ROWS_PER_STATEMENT) {
+        let values_sql = batch
+            .iter()
+            .map(|_| "(?, ?, ?, ?, ?, ?)")
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql =
+            format!("INSERT OR IGNORE INTO edges ({INSERT_EDGE_COLUMNS}) VALUES {values_sql}");
+        let mut param_refs: Vec<&dyn ToSql> = Vec::with_capacity(batch.len() * 6);
+        for edge in batch {
+            param_refs.push(&edge.from);
+            param_refs.push(&edge.to);
+            param_refs.push(&edge.rel);
+            param_refs.push(&edge.provenance);
+            param_refs.push(&edge.confidence);
+            param_refs.push(&edge.granularity);
+        }
+        let mut stmt = conn.prepare(&sql)?;
+        stmt.execute(params_from_iter(param_refs))?;
+        executed += batch.len();
+    }
+    Ok(executed)
+}
+
 /// Delete one edge by its `(from, to, rel, provenance)` identity — the same
 /// key the unique index and the append dedupe use (DF-WARPFS-170). The cache
 /// is otherwise insert-only (`INSERT OR IGNORE`), so a row that leaves
@@ -346,24 +393,14 @@ where
 ///
 /// PERF-002/GAP-092: prepared inserts committed in bounded chunks avoid both
 /// the old ~1ms-per-edge autocommit cost and an unbounded transaction delta.
+/// PERF-016: the rows within a transaction now go through the bulk multi-row
+/// statement path ([`insert_edges_multi_row`]) — row-for-row `INSERT OR
+/// IGNORE` semantics unchanged, only the per-execute overhead amortized.
 /// Shared by the bulk insert path and the GAP-094 checkpointed ingest, which
 /// commits a partial batch when its request budget runs out.
 fn insert_edge_chunk(conn: &Connection, chunk: &[Edge]) -> GraphResult<()> {
     conn.execute_batch("BEGIN TRANSACTION")?;
-    let insert_result = (|| -> GraphResult<()> {
-        let mut stmt = conn.prepare(INSERT_EDGE_SQL)?;
-        for edge in chunk {
-            stmt.execute(params![
-                edge.from,
-                edge.to,
-                edge.rel,
-                edge.provenance,
-                edge.confidence,
-                edge.granularity
-            ])?;
-        }
-        Ok(())
-    })();
+    let insert_result = insert_edges_multi_row(conn, chunk).map(|_| ());
 
     if let Err(error) = insert_result {
         let _ = conn.execute_batch("ROLLBACK");
@@ -953,6 +990,14 @@ struct IngestOutcome {
 /// [`RECONCILE_CHUNK_ROWS`] rows, and executing those as one transaction is
 /// exactly the unbounded-insert shape GAP-094 exists to remove.
 ///
+/// PERF-016: when NO deadline is set — the one-shot CLI shape
+/// ([`UNBOUNDED_RECONCILE_BUDGET_MS`], e.g. a cold `graph warm`) — the chunk
+/// goes through the bulk multi-row statement path
+/// ([`insert_edges_multi_row`]) instead of per-row executes; row-for-row
+/// `INSERT OR IGNORE` semantics are unchanged and every row is still
+/// committed in this one transaction. With a deadline the per-row path is
+/// kept so the overshoot contract above stays exact.
+///
 /// Returns `(rows inserted, stopped)`; `committed` advances to the offset of
 /// the last row actually inserted, so a resume point is always a row boundary
 /// and never claims bytes that were not executed.
@@ -962,6 +1007,26 @@ fn insert_edge_chunk_until(
     deadline: Option<Instant>,
     committed: &mut u64,
 ) -> GraphResult<(usize, bool)> {
+    if deadline.is_none() {
+        // Unbounded budget: bulk statements keep the cold one-shot replay from
+        // paying per-row execute overhead (PERF-016). The transaction still
+        // covers the whole chunk, and every row's offset is recorded so the
+        // checkpoint claims exactly the rows that were executed.
+        conn.execute_batch("BEGIN TRANSACTION")?;
+        let edges: Vec<Edge> = chunk.iter().map(|(edge, _)| edge).cloned().collect();
+        if let Err(error) = insert_edges_multi_row(conn, &edges) {
+            let _ = conn.execute_batch("ROLLBACK");
+            return Err(error);
+        }
+        if let Err(error) = conn.execute_batch("COMMIT") {
+            let _ = conn.execute_batch("ROLLBACK");
+            return Err(error.into());
+        }
+        if let Some((_, last_offset)) = chunk.last() {
+            *committed = *last_offset;
+        }
+        return Ok((chunk.len(), false));
+    }
     let mut inserted = 0_usize;
     conn.execute_batch("BEGIN TRANSACTION")?;
     let result = (|| -> GraphResult<()> {
@@ -2252,6 +2317,20 @@ impl GraphDB {
             let to = edge.to.clone();
             snap.reverse.entry(to).or_default().push(edge);
         }
+        // PERF-016: DuckDB's INSERT OR IGNORE does not preserve VALUES order
+        // in physical storage, so per-node lists must not inherit table
+        // order. Sort with the same key as `related_with_local`'s SELECTs so
+        // the snapshot arms stay byte-identical with the SQL arms.
+        for list in snap.forward.values_mut() {
+            list.sort_by(|a, b| {
+                (&a.to, &a.rel, &a.provenance).cmp(&(&b.to, &b.rel, &b.provenance))
+            });
+        }
+        for list in snap.reverse.values_mut() {
+            list.sort_by(|a, b| {
+                (&a.from, &a.rel, &a.provenance).cmp(&(&b.from, &b.rel, &b.provenance))
+            });
+        }
         Ok(snap)
     }
 
@@ -2357,7 +2436,8 @@ impl GraphDB {
             {
                 (
                         format!(
-                            "SELECT \"from\", \"to\", rel, provenance, confidence, granularity FROM edges WHERE {column} = ? AND rel = ?"
+                            "SELECT \"from\", \"to\", rel, provenance, confidence, granularity FROM edges WHERE {column} = ? AND rel = ? \
+                             ORDER BY \"from\", \"to\", rel, provenance"
                         ),
                         vec![
                             Box::new(target.clone()),
@@ -2367,7 +2447,8 @@ impl GraphDB {
             } else {
                 (
                         format!(
-                            "SELECT \"from\", \"to\", rel, provenance, confidence, granularity FROM edges WHERE {column} = ?"
+                            "SELECT \"from\", \"to\", rel, provenance, confidence, granularity FROM edges WHERE {column} = ? \
+                             ORDER BY \"from\", \"to\", rel, provenance"
                         ),
                         vec![Box::new(target.clone())],
                     )
@@ -2421,14 +2502,16 @@ impl GraphDB {
                         if let Some(rel) = rel_filter {
                             (
                                 "SELECT \"from\", \"to\", rel, provenance, confidence, granularity \
-                                 FROM edges WHERE \"to\" = ? AND rel = ?"
+                                 FROM edges WHERE \"to\" = ? AND rel = ? \
+                                 ORDER BY \"from\", \"to\", rel, provenance"
                                     .to_string(),
                                 vec![Box::new(node), Box::new(rel.to_string())],
                             )
                         } else {
                             (
                                 "SELECT \"from\", \"to\", rel, provenance, confidence, granularity \
-                                 FROM edges WHERE \"to\" = ?"
+                                 FROM edges WHERE \"to\" = ? \
+                                 ORDER BY \"from\", \"to\", rel, provenance"
                                     .to_string(),
                                 vec![Box::new(node)],
                             )
@@ -3446,6 +3529,7 @@ fn component_name_of(file: &str) -> String {
 mod tests {
     use super::*;
     use crate::impact::SCOPE_FILE;
+    use hilo_metadata::inventory::GRANULARITY_SYMBOL;
 
     fn write_go_file(dir: &Path, name: &str, content: &str) -> String {
         let path = dir.join(name);
@@ -4598,6 +4682,82 @@ mod tests {
             )
             .unwrap();
         assert_eq!(to_val, "y.go");
+    }
+
+    /// PERF-016: the bulk multi-row insert path must be semantically
+    /// indistinguishable from the row-by-row `INSERT OR IGNORE` it replaced —
+    /// duplicates within one statement, duplicates across statements, and a
+    /// full re-execution are all ignored by the unique index, and the return
+    /// value counts rows EXECUTED, not rows changed.
+    #[test]
+    fn bulk_multi_row_insert_matches_or_ignore_semantics() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_schema(&conn).unwrap();
+
+        // 600 distinct edges => three 256-row statements, so cross-statement
+        // duplicates are exercised alongside within-statement ones.
+        let mut edges: Vec<Edge> = (0..600)
+            .map(|i| Edge::new(format!("f{i}.go"), format!("g{i}.go"), "imports"))
+            .collect();
+        // Duplicate of edges[0] INSIDE the same statement batch.
+        edges.push(Edge::new("f0.go", "g0.go", "imports"));
+        // Duplicate of an edge committed by an EARLIER statement batch.
+        edges.push(Edge::new("f10.go", "g10.go", "imports"));
+
+        let executed = insert_edges_multi_row(&conn, &edges).unwrap();
+        assert_eq!(
+            executed,
+            edges.len(),
+            "executed count counts rows executed, not rows changed"
+        );
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM edges", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(
+            count, 600,
+            "within-statement and cross-statement duplicates must be ignored"
+        );
+
+        // Re-executing the whole set (the cached-warm / reconcile re-insert
+        // shape) adds nothing.
+        insert_edges_multi_row(&conn, &edges).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM edges", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 600, "bulk re-insert must stay idempotent");
+    }
+
+    /// PERF-016: the bulk path binds every column, including non-default
+    /// provenance/confidence/granularity — a symbol-level edge survives the
+    /// round trip exactly as it did on the per-row path.
+    #[test]
+    fn bulk_multi_row_insert_round_trips_all_columns() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_schema(&conn).unwrap();
+
+        let edge =
+            Edge::with_provenance("src/a.rs", "tests/a_test.rs", "tested_by", "heuristic", 0.8);
+        let edge = Edge {
+            granularity: GRANULARITY_SYMBOL.to_string(),
+            ..edge
+        };
+
+        insert_edges_multi_row(&conn, std::slice::from_ref(&edge)).unwrap();
+
+        let (prov, conf, gran): (String, f64, String) = conn
+            .query_row(
+                "SELECT provenance, confidence, granularity FROM edges",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(prov, "heuristic");
+        // `confidence` is a DuckDB REAL column (f32 storage): 0.8f64
+        // round-trips as 0.800000011920929, so the tolerance must clear f32
+        // epsilon — 1e-9 can never hold regardless of insert path.
+        assert!((conf - 0.8).abs() < 1e-6);
+        assert_eq!(gran, GRANULARITY_SYMBOL);
     }
 
     /// GAP-121: a cache written before the `granularity` column existed must
