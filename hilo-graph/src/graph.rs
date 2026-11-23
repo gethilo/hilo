@@ -4760,6 +4760,113 @@ mod tests {
         assert_eq!(gran, GRANULARITY_SYMBOL);
     }
 
+    /// PERF-016: an empty slice is a no-op — zero statements prepared, zero
+    /// rows executed, table untouched.
+    #[test]
+    fn bulk_multi_row_insert_empty_slice_is_a_noop() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_schema(&conn).unwrap();
+
+        let executed = insert_edges_multi_row(&conn, &[]).unwrap();
+        assert_eq!(executed, 0, "empty input must execute zero rows");
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM edges", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0, "empty input must not touch the table");
+    }
+
+    /// PERF-016: statement-count boundaries — a single row, exactly one full
+    /// 256-row statement, and one row into the second statement all land
+    /// with every row present.
+    #[test]
+    fn bulk_multi_row_insert_handles_statement_count_boundaries() {
+        for (rows, label) in [
+            (1_usize, "single row"),
+            (BULK_INSERT_ROWS_PER_STATEMENT, "exactly one full statement"),
+            (
+                BULK_INSERT_ROWS_PER_STATEMENT + 1,
+                "one row into the second statement",
+            ),
+        ] {
+            let conn = Connection::open_in_memory().unwrap();
+            ensure_schema(&conn).unwrap();
+            let edges: Vec<Edge> = (0..rows)
+                .map(|i| Edge::new(format!("f{i}.go"), format!("g{i}.go"), "imports"))
+                .collect();
+            let executed = insert_edges_multi_row(&conn, &edges).unwrap();
+            assert_eq!(executed, rows, "{label}: executed must equal batch size");
+
+            let count: i64 = conn
+                .query_row("SELECT COUNT(*) FROM edges", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(count, rows as i64, "{label}: every row must be present");
+        }
+    }
+
+    /// PERF-016: the executed-count contract against PRE-EXISTING rows —
+    /// an all-duplicate re-insert (the cached-warm shape) still reports
+    /// every row EXECUTED while changing nothing, and a mixed batch reports
+    /// the full executed count while adding exactly the new rows.
+    #[test]
+    fn bulk_multi_row_insert_executed_count_with_preexisting_rows() {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_schema(&conn).unwrap();
+
+        let base: Vec<Edge> = (0..3)
+            .map(|i| Edge::new(format!("f{i}.go"), format!("g{i}.go"), "imports"))
+            .collect();
+        assert_eq!(insert_edges_multi_row(&conn, &base).unwrap(), 3);
+
+        // All-duplicate re-insert: every row EXECUTED, zero rows changed.
+        assert_eq!(
+            insert_edges_multi_row(&conn, &base).unwrap(),
+            3,
+            "executed counts rows executed, not rows changed"
+        );
+
+        // Mixed batch: two duplicates + one genuinely new row.
+        let mut mixed = base[..2].to_vec();
+        mixed.push(Edge::new("f9.go", "g9.go", "imports"));
+        assert_eq!(insert_edges_multi_row(&conn, &mixed).unwrap(), 3);
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM edges", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 4, "only the genuinely new row may be added");
+    }
+
+    /// PERF-016 regression pin: rows inserted through the bulk path may sit
+    /// in the table in any physical order (DuckDB's INSERT OR IGNORE
+    /// conflict filtering reorders even all-distinct batches), so `related`
+    /// must answer in deterministic edge-identity order — never storage or
+    /// insertion order — and the snapshot arm must agree byte-for-byte.
+    #[test]
+    fn related_answers_in_identity_order_regardless_of_bulk_insert_order() {
+        let db = GraphDB::open(":memory:").unwrap();
+        let edges = vec![
+            Edge::new("src/main.rs", "zzz.go", "imports"),
+            Edge::new("src/main.rs", "mmm.go", "imports"),
+            Edge::new("src/main.rs", "aaa.go", "imports"),
+        ];
+        insert_edges_multi_row(db.conn(), &edges).unwrap();
+
+        let related = db.related("src/main.rs", None, Direction::Forward).unwrap();
+        let tos: Vec<&str> = related.iter().map(|edge| edge.to.as_str()).collect();
+        assert_eq!(
+            tos,
+            vec!["aaa.go", "mmm.go", "zzz.go"],
+            "related must sort by edge identity, not insertion/storage order"
+        );
+
+        let snap = db.related_snapshot().unwrap();
+        let snapshot_arm = db.related_forward_snapshot(&snap, "src/main.rs").unwrap();
+        assert_eq!(
+            related, snapshot_arm,
+            "snapshot forward must reproduce the sorted SQL answer"
+        );
+    }
+
     /// GAP-121: a cache written before the `granularity` column existed must
     /// gain it in place, with every old row reading as `file` — never as a
     /// symbol claim.
