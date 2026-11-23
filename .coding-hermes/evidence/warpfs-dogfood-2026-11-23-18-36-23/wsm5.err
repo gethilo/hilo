@@ -1,0 +1,1 @@
+error: failed to build mount plan for ws5.yaml: Validation failed: failed to ensure worktree for heading: unresolved ref 'main': tried 'main', 'refs/heads/main', 'refs/tags/main'; available branches: master-live, origin/HEAD, origin/master-live

@@ -1,0 +1,132 @@
+[
+ {
+  "label": "floor --version",
+  "args": "--version",
+  "rc": 0,
+  "wall_s": 0.006,
+  "loadavg": [
+   "12.71",
+   "16.92",
+   "21.24"
+  ],
+  "stdout_lines": 3,
+  "stderr_lines": 0
+ },
+ {
+  "label": "A1 init",
+  "args": "init",
+  "rc": 0,
+  "wall_s": 0.012,
+  "loadavg": [
+   "12.71",
+   "16.92",
+   "21.24"
+  ],
+  "stdout_lines": 4,
+  "stderr_lines": 0
+ },
+ {
+  "label": "A2 cold graph warm HILO_WARM_TIMING=1",
+  "args": "graph warm",
+  "rc": 0,
+  "wall_s": 13.624,
+  "loadavg": [
+   "12.71",
+   "16.92",
+   "21.24"
+  ],
+  "stdout_lines": 29,
+  "stderr_lines": 12
+ },
+ {
+  "label": "A3 graph stats post-warm",
+  "args": "graph stats",
+  "rc": 0,
+  "wall_s": 0.341,
+  "loadavg": [
+   "15.36",
+   "17.31",
+   "21.30"
+  ],
+  "stdout_lines": 66,
+  "stderr_lines": 0
+ },
+ {
+  "label": "A4 warm graph warm (2nd run)",
+  "args": "graph warm",
+  "rc": 0,
+  "wall_s": 1.427,
+  "loadavg": [
+   "15.36",
+   "17.31",
+   "21.30"
+  ],
+  "stdout_lines": 27,
+  "stderr_lines": 10
+ },
+ {
+  "label": "A5 graph stats again",
+  "args": "graph stats",
+  "rc": 0,
+  "wall_s": 0.058,
+  "loadavg": [
+   "15.36",
+   "17.31",
+   "21.30"
+  ],
+  "stdout_lines": 66,
+  "stderr_lines": 0
+ },
+ {
+  "label": "A6 graph untested --granularity function",
+  "args": "graph untested --granularity function",
+  "rc": 0,
+  "wall_s": 0.592,
+  "loadavg": [
+   "15.36",
+   "17.31",
+   "21.30"
+  ],
+  "stdout_lines": 284,
+  "stderr_lines": 0
+ },
+ {
+  "label": "A7 graph impact <busy file>",
+  "args": "graph impact package.json",
+  "rc": 1,
+  "wall_s": 0.101,
+  "loadavg": [
+   "15.36",
+   "17.31",
+   "21.30"
+  ],
+  "stdout_lines": 0,
+  "stderr_lines": 1
+ },
+ {
+  "label": "A8 graph search 'handler'",
+  "args": "graph search handler",
+  "rc": 0,
+  "wall_s": 0.075,
+  "loadavg": [
+   "15.36",
+   "17.31",
+   "21.30"
+  ],
+  "stdout_lines": 8,
+  "stderr_lines": 0
+ },
+ {
+  "label": "A9 graph understand 'where is config loaded'",
+  "args": "graph understand where is config loaded",
+  "rc": 0,
+  "wall_s": 0.138,
+  "loadavg": [
+   "15.36",
+   "17.31",
+   "21.30"
+  ],
+  "stdout_lines": 481,
+  "stderr_lines": 0
+ }
+]

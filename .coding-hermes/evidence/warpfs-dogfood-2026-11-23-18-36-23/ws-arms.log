@@ -1,0 +1,17 @@
+=== W1: workspace schema, repos with url=<local clone path> ===
+ws-mount rc=1
+error: failed to load manifest /tmp/dftip-1123/ws3.yaml: manifest matches neither accepted schema
+  - workspace schema (top-level keys: repos[], backends[], mounts[], auto_dependency_order): repos[0]: missing field `ref` at line 2 column 5
+  - project schema (the `.vfs/manifest.yaml` written by `hilo init`: version, project, interfaces, repos[] with at/auto_pull, ...): missing field `project`
+/tmp/dftip-1123/wmnt3/heading/apps/api/src/config.ts: user.vfs.role: No such file or directory
+ws-getfattr rc=1
+ws-meta-set rc=1
+error: no such file: /tmp/dftip-1123/wmnt3/heading/apps/api/src/config.ts
+/tmp/dftip-1123/wmnt3/heading/apps/api/src/config.ts: user.vfs.role: No such file or directory
+=== W2: project schema (init-written manifest + second repo appended) ===
+proj-mount rc=1
+error: failed to load manifest /tmp/dftip-1123/proj-manifest.yaml: manifest matches neither accepted schema
+  - workspace schema (top-level keys: repos[], backends[], mounts[], auto_dependency_order): unknown field `version`, expected one of `repos`, `backends`, `mounts`, `auto_dependency_order`
+  - project schema (the `.vfs/manifest.yaml` written by `hilo init`: version, project, interfaces, repos[] with at/auto_pull, ...): unknown field `repos-test`, expected one of `version`, `project`, `interfaces`, `repos`, `backends`, `metadata`, `graph`, `permissions`, `triggers`, `rules`, `plugins`, `discovery`, `sandbox`, `performance` at line 105 column 1
+  hint: the file starts with project-schema keys (`version`/`project`/…), so the project schema above is the one to fix.
+=== WS-ARMS DONE ===

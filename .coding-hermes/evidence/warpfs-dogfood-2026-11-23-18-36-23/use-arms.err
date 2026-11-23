@@ -1,0 +1,43 @@
+
+=== floor --version | rc=0 | wall=0.006s
+
+=== A1 init | rc=0 | wall=0.012s
+
+=== A2 cold graph warm HILO_WARM_TIMING=1 | rc=0 | wall=13.624s
+  parsing 100/395 files...
+  parsing 200/395 files...
+  parsing 300/395 files...
+  parsing 395/395 files...
+  [timing] test associations: 384.492µs
+  [timing] service calls: 15.198265ms
+  [timing] conformance edges: 996.408319ms
+  [timing] service contracts: 1.011787229s
+  [timing] jsonl dedup write: 875.66874ms
+  [timing] GraphDB::open (incl reconcile): 4.054978738s
+  [timing] insert_edges: 3.250528919s
+  cache prune: 0 stale row(s) removed from graph.db
+
+=== A3 graph stats post-warm | rc=0 | wall=0.341s
+
+=== A4 warm graph warm (2nd run) | rc=0 | wall=1.427s
+  parsing 100/395 files...
+  parsing 200/395 files...
+  parsing 300/395 files...
+  parsing 395/395 files...
+  parse cache: 395/395 files skipped (unchanged)
+  [timing] test associations: 409.709µs
+  [timing] service calls: 15.476411ms
+  [timing] conformance edges: 1.187156277s
+  [timing] service contracts: 1.205978124s
+  [timing] full cache hit — skipping jsonl+db write
+
+=== A5 graph stats again | rc=0 | wall=0.058s
+
+=== A6 graph untested --granularity function | rc=0 | wall=0.592s
+
+=== A7 graph impact <busy file> | rc=1 | wall=0.101s
+error: failed to compute impact: graph error: 'package.json' is not an indexable source file (26 AST languages) — impact/related cannot answer for it
+
+=== A8 graph search 'handler' | rc=0 | wall=0.075s
+
+=== A9 graph understand 'where is config loaded' | rc=0 | wall=0.138s

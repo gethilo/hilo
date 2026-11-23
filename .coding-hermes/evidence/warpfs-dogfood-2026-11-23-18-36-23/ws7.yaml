@@ -1,0 +1,14 @@
+repos:
+  - name: heading
+    url: /tmp/dftip-1123/heading
+    ref: master-live
+    writable: true
+  - name: second
+    url: /tmp/dftip-1123/second
+    ref: master-live
+    writable: true
+mounts:
+  - source: heading
+    at: /heading
+  - source: second
+    at: /second

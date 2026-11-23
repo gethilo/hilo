@@ -1,0 +1,988 @@
+
+=== floor --version | rc=0 | wall=0.006s | load=['12.71', '16.92', '21.24'] | cwd=/tmp/dftip-1123/heading
+hilo 0.4.1
+build: v0.4.1-125-g675e6ed-dirty
+built: 2026-11-22T13:12:37Z
+
+=== A1 init | rc=0 | wall=0.012s | load=['12.71', '16.92', '21.24'] | cwd=/tmp/dftip-1123/heading
+Initialized Hilo in /tmp/dftip-1123/heading
+  Created post-commit
+  Created post-merge
+Installed git hooks: post-commit, post-merge
+
+=== A2 cold graph warm HILO_WARM_TIMING=1 | rc=0 | wall=13.624s | load=['12.71', '16.92', '21.24'] | cwd=/tmp/dftip-1123/heading
+Compacted 28 duplicate edge row(s) in edges.jsonl (1136 -> 1108 rows)
+Pruned 529 stale edge(s) from edges.jsonl: 517 missing path, 12 superseded (1108 rows -> 579)
+Discovered 2711 edges across 349 files (3 languages)
+Excluded 1 supported source files (hidden: 1)
+Coverage: 395 files = 349 contribute edges + 0 package facades (__init__.py) + 43 no imports + 3 parse-miss + 0 unreadable + 0 unsupported extension
+  parse-miss: apps/web/src/components/MessageBubble.tsx — syntax errors
+  parse-miss: apps/web/src/components/TypingIndicator.tsx — syntax errors
+  parse-miss: packages/preference-engine/src/index.ts — syntax errors
+  parse recovered: apps/web/src/components/ExportPreview.icons.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/src/components/OptionCard.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/src/components/ChatInterface.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/src/components/EvacuationMode.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/src/components/BuildStamp.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/src/components/ClientSelector.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/src/components/ProgressBar.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/src/components/AdminPanel.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/src/components/ClientSidebar.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/src/components/ExportPreview.panels.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/src/components/ExportPreview.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/src/components/AuthGuard.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/src/app/layout.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/src/app/login/page.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/src/app/page.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/src/app/admin/page.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/tests/components/option-data-source.test.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/tests/components/ExportPreview.test.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/tests/components/OptionCard.test.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/tests/components/AdminPanel.test.tsx — syntax errors (direct recovery)
+  ... and 14 more parse recovered
+
+=== A3 graph stats post-warm | rc=0 | wall=0.341s | load=['15.36', '17.31', '21.30'] | cwd=/tmp/dftip-1123/heading
+Total edges: 2670 distinct / 2670 raw (edges.jsonl)
+Total files discovered: 395
+Total files with edges: 349
+File census: 349 files with edges (distinct edge sources) — warm last counted 395 discovered files = 349 contribute + 46 zero-edge (43 no imports + 0 package facades + 3 parse-miss)
+Components (15 total):
+  apps: 223 files, 1961 edges
+  prompts: 147 files, 0 edges
+  packages: 103 files, 613 edges
+  .coding-hermes: 70 files, 0 edges
+  .gitreins: 59 files, 0 edges
+  scripts: 17 files, 68 edges
+  specs: 14 files, 0 edges
+  .: 5 files, 12 edges
+  images: 5 files, 0 edges
+  deploy: 2 files, 0 edges
+  skills: 2 files, 0 edges
+  .qa: 1 files, 0 edges
+  config: 1 files, 0 edges
+  docs: 1 files, 2 edges
+  tests: 1 files, 0 edges
+Most connected: pkg:vitest
+Conformance: 14 implements, 0 consumes (heuristic extraction — see `hilo graph wiring`)
+Edge types:
+  conformance_of: 18
+  implements: 14
+  imports: 1585
+  tested_by: 1052
+  tests: 1
+Orphans (no incoming edges):
+  apps/api/scripts/measure-degraded-chat.mjs
+  apps/api/scripts/monitor-loop-demo.ts
+  apps/api/src/app.ts
+  apps/api/src/auth/jwt.ts
+  apps/api/src/auth/keys.ts
+  apps/api/src/config.ts
+  apps/api/src/demo/chat-roundtrip-cli.ts
+  apps/api/src/demo/chat-roundtrip.ts
+  apps/api/src/demo/crm-store-cli.ts
+  apps/api/src/index.ts
+  apps/api/src/inventory/curated-flight-data.ts
+  apps/api/src/inventory/sample-route-catalogue.ts
+  apps/api/src/middleware/auth.ts
+  apps/api/src/middleware/error-handler.ts
+  apps/api/src/middleware/logger.ts
+  apps/api/src/middleware/rate-limit.ts
+  apps/api/src/orchestrator/amadeus-providers.ts
+  apps/api/src/orchestrator/audit-persistence.ts
+  apps/api/src/orchestrator/learned-preferences.ts
+  apps/api/src/orchestrator/live-providers.ts
+  apps/api/src/orchestrator/mock-providers.ts
+  apps/api/src/orchestrator/phases/evacuation.ts
+  apps/api/src/orchestrator/phases/identify-client.ts
+  apps/api/src/orchestrator/phases/monitor-loop.ts
+  apps/api/src/orchestrator/phases/monitor.ts
+  ... 322 more orphans (use --limit 0 to show all)
+Top dependencies:
+  pkg:vitest: 366
+  pkg:node:fs: 146
+  pkg:node:path: 143
+  pkg:node:http: 109
+  local:../../src/config.js: 106
+  pkg:node:url: 91
+  pkg:node:os: 90
+  local:../../src/orchestrator/types.js: 88
+  local:../../src/app.js: 84
+  local:../../src/orchestrator/session-store.js: 82
+
+=== A4 warm graph warm (2nd run) | rc=0 | wall=1.427s | load=['15.36', '17.31', '21.30'] | cwd=/tmp/dftip-1123/heading
+Discovered 2711 edges across 349 files (3 languages) [all cached, graph unchanged]
+Excluded 1 supported source files (hidden: 1)
+Coverage: 395 files = 349 contribute edges + 0 package facades (__init__.py) + 43 no imports + 3 parse-miss + 0 unreadable + 0 unsupported extension
+  parse-miss: apps/web/src/components/MessageBubble.tsx — syntax errors
+  parse-miss: apps/web/src/components/TypingIndicator.tsx — syntax errors
+  parse-miss: packages/preference-engine/src/index.ts — syntax errors
+  parse recovered: apps/web/src/components/ExportPreview.icons.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/src/components/OptionCard.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/src/components/ChatInterface.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/src/components/EvacuationMode.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/src/components/BuildStamp.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/src/components/ClientSelector.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/src/components/ProgressBar.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/src/components/AdminPanel.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/src/components/ClientSidebar.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/src/components/ExportPreview.panels.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/src/components/ExportPreview.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/src/components/AuthGuard.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/src/app/layout.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/src/app/login/page.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/src/app/page.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/src/app/admin/page.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/tests/components/option-data-source.test.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/tests/components/ExportPreview.test.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/tests/components/OptionCard.test.tsx — syntax errors (direct recovery)
+  parse recovered: apps/web/tests/components/AdminPanel.test.tsx — syntax errors (direct recovery)
+  ... and 14 more parse recovered
+
+=== A5 graph stats again | rc=0 | wall=0.058s | load=['15.36', '17.31', '21.30'] | cwd=/tmp/dftip-1123/heading
+Total edges: 2670 distinct / 2670 raw (edges.jsonl)
+Total files discovered: 395
+Total files with edges: 349
+File census: 349 files with edges (distinct edge sources) — warm last counted 395 discovered files = 349 contribute + 46 zero-edge (43 no imports + 0 package facades + 3 parse-miss)
+Components (15 total):
+  apps: 223 files, 1961 edges
+  prompts: 147 files, 0 edges
+  packages: 103 files, 613 edges
+  .coding-hermes: 70 files, 0 edges
+  .gitreins: 59 files, 0 edges
+  scripts: 17 files, 68 edges
+  specs: 14 files, 0 edges
+  .: 5 files, 12 edges
+  images: 5 files, 0 edges
+  deploy: 2 files, 0 edges
+  skills: 2 files, 0 edges
+  .qa: 1 files, 0 edges
+  config: 1 files, 0 edges
+  docs: 1 files, 2 edges
+  tests: 1 files, 0 edges
+Most connected: pkg:vitest
+Conformance: 14 implements, 0 consumes (heuristic extraction — see `hilo graph wiring`)
+Edge types:
+  conformance_of: 18
+  implements: 14
+  imports: 1585
+  tested_by: 1052
+  tests: 1
+Orphans (no incoming edges):
+  apps/api/scripts/measure-degraded-chat.mjs
+  apps/api/scripts/monitor-loop-demo.ts
+  apps/api/src/app.ts
+  apps/api/src/auth/jwt.ts
+  apps/api/src/auth/keys.ts
+  apps/api/src/config.ts
+  apps/api/src/demo/chat-roundtrip-cli.ts
+  apps/api/src/demo/chat-roundtrip.ts
+  apps/api/src/demo/crm-store-cli.ts
+  apps/api/src/index.ts
+  apps/api/src/inventory/curated-flight-data.ts
+  apps/api/src/inventory/sample-route-catalogue.ts
+  apps/api/src/middleware/auth.ts
+  apps/api/src/middleware/error-handler.ts
+  apps/api/src/middleware/logger.ts
+  apps/api/src/middleware/rate-limit.ts
+  apps/api/src/orchestrator/amadeus-providers.ts
+  apps/api/src/orchestrator/audit-persistence.ts
+  apps/api/src/orchestrator/learned-preferences.ts
+  apps/api/src/orchestrator/live-providers.ts
+  apps/api/src/orchestrator/mock-providers.ts
+  apps/api/src/orchestrator/phases/evacuation.ts
+  apps/api/src/orchestrator/phases/identify-client.ts
+  apps/api/src/orchestrator/phases/monitor-loop.ts
+  apps/api/src/orchestrator/phases/monitor.ts
+  ... 322 more orphans (use --limit 0 to show all)
+Top dependencies:
+  pkg:vitest: 366
+  pkg:node:fs: 146
+  pkg:node:path: 143
+  pkg:node:http: 109
+  local:../../src/config.js: 106
+  pkg:node:url: 91
+  pkg:node:os: 90
+  local:../../src/orchestrator/types.js: 88
+  local:../../src/app.js: 84
+  local:../../src/orchestrator/session-store.js: 82
+
+=== A6 graph untested --granularity function | rc=0 | wall=0.592s | load=['15.36', '17.31', '21.30'] | cwd=/tmp/dftip-1123/heading
+64 file(s) with uncovered public function(s) at function granularity (217 function(s)):
+  apps/api/src/auth/agency.ts (2/3 covered)
+    isProductionEnv  apps/api/src/auth/agency.ts:48
+  apps/api/src/auth/keys.ts (7/13 covered)
+    isProductionEnv  apps/api/src/auth/keys.ts:95
+    notConfiguredMessage  apps/api/src/auth/keys.ts:102
+    CREDENTIALS_FILE_ENV_VAR  apps/api/src/auth/keys.ts:142
+    resolveCredentialsFilePath  apps/api/src/auth/keys.ts:167
+    resolveCredentials  apps/api/src/auth/keys.ts:283
+    operatorForToken  apps/api/src/auth/keys.ts:368
+  apps/api/src/config.ts (10/12 covered)
+    publicHostFor  apps/api/src/config.ts:97
+    DEFAULT_PUBLIC_PORT  apps/api/src/config.ts:210
+  apps/api/src/demo/chat-roundtrip.ts (3/4 covered)
+    isOptionUpdate  apps/api/src/demo/chat-roundtrip.ts:45
+  apps/api/src/inventory/sample-route-catalogue.ts (2/3 covered)
+    _setRouteCatalogueForTests  apps/api/src/inventory/sample-route-catalogue.ts:48
+  apps/api/src/middleware/error-handler.ts (1/3 covered)
+    createError  apps/api/src/middleware/error-handler.ts:9
+    errorHandler  apps/api/src/middleware/error-handler.ts:22
+  apps/api/src/middleware/logger.ts (0/1 covered)
+    requestLogger  apps/api/src/middleware/logger.ts:3
+  apps/api/src/middleware/rate-limit.ts (0/3 covered)
+    createRateLimiter  apps/api/src/middleware/rate-limit.ts:29
+    LOGIN_RATE_LIMIT  apps/api/src/middleware/rate-limit.ts:77
+    API_RATE_LIMIT  apps/api/src/middleware/rate-limit.ts:82
+  apps/api/src/orchestrator/audit-persistence.ts (7/12 covered)
+    AUDIT_DIR_ENV_VAR  apps/api/src/orchestrator/audit-persistence.ts:61
+    AUDIT_MAX_BYTES_ENV_VAR  apps/api/src/orchestrator/audit-persistence.ts:64
+    AUDIT_KEEP_ENV_VAR  apps/api/src/orchestrator/audit-persistence.ts:67
+    AuditDirRequiredError  apps/api/src/orchestrator/audit-persistence.ts:124
+    _resetAuditFileForTests  apps/api/src/orchestrator/audit-persistence.ts:274
+  apps/api/src/orchestrator/learned-preferences.ts (1/3 covered)
+    seasonKeyForDate  apps/api/src/orchestrator/learned-preferences.ts:65
+    applyLearnedPreferences  apps/api/src/orchestrator/learned-preferences.ts:221
+  apps/api/src/orchestrator/phases/monitor-loop.ts (11/13 covered)
+    DEFAULT_MONITOR_LOOP_RUNTIME  apps/api/src/orchestrator/phases/monitor-loop.ts:788
+    getActiveMonitorLoop  apps/api/src/orchestrator/phases/monitor-loop.ts:882
+  apps/api/src/orchestrator/phases/monitor.ts (2/3 covered)
+    persistMonitorState  apps/api/src/orchestrator/phases/monitor.ts:179
+  apps/api/src/orchestrator/phases/pull-data.ts (0/1 covered)
+    executePullData  apps/api/src/orchestrator/phases/pull-data.ts:121
+  apps/api/src/orchestrator/session-store.ts (7/14 covered)
+    getSessionByStreamId  apps/api/src/orchestrator/session-store.ts:81
+    setClientId  apps/api/src/orchestrator/session-store.ts:126
+    setLayerResults  apps/api/src/orchestrator/session-store.ts:144
+    getLayerResults  apps/api/src/orchestrator/session-store.ts:185
+    setRankedOptions  apps/api/src/orchestrator/session-store.ts:189
+    setSurfaceSnapshot  apps/api/src/orchestrator/session-store.ts:198
+    setMonitorState  apps/api/src/orchestrator/session-store.ts:207
+  apps/api/src/orchestrator/types.ts (2/5 covered)
+    STORE_ERROR_CLIENT_RESOLUTION  apps/api/src/orchestrator/types.ts:75
+    NO_CLIENT_RESOLUTION  apps/api/src/orchestrator/types.ts:83
+    clientResolutionFromLayer  apps/api/src/orchestrator/types.ts:95
+  apps/api/src/routes/auth.ts (0/1 covered)
+    authRouter  apps/api/src/routes/auth.ts:20
+  apps/api/src/routes/clients.ts (1/2 covered)
+    _crmClient  apps/api/src/routes/clients.ts:43
+  apps/api/src/routes/integrations.ts (1/4 covered)
+    integrationsRouter  apps/api/src/routes/integrations.ts:28
+    probeMargin  apps/api/src/routes/integrations.ts:54
+    probeWeather  apps/api/src/routes/integrations.ts:97
+  apps/api/src/routes/monitor-simulate.ts (0/1 covered)
+    isDevMonitoringAllowed  apps/api/src/routes/monitor-simulate.ts:33
+  apps/api/src/services/export.helpers.ts (7/19 covered)
+    generateShareToken  apps/api/src/services/export.helpers.ts:30
+    hashToken  apps/api/src/services/export.helpers.ts:35
+    canonicalize  apps/api/src/services/export.helpers.ts:41
+    computeContentSnapshotHash  apps/api/src/services/export.helpers.ts:51
+    buildDefaultContent  apps/api/src/services/export.helpers.ts:113
+    applySelection  apps/api/src/services/export.helpers.ts:196
+    cloneDraft  apps/api/src/services/export.helpers.ts:240
+    cloneContent  apps/api/src/services/export.helpers.ts:254
+    cloneBranding  apps/api/src/services/export.helpers.ts:271
+    cloneVersion  apps/api/src/services/export.helpers.ts:277
+    computeExpiry  apps/api/src/services/export.helpers.ts:297
+    sharePathForToken  apps/api/src/services/export.helpers.ts:336
+  apps/api/src/services/export.ts (1/6 covered)
+    versions  apps/api/src/services/export.ts:6
+    tokenIndex  apps/api/src/services/export.ts:7
+    passwordAttempts  apps/api/src/services/export.ts:8
+    _setExportServiceForTests  apps/api/src/services/export.ts:12
+    getExportService  apps/api/src/services/export.ts:16
+  apps/api/src/services/export.types.ts (6/30 covered)
+    DEFAULT_EXPIRY_DAYS  apps/api/src/services/export.types.ts:5
+    MIN_EXPIRY_DAYS  apps/api/src/services/export.types.ts:7
+    MAX_EXPIRY_DAYS  apps/api/src/services/export.types.ts:9
+    BCRYPT_COST  apps/api/src/services/export.types.ts:13
+    MAX_PASSWORD_ATTEMPTS  apps/api/src/services/export.types.ts:18
+    PASSWORD_LOCKOUT_MS  apps/api/src/services/export.types.ts:20
+    exportCarrierCodeSchema  apps/api/src/services/export.types.ts:73
+    exportImageAssetSchema  apps/api/src/services/export.types.ts:79
+    exportExternalLinkSchema  apps/api/src/services/export.types.ts:93
+    exportTripOverviewSchema  apps/api/src/services/export.types.ts:101
+    exportGroundTransportSchema  apps/api/src/services/export.types.ts:166
+    exportDiningSchema  apps/api/src/services/export.types.ts:189
+    exportNoteSchema  apps/api/src/services/export.types.ts:206
+    exportMapSchema  apps/api/src/services/export.types.ts:216
+    exportWeatherForecastSchema  apps/api/src/services/export.types.ts:233
+    exportBrandingSchema  apps/api/src/services/export.types.ts:252
+    exportAccessPolicySchema  apps/api/src/services/export.types.ts:269
+    exportRenderArtifactSchema  apps/api/src/services/export.types.ts:281
+    contentSelectionSchema  apps/api/src/services/export.types.ts:295
+    exportIdParamSchema  apps/api/src/services/export.types.ts:413
+    updateDraftBodySchema  apps/api/src/services/export.types.ts:424
+    passwordAttemptBodySchema  apps/api/src/services/export.types.ts:455
+    listQuerySchema  apps/api/src/services/export.types.ts:459
+    shareTokenParamSchema  apps/api/src/services/export.types.ts:463
+  apps/api/src/services/transcript/extraction.ts (0/1 covered)
+    extractCandidates  apps/api/src/services/transcript/extraction.ts:109
+  apps/api/src/services/transcript/extractor.ts (0/4 covered)
+    EXTRACTION_VERSION  apps/api/src/services/transcript/extractor.ts:26
+    minimizeSensitiveContent  apps/api/src/services/transcript/extractor.ts:155
+    extractCandidates  apps/api/src/services/transcript/extractor.ts:205
+    validateCandidate  apps/api/src/services/transcript/extractor.ts:228
+  apps/api/src/services/transcript/guest.ts (0/5 covered)
+    detectGuestAssociations  apps/api/src/services/transcript/guest.ts:26
+    createGuestAssociation  apps/api/src/services/transcript/guest.ts:74
+    createPatternSignature  apps/api/src/services/transcript/guest.ts:109
+    findPatternMatch  apps/api/src/services/transcript/guest.ts:133
+    assertAnonymousAssociation  apps/api/src/services/transcript/guest.ts:147
+  apps/api/src/services/transcript/ingestion.ts (3/5 covered)
+    configurePipeline  apps/api/src/services/transcript/ingestion.ts:52
+    getPipeline  apps/api/src/services/transcript/ingestion.ts:60
+  apps/api/src/services/transcript/minimize.ts (0/1 covered)
+    minimizeTranscript  apps/api/src/services/transcript/minimize.ts:159
+  apps/api/src/services/transcript/pipeline.ts (2/7 covered)
+    _resetForTest  apps/api/src/services/transcript/pipeline.ts:118
+    TranscriptPipeline  apps/api/src/services/transcript/pipeline.ts:204
+    getArtifactStatus  apps/api/src/services/transcript/pipeline.ts:567
+    deleteArtifact  apps/api/src/services/transcript/pipeline.ts:584
+    checkResolved  apps/api/src/services/transcript/pipeline.ts:592
+  apps/api/src/services/transcript/policy.ts (2/7 covered)
+    resolveCapability  apps/api/src/services/transcript/policy.ts:66
+    resolveEffectivePolicy  apps/api/src/services/transcript/policy.ts:129
+    getPolicyConfig  apps/api/src/services/transcript/policy.ts:157
+    getEffectivePolicy  apps/api/src/services/transcript/policy.ts:168
+    setClientPolicy  apps/api/src/services/transcript/policy.ts:188
+  apps/api/src/services/transcript/review.ts (0/4 covered)
+    getPendingCandidates  apps/api/src/services/transcript/review.ts:11
+    getCandidate  apps/api/src/services/transcript/review.ts:19
+    reviewCandidate  apps/api/src/services/transcript/review.ts:49
+    wouldOverwriteAgentConfirmed  apps/api/src/services/transcript/review.ts:118
+  apps/api/src/services/transcript/stt-provider.ts (1/2 covered)
+    isRetryableSttError  apps/api/src/services/transcript/stt-provider.ts:154
+  apps/api/src/services/transcript/types.ts (0/6 covered)
+    ARTIFACT_STATES  apps/api/src/services/transcript/types.ts:13
+    ALLOWED_CANDIDATE_CATEGORIES  apps/api/src/services/transcript/types.ts:264
+    CANDIDATE_SCOPES  apps/api/src/services/transcript/types.ts:284
+    candidateScopeSchema  apps/api/src/services/transcript/types.ts:543
+    candidateSchema  apps/api/src/services/transcript/types.ts:569
+    reviewActionSchema  apps/api/src/services/transcript/types.ts:655
+  apps/api/src/tooling/board-monotonic.ts (7/11 covered)
+    BoardParseError  apps/api/src/tooling/board-monotonic.ts:32
+    updatedAtRaw  apps/api/src/tooling/board-monotonic.ts:77
+    updatedAtMillis  apps/api/src/tooling/board-monotonic.ts:83
+    canonicalJson  apps/api/src/tooling/board-monotonic.ts:91
+  apps/api/src/websocket/messages.ts (1/5 covered)
+    clientMessageSchema  apps/api/src/websocket/messages.ts:8
+    serverMessageTypeSchema  apps/api/src/websocket/messages.ts:21
+    serverMessageSchema  apps/api/src/websocket/messages.ts:30
+    buildServerMessage  apps/api/src/websocket/messages.ts:43
+  apps/api/src/websocket/stream-manager.ts (6/8 covered)
+    TOPIC_HISTORY_TTL_MS  apps/api/src/websocket/stream-manager.ts:99
+    TOPIC_HISTORY_MAX_EVENTS  apps/api/src/websocket/stream-manager.ts:102
+  apps/api/src/websocket/ws-auth.ts (6/7 covered)
+    WS_TOKEN_QUERY_PARAM  apps/api/src/websocket/ws-auth.ts:58
+  apps/web/src/app/admin/page.tsx (0/1 covered)
+    AdminPage  apps/web/src/app/admin/page.tsx:5
+  apps/web/src/app/layout.tsx (1/2 covered)
+    RootLayout  apps/web/src/app/layout.tsx:13
+  apps/web/src/app/page.tsx (0/1 covered)
+    Home  apps/web/src/app/page.tsx:3
+  apps/web/src/components/ExportPreview.icons.tsx (0/7 covered)
+    IconPlane  apps/web/src/components/ExportPreview.icons.tsx:17
+    IconBed  apps/web/src/components/ExportPreview.icons.tsx:34
+    IconCar  apps/web/src/components/ExportPreview.icons.tsx:54
+    IconForkKnife  apps/web/src/components/ExportPreview.icons.tsx:73
+    IconNotebook  apps/web/src/components/ExportPreview.icons.tsx:92
+    IconGlobe  apps/web/src/components/ExportPreview.icons.tsx:112
+    sectionIcon  apps/web/src/components/ExportPreview.icons.tsx:133
+  apps/web/src/components/ExportPreview.panels.tsx (0/3 covered)
+    PhotoStatusBadge  apps/web/src/components/ExportPreview.panels.tsx:168
+    StatusChip  apps/web/src/components/ExportPreview.panels.tsx:193
+    EditInline  apps/web/src/components/ExportPreview.panels.tsx:214
+  apps/web/src/components/ExportPreview.tsx (0/5 covered)
+    getSectionMeta  apps/web/src/components/ExportPreview.tsx:79
+    formatLocalDate  apps/web/src/components/ExportPreview.tsx:117
+    photoStatusColor  apps/web/src/components/ExportPreview.tsx:129
+    photoStatusLabel  apps/web/src/components/ExportPreview.tsx:143
+    toggleSectionInclusion  apps/web/src/components/ExportPreview.tsx:179
+  apps/web/src/components/TypingIndicator.tsx (0/1 covered)
+    TypingIndicator  apps/web/src/components/TypingIndicator.tsx:8
+  apps/web/src/lib/airport-timezones.ts (2/3 covered)
+    AIRPORT_TIME_ZONES  apps/web/src/lib/airport-timezones.ts:2
+  apps/web/src/lib/build-stamp.ts (4/5 covered)
+    describeFreshness  apps/web/src/lib/build-stamp.ts:50
+  apps/web/src/lib/websocket-types.ts (1/3 covered)
+    PROGRESS_PHASES  apps/web/src/lib/websocket-types.ts:20
+    isAgentPhase  apps/web/src/lib/websocket-types.ts:75
+  apps/web/vitest.coverage.mjs (0/1 covered)
+    webCoverage  apps/web/vitest.coverage.mjs:35
+  e2e-debug-luna.py (0/4 covered)
+    screenshot  e2e-debug-luna.py:21
+    attrs  e2e-debug-luna.py:28
+    dump_controls  e2e-debug-luna.py:36
+    dump_input_html  e2e-debug-luna.py:55
+  e2e-usability.py (1/2 covered)
+    wait_for_app  e2e-usability.py:20
+  packages/core/src/constants.ts (7/15 covered)
+    RISK_LEVELS  packages/core/src/constants.ts:3
+    PREFERENCE_PRIORITIES  packages/core/src/constants.ts:5
+    BOOKING_STATUSES  packages/core/src/constants.ts:7
+    setMockMode  packages/core/src/constants.ts:63
+    getMockMode  packages/core/src/constants.ts:67
+    isMockProvider  packages/core/src/constants.ts:71
+    CABIN_KEYWORDS  packages/core/src/constants.ts:86
+    STOP_RE  packages/core/src/constants.ts:100
+  packages/core/src/schemas.ts (8/26 covered)
+    isoInstantSchema  packages/core/src/schemas.ts:12
+    headingIdSchema  packages/core/src/schemas.ts:13
+    riskLevelSchema  packages/core/src/schemas.ts:17
+    preferenceHierarchySchema  packages/core/src/schemas.ts:18
+    bookingStatusSchema  packages/core/src/schemas.ts:19
+    mockModeSchema  packages/core/src/schemas.ts:20
+    sourceStateSchema  packages/core/src/schemas.ts:21
+    complianceStateSchema  packages/core/src/schemas.ts:22
+    seatInfoSchema  packages/core/src/schemas.ts:28
+    seatMapSchema  packages/core/src/schemas.ts:36
+    seatPreferenceSchema  packages/core/src/schemas.ts:100
+    connectionPreferenceSchema  packages/core/src/schemas.ts:106
+    routeCountSchema  packages/core/src/schemas.ts:113
+    bookingHistorySchema  packages/core/src/schemas.ts:119
+    clientProfileSchema  packages/core/src/schemas.ts:126
+    bookingSchema  packages/core/src/schemas.ts:155
+    pricingSchema  packages/core/src/schemas.ts:164
+    isoDateSchema  packages/core/src/schemas.ts:173
+  packages/crm/src/encryption.ts (12/15 covered)
+    CLIENT_STORE_UNDECRYPTABLE_CODE  packages/crm/src/encryption.ts:53
+    CLIENT_STORE_UNDECRYPTABLE_REMEDIATION  packages/crm/src/encryption.ts:56
+    findClientStoreUndecryptableError  packages/crm/src/encryption.ts:80
+  packages/crm/src/rotate.ts (1/3 covered)
+    CRM_ROTATE_TO_KEY_ENV_VAR  packages/crm/src/rotate.ts:44
+    CRM_STORE_FILES  packages/crm/src/rotate.ts:47
+  packages/flight-search/src/flight-search-cache.ts (3/10 covered)
+    FLIGHT_OFFERS_TTL_MS  packages/flight-search/src/flight-search-cache.ts:3
+    SEAT_MAPS_TTL_MS  packages/flight-search/src/flight-search-cache.ts:4
+    FLIGHT_STATUS_TTL_MS  packages/flight-search/src/flight-search-cache.ts:5
+    AIRPORT_ROUTES_TTL_MS  packages/flight-search/src/flight-search-cache.ts:6
+    TRAVEL_RESTRICTIONS_TTL_MS  packages/flight-search/src/flight-search-cache.ts:7
+    AMADEUS_CACHE_TTLS  packages/flight-search/src/flight-search-cache.ts:9
+    canonicalizeParams  packages/flight-search/src/flight-search-cache.ts:55
+  packages/flight-search/src/supplier.ts (5/7 covered)
+    isSupplierError  packages/flight-search/src/supplier.ts:107
+    supplierOfferToFlightOption  packages/flight-search/src/supplier.ts:278
+  packages/margin/src/contract-import.ts (5/6 covered)
+    CONTRACT_IMPORT_STAMP  packages/margin/src/contract-import.ts:55
+  packages/margin/src/types.ts (0/1 covered)
+    MARGIN_SOURCE_CONTRACT_IMPORT  packages/margin/src/types.ts:8
+  packages/mock-db/src/load-sample-inventory.ts (8/12 covered)
+    SAMPLE_SCHEMA_PATH  packages/mock-db/src/load-sample-inventory.ts:41
+    SAMPLE_DB_PATH  packages/mock-db/src/load-sample-inventory.ts:42
+    SAMPLE_MANIFEST_PATH  packages/mock-db/src/load-sample-inventory.ts:43
+    resolveSampleDbPath  packages/mock-db/src/load-sample-inventory.ts:89
+  packages/mock-db/src/resolve-db-path.ts (0/1 covered)
+    resolveDbPath  packages/mock-db/src/resolve-db-path.ts:23
+  packages/mock-db/src/sample-holds.ts (4/8 covered)
+    effectiveSeatStatus  packages/mock-db/src/sample-holds.ts:98
+    readSampleHold  packages/mock-db/src/sample-holds.ts:198
+    listSampleHolds  packages/mock-db/src/sample-holds.ts:270
+    listActiveSeatHolds  packages/mock-db/src/sample-holds.ts:281
+  packages/mock-db/src/validate-db-path.ts (8/11 covered)
+    readDbEnvValueFromDotenv  packages/mock-db/src/validate-db-path.ts:147
+    resolveDbPathForGate  packages/mock-db/src/validate-db-path.ts:204
+    REQUIRE_SEEDED_FLAG  packages/mock-db/src/validate-db-path.ts:441
+  packages/mock-db/vitest.coverage.mjs (0/1 covered)
+    mockDbCoverage  packages/mock-db/vitest.coverage.mjs:51
+  packages/preference-engine/src/ranking.ts (2/4 covered)
+    fullCompare  packages/preference-engine/src/ranking.ts:487
+    sortWithTraces  packages/preference-engine/src/ranking.ts:544
+  scripts/verify-build-freshness.mjs (1/2 covered)
+    resolveVcsIdentity  scripts/verify-build-freshness.mjs:58
+
+rule: function covered: at least one TEST file (classify::is_test_file rules) names the function's bare identifier OUTSIDE its import/use/package declarations (an unused import is not a test); a function is reported uncovered only when NO test file anywhere in the corpus names it. File-level `tested_by` edges are NOT consulted — treating them as function coverage is the GAP-121 false positive. Not counted: references from the defining file itself (an in-file `#[cfg(test)] mod tests` block), and non-public functions
+
+=== A7 graph impact <busy file> | rc=1 | wall=0.101s | load=['15.36', '17.31', '21.30'] | cwd=/tmp/dftip-1123/heading
+
+=== A8 graph search 'handler' | rc=0 | wall=0.075s | load=['15.36', '17.31', '21.30'] | cwd=/tmp/dftip-1123/heading
+0.0328  apps/api/src/middleware/error-handler.ts  [lexical]
+         symbols: handler
+0.0313  apps/api/src/services/export.helpers.ts  [lexical]
+0.0308  apps/api/src/orchestrator/run.ts  [lexical]
+0.0308  apps/web/src/components/ClientSelector.tsx  [lexical]
+0.0299  apps/web/src/components/EvacuationMode.tsx  [lexical]
+0.0313  apps/api/tests/transcript/transcript-routes.test.ts  [lexical]
+0.0308  apps/api/tests/services/hd-rvw-104-weather-health.test.ts  [lexical]
+
+=== A9 graph understand 'where is config loaded' | rc=0 | wall=0.138s | load=['15.36', '17.31', '21.30'] | cwd=/tmp/dftip-1123/heading
+## MAP
+apps/api/src/config.ts →
+  - AmadeusTimeouts
+  - resolveAmadeusTimeouts
+  - resolveShareBaseUrl
+  - publicHostFor
+  - stripTrailingSlash
+  - optionalEnv
+  - LiveModeConfigError
+  - constructor
+  - liveModeConfigIssues
+  - assertLiveModeConfigured
+  - AppConfig
+  - loadConfig
+  - toAppConfig
+apps/api/tests/config/amadeus-timeouts.test.ts → (no symbols extracted)
+apps/api/tests/config/env-validation.test.ts → (no symbols extracted)
+apps/api/tests/config/hd-gap-063-disruption-env.test.ts →
+  - snapshotEnv
+apps/api/tests/config/live-mode-refusal.test.ts →
+  - config
+  - clearEnv
+  - sessionWithQuery
+apps/api/tests/config/prod-compose-provisioning.test.ts →
+  - extractBlock
+  - envEntries
+  - bindTargets
+apps/api/tests/config/profile-flip.test.ts →
+  - serviceBlock
+  - applyProfile
+apps/api/vitest.config.ts → (no symbols extracted)
+apps/web/eslint.config.mjs → (no symbols extracted)
+apps/web/next.config.ts → (no symbols extracted)
+apps/web/playwright.config.ts → (no symbols extracted)
+apps/api/src/orchestrator/mock-providers.ts →
+  - ClientCacheInvalidator
+  - invalidateClientCaches
+  - _setProvidersCrmClientForTests
+  - getCrmClient
+  - nowIso
+  - buildClientPreferenceRules
+  - classifyClientResolution
+  - skippedPreferencesWithResolution
+  - fetchClientPreferences
+  - MockSegment
+  - MockCandidateTemplate
+  - routeCandidatesFor
+  - seatMapForCandidate
+  - generateMockCandidates
+  - computeDisruptionRisks
+  - disruptionRouteFor
+  - disruptionFlightShim
+  - fetchDisruptionWithMemories
+  - _resetMarginProviderForTests
+  - getMarginProvider
+  - getDisruptionProvider
+  - _setDisruptionProviderForTests
+  - CacheConfig
+  - MockProviderOverrides
+apps/api/src/auth/jwt.ts →
+  - JwtClaims
+  - MintOptions
+  - JwtError
+  - constructor
+  - b64url
+  - subjectHash
+  - mintJwt
+  - verifyJwt
+  - subjectMatches
+  - JwtAuthConfig
+apps/api/src/orchestrator/types.ts →
+  - SourceProvenance
+  - QueryField
+  - Query
+  - ClientResolutionReason
+  - ClientResolution
+  - clientResolutionFromLayer
+  - LayerStatus
+  - LayerSource
+  - LayerResult
+  - CandidateSeatMap
+  - deriveLayerSource
+  - LayerResults
+  - AuditEvent
+  - SessionState
+  - IdentifyClientResult
+  - ParseRequestResult
+  - PullDataResult
+  - RankedFlightOption
+  - RankOptionsResult
+  - EvacuationOption
+  - EvacuationResult
+  - ComplianceWarning
+  - SurfaceResult
+  - SurfaceSnapshot
+  - OrchestratorConfig
+apps/api/src/orchestrator/run.ts →
+  - layerSourcesFrom
+  - DegradedLayer
+  - MockFallbackDetail
+  - mockFallbackDetail
+  - degradedLayersFrom
+  - describeNoOptionsReason
+  - TerminalHaltDetails
+  - buildResumeHint
+apps/api/src/index.ts →
+  - shutdown
+apps/api/src/routes/exports.ts →
+  - recordBookingFromSnapshot
+  - shareBaseUrlFor
+  - notFound
+  - artifactDirectory
+  - cabinLabel
+  - transportLabel
+  - ExternalLink
+  - ImageAsset
+apps/api/src/routes/chat.ts →
+  - SessionState
+  - ChatAcceptedResponse
+  - emit
+apps/api/src/app.ts →
+  - createApp
+apps/api/src/middleware/auth.ts →
+  - AuthLocals
+  - operatorFromResponse
+  - createAuthMiddleware
+apps/api/src/orchestrator/amadeus-providers.ts →
+  - MockFallbackReason
+  - MockFallbackDiagnostics
+  - MockFallbackClassificationInput
+  - classifyMockFallback
+  - warnDegradedAvailability
+  - freshMockAvailability
+  - toCabinClass
+  - amadeusErrorInfo
+apps/api/src/orchestrator/live-providers.ts →
+  - liveDisruptionSource
+  - freshDisruptionResult
+  - useLiveDisruption
+  - AmadeusHttpClientDeps
+  - buildAmadeusHttpClient
+  - createLiveProviders
+  - fetchDisruption
+
+## SIGNATURES
+apps/api/src/orchestrator/mock-providers.ts:60  type ClientCacheInvalidator = (clientId: string) => void;
+apps/api/src/orchestrator/mock-providers.ts:69  function invalidateClientCaches(clientId: string | null): void {
+apps/api/src/orchestrator/mock-providers.ts:79  function _setProvidersCrmClientForTests(client: CrmClient): void {
+apps/api/src/orchestrator/mock-providers.ts:84  async function getCrmClient(): Promise<CrmClient> {
+apps/api/src/orchestrator/mock-providers.ts:110  function nowIso(): string {
+apps/api/src/orchestrator/mock-providers.ts:114  function buildClientPreferenceRules(profile: ClientProfile): PreferenceRule[] {
+apps/api/src/orchestrator/mock-providers.ts:194  async function classifyClientResolution(
+apps/api/src/orchestrator/mock-providers.ts:237  function skippedPreferencesWithResolution(
+apps/api/src/orchestrator/mock-providers.ts:254  async function fetchClientPreferences(
+apps/api/src/orchestrator/mock-providers.ts:332  interface MockSegment {
+apps/api/src/orchestrator/mock-providers.ts:340  interface MockCandidateTemplate {
+apps/api/src/orchestrator/mock-providers.ts:376  function routeCandidatesFor(): Record<string, MockCandidateTemplate[]> {
+apps/api/src/orchestrator/mock-providers.ts:389  function seatMapForCandidate(
+apps/api/src/orchestrator/mock-providers.ts:416  function generateMockCandidates(session: SessionState): Array<Record<string, unknown>> {
+apps/api/src/orchestrator/mock-providers.ts:530  async function computeDisruptionRisks(
+apps/api/src/orchestrator/mock-providers.ts:556  function disruptionRouteFor(session: SessionState): {
+apps/api/src/orchestrator/mock-providers.ts:581  function disruptionFlightShim(session: SessionState): FlightOption {
+apps/api/src/orchestrator/mock-providers.ts:616  async function fetchDisruptionWithMemories(
+apps/api/src/orchestrator/mock-providers.ts:664  function _resetMarginProviderForTests(): void {
+apps/api/src/orchestrator/mock-providers.ts:668  function getMarginProvider(): DbMarginData {
+apps/api/src/orchestrator/mock-providers.ts:694  function getDisruptionProvider(): DisruptionProvider {
+apps/api/src/orchestrator/mock-providers.ts:703  function _setDisruptionProviderForTests(
+apps/api/src/orchestrator/mock-providers.ts:711  type CacheConfig = Pick<AppConfig, "cache">;
+apps/api/src/orchestrator/mock-providers.ts:713  type MockProviderOverrides = Partial<
+apps/api/src/config.ts:34  type AmadeusTimeouts = {
+apps/api/src/config.ts:46  function resolveAmadeusTimeouts(amadeus: AppConfig["amadeus"]): AmadeusTimeouts {
+apps/api/src/config.ts:74  function resolveShareBaseUrl(config: {
+apps/api/src/config.ts:97  function publicHostFor(host: string | undefined): string {
+apps/api/src/config.ts:109  function stripTrailingSlash(value: string): string {
+apps/api/src/config.ts:128  function optionalEnv(name: string): string | undefined {
+apps/api/src/config.ts:144  class LiveModeConfigError extends Error {
+apps/api/src/config.ts:149  constructor(missingKnobs: string[]) {
+apps/api/src/config.ts:167  function liveModeConfigIssues(config: AppConfig): string[] {
+apps/api/src/config.ts:187  function assertLiveModeConfigured(config: AppConfig): void {
+apps/api/src/config.ts:343  type AppConfig = {
+apps/api/src/config.ts:411  function loadConfig(): AppConfig {
+apps/api/src/config.ts:496  function toAppConfig(parsed: z.infer<typeof configSchema>): AppConfig {
+apps/api/src/auth/jwt.ts:38  interface JwtClaims {
+apps/api/src/auth/jwt.ts:58  interface MintOptions {
+apps/api/src/auth/jwt.ts:76  class JwtError extends Error {
+apps/api/src/auth/jwt.ts:78  constructor(code: JwtError["code"], message: string) {
+apps/api/src/auth/jwt.ts:85  function b64url(input: Buffer | string): string {
+apps/api/src/auth/jwt.ts:89  function subjectHash(subject: string): string {
+apps/api/src/auth/jwt.ts:97  function mintJwt(opts: MintOptions): string {
+apps/api/src/auth/jwt.ts:129  function verifyJwt(
+apps/api/src/auth/jwt.ts:179  function subjectMatches(claims: JwtClaims, principal: string): boolean {
+apps/api/src/auth/jwt.ts:187  interface JwtAuthConfig {
+apps/api/src/orchestrator/types.ts:5  type SourceProvenance = "explicit" | "inferred" | "agent_edited" | "defaulted";
+apps/api/src/orchestrator/types.ts:7  interface QueryField<T> {
+apps/api/src/orchestrator/types.ts:17  interface Query {
+apps/api/src/orchestrator/types.ts:47  type ClientResolutionReason =
+apps/api/src/orchestrator/types.ts:53  interface ClientResolution {
+apps/api/src/orchestrator/types.ts:95  function clientResolutionFromLayer(
+apps/api/src/orchestrator/types.ts:106  type LayerStatus =
+apps/api/src/orchestrator/types.ts:133  type LayerSource =
+apps/api/src/orchestrator/types.ts:146  interface LayerResult {
+apps/api/src/orchestrator/types.ts:170  interface CandidateSeatMap {
+apps/api/src/orchestrator/types.ts:197  function deriveLayerSource(layer: LayerResult | undefined | null): LayerSource {
+apps/api/src/orchestrator/types.ts:219  interface LayerResults {
+apps/api/src/orchestrator/types.ts:228  interface AuditEvent {
+apps/api/src/orchestrator/types.ts:247  interface SessionState {
+apps/api/src/orchestrator/types.ts:284  interface IdentifyClientResult {
+apps/api/src/orchestrator/types.ts:292  interface ParseRequestResult {
+apps/api/src/orchestrator/types.ts:300  interface PullDataResult {
+apps/api/src/orchestrator/types.ts:316  interface RankedFlightOption {
+apps/api/src/orchestrator/types.ts:341  interface RankOptionsResult {
+apps/api/src/orchestrator/types.ts:363  interface EvacuationOption {
+apps/api/src/orchestrator/types.ts:381  interface EvacuationResult {
+apps/api/src/orchestrator/types.ts:407  interface ComplianceWarning {
+apps/api/src/orchestrator/types.ts:429  interface SurfaceResult {
+apps/api/src/orchestrator/types.ts:442  interface SurfaceSnapshot {
+apps/api/src/orchestrator/types.ts:588  interface OrchestratorConfig {
+
+## DETAIL
+apps/api/src/orchestrator/mock-providers.ts [provenance=ast_exact, score=0.80]
+… lines 711-734 of 892 …
+type CacheConfig = Pick<AppConfig, "cache">;
+type MockProviderOverrides = Partial<
+  Pick<ProviderFns, "fetchPreferences" | "fetchMargin" | "fetchDisruption">
+>;
+const STATIC_CACHE_KEY = "default";
+export function createMockProviders(
+  config: CacheConfig = {},
+  overrides: MockProviderOverrides = {},
+): ProviderFns {
+  const preferencesCache = new TtlCache<LayerResult>(
+    config.cache?.preferencesTtlMs ?? DEFAULT_CACHE_CONFIG.preferencesTtlMs,
+  );
+  const marginCache = new TtlCache<LayerResult>(
+    config.cache?.marginTtlMs ?? DEFAULT_CACHE_CONFIG.marginTtlMs,
+  );
+  const disruptionCache = new TtlCache<LayerResult>(
+    config.cache?.disruptionTtlMs ?? DEFAULT_CACHE_CONFIG.disruptionTtlMs,
+  );
+  // DF-HEADING-27: register a per-client invalidator so the CRM route layer
+  // can evict stale entries the moment a profile is edited. HD-GAP-052: the
+
+
+apps/api/src/routes/chat.ts [provenance=ast_exact, score=0.80]
+… lines 1-24 of 362 …
+import { randomUUID } from "node:crypto";
+import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
+import { chatRequestSchema, type ChatRequest } from "@heading/core";
+import type { AppConfig } from "../config.js";
+import { getStreamManager } from "../websocket/index.js";
+import { createError } from "../middleware/error-handler.js";
+import { operatorFromResponse } from "../middleware/auth.js";
+import {
+  createSession as createOrchestratorSession,
+  runOrchestrator,
+  Phase,
+  type PhaseChangeEmitter,
+} from "../orchestrator/index.js";
+const router: IRouter = Router();
+// ── Session state (in-memory, mock phase) ────────────────────────────────────
+// Per-task spec: no persistence needed for the mock phase. We keep the
+// session record keyed by decisionSessionId so follow-up requests can find
+// it, plus an Idempotency-Key → cached response index so retries with the
+// same key return the same 202 envelope.
+interface SessionState {
+  id: string;
+
+
+apps/api/src/config.ts [provenance=ast_exact, score=1.00]
+… lines 144-210 of 566 …
+export class LiveModeConfigError extends Error {
+  readonly code = LIVE_MODE_UNCONFIGURED;
+  /** The env knobs that must be set, in the order they are named. */
+  readonly missingKnobs: string[];
+  constructor(missingKnobs: string[]) {
+    super(
+      `[config] FATAL: MOCK_MODE=live promises a real availability provider but is missing ` +
+        `${missingKnobs.join(", ")} (code ${LIVE_MODE_UNCONFIGURED}). Set them, or run ` +
+        `MOCK_MODE=full (in-process mock) / MOCK_MODE=hybrid (real layers where configured).`,
+    );
+    this.name = "LiveModeConfigError";
+    this.missingKnobs = missingKnobs;
+  }
+}
+/**
+ * List the env knobs a live-mode deployment is missing. Empty array = the
+ * profile can honour its promise.
+ *
+ * Only `live` is gated: `full` has no real layer to promise, and `hybrid`
+ * promises "real where configured", which readiness surfaces per layer.
+ */
+export function liveModeConfigIssues(config: AppConfig): string[] {
+  if (config.mockMode !== "live") return [];
+  const issues: string[] = [];
+  const amadeus = config.amadeus;
+  if (!amadeus || amadeus.environment === "disabled") {
+    issues.push("AMADEUS_ENVIRONMENT=test|production");
+  }
+  if (!amadeus || !amadeus.clientId) issues.push("AMADEUS_CLIENT_ID");
+  if (!amadeus || !amadeus.clientSecret) issues.push("AMADEUS_CLIENT_SECRET");
+  return issues;
+}
+/**
+ * Startup gate for `MOCK_MODE=live`. Throws ONE error naming EVERY missing
+ * knob (not one per boot attempt) so an operator fixes the deployment in a
+ * single pass. Called from `src/index.ts` before the port opens — never from
+ * `loadConfig()`, which must keep accepting any valid `MOCK_MODE` (a config
+ * parser validates shape; the entrypoint owns "may this process serve?").
+ */
+export function assertLiveModeConfigured(config: AppConfig): void {
+  const issues = liveModeConfigIssues(config);
+  if (issues.length > 0) {
+    throw new LiveModeConfigError(issues);
+  }
+}
+/**
+ * Zod schema for AppConfig.
+ *
+ * Validates raw env vars (all strings) into the typed AppConfig shape.
+ * - PORT is coerced to an integer (4000 default) — non-numeric input throws
+ *   because it's an unrecoverable startup error.
+ * - HOST, NODE_ENV, MOCK_API_URL have plain defaults.
+ * - MOCK_MODE is an enum with "full" default — invalid values are logged
+ *   and the default is used (recoverable).
+ * - API_KEYS is optional; comma-split into an array.
+ * - DUCKBRAIN_NAMESPACE is OPTIONAL in the schema (no default) so that
+ *   loadConfig() can detect its absence and emit a warning. When set, it
+ *   is validated as a non-empty string.
+ *
+ * Exported so tests can reuse it (e.g. snapshot validation, fixture setup).
+ */
+export const DEFAULT_PUBLIC_PORT = 4000;
+… lines 343-366 of 566 …
+export type AppConfig = {
+  port: number;
+  host: string;
+  nodeEnv: string;
+  mockMode: "full" | "live" | "hybrid";
+  mockApiUrl: string;
+  auth: {
+    apiKeys: string[];
+    /** HD-SEC-001: HEADING_CREDENTIALS_FILE — per-operator credentials JSON. */
+    credentialsFile?: string;
+  };
+  /** HD-GAP-055: the one agency this deployment serves (JWT `iss` claim). */
+  agencyId: string;
+  /** HD-GAP-055: JWT signing secret + TTLs. Empty secret = JWT disabled. */
+  jwt: {
+    secret: string;
+    accessTtlSeconds: number;
+    refreshTtlSeconds: number;
+  };
+  duckbrain: { namespace: string };
+  /** HD-GAP-044: absolute origin for minted share links. Optional so
+   *  hand-built AppConfig literals keep compiling; consumers resolve it via
+   *  resolveShareBaseUrl(), which falls back to host/port. */
+  publicBaseUrl?: string;
+… lines 411-434 of 566 …
+export function loadConfig(): AppConfig {
+  const raw = {
+    port: process.env.PORT,
+    host: process.env.HOST,
+    nodeEnv: process.env.NODE_ENV,
+    mockMode: process.env.MOCK_MODE,
+    mockApiUrl: process.env.MOCK_API_URL,
+    publicBaseUrl: process.env.PUBLIC_BASE_URL,
+    apiKeys: process.env.API_KEYS,
+    credentialsFile: process.env.HEADING_CREDENTIALS_FILE,
+    agencyId: process.env.AGENCY_ID,
+    jwtSecret: process.env.JWT_SECRET,
+    jwtAccessTtlSeconds: process.env.JWT_ACCESS_TTL_SECONDS,
+    jwtRefreshTtlSeconds: process.env.JWT_REFRESH_TTL_SECONDS,
+    duckbrainNamespace: process.env.DUCKBRAIN_NAMESPACE,
+    amadeus: {
+      baseUrl: process.env.AMADEUS_BASE_URL,
+      // HD-SPEC-BOUNDARY-001: "" is the compose spelling of "absent" — see
+      // optionalEnv(). Treating it as a validation failure would warn on every
+      // credential-less boot of the default (mock) profile.
+      clientId: optionalEnv("AMADEUS_CLIENT_ID"),
+      clientSecret: optionalEnv("AMADEUS_CLIENT_SECRET"),
+      environment: process.env.AMADEUS_ENVIRONMENT,
+      mockFallbackEnabled: process.env.AMADEUS_MOCK_FALLBACK_ENABLED,
+… lines 496-519 of 566 …
+function toAppConfig(parsed: z.infer<typeof configSchema>): AppConfig {
+  const apiKeyList = Array.isArray(parsed.apiKeys)
+    ? parsed.apiKeys
+    : parsed.apiKeys
+        .split(",")
+        .map((k) => k.trim())
+        .filter(Boolean);
+  const shareBase = resolveShareBaseUrl({
+    publicBaseUrl: parsed.publicBaseUrl,
+    host: parsed.host,
+    port: parsed.port,
+  });
+  return {
+    port: parsed.port,
+    host: parsed.host,
+    nodeEnv: parsed.nodeEnv,
+    mockMode: parsed.mockMode,
+    mockApiUrl: parsed.mockApiUrl,
+    auth: {
+      apiKeys: apiKeyList,
+      credentialsFile: parsed.credentialsFile,
+    },
+
+
+apps/api/src/routes/exports.ts [provenance=ast_exact, score=0.80]
+… lines 1-24 of 1077 …
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { Router, type IRouter, type Request, Response, NextFunction } from "express";
+import { z } from "zod";
+import {
+  getExportService,
+  publishBodySchema,
+  shareUrlForToken,
+  contentSelectionSchema,
+  versions,
+} from "../services/export.js";
+import type { TripSnapshot } from "../services/export.js";
+import { resolveShareBaseUrl } from "../config.js";
+import type { AppConfig } from "../config.js";
+import type { ExportVersion } from "../services/export.js";
+// D2 (HD-GAP-056): the share page renders the enrichment the data model
+// already carries — images, external links, menu/map/Instagram, weather.
+import { exportExternalLinkSchema, exportImageAssetSchema } from "../services/export.js";
+import { createError } from "../middleware/error-handler.js";
+// HD-GAP-052 — the booking learning loop's write path: publishing an export
+// for a client records a Booking (first flight segment) in the CRM. Read-only
+// for suppliers: no availability calls, no PNR changes — a local write only.
+
+
+apps/api/src/orchestrator/types.ts [provenance=ast_exact, score=0.80]
+… lines 588-605 of 605 …
+export interface OrchestratorConfig {
+  aggregateDeadlineMs: number;
+  perLayerDeadlineMs: number;
+}
+export const DEFAULT_ORCHESTRATOR_CONFIG: OrchestratorConfig = {
+  aggregateDeadlineMs: 60_000,
+  perLayerDeadlineMs: 30_000,
+};
+// ── Phase change broadcaster ────────────────────────────────────────────────
+export type PhaseChangeEmitter = (
+  phase: Phase,
+  controlState: ControlState | null,
+  sessionId: string,
+  details?: Record<string, unknown>,
+) => void;
+
+
+apps/api/src/orchestrator/run.ts [provenance=ast_exact, score=0.80]
+… lines 1-24 of 841 …
+import { Phase, ControlState, transition } from "./state-machine.js";
+import {
+  updatePhase,
+  setClientId,
+  setQuery,
+  setLayerResults,
+  setRankedOptions,
+  setSurfaceSnapshot,
+  setMonitorState,
+  appendAuditEvent,
+} from "./session-store.js";
+import { identifyClient } from "./phases/identify-client.js";
+import { parseRequest } from "./phases/parse-request.js";
+import { executePullData } from "./phases/pull-data.js";
+import { executeRankOptions } from "./phases/rank-options.js";
+import { executeSurface } from "./phases/surface.js";
+import { executeMonitor } from "./phases/monitor.js";
+import { executeEvacuation } from "./phases/evacuation.js";
+import { createMockProviders } from "./mock-providers.js";
+import { createAmadeusProviders } from "./amadeus-providers.js";
+import { createLiveProviders } from "./live-providers.js";
+// HD-GAP-053: the post-booking monitoring LOOP (see phases/monitor-loop.ts).
+import {
+  CLIENT_STORE_UNDECRYPTABLE_CODE,
+
+
+

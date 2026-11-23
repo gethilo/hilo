@@ -1,0 +1,5 @@
+manifest ws6.yaml: workspace schema
+Mounting 2 source(s)...
+  heading -> /heading (ro)
+  second -> /second (ro)
+Hilo workspace mount daemonized (pid 852319) — filesystem available at wmnt3 (log: /home/kara/.vfs/logs/workspace-daemon.log)

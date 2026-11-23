@@ -1,0 +1,1 @@
+error: failed to set xattr user.vfs.role on wmnt3/heading/apps/api/src/config.ts: xattr error: Operation not supported (os error 95)

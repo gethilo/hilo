@@ -1,0 +1,8 @@
+{"project": "hilo", "cell": "target-binding", "status": "OK", "detail": "target=<unset> runner=<unset> repo=hilo identity_source=origin-remote remote=git@github.com:gethilo/hilo.git head=ca3043ae908ba606ea5604153cd2bc95e9baedf4 evidence_project=hilo", "ts": "2026-11-23T18:54:24Z"}
+{"project": "hilo", "cell": "launch", "status": "OK", "detail": "agent=7b01b53f server=bunker-las-03 ttl=4h cpu=4.0 memory=default script_bytes=190159 \u2014 battery started detached (qa-run.sh); phase B: bunker-qa.sh collect --evidence /tmp/bunker-qa-evidence-20261123T185424Z-901520.jsonl", "ts": "2026-11-23T18:58:20Z"}
+{"project": "hilo", "cell": "toolchain-bootstrap", "status": "OK", "detail": "go 1.27.4 installed (discovered; ~/tools/go; floor=none ambient=absent installed=1.27.4)", "ts": "2026-11-23T18:58:50.976182+00:00"}
+{"project": "hilo", "cell": "toolchain-bootstrap", "status": "OK", "detail": "rust stable installed (~/tools/cargo + ~/tools/rustup)", "ts": "2026-11-23T18:59:30.822422+00:00"}
+{"project": "hilo", "cell": "toolchain-bootstrap", "status": "OK", "detail": "system gcc/g++ toolchain (~/tools/bin wrappers -> gcc/g++) \u2014 preferred over zig-cc for C++ cgo deps (MCP-008)", "ts": "2026-11-23T18:59:41.269251+00:00"}
+{"project": "hilo", "cell": "toolchain-bootstrap", "status": "OK", "detail": "make available (preinstalled) \u2014 GNU Make 4.4.1", "ts": "2026-11-23T18:59:41.298066+00:00"}
+{"project": "hilo", "cell": "toolchain-bootstrap", "status": "OK", "detail": "jq present (/usr/bin/jq)", "ts": "2026-11-23T18:59:41.325198+00:00"}
+{"project": "hilo", "cell": "toolchain-bootstrap", "status": "OK", "detail": "go+node ready", "ts": "2026-11-23T18:59:41.367331+00:00"}

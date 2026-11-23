@@ -1,0 +1,39 @@
+=== P0: where does the pre-mount xattr actually live? ===
+/dev/nvme0n1p2 ext4 1920641288 1629895564 193108760  90% /
+getfattr: Removing leading '/' from absolute path names
+# file: tmp/dftip-1123/heading/apps/api/src/config.ts
+user.vfs.role="library"
+
+underlying-getfattr rc=0
+1 /tmp/dftip-1123/heading/.vfs/annotations.jsonl
+{"rel_path":"apps/api/src/config.ts","attr":"role","value":"library"}
+=== T2-fix: workspace mount with schema-correct manifest ===
+workspace-mount rc=1 (clean, no pipe)
+0
+wsmount-getfattr rc=1
+/tmp/dftip-1123/wmnt2/heading/apps/api/src/config.ts: user.vfs.role: No such file or directory
+wsmount-meta-set rc=1
+error: no such file: /tmp/dftip-1123/wmnt2/heading/apps/api/src/config.ts
+/tmp/dftip-1123/wmnt2/heading/apps/api/src/config.ts: user.vfs.role: No such file or directory
+wsmount-readback rc=1
+=== T3-fix: single mount, clean rc ===
+mount rc=0
+singlemount-getfattr rc=0
+getfattr: Removing leading '/' from absolute path names
+# file: tmp/dftip-1123/mnt2/apps/api/src/config.ts
+user.vfs.role="library"
+
+singlemount-meta-set rc=1
+error: failed to set xattr user.vfs.role on /tmp/dftip-1123/mnt2/apps/api/src/config.ts: xattr error: Read-only file system (os error 30)
+=== T3b: who is the daemon? (pgrep -x vs -f) ===
+760040 /mnt/ssd/caches/hermes-target/release/hilo mount /tmp/dftip-1123/mnt2 --daemon
+760040 /mnt/ssd/caches/hermes-target/release/hilo mount /tmp/dftip-1123/mnt2 --daemon
+=== T3c: held fds of the daemon ===
+total 0
+lr-x------ 1 kara kara 64 Nov 23 13:46 0 -> /dev/null
+l-wx------ 1 kara kara 64 Nov 23 13:46 1 -> /dev/null
+l-wx------ 1 kara kara 64 Nov 23 13:46 2 -> /home/kara/.vfs/logs/mount-daemon.log
+lrwx------ 1 kara kara 64 Nov 23 13:46 3 -> /dev/fuse
+lrwx------ 1 kara kara 64 Nov 23 13:46 4 -> /dev/fuse
+daemon pid=760040
+=== DONE ===

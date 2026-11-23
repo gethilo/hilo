@@ -2254,3 +2254,13 @@ lane). Residue: agent 241bec2a (intentional, above); heading clone + logs in /tm
 (self-pruning); my own true-tip build left running in the background at close (target
 `/home/kara/warpfs-wt-df49/target` — if it lands, the next fire inherits a tip binary; if not,
 nothing references it).
+
+
+---
+## 2026-11-23 — warpfs (Hilo) — PARTIAL (run 51)
+
+Tick `warpfs-dogfood-2026-11-23-18-36-23`. Binary v0.4.1-125-g675e6ed-dirty; repo tip ca3043a. Real use on a fresh clone of heading: init, warm, stats, impact, search, understand and untested worked; MCP stats and HTTP health/metrics answered. First graph warm 13.624s, cached repeat 1.427s; inventory existed in clone. PERF-016 owns cold-warm cost. Warm reported 2711 discovered edges and 2670 persisted rows; existing DF-WARPFS-43-R2 owns that discrepancy. No new findings filed.
+
+Workspace mount read probe initially compared the wrong backing tree. Corrected control: xattr on actual backing tree was visible through mount; through-mount xattr write returned EOPNOTSUPP on the older binary. Related existing row DF-WARPFS-70; current-tip behavior unverified. Initial unsupported recurrence rows were withdrawn before commit. The inherited daemon-kill probe did not find a PID and does not prove logging on kill.
+
+Fresh-machine install battery launched on bunker-las-03, agent 7b01b53f, evidence `/tmp/bunker-qa-evidence-20261123T185424Z-901520.jsonl`. Collection returned RUNNING with six synced rows; no completed install cell. Agent left intact; installation unverified. Run report: `docs/dogfood/2026-11-23-run51-workspace-mount.md`; evidence `.coding-hermes/evidence/warpfs-dogfood-2026-11-23-18-36-23/`.
