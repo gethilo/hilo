@@ -1,0 +1,14 @@
+  parsing 100/258 files...
+  parsing 200/258 files...
+  parsing 258/258 files...
+  [timing] test associations: 352.703µs
+  [timing] service calls: 13.422988ms
+  [timing] conformance edges: 370.713659ms
+  [timing] service contracts: 384.187381ms
+  [timing] jsonl dedup write: 4.704001ms
+  [timing] GraphDB::open (incl reconcile): 813.31153ms
+  [timing] insert_edges: 111.812527ms
+Discovered 2396 edges across 244 files (3 languages)
+Excluded 4 supported source files (hidden: 4)
+Coverage: 258 files = 244 contribute edges + 0 package facades (__init__.py) + 14 no imports + 0 parse-miss + 0 unreadable + 0 unsupported extension
+WALL=2.74 USER=2.29 SYS=0.16

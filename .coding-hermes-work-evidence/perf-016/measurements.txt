@@ -1,0 +1,44 @@
+PERF-016 acceptance measurements — cold `graph warm` on the run-49 corpus reconstruction
+=========================================================================================
+
+Binary: /tmp/perf016-target/release/hilo (hilo 0.4.1, build v0.4.1-142-gab83a8f = commit
+ab83a8f, the perf-016 bulk-insert worktree HEAD). Private target dir used for every cargo
+invocation (CARGO_TARGET_DIR=/tmp/perf016-target; never the shared dirs).
+
+Corpus: /tmp/perf016-corpus = fresh `hilo init` (default v2 manifest, duckdb threads=4,
+memory_limit=512MB, spill_watermark=null, reconcile_budget_ms=null) over a copy of
+/home/kara/coding-hermes-tools, `graph clean` before the cold run.
+Corpus inventory: 2396 edges discovered across 244 files (3 languages); 258 coverage
+files (244 contribute edges + 14 no-imports + 4 hidden); edges.jsonl after dedupe: 2347
+rows (wc -l below).
+
+Targets (from the brief): GraphDB::open + insert_edges sum < 2 s; whole-command
+user+sys < 5 s; cached second warm must not regress the ~0.84 s baseline.
+
+COLD WARM (run 1, 2026-11-23 16:29:57 -05, host load average 35.72 1min):
+  [timing] GraphDB::open (incl reconcile): 813.31153 ms   (baseline ~9.54 s)
+  [timing] insert_edges:                   111.812527 ms  (baseline ~10.47 s, ~4.5 ms/edge)
+  SUM (open + insert_edges):               925.12 ms      — target < 2 s   PASS
+  /usr/bin/time WALL=2.74 USER=2.29 SYS=0.16  (user+sys = 2.45 s) — target < 5 s PASS
+  wc -l .vfs/graph/edges.jsonl = 2347
+  uptime: 16:30:00 up 2 days, 20:38, load average: 35.72, 38.98, 42.70
+
+CACHED WARM (run 2, 2026-11-23 16:30:08 -05, host load average 35.77 1min):
+  [timing] full cache hit — skipping jsonl+db write
+  WALL=0.47 USER=0.37 SYS=0.05 — baseline to not regress ~0.84 s → IMPROVED, no regression
+  wc -l .vfs/graph/edges.jsonl = 2347
+  uptime: 16:30:09 up 2 days, 20:39, load average: 35.77, 38.89, 42.62
+
+Verdict: both acceptance targets met with margin. Cold warm CPU dropped from the
+~20.2 s baseline (9.54 s open/reconcile + 10.47 s insert_edges) to 2.45 s total
+(user+sys), of which the two instrumented phases now cost 0.925 s combined. The
+cached warm path also improved 0.84 s -> 0.47 s wall.
+
+Caveats (honest deltas vs the run-49 baseline):
+- The reconstructed corpus yields 244 edge-contributing files / 258 coverage files vs
+  the baseline's "256-file corpus" description; the crashed worker's copy may have
+  differed slightly. The per-edge story is unchanged: bulk multi-row inserts cut the
+  insert phase from ~4.5 ms/edge to ~47 us/edge (111.8 ms / 2396 edges).
+- Measurements were taken under host load ~35-36 (a sibling worktree's cargo build was
+  running); both runs are CPU-bound (user+sys ~90% of wall), so load contention
+  inflates wall slightly but not the direction of the result.
