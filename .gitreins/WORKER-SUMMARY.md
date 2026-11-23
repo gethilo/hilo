@@ -76,4 +76,39 @@ edges.jsonl (fixture):
 - cargo clippy --workspace --all-targets -- -D warnings — PASS
 - cargo test -p hilo_graph --lib — 423 passed
 - cargo test -p hilo-cli --lib — 139 passed
+
+## DF-WARPFS-118 closeout (foreman tick warpfs-foreman-2026-11-23-02-19-24)
+
+Row DF-WARPFS-118: understand DETAIL now ranks the task-owning file ahead of
+the examples/ and tests/ consumers on foreign fixtures.
+
+Fix commit: 4fc3b783e098d228955d040104178e6b016d888c (Co-authored-by Alexis
+Okuwa <wojonstech@gmail.com>); files: hilo-graph/src/signal.rs,
+hilo-cli/src/commands/graph.rs, hilo-mcp/src/tools/mod.rs (236 insertions).
+Root cause: definitions-only owner never became an edge endpoint (all imports
+collapsed to pkg: pseudo-node edges), so the edge-only anchor universe could
+not see it. Census feed widened to warm-discovered files (SignalOpts
+.discovered_files; engine default unchanged, library callers deterministic).
+
+Probe 1: `bash .gitreins/history/2026-11-21/pm-c8-df118-counterexample/rust-probe.sh`
+→ exit status 0 (transcript: same-dir rust-probe.txt). Probe was re-run after
+repairing its missing init/warm steps (the judge's d2d3944d finding; the row's
+own reproduction text says the fixture "runs hilo init, hilo graph warm, and
+hilo graph understand" — the script omitted them). Key lines:
+- `/mnt/ssd/caches/hermes-target/debug/hilo graph understand --tier detail ...` ends `rc=0`
+- `## DETAIL` block order: `src/upload/retry.rs [provenance=ast_exact, score=1.00]`
+  (owner FIRST — retry_policy/next_delay_ms defs rendered), then
+  `src/upload/mod.rs`, then `tests/upload_retry.rs`, then `examples/upload_demo.rs`.
+Probe 2: `bash .gitreins/history/2026-11-21/pm-c8-df118-counterexample/python-probe.sh`
+→ exit status 0 (transcript: same-dir python-probe.txt). Key lines:
+- `## DETAIL` block order: `uploader/retry.py [provenance=ast_exact, score=1.00]`
+  (owner FIRST — retry_policy/next_delay_ms defs rendered), then
+  `uploader/__init__.py`, then `examples/upload_demo.py`, then
+  `tests/test_upload_retry.py`.
+Independent re-verification by the foreman BEFORE judging: fresh rust fixture
+run showed owner first at exit 0; python fixture owner first at exit 0.
+
+Regression net: `cargo test -p hilo_graph --lib understand_detail` exit 0 —
+"test result: ok. 11 passed; 0 failed; 0 ignored; 589 filtered out" (8 prior
+arms + 3 new: census fix, no-census defect-shape pin, census precision).
 - Full workspace build: bunker-las-02 fallback (bunker-las-03 offline 3d): `cargo build --workspace` PASS 37.5s; `cargo clippy --workspace --all-targets -- -D warnings` PASS; `cargo test -p hilo_graph --lib` 423 passed (112s)
