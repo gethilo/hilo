@@ -2632,8 +2632,9 @@ tasks:
     and ahead of tests/; cargo test -p hilo_graph --lib understand_detail stays green
     (>=8 passed, 0 failed); closeout quotes both probe transcripts with exit status
     0.'
-  status: in_progress
+  status: complete
   created_at: '2026-11-23T02:42:44.085093+00:00'
+  completed_at: '2026-11-23T03:37:54.616336+00:00'
 - id: DF-WARPFS-80
   title: 'C header nodes local: id form advertised in errors'
   criteria:
