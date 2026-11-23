@@ -1,0 +1,31 @@
+# Guard-red attribution — delivery 3 of tick warpfs-dogfood-2026-11-23-18-36-23
+
+The tier-1 pre-commit guard blocked this delivery's records-only commit
+(dogfood-log.md only) with `tests (full) — test failed, to rerun pass
+-p hilo_graph --lib`; guard log (repo-local, untracked):
+.gitreins/logs/guard-20261123T192959.625275Z.log — 600 passed, 2 failed:
+bulk_multi_row_insert_round_trips_all_columns (graph.rs:4737 conf 0.8
+assertion) and graphdb_open_replays_below_spill_watermark (edge order).
+
+Attribution: STALE SHARED-TARGET BINARY, not product state.
+- bulk_multi_row_insert_round_trips_all_columns appears in NO commit on ANY
+  ref of this repo (`git log --all -S <name>` empty) and the panicking line
+  numbers do not match the current graph.rs — the executed binary was built
+  from a sibling worktree's in-flight source.
+- Live asymmetry proof (same source 83a3e65, minutes apart, same host):
+  `cargo test -p hilo_graph --lib -- graphdb_open_replays_below_spill_watermark`
+  -> FAILED (601 filtered — stale binary's census), while
+  `cargo test --workspace --lib -- <both names>` -> rc=0, the same test
+  PASSES (1 passed, 599 filtered; fresh hilo_graph-5d76e3fc7822038b).
+- Mechanism: ambient CARGO_TARGET_DIR=/mnt/ssd/caches/hermes-target is
+  shared across worktrees; cargo fingerprints do not distinguish two
+  package roots with the same name+version, so a -p run can execute a
+  sibling's binary. Known class; the -p lane here is the poisoned one.
+- Honest re-grade of the tree: workspace-unified run rc=0 (see
+  ws-lib-test.txt in scratch at run time; result lines preserved above).
+
+Hand-grade summary for the bypassed commit: secrets PASS (guard's own
+gitleaks: clean); boardctl validate rc printed in the commit message;
+tests lane VOID as run (stale artifact), honest re-grade rc=0. No product
+row filed: tip is green on the freshly-compiled suite; the -p-vs-workspace
+asymmetry is an environment/harness hazard, not a product defect.

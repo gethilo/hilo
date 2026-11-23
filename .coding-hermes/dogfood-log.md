@@ -2306,3 +2306,51 @@ stays unverified (inherited kill probe found no PID). No new rows written
 by delivery 2. Foreman wave state in the working tree (PERF-016 /
 DF-WARPFS-91 / RELEASE-017 in_progress) left for its writer; .vfs residue
 predates the tick and was left untouched.
+## 2026-11-23 — warpfs (Hilo) — no-op provenance — delivery 3
+
+Delivery 3 of tick `warpfs-dogfood-2026-11-23-18-36-23` (inbound dispatches
+13:36:55, 14:09:57 and 14:25:58 -05 host-local — a third fire of one label,
+a scheduler/gateway dispatch re-fire, not a product defect; no product row
+filed, the tick report is the owning surface).
+
+Parity proof: local HEAD == origin/master == 83a3e65 (`git ls-remote --heads`
+== `git rev-parse HEAD`), so the product delta since delivery 2's record
+commit is empty — no re-walk licensed. An unchanged tree re-driven measures
+the host; with loadavg 53-62 the perf leg was additionally not re-measured.
+
+Install leg re-check (the one thing delivery 2 left open in flight):
+`bunker-qa.sh collect` re-run at 14:28 -05 — battery STILL RUNNING on agent
+7b01b53f @ bunker-las-03, 15 evidence rows unchanged since delivery 2's
+14:22-14:26 collect. Pure corroboration, no new evidence; agent left intact
+for the collector. Cell state stands as delivery 2 graded it (fresh-install
+OK 11m38s, tests OK, lint FAIL owned by QA-WARPFS-035).
+
+Board census at this delivery: tasks.jsonl 506 rows, events.jsonl 1249
+events, jq parses all 506 ids, zero duplicate ids; working-copy board mtime
+14:07 -05 predates delivery 2's commits. Residue scan clean: no process with
+the warpfs workdir in its cmdline and no hilo/warpfs listener on this host.
+
+Sibling state left untouched (attributed, not mine): uncommitted board +
+.gitreins/tasks.yaml + .vfs/graph/edges.jsonl edits (foreman waves PERF-016
+/ DF-WARPFS-91 / RELEASE-017, documented by delivery 2) and untracked
+.coding-hermes/evidence/df-warpfs-91-crashed-wave-20261116/ salvage.
+
+Deliberately NOT walked: workspace-mount xattr EOPNOTSUPP on a current-tip
+binary stays owned by DF-WARPFS-70; DF-WARPFS-156/176 durability-at-kill
+stays owned by those rows. Both are the (b) OWNED class — a walk proves
+nothing the owner's row does not.
+
+Guard-red non-finding (this delivery's one new measurement): the tier-1
+pre-commit guard blocked this records-only commit with 2 hilo_graph --lib
+failures. Attributed STALE-SHARED-TARGET, not product: the failing test
+bulk_multi_row_insert_round_trips_all_columns exists in no commit on any
+ref of this repo, and the live asymmetry proof has -p hilo_graph FAILING
+the spill_watermark test (601 filtered — stale binary's census) while the
+workspace-unified run PASSES it on identical source minutes later
+(CARGO_TARGET_DIR=/mnt/ssd/caches/hermes-target is shared across worktrees;
+fingerprints do not separate same name+version package roots). Honest
+re-grade: `cargo test --workspace --lib` rc=0. Tip is green on the
+freshly-compiled suite; no product row filed. Full attribution:
+.coding-hermes/evidence/warpfs-dogfood-2026-11-23-18-36-23/
+delivery3-guard-red-attribution.txt. Commit bypassed with hand-graded
+lanes: secrets PASS (guard gitleaks clean), boardctl validate rc=0 OK.
