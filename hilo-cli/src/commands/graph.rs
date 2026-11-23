@@ -3681,6 +3681,12 @@ pub fn run_understand(task: &str, budget: Option<usize>, tier: Option<&str>) -> 
     };
 
     let symbols = load_or_build_symbol_cache(&cwd, &graph)?.symbols;
+    // DF-WARPFS-118: the symbol cache keys are warm's discovery census —
+    // every file warm parsed, including zero-edge owners the edge universe
+    // never stores. Handing them to anchor discovery lets the file that
+    // DEFINES the task's symbols lead DETAIL instead of its `pkg:`-importing
+    // consumers.
+    opts.discovered_files = symbols.keys().cloned().collect();
     let cached_symbols = |path: &str| symbols.get(path).cloned().unwrap_or_default();
     let result =
         hilo_graph::signal::understand_with_symbols(&graph, task, &opts, Some(&cached_symbols))

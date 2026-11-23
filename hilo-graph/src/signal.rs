@@ -128,6 +128,27 @@ pub struct SignalOpts {
     /// it from `graph.map_exclude_paths` in the manifest, whose serde default
     /// is [`MAP_EXCLUDE_PATHS_DEFAULT`].
     pub map_exclude_paths: Vec<String>,
+    /// Files the CALLER knows are in the corpus but the edge graph does not
+    /// name (DF-WARPFS-118). Normally empty.
+    ///
+    /// The parser only stores edges, so a file that merely defines symbols
+    /// while every import of it was classified as a `pkg:` pseudo-node has no
+    /// edge endpoint of its own: the edge universe (`distinct_files`) never
+    /// sees it, it can never anchor, and a task about it is answered by its
+    /// consumers alone (the owner missing from DETAIL entirely). A caller that
+    /// carried the discovery census — the CLI from its persisted symbol cache
+    /// keys, MCP from warm's parse-cache keys — passes those paths here, and
+    /// the literal anchor pass scores them exactly like the edge universe
+    /// (token_match_grade, GAP-078) so the owning file competes for (and
+    /// leads) the anchor band. Candidates that are pseudo-nodes, build-output
+    /// paths, or unknown languages are ignored; every candidate still must
+    /// match a task token to anchor, so this widens discovery without turning
+    /// the census into a keyword dump.
+    ///
+    /// Empty by default (library callers and every pinned regression keep the
+    /// historical edge-only universe); the engine stays deterministic on its
+    /// explicit inputs and never reads the disk or the cwd for a census.
+    pub discovered_files: Vec<String>,
 }
 
 impl Default for SignalOpts {
@@ -139,6 +160,7 @@ impl Default for SignalOpts {
             max_nodes: 60,
             resolution: Resolution::Harmonic,
             map_exclude_paths: Vec::new(),
+            discovered_files: Vec::new(),
         }
     }
 }
@@ -309,7 +331,13 @@ where
     // specifier nodes (GAP-098). Built once per call — one SQL scan, the
     // same budget `semantic::search` already pays for its own resolver.
     let known_files = graph_file_set(db);
-    let anchors = discover_anchors(db, task, opts.seed_limit, symbol_extractor);
+    let anchors = discover_anchors(
+        db,
+        task,
+        opts.seed_limit,
+        symbol_extractor,
+        &opts.discovered_files,
+    );
 
     // 2. Traverse the graph from anchors to collect the file set. Degrees come
     //    from the whole graph in one scan (DF-WARPFS-118): the DETAIL tier
@@ -421,6 +449,7 @@ fn discover_anchors(
     task: &str,
     seed_limit: usize,
     symbol_extractor: crate::semantic::SymbolExtractor<'_>,
+    discovered_files: &[String],
 ) -> Vec<String> {
     let tokens = tokenize_task(task);
     if tokens.is_empty() {
@@ -444,6 +473,17 @@ fn discover_anchors(
     let mut all_files: HashSet<String> = froms.into_iter().collect();
     all_files.extend(tos);
     all_files.retain(|p| !crate::semantic::is_relative_specifier_node(p));
+    // DF-WARPFS-118: the caller's discovery census widens the candidate set
+    // with zero-edge files — an owner whose imports were all classified as
+    // `pkg:` nodes has no edge endpoint, so without the census its path can
+    // never anchor and the task is answered by consumers alone. Unknown
+    // extensions/pseudo-nodes are noise from a stale or hand-built census and
+    // cost nothing to drop.
+    for candidate in discovered_files {
+        if !all_files.contains(candidate) && is_anchor_candidate(candidate) {
+            all_files.insert(candidate.clone());
+        }
+    }
     let mut scored: Vec<(String, u64)> = all_files
         .into_iter()
         .map(|path| {
@@ -538,6 +578,16 @@ fn is_pseudo_node(path: &str) -> bool {
 /// Whether `path` is a raw `local:` import specifier node rather than a file.
 fn is_specifier_node(path: &str) -> bool {
     path.starts_with("local:")
+}
+
+/// Whether a caller-supplied discovery-census path may join the anchor
+/// candidate set (DF-WARPFS-118): a real, supported source file outside any
+/// build/dependency tree. Graph pseudo-nodes (`pkg:`, `sys:`, `std:`,
+/// `external:`, `local:` specifiers) and pruned corpus paths never anchor.
+fn is_anchor_candidate(path: &str) -> bool {
+    !is_pseudo_node(path)
+        && !crate::semantic::is_pruned_corpus_path(path)
+        && crate::parser::Language::from_path(std::path::Path::new(path)).is_some()
 }
 
 /// Every file path the graph knows, in one pass over its edge endpoints
@@ -3887,7 +3937,7 @@ mod tests {
         ])
         .unwrap();
 
-        let anchors = discover_anchors(&db, "session handling", 8, None);
+        let anchors = discover_anchors(&db, "session handling", 8, None, &[]);
 
         assert_eq!(
             anchors.first().map(String::as_str),
@@ -5265,6 +5315,179 @@ mod tests {
         assert!(
             !small.contains("no detail block fits"),
             "flat never reports a budget cut"
+        );
+    }
+
+    // ── DF-WARPFS-118 (PM cycle 8): the zero-edge owner must anchor ──────────
+    //
+    // The reopen's measured defect: the owner of the task's symbols is a
+    // definition-only file — every import of it was classified as a `pkg:`
+    // pseudo-node, so the owner never became an edge endpoint — and the
+    // edge-only anchor pass therefore answered the task with the consumers
+    // alone, owner absent from DETAIL entirely. The unit suite passed all its
+    // arms at the measured HEAD because every arm's owner was an edge source
+    // (a hub); the integration behavior was uncaptured.
+
+    /// The probe fixture: `src/upload/retry.rs` DEFINES `retry_policy` /
+    /// `next_delay_ms` and carries no edges of its own; a tests consumer and
+    /// an examples consumer reach it only through `pkg:`-classified imports.
+    fn zero_edge_owner_fixture() -> GraphDB {
+        let db = GraphDB::open(":memory:").unwrap();
+        let edges = vec![
+            edge(
+                "tests/upload_retry.rs",
+                "pkg:uploader::upload::retry::next_delay_ms",
+                "imports",
+            ),
+            edge(
+                "tests/upload_retry.rs",
+                "pkg:uploader::upload::retry::retry_policy",
+                "tested_by",
+            ),
+            edge(
+                "examples/upload_demo.rs",
+                "pkg:uploader::upload::retry::retry_policy",
+                "imports",
+            ),
+        ];
+        db.insert_edges(&edges).unwrap();
+        db
+    }
+
+    /// Source bodies for the fixture: the owner defines the task's symbols;
+    /// the consumers merely import them (no definitions).
+    fn zero_edge_owner_reader(path: &str) -> Option<String> {
+        if path == "src/upload/retry.rs" {
+            Some(concat!(
+                "pub struct RetryPolicy { attempts: u32 }\n",
+                "pub fn retry_policy(attempts: u32) -> RetryPolicy { todo!() }\n",
+                "pub fn next_delay_ms(policy: &RetryPolicy, attempt: u32) -> u64 { todo!() }\n"
+            ))
+            .map(String::from)
+        } else {
+            Some("fn consume() { let _ = retry_policy(5); }\n".to_string())
+        }
+    }
+
+    #[test]
+    fn understand_detail_anchors_the_zero_edge_owner_from_the_census() {
+        // With the caller's discovery census the owner's path can anchor: it
+        // matches the task's words with two whole-component grades, ahead of
+        // both consumers' prefix/substring grades, so the owner must lead
+        // DETAIL — not merely appear in it.
+        let db = zero_edge_owner_fixture();
+        let opts = SignalOpts {
+            discovered_files: vec!["src/upload/retry.rs".to_string()],
+            ..Default::default()
+        };
+        let result = understand_with_source(
+            &db,
+            "how does the upload retry policy compute backoff",
+            &opts,
+            Some(zero_edge_owner_reader),
+        )
+        .unwrap();
+        let detail = detail_paths(&result);
+        assert_eq!(
+            detail.first().map(String::as_str),
+            Some("src/upload/retry.rs"),
+            "the zero-edge owner must lead DETAIL, got {detail:?}"
+        );
+        let owner_index = detail
+            .iter()
+            .position(|p| p == "src/upload/retry.rs")
+            .unwrap();
+        let tests_index = detail
+            .iter()
+            .position(|p| p == "tests/upload_retry.rs")
+            .unwrap_or(usize::MAX);
+        let examples_index = detail
+            .iter()
+            .position(|p| p == "examples/upload_demo.rs")
+            .unwrap_or(usize::MAX);
+        assert!(
+            owner_index < tests_index,
+            "the owner must rank ahead of the tests consumer, got {detail:?}"
+        );
+        assert!(
+            owner_index < examples_index,
+            "the owner must rank ahead of the examples consumer, got {detail:?}"
+        );
+        assert!(
+            result
+                .text
+                .contains("src/upload/retry.rs [provenance=ast_exact"),
+            "the owner must render its DETAIL block:\n{}",
+            result.text
+        );
+        assert!(
+            result.text.contains("retry_policy(attempts: u32)"),
+            "the owner's DETAIL block must carry its exact lines:\n{}",
+            result.text
+        );
+    }
+
+    #[test]
+    fn understand_detail_without_the_census_keeps_the_measured_defect_shape() {
+        // The RED arm: without census files the edge-only universe cannot see
+        // a definition-only owner at all. This pins what the fix changes —
+        // anchor discovery, not tier ranking — so a future refactor that
+        // re-widens the universe silently keeps this contract visible.
+        let db = zero_edge_owner_fixture();
+        let result = understand_with_source(
+            &db,
+            "how does the upload retry policy compute backoff",
+            &SignalOpts::default(),
+            Some(zero_edge_owner_reader),
+        )
+        .unwrap();
+        let detail = detail_paths(&result);
+        assert!(
+            !detail.iter().any(|p| p == "src/upload/retry.rs"),
+            "edge-only universe must not invent the owner, got {detail:?}"
+        );
+    }
+
+    #[test]
+    fn understand_detail_census_candidates_must_still_match_a_task_token() {
+        // The widening must not become a census dump: candidates that match no
+        // task token stay out, build-output paths stay out, and unknown
+        // extensions stay out.
+        let db = zero_edge_owner_fixture();
+        let opts = SignalOpts {
+            discovered_files: vec![
+                "src/upload/retry.rs".to_string(),
+                "src/limiter/quota.rs".to_string(), // real source, no token match
+                "target/debug/build/gen.rs".to_string(), // pruned build output, matches nothing
+                "docs/notes.md".to_string(),        // unsupported extension
+                "pkg:uploader::upload::retry::next_delay_ms".to_string(), // pseudo-node
+            ],
+            ..Default::default()
+        };
+        let result = understand_with_source(
+            &db,
+            "how does the upload retry policy compute backoff",
+            &opts,
+            Some(zero_edge_owner_reader),
+        )
+        .unwrap();
+        let detail = detail_paths(&result);
+        assert_eq!(
+            detail.first().map(String::as_str),
+            Some("src/upload/retry.rs"),
+            "the matched census candidate still leads, got {detail:?}"
+        );
+        assert!(
+            !detail.iter().any(|p| p == "src/limiter/quota.rs"),
+            "an unmatched census candidate must not anchor, got {detail:?}"
+        );
+        assert!(
+            !result
+                .anchors
+                .iter()
+                .any(|p| p == "src/limiter/quota.rs" || p == "docs/notes.md"),
+            "unmatched/unsupported census candidates never anchor, got {:?}",
+            result.anchors
         );
     }
 

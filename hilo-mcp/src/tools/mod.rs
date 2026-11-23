@@ -809,6 +809,11 @@ fn graph_understand(arguments: &serde_json::Value) -> McpResult<serde_json::Valu
         token_budget,
         resolution,
         map_exclude_paths,
+        // DF-WARPFS-118: warm's parse-cache keys are the discovery census —
+        // every file warm parsed, including zero-edge owners the edge
+        // universe never stores. Anchor discovery scores them like any other
+        // path so a definition-only owner can still lead the answer.
+        discovered_files: hilo_graph::parse_cache_keys(&graph_root()),
         ..Default::default()
     };
 
