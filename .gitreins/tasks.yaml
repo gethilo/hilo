@@ -3013,3 +3013,37 @@ tasks:
   status: complete
   created_at: '2026-11-22T15:11:28.863629+00:00'
   completed_at: '2026-11-22T20:15:18.888063+00:00'
+- id: PERF-016
+  title: 'PERF: cold graph warm bulk-load path (DuckDB write)'
+  criteria:
+  - 'On the reconstructed run-49 corpus (256 files/2321 edges from coding-hermes-tools@6e702d1):
+    cold ''hilo graph clean && HILO_WARM_TIMING=1 hilo graph warm'' reports GraphDB::open(incl
+    reconcile) + insert_edges phases summing under 2s and /usr/bin/time user+sys under
+    5s (host load recorded with each measurement; foreman re-measures on merged tree
+    if loaded); .vfs/graph/edges.jsonl row count identical pre/post fix on the same
+    corpus; cached warm stays fast (~0.84s baseline, no regression); RECONCILE_CHUNK_ROWS
+    retuning out of scope; cargo test -p hilo-graph green.'
+  status: complete
+  created_at: '2026-11-23T05:13:27.586108+00:00'
+  completed_at: '2026-11-24T23:27:33.911320+00:00'
+- id: DF-WARPFS-91
+  title: Erlang structural edge extraction (cowboy coverage 6%)
+  criteria:
+  - '''hilo graph warm'' on ninenines/cowboy prints a Coverage: line showing >50%
+    coverage (or ''Erlang coverage limited'' warning WITH documented reason why real
+    extraction was not implemented - warning-only with no extraction is NOT acceptable);
+    ''hilo graph stats'' shows >50 cowboy files with edges; extraction covers -module/-import/-include
+    refs, behaviours/callbacks, cross-module calls with provenance tags; Erlang extractor
+    unit tests added; cargo test -p hilo-graph green.'
+  status: in_progress
+  created_at: '2026-11-23T05:13:29.943146+00:00'
+- id: RELEASE-017
+  title: Document the release process in docs/releasing.md
+  criteria:
+  - docs/releasing.md exists and is tracked; a tracked README.md or CONTRIBUTING.md
+    entry links to it; every release command documented has captured output in the
+    document from real read-only runs against v0.4.1 (tag show/rev-parse, gh release
+    view, sha256sum -c on downloaded assets); mutating commands (tag/publish) documented
+    but NOT executed; no tag or release created by this change.
+  status: in_progress
+  created_at: '2026-11-23T05:13:31.996835+00:00'

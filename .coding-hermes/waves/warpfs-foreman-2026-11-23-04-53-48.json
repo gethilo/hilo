@@ -1,0 +1,92 @@
+{
+  "tick": "warpfs-foreman-2026-11-23-04-53-48",
+  "dispatched_at": "2026-11-23T05:05:00-05:00",
+  "wave_size": 3,
+  "wave_budget": 8,
+  "model": "glm-5.3-flash",
+  "provider": "ollama-cloud",
+  "base": "origin/master",
+  "base_sha": "ca3043a",
+  "rows": [
+    {
+      "id": "PERF-016",
+      "worktree": "/home/kara/worktrees/warpfs-PERF-016",
+      "branch": "wt/PERF-016",
+      "base_sha": "ca3043a",
+      "scope": "hilo-graph/src/graph.rs, hilo-cli/src/commands/graph.rs, .coding-hermes/evidence/perf-016/",
+      "outcome": "merged",
+      "merged_commit": "1c35d519e09254ded87fd661b1eb885c6ea513ca",
+      "verdict": "a57519e5",
+      "notes": "rebased in worktree, merged --no-ff to master, tier-2 judged"
+    },
+    {
+      "id": "DF-WARPFS-91",
+      "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-91",
+      "branch": "wt/DF-WARPFS-91",
+      "base_sha": "ca3043a",
+      "scope": "hilo-graph/src/parser.rs (+ new lang extractor files), hilo-graph/tests/, .coding-hermes/evidence/df-warpfs-91/",
+      "note": "crashed-wave 2026-11-16 work preserved at .coding-hermes/evidence/df-warpfs-91-crashed-wave-20261116/ (parser-rs.patch + zz_ast_probe.rs); fresh worktree re-created from ca3043a; worker resumes from reference patch",
+      "outcome": "pending",
+      "merged_commit": "",
+      "verdict": "",
+      "notes": "see wave recovery report"
+    },
+    {
+      "id": "RELEASE-017",
+      "worktree": "/home/kara/worktrees/warpfs-RELEASE-017",
+      "branch": "wt/RELEASE-017",
+      "base_sha": "ca3043a",
+      "scope": "docs/releasing.md (new), README.md (one link), .coding-hermes/evidence/release-017/",
+      "outcome": "no-work-landed",
+      "notes": "worker died pre-commit at base; staged recon evidence preserved in worktree; row pending"
+    }
+  ],
+  "parked": [
+    {
+      "id": "DF-WARPFS-175",
+      "reason": "README.md seam conflict with RELEASE-017"
+    },
+    {
+      "id": "INF-CI-021",
+      "reason": "edits judge/guard budget config while tick judges run; collides with PERF-016 timing isolation"
+    },
+    {
+      "id": "DF-WARPFS-124",
+      "reason": "live rclone serve rig verification; slots filled"
+    },
+    {
+      "id": "PERF-011",
+      "reason": "mount/hyperfine benchmarks would contend PERF-016 timing measurements"
+    },
+    {
+      "id": "DF-WARPFS-137",
+      "reason": "P4 cargo test build contention with wave; next tick"
+    },
+    {
+      "id": "QA-WARPFS-043/025/026/027/031/035/036",
+      "reason": "route: qa lane"
+    },
+    {
+      "id": "RELEASE-012/016",
+      "reason": "route: releng lane"
+    },
+    {
+      "id": "RELEASE-015",
+      "reason": "status blocked"
+    },
+    {
+      "id": "SCHED-WARPFS-1",
+      "reason": "route: fleet-config workstream (per row title)"
+    },
+    {
+      "id": "DF-WARPFS-81/99",
+      "reason": "route: bunker/install verification"
+    }
+  ],
+  "cos_plane": "boardctl direction initiatives=[]; no card plane for warpfs; alignment record = handoff /handoff/warpfs/foreman/2026-11-23T0345Z naming PERF-016 next slot",
+  "finished_at": "2026-11-24T21:55:00Z",
+  "recovery_closeout": {
+    "closed_by": "warpfs-foreman-2026-11-24-21-11-28",
+    "cleanup": "worktrees intact (RELEASE-017 recon evidence preserved in place); origin worker branches left at pre-rebase tips as evidence"
+  }
+}
