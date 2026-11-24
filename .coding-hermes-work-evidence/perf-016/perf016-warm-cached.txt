@@ -1,0 +1,13 @@
+  parsing 100/258 files...
+  parsing 200/258 files...
+  parsing 258/258 files...
+  parse cache: 258/258 files skipped (unchanged)
+  [timing] test associations: 353.495µs
+  [timing] service calls: 10.70254ms
+  [timing] conformance edges: 307.267462ms
+  [timing] service contracts: 381.439612ms
+  [timing] full cache hit — skipping jsonl+db write
+Discovered 2396 edges across 244 files (3 languages) [all cached, graph unchanged]
+Excluded 4 supported source files (hidden: 4)
+Coverage: 258 files = 244 contribute edges + 0 package facades (__init__.py) + 14 no imports + 0 parse-miss + 0 unreadable + 0 unsupported extension
+WALL=0.47 USER=0.37 SYS=0.05
