@@ -1,0 +1,53 @@
+Total edges: 1394 distinct / 1394 raw (edges.jsonl)
+Total files discovered: 190
+Total files with edges: 167
+File census: 167 files with edges (distinct edge sources) — warm last counted 190 discovered files = 167 contribute + 23 zero-edge (23 no imports + 0 package facades)
+Components (6 total):
+  doc: 153 files, 0 edges
+  test: 94 files, 1018 edges
+  examples: 45 files, 118 edges
+  src: 28 files, 258 edges
+  .github: 1 files, 0 edges
+  ebin: 1 files, 0 edges
+Most connected: pkg:cowboy_req
+Edge types:
+  imports: 885
+  tested_by: 509
+Orphans (no incoming edges):
+  examples/chunked_hello_world/src/chunked_hello_world_app.erl
+  examples/chunked_hello_world/src/chunked_hello_world_sup.erl
+  examples/chunked_hello_world/src/toppage_h.erl
+  examples/compress_response/src/compress_response_app.erl
+  examples/compress_response/src/compress_response_sup.erl
+  examples/compress_response/src/toppage_h.erl
+  examples/cookie/src/cookie_app.erl
+  examples/cookie/src/cookie_sup.erl
+  examples/cookie/src/toppage_h.erl
+  examples/echo_get/src/echo_get_app.erl
+  examples/echo_get/src/echo_get_sup.erl
+  examples/echo_get/src/toppage_h.erl
+  examples/echo_post/src/echo_post_app.erl
+  examples/echo_post/src/echo_post_sup.erl
+  examples/echo_post/src/toppage_h.erl
+  examples/eventsource/src/eventsource_app.erl
+  examples/eventsource/src/eventsource_h.erl
+  examples/eventsource/src/eventsource_sup.erl
+  examples/file_server/src/directory_h.erl
+  examples/file_server/src/directory_lister.erl
+  examples/file_server/src/file_server_app.erl
+  examples/file_server/src/file_server_sup.erl
+  examples/hello_world/src/hello_world_app.erl
+  examples/hello_world/src/hello_world_sup.erl
+  examples/hello_world/src/toppage_h.erl
+  ... 142 more orphans (use --limit 0 to show all)
+Top dependencies:
+  pkg:cowboy_req: 111
+  pkg:cowboy_router: 82
+  pkg:ct_helper: 82
+  pkg:lists: 79
+  pkg:cowboy_test: 68
+  pkg:cowboy: 66
+  pkg:erlang: 56
+  pkg:maps: 55
+  pkg:gun: 50
+  pkg:timer: 44
