@@ -26,10 +26,10 @@
       "base_sha": "ca3043a",
       "scope": "hilo-graph/src/parser.rs (+ new lang extractor files), hilo-graph/tests/, .coding-hermes/evidence/df-warpfs-91/",
       "note": "crashed-wave 2026-11-16 work preserved at .coding-hermes/evidence/df-warpfs-91-crashed-wave-20261116/ (parser-rs.patch + zz_ast_probe.rs); fresh worktree re-created from ca3043a; worker resumes from reference patch",
-      "outcome": "pending",
-      "merged_commit": "",
-      "verdict": "",
-      "notes": "see wave recovery report"
+      "outcome": "merged",
+      "merged_commit": "05442df35f908f0f268edc66ec367b99db970278",
+      "verdict": "570a5483",
+      "notes": "rebased in worktree, merged --no-ff, tier-2 PASS 570a5483 on 05442df35f908f0f268edc66ec367b99db970278. Infra-FAIL round b635529a (z.ai 429) superseded by PASS round."
     },
     {
       "id": "RELEASE-017",

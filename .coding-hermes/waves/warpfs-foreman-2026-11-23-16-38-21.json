@@ -40,10 +40,10 @@
       "base_sha": "ca3043a",
       "residue": "hilo-graph/src/parser.rs +244/-25 Erlang behaviour/import/remote-call extractor",
       "target_dir": "/tmp/hilo-warpfs-target",
-      "outcome": "pending",
-      "merged_commit": "",
-      "verdict": "",
-      "notes": "see wave recovery report"
+      "outcome": "merged",
+      "merged_commit": "05442df35f908f0f268edc66ec367b99db970278",
+      "verdict": "570a5483",
+      "notes": "rebased in worktree, merged --no-ff, tier-2 PASS 570a5483 on 05442df35f908f0f268edc66ec367b99db970278. Infra-FAIL round b635529a (z.ai 429) superseded by PASS round."
     },
     {
       "id": "RELEASE-017",
