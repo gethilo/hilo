@@ -16,7 +16,74 @@
 #
 # Exit codes are cargo's, unchanged: a normal compile error is still 101,
 # a signal death is still 128+N — the wrapper only adds the diagnosis.
+# cargo is resolved without relying on an interactive PATH: PATH first, then
+# ~/.cargo/bin, then $CARGO_HOME/bin, then rustup toolchains; if none exist
+# the script prints a diagnostic and exits 127. The build log is written to
+# <repo>/.hilo-build-last.XXXXXX.log (deleted on success); set
+# HILO_BUILD_LOG_DIR to keep it in an explicit scratch directory.
 set -u
+
+# Resolve the cargo toolchain BEFORE using it: runtimes like systemd-run give
+# a minimal PATH without ~/.cargo/bin, where a bare `cargo` is "command not
+# found" (127). Resolution order (RELEASE-019):
+#   1. cargo already on PATH
+#   2. the default rustup proxy at $HOME/.cargo/bin/cargo
+#   3. a relocated cargo home at $CARGO_HOME/bin/cargo
+#   4. rustup-managed toolchains under ~/.rustup (or $CARGO_HOME/toolchains)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+
+resolve_cargo() {
+    if command -v cargo >/dev/null 2>&1; then
+        command -v cargo
+        return 0
+    fi
+    if [ -x "$HOME/.cargo/bin/cargo" ]; then
+        echo "$HOME/.cargo/bin/cargo"
+        return 0
+    fi
+    if [ -n "${CARGO_HOME:-}" ] && [ -x "$CARGO_HOME/bin/cargo" ]; then
+        echo "$CARGO_HOME/bin/cargo"
+        return 0
+    fi
+    local candidate
+    for candidate in "$HOME/.rustup/toolchains/"*/bin/cargo \
+                     "${CARGO_HOME:-"$REPO_ROOT/.no-cargo-home"}/toolchains/"*/bin/cargo; do
+        if [ -x "$candidate" ]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+if ! CARGO_BIN="$(resolve_cargo)"; then
+    {
+        echo "build-hilo: cargo not found on PATH or ~/.cargo/bin/cargo (set PATH to include ~/.cargo/bin or install rustup)"
+        echo "build-hilo: probed: command -v cargo; \$HOME/.cargo/bin/cargo; ${CARGO_HOME:-(CARGO_HOME unset)}/bin/cargo; toolchains under \${HOME}/.rustup/toolchains/"
+    } >&2
+    exit 127
+fi
+echo "build-hilo: cargo resolved: $CARGO_BIN"
+
+# rustc must be reachable beside cargo (cargo -vV invokes it): when the
+# resolved toolchain was found via ~/.cargo/bin or a toolchain dir rather
+# than PATH, prepend that dir to PATH so the rustup rustc proxy is visible.
+RUSTC_DIR="$(dirname "$CARGO_BIN")"
+case ":$PATH:" in
+    *":$RUSTC_DIR:"*) ;;
+    *) export PATH="$RUSTC_DIR:$PATH" ;;
+esac
+
+# Build log: keep it with the workspace instead of generic /tmp so the
+# evidence is re-findable next to the tree (RELEASE-019). HILO_BUILD_LOG_DIR
+# names an explicit scratch directory; on failure to use it, fall back to
+# ${TMPDIR:-/tmp} with a loud note. The log is deleted on a clean build.
+LOG_DIR="${HILO_BUILD_LOG_DIR:-$REPO_ROOT}"
+if [ ! -d "$LOG_DIR" ] && ! mkdir -p "$LOG_DIR" 2>/dev/null; then
+    echo "build-hilo: build-log dir '$LOG_DIR' unusable; falling back to ${TMPDIR:-/tmp}" >&2
+    LOG_DIR="${TMPDIR:-/tmp}"
+fi
 
 PROFILE_ARGS=(--release)
 if [ "${1:-}" = "--debug" ]; then
@@ -36,8 +103,8 @@ fi
 # still sees the build output. Capturing matters because cargo exits 101 for
 # a build-script failure even when the underlying cc-rs compile died of
 # SIGABRT — the signal is only visible in the captured output.
-LOG="$(mktemp "${TMPDIR:-/tmp}/hilo-build-last.XXXXXX.log")"
-cargo build "${PROFILE_ARGS[@]:+${PROFILE_ARGS[@]}}" "$@" > "$LOG" 2>&1
+LOG="$(mktemp "$LOG_DIR/.hilo-build-last.XXXXXX.log")"
+"$CARGO_BIN" build "${PROFILE_ARGS[@]:+${PROFILE_ARGS[@]}}" "$@" > "$LOG" 2>&1
 rc=$?
 cat "$LOG" >&2
 
