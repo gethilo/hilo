@@ -3296,6 +3296,12 @@ fn format_output_with_reserve(
             "{EMPTY_TIER} — every matched file sits under a MAP-excluded path\n"
         ));
     } else {
+        // REV-WARPFS-018: consecutive file blocks are separated by a blank
+        // line, so a probe parsing the MAP (blank-line split or a bounded
+        // line window) can never read one file's symbols under the
+        // previous heading's block: every block opens with the `path →`
+        // heading that names the file every symbol under it belongs to.
+        let mut separator_needed = false;
         for sf in &map_order {
             let mut row = if sf.symbols.is_empty() {
                 format!("{} → (no symbols extracted)\n", sf.path)
@@ -3306,10 +3312,13 @@ fn format_output_with_reserve(
                 }
                 row
             };
+            if separator_needed {
+                row.insert(0, '\n');
+            }
             if !append_if_fits(&mut map, &row, map_budget) {
                 break;
             }
-            row.clear();
+            separator_needed = true;
         }
     }
     if map.trim_end() == "## MAP" {
@@ -4032,6 +4041,99 @@ mod tests {
                 .iter()
                 .any(|f| f.path == "examples/aaa/util.rs"),
             "the exclusion list filters the MAP tier only — the decoy file must survive the result set"
+        );
+    }
+
+    #[test]
+    fn understand_map_blank_separates_symbols_under_own_file_heading() {
+        // REV-WARPFS-018: the MAP tier's file blocks ran together with no
+        // separator between them, so a line-window probe over the section
+        // (a blank-line-split parser, or a bounded `grep -A N` reader)
+        // absorbed the next file's symbols into the previous heading's
+        // block and attributed them to the wrong file. Two contract arms
+        // for the same parse: blocks must be blank-line separated, and
+        // every symbol row must sit under exactly one heading — the one
+        // naming the file whose source defines it.
+        let db = GraphDB::open(":memory:").unwrap();
+        db.insert_edges(&[edge(
+            "src/limiter/rate_limiter.rs",
+            "src/limiter/store.rs",
+            "imports",
+        )])
+        .unwrap();
+
+        const LIMITER_SOURCE: &str = "use crate::store::TokenBucket;\n\npub struct RateLimiter {\n    bucket: TokenBucket,\n}\n\npub fn check_rate(limiter: &RateLimiter) -> bool {\n    limiter.bucket.try_take()\n}\n";
+        const STORE_SOURCE: &str = "pub struct TokenBucket {\n    tokens: u64,\n}\n\nimpl TokenBucket {\n    pub fn try_take(&self) -> bool {\n        true\n    }\n}\n";
+        let reader = |path: &str| -> Option<String> {
+            match path {
+                "src/limiter/rate_limiter.rs" => Some(LIMITER_SOURCE.to_string()),
+                "src/limiter/store.rs" => Some(STORE_SOURCE.to_string()),
+                _ => None,
+            }
+        };
+
+        let result =
+            understand_with_source(&db, "rate limiter", &SignalOpts::default(), Some(reader))
+                .unwrap();
+        let map = result
+            .text
+            .split("## MAP")
+            .nth(1)
+            .and_then(|rest| rest.split("## SIGNATURES").next())
+            .expect("MAP tier must exist");
+
+        let body = map.trim();
+        let blocks: Vec<&str> = body
+            .split("\n\n")
+            .filter(|b| !b.trim().is_empty())
+            .collect();
+        assert!(
+            blocks.len() >= 2,
+            "each file's symbol block must be separated from its neighbours \
+             so a parsing probe cannot read one file's symbols under another \
+             file's heading; MAP blocks merged:\n{map}"
+        );
+
+        for block in &blocks {
+            let heading_count = block.lines().filter(|l| l.contains("→")).count();
+            assert_eq!(
+                heading_count, 1,
+                "every MAP block must sit under exactly one file heading, got \
+                 {heading_count} in:\n{block}"
+            );
+            let heading = block.lines().find(|l| l.contains("→")).unwrap();
+            let (file, _) = heading.split_once(" →").unwrap();
+            let source = match file {
+                "src/limiter/rate_limiter.rs" => LIMITER_SOURCE,
+                "src/limiter/store.rs" => STORE_SOURCE,
+                other => panic!("MAP heading names a file outside the corpus: {other}"),
+            };
+            for sym in block.lines().filter_map(|l| l.strip_prefix("  - ")) {
+                assert!(
+                    source.contains(sym),
+                    "symbol {sym:?} is listed under {file:?} but does not \
+                     resolve to that file's own source:\n{block}"
+                );
+            }
+        }
+
+        // Cross-attribution, the exact defect shape: no symbol of one file
+        // may render inside the other file's block.
+        let limiter_block = blocks[blocks
+            .iter()
+            .position(|b| b.starts_with("src/limiter/rate_limiter.rs"))
+            .expect("the rate limiter must be in MAP")];
+        let store_block = blocks[blocks
+            .iter()
+            .position(|b| b.starts_with("src/limiter/store.rs"))
+            .expect("the token store must be in MAP")];
+        assert!(
+            !limiter_block.contains("  - TokenBucket"),
+            "the store's symbol must not render inside the limiter's block:\n{limiter_block}"
+        );
+        assert!(
+            !store_block.contains("  - check_rate"),
+            "the limiter's symbol must not render inside the store's block:\n{store_block}"
         );
     }
 
