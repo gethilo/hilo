@@ -3065,3 +3065,13 @@ tasks:
   status: complete
   created_at: '2026-11-25T11:53:27.426061+00:00'
   completed_at: '2026-11-26T04:48:05.789331+00:00'
+- id: DF-WARPFS-153
+  title: 'sandbox docs: mount stores/validates the sandbox block, isolation is sandbox-exec-only'
+  criteria:
+  - docs/cli-reference.md mount section states mounting with a sandbox block stores
+    and validates the config and that process isolation applies to hilo sandbox exec;
+    specs/warpfs-spec.md section 14.1 states the diagram is realized by hilo sandbox
+    exec, not by mount
+  status: complete
+  created_at: '2026-11-26T04:56:20.250710+00:00'
+  completed_at: '2026-11-26T04:56:45.710630+00:00'

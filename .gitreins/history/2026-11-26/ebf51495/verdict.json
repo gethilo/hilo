@@ -1,0 +1,43 @@
+{
+  "task_id": "DF-WARPFS-153",
+  "task_title": "sandbox docs: mount stores/validates the sandbox block, isolation is sandbox-exec-only",
+  "task_criteria": [
+    "docs/cli-reference.md mount section states mounting with a sandbox block stores and validates the config and that process isolation applies to hilo sandbox exec; specs/warpfs-spec.md section 14.1 states the diagram is realized by hilo sandbox exec, not by mount"
+  ],
+  "passed": true,
+  "worktree": "/home/kara/warpfs",
+  "branch": "master",
+  "commit": "a1f67f5a4b42b79f5c517b55989a6a3749195263",
+  "pass_class": "tier1-only",
+  "tier2_skipped": true,
+  "working_tree_content_fingerprint": "9d72ff2150b4ffc610c3fbab11925236dbcf54ee0a907007956df7f30060f60c",
+  "working_tree_dirty_path_count": 3,
+  "items": [],
+  "stages": {},
+  "summary": "Judge Result: DF-WARPFS-153\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-11-26T04:56:46.250704",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-11-26T04:56:46.360321+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 262176,
+        "truncated": true,
+        "source": "git show a1f67f5a4b42"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 25297,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "DF-WARPFS-153"
+  }
+}
