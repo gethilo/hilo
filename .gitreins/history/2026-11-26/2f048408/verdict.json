@@ -1,0 +1,111 @@
+{
+  "task_id": "RELEASE-019",
+  "task_title": "release build path resolves cargo without interactive PATH",
+  "task_criteria": [
+    "from clean env without ~/.cargo/bin on PATH, make release produces target/release/hilo; build-hilo.sh resolves cargo itself and diagnoses absent toolchain; docs document the invocation"
+  ],
+  "passed": false,
+  "worktree": "/home/kara/worktrees/warpfs-RELEASE-019-judge",
+  "branch": "",
+  "commit": "f76d6006f1dfa7cedb0c0e61d8b11f9ca13f0904",
+  "pass_class": "degraded",
+  "tier2_skipped": false,
+  "working_tree_content_fingerprint": "87bb10e0f127e82070d6946aa183daadaeb9ba46a23f13ed8f35e29e92a13218",
+  "working_tree_dirty_path_count": 5,
+  "items": [],
+  "merge_recommendation": "needs_review",
+  "stages": {
+    "tier2": {
+      "id": "tier2",
+      "passed": false,
+      "any_failed": true,
+      "summary": "INCOMPLETE\n  \u2717 Coverage FAILED \u2014 ungraded: from clean env without ~/.cargo/bin on PATH, make release produces target/release/hilo; build-hilo.sh resolves cargo itself and diagnoses absent toolchain; docs document the invocation\nEvaluator error: LLM call failed: LLM request failed after 3 attempts (provider=openai model=glm-5.3-flash url=https://api.z.ai/api/coding/paas/v4/chat/completions key=<GITREINS_LLM_API_KEY>) \u2014 last error: 429 Client Error: Too Many Requests for url: https://api.z.ai/api/coding/paas/v4/chat/completions",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": false,
+          "output": "INCOMPLETE\n  \u2717 Coverage FAILED \u2014 ungraded: from clean env without ~/.cargo/bin on PATH, make release produces target/release/hilo; build-hilo.sh resolves cargo itself and diagnoses absent toolchain; docs document the invocation\nEvaluator error: LLM call failed: LLM request failed after 3 attempts (provider=openai model=glm-5.3-flash url=https://api.z.ai/api/coding/paas/v4/chat/completions key=<GITREINS_LLM_API_KEY>) \u2014 last error: 429 Client Error: Too Many Requests for url: https://api.z.ai/api/coding/paas/v4/chat/completions",
+          "error": "",
+          "data": {
+            "verdict": "INCOMPLETE",
+            "items": [],
+            "summary": "Evaluator error: LLM call failed: LLM request failed after 3 attempts (provider=openai model=glm-5.3-flash url=https://api.z.ai/api/coding/paas/v4/chat/completions key=<GITREINS_LLM_API_KEY>) \u2014 last error: 429 Client Error: Too Many Requests for url: https://api.z.ai/api/coding/paas/v4/chat/completions",
+            "ungraded_criteria": [
+              "from clean env without ~/.cargo/bin on PATH, make release produces target/release/hilo; build-hilo.sh resolves cargo itself and diagnoses absent toolchain; docs document the invocation"
+            ],
+            "provenance": {
+              "model": "glm-5.3-flash",
+              "base_url_source": "GITREINS_LLM_BASE_URL",
+              "api_key_source": "GITREINS_LLM_API_KEY"
+            },
+            "context_stats": {
+              "diff_source": "working-tree",
+              "diff_bytes": 1080,
+              "prompt_bytes": 13484
+            }
+          }
+        }
+      ],
+      "model": "glm-5.3-flash",
+      "base_url_source": "GITREINS_LLM_BASE_URL",
+      "api_key_source": "GITREINS_LLM_API_KEY",
+      "ungraded_criteria": [
+        "from clean env without ~/.cargo/bin on PATH, make release produces target/release/hilo; build-hilo.sh resolves cargo itself and diagnoses absent toolchain; docs document the invocation"
+      ],
+      "context_stats": {
+        "diff_source": "working-tree",
+        "diff_bytes": 1080,
+        "prompt_bytes": 13484
+      }
+    }
+  },
+  "ungraded_criteria": [
+    "from clean env without ~/.cargo/bin on PATH, make release produces target/release/hilo; build-hilo.sh resolves cargo itself and diagnoses absent toolchain; docs document the invocation"
+  ],
+  "context_stats": {
+    "diff_source": "working-tree",
+    "diff_bytes": 1080,
+    "prompt_bytes": 13484
+  },
+  "review": {
+    "reviewer_email": "totalwindupflightsystems@gmail.com",
+    "reviewer_name": "totalwindupflightsystems",
+    "commit_author_email": "totalwindupflightsystems@gmail.com",
+    "commit_author_name": "totalwindupflightsystems",
+    "self_review": true,
+    "findings": [],
+    "summary": "",
+    "error": "LLM call failed: LLM request failed after 3 attempts (provider=openai model=glm-5.3-flash url=https://api.z.ai/api/coding/paas/v4/chat/completions key=<GITREINS_LLM_API_KEY>) \u2014 last error: 429 Client Error: Too Many Requests for url: https://api.z.ai/api/coding/paas/v4/chat/completions",
+    "review_state": {
+      "emitted": [],
+      "carried": []
+    }
+  },
+  "summary": "Stage tier2: FAIL\n  INCOMPLETE\n  \u2717 Coverage FAILED \u2014 ungraded: from clean env without ~/.cargo/bin on PATH, make release produces target/release/hilo; build-hilo.sh resolves cargo itself and diagnoses absent toolchain; docs document the invocation\nEvaluator error: LLM call failed: LLM request failed after 3 attempts (provider=openai model=glm-5.3-flash url=https://api.z.ai/api/coding/paas/v4/chat/completions key=<GITREINS_LLM_API_KEY>) \u2014 last error: 429 Client Error: Too Many Requests for url: https://api.z.ai/api/coding/paas/v4/chat/completions\n\nOverall: FAIL \u2717",
+  "evaluated_at": "2026-11-26T04:40:37.140520",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-11-26T04:40:37.326230+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 3137,
+        "truncated": false,
+        "source": "git show f76d6006f1df"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 262176,
+        "truncated": true,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "RELEASE-019"
+  }
+}

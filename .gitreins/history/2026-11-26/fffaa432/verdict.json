@@ -1,0 +1,43 @@
+{
+  "task_id": "RELEASE-019",
+  "task_title": "release build path resolves cargo without interactive PATH",
+  "task_criteria": [
+    "from clean env without ~/.cargo/bin on PATH, make release produces target/release/hilo; build-hilo.sh resolves cargo itself and diagnoses absent toolchain; docs document the invocation"
+  ],
+  "passed": true,
+  "worktree": "/home/kara/worktrees/warpfs-RELEASE-019-judge",
+  "branch": "",
+  "commit": "f76d6006f1dfa7cedb0c0e61d8b11f9ca13f0904",
+  "pass_class": "tier1-only",
+  "tier2_skipped": true,
+  "working_tree_content_fingerprint": "87bb10e0f127e82070d6946aa183daadaeb9ba46a23f13ed8f35e29e92a13218",
+  "working_tree_dirty_path_count": 5,
+  "items": [],
+  "stages": {},
+  "summary": "Judge Result: RELEASE-019\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-11-26T04:48:06.278938",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-11-26T04:48:06.382919+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 3137,
+        "truncated": false,
+        "source": "git show f76d6006f1df"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 262176,
+        "truncated": true,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "RELEASE-019"
+  }
+}

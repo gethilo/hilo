@@ -1,0 +1,65 @@
+commit f76d6006f1dfa7cedb0c0e61d8b11f9ca13f0904
+Author:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+AuthorDate: Wed Nov 25 08:43:49 2026 -0500
+Commit:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+CommitDate: Wed Nov 25 08:43:49 2026 -0500
+
+    docs: document non-interactive release build in releasing.md — make release route, cargo resolution order, and build-log location. Addresses RELEASE-019.
+    
+    Co-authored-by: Alexis Okuwa <wojonstech@gmail.com>
+---
+ docs/releasing.md | 41 +++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 41 insertions(+)
+
+diff --git a/docs/releasing.md b/docs/releasing.md
+index f1fb7f6..6379f82 100644
+--- a/docs/releasing.md
++++ b/docs/releasing.md
+@@ -53,6 +53,47 @@ to that release. Record the exact command output and target triple with the
+ release evidence. The tag and publication step is intentionally separate from
+ this dependency gate and must use the exact CI-verified commit.
+ 
++## Building the release binary non-interactively
++
++`make release` is the release build invocation; it routes through
++`scripts/build-hilo.sh -p hilo-cli`, which wraps cargo for the OOM
++classification (DF-WARPFS-142) and resolves the toolchain itself, so it does
++not depend on an interactive PATH. The resolution order is:
++
++1. `cargo` already on `PATH`;
++2. `$HOME/.cargo/bin/cargo` (the default rustup proxy);
++3. `$CARGO_HOME/bin/cargo` (relocated cargo home);
++4. rustup-managed toolchains under `~/.rustup/toolchains/` (or
++   `$CARGO_HOME/toolchains/`).
++
++If none of those exist the wrapper prints
++`build-hilo: cargo not found on PATH or ~/.cargo/bin/cargo (set PATH to
++include ~/.cargo/bin or install rustup)` with the full probe list and exits
++`127` instead of a bare `command not found`.
++
++This matters wherever the build runs under a service or runner environment
++that strips the interactive `PATH` additions (systemd units, CI runners,
++`env -i` shells). Nothing needs to be set when rustup was installed to its
++default location; otherwise either extend `PATH` with the cargo binaries or
++export `CARGO_HOME`. Example:
++
++```bash
++env -i HOME="$HOME" PATH=/usr/bin:/bin CARGO_TARGET_DIR=/mnt/ssd/caches/hermes-target make release
++```
++
++The release profile keeps debug line tables and symbols on purpose (PERF-006)
++and `make release` strips the artefact; `CARGO_TARGET_DIR` is inherited, so
++point it at a warm cache directory to keep the rebuild incremental.
++
++The build log is captured next to the workspace, not in generic `/tmp`: the
++wrapper writes it to `<workspace>/.hilo-build-last.XXXXXX.log` and deletes it
++on a clean build. Set `HILO_BUILD_LOG_DIR` to keep the log in an explicit
++scratch directory instead; if that directory cannot be created the wrapper
++falls back to `${TMPDIR:-/tmp}` and says so. On a failed build the log is
++preserved at whatever path the wrapper reports, and it is classified there
++for the OOM signature (signal deaths, `out of memory`, `std::bad_alloc`)
++before the failure is reported.
++
+ ## Tag and release assets
+ 
+ After all checks pass, create an annotated tag named `vX.Y.Z` on the exact
