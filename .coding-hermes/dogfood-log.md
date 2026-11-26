@@ -2412,3 +2412,7 @@ Deliberately NOT walked: workspace-mount xattr EOPNOTSUPP on a current-tip
 binary stays owned by DF-WARPFS-70; DF-WARPFS-156/176 durability-at-kill
 stays owned by those rows. Both are the (b) OWNED class — a walk proves
 nothing the owner's row does not.
+
+## 2026-11-26 — warpfs-dogfood-2026-11-26-19-30-27
+
+Verdict: UNKNOWN-VALUE for target d2326e4; real-use probe used an older dirty binary. Fresh-install battery PARTIAL and running on bunker-mvp agent 57cf0b82; no install pass claimed. See docs/dogfood-warpfs-2026-11-26-193027.md and .coding-hermes/evidence/warpfs-dogfood-2026-11-26-19-30-27/ for evidence and collection instructions. No new findings filed.
