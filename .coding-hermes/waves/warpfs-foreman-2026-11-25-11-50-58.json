@@ -1,0 +1,8 @@
+{
+  "tick": "warpfs-foreman-2026-11-25-11-50-58",
+  "wave_budget": 2,
+  "workers": [
+    {"task": "REV-WARPFS-018", "worktree": "/home/kara/worktrees/warpfs-REV-WARPFS-018", "branch": "wt/REV-WARPFS-018", "base_sha": "089428b", "brief": "/tmp/brief-REV-WARPFS-018-20261125.txt", "model": "glm-5.3-flash", "provider": "ollama-cloud", "status": "dispatched"},
+    {"task": "RELEASE-019", "worktree": "/home/kara/worktrees/warpfs-RELEASE-019", "branch": "wt/RELEASE-019", "base_sha": "089428b", "brief": "/tmp/brief-RELEASE-019-20261125.txt", "model": "glm-5.3-flash", "provider": "ollama-cloud", "status": "dispatched"}
+  ]
+}

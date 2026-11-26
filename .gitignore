@@ -77,3 +77,9 @@ target-local/
 .vfs/graph/.last_reconcile
 .vfs/graph/state.json
 .gitreins/rescued-*/
+
+# --- GitReins runtime state that rewrites every judge run (drift law) ---
+.gitreins/review-state.json
+.gitreins/review-state.lock
+.vfs/graph/edges.jsonl.lock
+.hilo-build-last.*.log

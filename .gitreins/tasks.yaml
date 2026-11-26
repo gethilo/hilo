@@ -3048,3 +3048,19 @@ tasks:
     but NOT executed; no tag or release created by this change.
   status: pending
   created_at: '2026-11-23T05:13:31.996835+00:00'
+- id: REV-WARPFS-018
+  title: graph understand MAP groups foreign symbols under their own file heading
+  criteria:
+  - MAP output of a two-file corpus shows every symbol under a heading naming its
+    own file; cargo test -p hilo_graph --lib exits 0 with the regression test
+  status: complete
+  created_at: '2026-11-25T11:53:26.852176+00:00'
+  completed_at: '2026-11-25T15:53:08.082332+00:00'
+- id: RELEASE-019
+  title: release build path resolves cargo without interactive PATH
+  criteria:
+  - from clean env without ~/.cargo/bin on PATH, make release produces target/release/hilo;
+    build-hilo.sh resolves cargo itself and diagnoses absent toolchain; docs document
+    the invocation
+  status: in_progress
+  created_at: '2026-11-25T11:53:27.426061+00:00'
