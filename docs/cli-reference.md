@@ -1167,10 +1167,7 @@ in the "Hilo mount daemonized" banner. This is where trigger engine
 output (`--triggers` — "loaded N triggers", fire/failure messages) and
 tracing logs land when running detached.
 
-**Bubblewrap sandboxing (DF-WARPFS-77):** the manifest `sandbox:` block is now
-honored at mount time. A block with `enabled: true` mounts with the
-`BubblewrapConfig` wired into the FUSE session (network/PID/root isolation per
-spec §14.3). A missing or disabled block leaves the mount unsandboxed with no
+**Bubblewrap sandboxing (DF-WARPFS-77):** at mount time, the manifest `sandbox:` block is stored and validated as a `BubblewrapConfig` carried by the FUSE session; process isolation applies only to processes launched through `hilo sandbox exec`. No process isolation happens at mount time: zero `bwrap` processes serve the tree. A missing or disabled block leaves the mount unsandboxed with no
 change in behavior and no warning. When a block is present and enabled but
 `bwrap` is not installed, the mount proceeds unsandboxed with a loud stderr
 warning naming `sandbox` and `not found` (fail-open — sandboxing is optional).

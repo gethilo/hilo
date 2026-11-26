@@ -810,6 +810,8 @@ Sandbox:           /workspace  ← bind-mounted read-write
                    agent's shell (cd /workspace)
 ```
 
+This diagram describes the isolation architecture realized by `hilo sandbox exec`; mount-time `sandbox:` configuration is stored and validated only. A mount does not itself wrap or isolate any process, so an agent reading files through the mount is not sandboxed by mounting it.
+
 ### 14.2 Security Properties
 
 | Threat | Without Bubblewrap | With Bubblewrap |
