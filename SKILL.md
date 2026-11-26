@@ -84,7 +84,7 @@ hilo-metadata/      # xattr read/write, inventory files (JSONL)
 hilo-graph/         # AST parsing (26 langs), DuckDB graph, edges, impact, classify,
                     #   provenance, signal engine, semantic search, determinism tests
 hilo-cli/           # CLI shim (init, meta, graph, classify, mount, serve, workspace)
-hilo-mcp/           # MCP server (17 tools), JSON-RPC
+hilo-mcp/           # MCP server (18 tools), JSON-RPC
 hilo-backends/      # S3 (read/write-thru), Git (clone/pull), local
 hilo-fuse/          # FUSE daemon, mount ops, xattr passthrough, workspace mount
 hilo-triggers/      # inotify watchers, debounce, re-discover on change
@@ -152,8 +152,9 @@ git push origin master
 
 From a deep real-use run on a fresh ripgrep clone (111 files): init 5ms,
 warm 1.2s/256 edges, classify 0.18s, FUSE `--daemon` mount instant + clean
-unmount, MCP 17 tools over stdio all responding with structured JSON. The
-plumbing is real. The graph DATA has known gaps — read before querying:
+unmount, MCP tools over stdio responding with structured JSON (the current
+registry contains 18 tools). The plumbing is real. The
+graph DATA has known gaps — read before querying:
 
 **The `pkg:` form is the only reliable blast-radius query.**
 Every edge in the graph targets `pkg:<name>` pseudo-nodes; there are ZERO
@@ -241,7 +242,8 @@ SKILL.md line 25 now uses the real package name; hilo-cli is the only
 hyphenated crate, `-p hilo_graph` for graph tests is correct.
 
 **Still-verified-clean (from run 1, re-confirmed):** FUSE `--daemon` mount
-instant + clean unmount; MCP 17 tools responding; meta/xattr round-trips;
+instant + clean unmount; MCP tools responding (the current registry contains
+18 tools); meta/xattr round-trips;
 graph clean → rewarm determinism (598/749 twice); git hooks incremental
 warm; 6-language corpus parses; release impact query 0.84s.
 
@@ -270,7 +272,8 @@ P0/P1 graph-data breaks are closed; every fix re-verified live:
   "1367/1367 files" with no mention of the 4122 excluded vendor files.
   Don't misread it as data loss — check `stats` + edges.jsonl.
 - **Re-verified clean:** tested_by/untested real (3409 tested_by edges on
-  containerd); MCP stdout pure JSON-RPC (0 non-JSON lines, 17 tools);
+  containerd); MCP stdout pure JSON-RPC (0 non-JSON lines, 17 observed at
+  the time; the current registry contains 18 tools);
   FUSE xattr passthrough through the mount; meta round-trips; incremental
   `warm --changed` (1 file → 1s); stats 26ms / impact 108ms at
   containerd scale.
@@ -302,7 +305,8 @@ Rust/Go, 🟡 for Python** — one family of gaps, all resolution-layer:
   `--set <attr> --value <val> <path>`; nothing rejects the typo.
 - **MCP transport is NDJSON** (one JSON-RPC message per line) — LSP-style
   Content-Length framing → `-32700 Parse error`. Client gotcha, not a
-  bug. 17 tools, stdout pure (GAP-050 still fixed), GAP-062 re-confirmed
+  bug. The run observed 17; the current registry contains 18 tools. Stdout was
+  pure (GAP-050 still fixed); GAP-062 was re-confirmed
   over MCP (`related` ghost path → `[]`, isError=false).
 - **Re-verified clean on Python:** pkg-form impact exact; stats 28 ms /
   impact 20 ms / search 23 ms / untested 19 ms; byte-deterministic
