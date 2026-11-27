@@ -20,6 +20,22 @@
 //!   since the last sync, and transferring them re-logged a LWW conflict
 //!   per file on every repeat run (DF-WARPFS-69). This is a documented
 //!   deviation from the spec §7 per-direction tie-break.
+//! - Stale listings (DF-WARPFS-124): the remote walk may serve a cached
+//!   directory listing (rclone serve's 5m dir-cache, or any
+//!   eventual-consistency store), whose mtimes can lag the real objects.
+//!   Before trusting it, [`plan_sync`] REVALIDATES every local file that
+//!   has a listing counterpart with a per-key `stat` (the HEAD-class
+//!   operation that bypasses the listing cache) and plans from the
+//!   authoritative mtime — a stale listing cannot silently hide a remote
+//!   change behind an equal-mtime no-op, misdirect a resolution into a
+//!   clobbering push, or turn a post-transfer aligned file into a phantom
+//!   "local newer" re-push. A `NotFound` stat demotes the listing entry
+//!   to "no remote counterpart"; any other stat error fails the plan
+//!   (an unrevalidatable candidate must not fall back to stale data).
+//!   LIMITATION (documented honestly): revalidation is per-key over keys
+//!   the listing DID report — a remote key entirely absent from a stale
+//!   snapshot cannot be discovered by stat and only appears when the
+//!   listing cache refreshes.
 //! - A direction-blocked resolution (e.g. remote-newer file during a
 //!   `Push`-only run) produces no transfer item; it resolves on the next
 //!   two-way run.
@@ -287,7 +303,24 @@ pub fn plan_sync(
                 }
             }
             Some(ro) => {
-                let remote_mtime = ro.modified.unwrap_or(0);
+                // DF-WARPFS-124: the listing entry may be stale (rclone
+                // serve dir-cache, eventual-consistency stores). Revalidate
+                // the candidate with a per-key stat/HEAD and plan from the
+                // AUTHORITATIVE mtime, so a stale listing cannot silently
+                // hide a remote change behind an equal-mtime no-op or
+                // misdirect the LWW resolution into a clobbering push.
+                let remote_mtime = match revalidate_remote_entry(backend, &lf.rel_path, ro)? {
+                    RemoteRevalidation::Present(mtime) => mtime,
+                    RemoteRevalidation::Gone => {
+                        // Phantom/stale listing entry: the key is gone at
+                        // the authoritative layer — same semantics as no
+                        // remote counterpart.
+                        if matches!(direction, SyncDirection::Push | SyncDirection::Both) {
+                            plan.to_transfer.push(item);
+                        }
+                        continue;
+                    }
+                };
                 let local_mtime = lf.mtime_unix;
                 if local_mtime > remote_mtime {
                     if matches!(direction, SyncDirection::Push | SyncDirection::Both) {
@@ -351,6 +384,37 @@ pub fn plan_sync(
     }
 
     Ok(plan)
+}
+
+/// Outcome of revalidating one listing entry against the authoritative
+/// per-key metadata (DF-WARPFS-124).
+enum RemoteRevalidation {
+    /// The key exists; the payload is its authoritative mtime in unix
+    /// seconds (the stat's `modified`, falling back to the listing's when
+    /// the stat carries no timestamp).
+    Present(i64),
+    /// The listing entry was stale/phantom: the key does not exist at the
+    /// authoritative layer.
+    Gone,
+}
+
+/// Revalidate one directory-listing entry with a per-key `stat` — the
+/// HEAD-class operation that bypasses listing caches (DF-WARPFS-124).
+/// `NotFound` demotes the entry to [`RemoteRevalidation::Gone`]; any other
+/// stat error fails the plan, because an unrevalidatable candidate must
+/// not silently fall back to potentially-stale listing data.
+fn revalidate_remote_entry(
+    backend: &dyn Backend,
+    key: &str,
+    listed: &BackendEntry,
+) -> Result<RemoteRevalidation, SyncError> {
+    match backend.stat(key) {
+        Ok(e) => Ok(RemoteRevalidation::Present(
+            e.modified.or(listed.modified).unwrap_or(0),
+        )),
+        Err(BackendError::NotFound(_)) => Ok(RemoteRevalidation::Gone),
+        Err(e) => Err(SyncError::Backend(e)),
+    }
 }
 
 /// Execute a plan: transfers, then deletes. Stops at the first failure with
@@ -1489,5 +1553,287 @@ mod tests {
         assert!(line.contains("\"kind\":\"divergent_overwrite\""), "{line}");
         let round: ConflictRecord = serde_json::from_str(&line).unwrap();
         assert_eq!(round.kind, ConflictKind::DivergentOverwrite);
+    }
+
+    /// DF-WARPFS-124 test double: a backend whose directory listing
+    /// (list/walk) serves a FROZEN snapshot — the rclone-serve dir-cache /
+    /// eventual-consistency shape — while per-key operations (stat/get/put/
+    /// delete) hit the live store. `stat_calls` counts per-key stats so a
+    /// test can prove the planner revalidated instead of trusting the
+    /// frozen listing.
+    struct StaleListBackend {
+        inner: MockBackend,
+        frozen: Mutex<Option<Vec<BackendEntry>>>,
+        stat_calls: Mutex<HashMap<String, usize>>,
+    }
+
+    impl StaleListBackend {
+        fn new(inner: MockBackend) -> Self {
+            Self {
+                inner,
+                frozen: Mutex::new(None),
+                stat_calls: Mutex::new(HashMap::new()),
+            }
+        }
+
+        /// Freeze the listing at its current state (the cache snapshot).
+        fn freeze_listing(&self) {
+            let snap = self.inner.list("").unwrap();
+            *self.frozen.lock().unwrap() = Some(snap);
+        }
+
+        fn stat_calls(&self, key: &str) -> usize {
+            self.stat_calls
+                .lock()
+                .unwrap()
+                .get(key)
+                .copied()
+                .unwrap_or(0)
+        }
+    }
+
+    impl Backend for StaleListBackend {
+        fn kind(&self) -> BackendKind {
+            self.inner.kind()
+        }
+
+        fn name(&self) -> &str {
+            "stale-list-mock"
+        }
+
+        fn list(&self, prefix: &str) -> Result<Vec<BackendEntry>, BackendError> {
+            match self.frozen.lock().unwrap().clone() {
+                Some(snap) => Ok(snap),
+                None => self.inner.list(prefix),
+            }
+        }
+
+        fn walk(&self, prefix: &str) -> Result<Vec<BackendEntry>, BackendError> {
+            self.list(prefix)
+        }
+
+        fn stat(&self, key: &str) -> Result<BackendEntry, BackendError> {
+            *self
+                .stat_calls
+                .lock()
+                .unwrap()
+                .entry(key.to_string())
+                .or_insert(0) += 1;
+            self.inner.stat(key)
+        }
+
+        fn get(&self, key: &str, dest: &Path) -> Result<(), BackendError> {
+            self.inner.get(key, dest)
+        }
+
+        fn put(&self, local: &Path, key: &str) -> Result<crate::WriteResult, BackendError> {
+            self.inner.put(local, key)
+        }
+
+        fn delete(&self, key: &str) -> Result<(), BackendError> {
+            self.inner.delete(key)
+        }
+    }
+
+    /// DF-WARPFS-124 regression (AC1): a stale/cached directory listing must
+    /// not silently hide a remote change that a per-key stat can see. The
+    /// planner revalidates the listing's candidates with stat/HEAD and plans
+    /// from the authoritative mtime.
+    ///
+    /// ch:trace row=DF-WARPFS-124 spec=specs/backend-backed-workspace-spec.md#7 wave=none:serial \
+    ///   test=hilo-backends/src/planner.rs::stale_listing_is_revalidated_by_per_key_stat \
+    ///   doc=hilo-cli/src/commands/backend.rs evidence=none:worker-commit-only-until-foreman-verification \
+    ///   witness=none:worker-branch verdict=none:pending-foreman-judge commit=none:self-referential-hash \
+    ///   memory=none:pending
+    ///
+    /// LIMITATION (proven honestly, not fabricated): revalidation is
+    /// per-key over keys the listing DID report — a remote key entirely
+    /// absent from a stale snapshot cannot be discovered by stat and only
+    /// appears when the listing cache refreshes.
+    #[test]
+    fn stale_listing_is_revalidated_by_per_key_stat() {
+        // Arm 1: the stale listing hides a remote-newer change behind an
+        // equal-mtime "no transfer" steady state.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write_file(root, "shared.txt", b"local-v1", 2000);
+        let inner = MockBackend::new();
+        inner.seed("shared.txt", b"remote-v1", 2000); // aligned steady state
+        let backend = StaleListBackend::new(inner);
+        backend.freeze_listing(); // snapshot: shared.txt @ 2000
+
+        // The remote changes AFTER the snapshot: a dir-cache would keep
+        // serving modified=2000 for up to its TTL.
+        backend.inner.seed("shared.txt", b"remote-v2-changed", 9000);
+
+        // The double really serves a stale listing: walk says 2000, the
+        // per-key stat says 9000.
+        let listed = backend.walk("").unwrap();
+        assert_eq!(
+            listed
+                .iter()
+                .find(|e| e.key == "shared.txt")
+                .unwrap()
+                .modified,
+            Some(2000),
+            "walk serves the frozen snapshot"
+        );
+        assert_eq!(
+            backend.stat("shared.txt").unwrap().modified,
+            Some(9000),
+            "stat is authoritative"
+        );
+
+        let eph = empty_ephemeral(root);
+        let plan = plan_sync(&backend, root, &empty_ignore(), &eph, SyncDirection::Both).unwrap();
+        let dirs: HashMap<&str, SyncDirection> = plan
+            .to_transfer
+            .iter()
+            .map(|i| (i.key.as_str(), i.direction))
+            .collect();
+        assert_eq!(
+            dirs.get("shared.txt"),
+            Some(&SyncDirection::Pull),
+            "a stale equal-mtime listing must not hide the remote change"
+        );
+        assert!(
+            backend.stat_calls("shared.txt") >= 1,
+            "the plan revalidated the listing candidate via per-key stat"
+        );
+
+        let stats = execute_sync(&plan, &backend, root).unwrap();
+        assert_eq!(stats.pulled, 1);
+        assert_eq!(stats.pushed, 0);
+        assert_eq!(read_plain(&root.join("shared.txt")), "remote-v2-changed");
+        // One-sided (local never moved): routine resolution, no conflict row.
+        assert!(stats.conflicts.is_empty());
+        assert!(!root.join(".vfs/sync/conflicts.jsonl").exists());
+        assert_eq!(local_mtime_unix(&root.join("shared.txt")), Some(9000));
+
+        // Repeat sync over the STILL-frozen listing: without revalidation
+        // the stale 2000 vs local 9000 would mis-plan a phantom "local
+        // newer" re-push (the task's post-transfer-mtime symptom); with
+        // revalidation it is a full no-op.
+        let plan2 = plan_sync(&backend, root, &empty_ignore(), &eph, SyncDirection::Both).unwrap();
+        assert!(
+            plan2.to_transfer.is_empty(),
+            "revalidation also suppresses the phantom re-push on repeat"
+        );
+        let stats2 = execute_sync(&plan2, &backend, root).unwrap();
+        assert_eq!(stats2.transferred, 0);
+        assert!(stats2.conflicts.is_empty());
+
+        // Arm 2: the stale listing hides a remote-newer change behind a
+        // local-newer "push" decision — the push would clobber newer remote
+        // data; revalidation turns it into the correct pull.
+        let tmp2 = tempfile::tempdir().unwrap();
+        let root2 = tmp2.path();
+        write_file(root2, "shared.txt", b"local-v1", 2000);
+        let inner2 = MockBackend::new();
+        inner2.seed("shared.txt", b"remote-v1", 1000); // local newer per listing
+        let backend2 = StaleListBackend::new(inner2);
+        backend2.freeze_listing();
+        backend2
+            .inner
+            .seed("shared.txt", b"remote-v2-changed", 9000);
+
+        let plan = plan_sync(
+            &backend2,
+            root2,
+            &empty_ignore(),
+            &empty_ephemeral(root2),
+            SyncDirection::Both,
+        )
+        .unwrap();
+        let dirs: HashMap<&str, SyncDirection> = plan
+            .to_transfer
+            .iter()
+            .map(|i| (i.key.as_str(), i.direction))
+            .collect();
+        assert_eq!(
+            dirs.get("shared.txt"),
+            Some(&SyncDirection::Pull),
+            "a stale local-newer listing must not misdirect to a clobbering push"
+        );
+        let stats = execute_sync(&plan, &backend2, root2).unwrap();
+        assert_eq!(stats.pulled, 1);
+        assert_eq!(stats.pushed, 0);
+        assert!(stats.conflicts.is_empty());
+        assert_eq!(read_plain(&root2.join("shared.txt")), "remote-v2-changed");
+    }
+
+    /// DF-WARPFS-124 (AC2, strengthens DF-WARPFS-67): the persisted
+    /// ConflictRecord carries the PRE-TRANSFER decision mtimes even though
+    /// the filesystem is aligned afterwards — never values sampled after
+    /// the transfer or after the local mtime alignment.
+    ///
+    /// ch:trace row=DF-WARPFS-124 spec=specs/backend-backed-workspace-spec.md#7 wave=none:serial \
+    ///   test=hilo-backends/src/planner.rs::conflict_record_jsonl_carries_pre_transfer_mtimes_after_alignment \
+    ///   doc=hilo-cli/src/commands/backend.rs evidence=none:worker-commit-only-until-foreman-verification \
+    ///   witness=none:worker-branch verdict=none:pending-foreman-judge commit=none:self-referential-hash \
+    ///   memory=none:pending
+    #[test]
+    fn conflict_record_jsonl_carries_pre_transfer_mtimes_after_alignment() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        write_file(root, "shared.txt", b"local-v2", 3000);
+        let backend = MockBackend::new();
+        backend.seed("shared.txt", b"remote-v1", 1000);
+        let plan = plan_sync(
+            &backend,
+            root,
+            &empty_ignore(),
+            &empty_ephemeral(root),
+            SyncDirection::Both,
+        )
+        .unwrap();
+        assert!(matches!(plan.to_transfer[0].direction, SyncDirection::Push));
+        // The remote moves ahead between plan and execute (spec §13.11):
+        // the push is a genuine divergent overwrite.
+        backend.seed("shared.txt", b"remote-v2", 9000);
+        let stats = execute_sync(&plan, &backend, root).unwrap();
+        assert_eq!(stats.conflicts.len(), 1);
+
+        // The filesystem IS aligned afterwards: the push won, the store
+        // stamped modified = the pushed local mtime, and the local file
+        // was re-aligned to that value — both sides now read 3000, not the
+        // pre-transfer 9000.
+        assert_eq!(backend.stat("shared.txt").unwrap().modified, Some(3000));
+        assert_eq!(local_mtime_unix(&root.join("shared.txt")), Some(3000));
+
+        // The persisted JSONL row still carries the PRE-TRANSFER decision
+        // values (local 3000, remote 9000) — a post-transfer sample would
+        // read (3000, 3000).
+        let ledger = read_plain(&root.join(".vfs/sync/conflicts.jsonl"));
+        let rows: Vec<ConflictRecord> = ledger
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].key, "shared.txt");
+        assert_eq!((rows[0].local_mtime, rows[0].remote_mtime), (3000, 9000));
+        assert_eq!(rows[0].resolved, ResolvedBy::LocalWins);
+        assert_eq!(rows[0].kind, ConflictKind::DivergentOverwrite);
+
+        // AC3: a repeat sync over the aligned set plans nothing and appends
+        // no further rows.
+        let plan2 = plan_sync(
+            &backend,
+            root,
+            &empty_ignore(),
+            &empty_ephemeral(root),
+            SyncDirection::Both,
+        )
+        .unwrap();
+        assert!(plan2.to_transfer.is_empty());
+        let stats2 = execute_sync(&plan2, &backend, root).unwrap();
+        assert_eq!(stats2.transferred, 0);
+        assert!(stats2.conflicts.is_empty());
+        let ledger2 = read_plain(&root.join(".vfs/sync/conflicts.jsonl"));
+        assert_eq!(
+            ledger2.lines().count(),
+            1,
+            "no false conflict rows on repeat sync"
+        );
     }
 }
