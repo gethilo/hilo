@@ -3075,3 +3075,14 @@ tasks:
   status: complete
   created_at: '2026-11-26T04:56:20.250710+00:00'
   completed_at: '2026-11-26T04:56:45.710630+00:00'
+- id: DF-WARPFS-124
+  title: Stale directory listings must not create false sync plans or conflicts
+  criteria:
+  - 'Implement and test the DF-WARPFS-124 acceptance: a cached directory listing must
+    not silently miss a remote change or record post-transfer mtimes as a conflict.
+    FAILIF: the implementation still relies on a stale LIST result without revalidation,
+    misses a newly changed remote object, or writes a conflict record whose mtimes
+    are sampled after transfer. PROOF: focused Rust tests cover the stale-list/revalidation
+    path and pre-transfer conflict metadata, and the relevant package tests pass.'
+  status: in_progress
+  created_at: '2026-11-27T16:42:25.788045+00:00'

@@ -1,0 +1,9 @@
+{
+  "tick": "warpfs-foreman-2026-11-27-16-16-31",
+  "mode": "serial",
+  "budget": 3,
+  "base_sha": "86ec934f399b61ef7f92a1a896b1828e25ebc964",
+  "rows": [{"id":"DF-WARPFS-124","reason":"highest-value ready product-code row after P1 judge-lane infrastructure blocker; serial because only one row selected this tick","depends_on":[],"worktree":"/home/kara/worktrees/warpfs-DF-WARPFS-124-20261127-1616","branch":"wt/DF-WARPFS-124-20261127-1616","model":"glm-5.3-flash","provider":"opencode-go-2","ownership":"foreman"}],
+  "plan_review": {"status":"plan-unreviewed","review_command_timed_out":true,"time_limit_seconds":240},
+  "worker": {"status":"pending","brief":"/home/kara/.hermes/cache/scratch/warpfs-DF-WARPFS-124-brief.md"}
+}
