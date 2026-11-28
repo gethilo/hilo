@@ -204,6 +204,13 @@ enum GraphCommand {
     /// a source file is listed when no `tested_by` edge targets it (directly
     /// or through its `pkg:`/`local:` node).
     ///
+    /// The predicate is "no test file IMPORTS this file": the list is derived
+    /// from graph import/test edges only. A module that is exercised solely by
+    /// an integration or CLI test which SPAWNS the `hilo` binary — rather than
+    /// importing the module — emits no `tested_by` edge, so it is listed here
+    /// even though a test does exercise it at runtime. Read "untested" as
+    /// "no importing test", not "no test at all" (DF-WARPFS-160).
+    ///
     /// `--granularity function` answers the GAP-121 question instead: which
     /// public FUNCTIONS have no test that names them. A file whose sibling
     /// test file exists but exercises only some of its functions is listed

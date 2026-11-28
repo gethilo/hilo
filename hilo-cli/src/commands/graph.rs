@@ -3903,8 +3903,46 @@ pub fn run_untested(granularity: Option<&str>, json: bool) -> Result<()> {
     }
 }
 
-/// The historical file-level answer. Output is byte-identical to what this
-/// command printed before GAP-121; `--json` is additive.
+/// DF-WARPFS-160: the predicate the file-level list is actually derived from.
+///
+/// The query reads graph edges only, so a module exercised exclusively by an
+/// integration test that SPAWNS the CLI never appears as covered. Printed on
+/// every non-empty report so a reader cannot mistake the list for "no test
+/// exercises this file at runtime" (measured: 37 of 61 listed files on this
+/// repo were exercised by CLI-spawning tests).
+const UNTESTED_FILES_PREDICATE: &str = "predicate: no test file IMPORTS these files (import-edge derived; CLI/integration tests that spawn the binary are NOT counted — a listed file may still be exercised at runtime)";
+
+/// DF-WARPFS-160: render the human-readable `graph untested` report.
+///
+/// Split out of [`run_untested_files`] so the wording — and specifically the
+/// predicate that keeps the "untested" claim honest — is unit-testable without
+/// a warmed graph (no DuckDB, no `.vfs/`).
+///
+/// The historical shapes are preserved: `N untested file(s):` followed by one
+/// `  <path>` per file, and `All files have test coverage.` for the empty case.
+/// The predicate line is the only addition (non-empty case, after the count
+/// line, separated from the listing by a blank line so a path can never be
+/// mistaken for the note).
+fn format_untested_files(files: &[String]) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::new();
+    if files.is_empty() {
+        out.push_str("All files have test coverage.\n");
+        return out;
+    }
+
+    let _ = writeln!(out, "{} untested file(s):", files.len());
+    let _ = writeln!(out, "  {UNTESTED_FILES_PREDICATE}");
+    out.push('\n');
+    for f in files {
+        let _ = writeln!(out, "  {f}");
+    }
+    out
+}
+
+/// The historical file-level answer. Output gains only the DF-WARPFS-160
+/// predicate line; `--json` is additive.
 fn run_untested_files(json: bool) -> Result<()> {
     let cwd = std::env::current_dir().context("failed to determine the current directory")?;
     require_completed_warm(&cwd)?;
@@ -3937,10 +3975,7 @@ fn run_untested_files(json: bool) -> Result<()> {
         return Ok(());
     }
 
-    println!("{} untested file(s):", files.len());
-    for f in &files {
-        println!("  {f}");
-    }
+    print!("{}", format_untested_files(&files));
 
     Ok(())
 }
@@ -8047,6 +8082,57 @@ mod tests {
         assert!(
             message.contains("map, signatures, detail, all"),
             "error names the accepted set: {message}"
+        );
+    }
+
+    /// DF-WARPFS-160: the plain-text report must state the predicate it is
+    /// actually derived from. The list comes from import/test edges only, so a
+    /// file exercised by a test that SPAWNS the binary looks untested; without
+    /// the predicate line a reader concludes "no test exercises this at all".
+    /// This is the formatting seam, asserted without a warmed graph.
+    #[test]
+    fn untested_files_text_names_the_import_edge_predicate() {
+        let files = vec![
+            "hilo-cli/src/commands/graph.rs".to_string(),
+            "hilo-graph/src/graph.rs".to_string(),
+        ];
+        let text = format_untested_files(&files);
+
+        assert!(
+            text.contains("2 untested file(s):"),
+            "the count line keeps its historical shape: {text:?}"
+        );
+        assert!(
+            text.contains("IMPORTS"),
+            "the predicate must be named literally (IMPORTS): {text:?}"
+        );
+        assert!(
+            text.contains("CLI/integration tests"),
+            "the CLI-invocation blind spot must be stated: {text:?}"
+        );
+        // The per-file listing lines keep their exact historical shape.
+        for f in &files {
+            assert!(
+                text.contains(&format!("\n  {f}\n")) || text.ends_with(&format!("  {f}\n")),
+                "expected an unchanged `  <path>` line for {f}: {text:?}"
+            );
+        }
+        // The predicate sits after the count line and before the blank line
+        // that separates it from the listing, so no path can be misread as it.
+        let count_at = text.find("untested file(s):").unwrap();
+        let pred_at = text.find("predicate:").unwrap();
+        let first_file_at = text.find(&files[0]).unwrap();
+        assert!(count_at < pred_at && pred_at < first_file_at, "{text:?}");
+    }
+
+    /// DF-WARPFS-160: the empty case keeps the historical single line (an
+    /// existing consumer's `All files have test coverage.` check still matches);
+    /// the note is only added where a list could be misread.
+    #[test]
+    fn untested_files_text_empty_case_keeps_the_historical_line() {
+        assert_eq!(
+            format_untested_files(&[]),
+            "All files have test coverage.\n"
         );
     }
 }
