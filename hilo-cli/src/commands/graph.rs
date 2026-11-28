@@ -4570,6 +4570,53 @@ mod tests {
         );
     }
 
+    // ch:trace row=QA-WARPFS-029 spec=none:test-only wave=none:serial test=hilo-cli/src/commands/graph.rs::graph_query_root_child_manifest_beats_stray_ancestor_inventory doc=none:no-doc-change witness=none:local-test verdict=none:worker-pending commit=none:self-referential-hash
+    #[test]
+    fn graph_query_root_child_manifest_beats_stray_ancestor_inventory() {
+        // QA-WARPFS-029 class guard, the contract the CLI integration fixtures
+        // rely on: a stray ANCESTOR `.vfs/graph/edges.jsonl` (the shape a host
+        // leaves in `~/.vfs/`) is what a query adopts when nothing nearer
+        // claims it — that leak is why a fixture must own its query root. A
+        // project's own manifest is the boundary that outranks it, so a temp
+        // project cannot borrow an ancestor's graph. Both arms are asserted so
+        // the second one cannot pass vacuously.
+        let outer = TempDir::new().unwrap();
+        let child = outer.path().join("child");
+        let cwd = child.join("src");
+        fs::create_dir_all(&cwd).unwrap();
+        fs::create_dir_all(outer.path().join(".vfs").join("graph")).unwrap();
+        fs::write(
+            outer.path().join(".vfs").join("graph").join("edges.jsonl"),
+            "{\"from\":\"a.rs\",\"to\":\"pkg:x\",\"rel\":\"imports\"}\n",
+        )
+        .unwrap();
+
+        let (leaked_root, leaked_db) = resolve_graph_query_root(&cwd);
+        assert_eq!(
+            leaked_root,
+            outer.path(),
+            "premise: with no nearer boundary the stray ancestor inventory IS the query root"
+        );
+        assert_eq!(
+            leaked_db,
+            outer.path().join(".vfs").join("graph").join("graph.db")
+        );
+
+        fs::create_dir_all(child.join(".vfs")).unwrap();
+        fs::write(
+            child.join(".vfs").join("manifest.yaml"),
+            "project:\n  name: child\n",
+        )
+        .unwrap();
+
+        let (root, db) = resolve_graph_query_root(&cwd);
+        assert_eq!(
+            root, child,
+            "a project's own manifest must terminate the walk at the project"
+        );
+        assert_eq!(db, child.join(".vfs").join("graph").join("graph.db"));
+    }
+
     #[test]
     fn normalize_subject_symbol_nodes_pass_through() {
         let dir = TempDir::new().unwrap();

@@ -211,10 +211,75 @@ mod tests {
         assert_eq!(find_workspace_root(&nested), Some(dir.path().to_path_buf()));
     }
 
+    /// A temp dir whose ANCESTOR chain carries no `.vfs/` marker.
+    ///
+    /// `find_workspace_root` walks all the way to `/`, so it has no inner
+    /// boundary a fixture can impose: "outside a workspace" is only reachable
+    /// on a path whose REAL ancestors are marker-free. QA-WARPFS-029: this
+    /// host keeps a stray `~/.vfs/`, and the suite is routinely handed a
+    /// TMPDIR already inside `$HOME`, so `TempDir::new()` (TMPDIR-derived)
+    /// silently acquires `Some("/home/kara")`. Pick the first marker-free
+    /// candidate base and build the fixture inside it — a host where every
+    /// candidate sits inside a workspace fails loudly here instead of
+    /// asserting against the operator's real workspace.
+    fn tempdir_outside_workspace() -> TempDir {
+        let mut rejected: Vec<String> = Vec::new();
+        for base in [
+            std::env::temp_dir(),
+            PathBuf::from("/var/tmp"),
+            PathBuf::from("/tmp"),
+        ] {
+            if !base.is_dir() {
+                rejected.push(format!("{} (missing)", base.display()));
+                continue;
+            }
+            match base.ancestors().find(|dir| dir.join(".vfs").is_dir()) {
+                None => {
+                    return TempDir::new_in(&base).unwrap_or_else(|e| {
+                        panic!("failed to create fixture under {}: {e}", base.display())
+                    })
+                }
+                Some(ws) => rejected.push(format!(
+                    "{} (inside workspace {})",
+                    base.display(),
+                    ws.display()
+                )),
+            }
+        }
+        panic!("QA-WARPFS-029: no temp root outside a .vfs workspace; tried {rejected:?}");
+    }
+
+    // ch:trace row=QA-WARPFS-029 spec=none:test-only wave=none:serial test=hilo-metadata/src/sidecar.rs::find_workspace_root_none_outside_workspace doc=none:no-doc-change witness=none:local-test verdict=none:worker-pending commit=none:self-referential-hash
     #[test]
     fn find_workspace_root_none_outside_workspace() {
-        let dir = TempDir::new().unwrap();
-        assert_eq!(find_workspace_root(&dir.path().join("nowhere")), None);
+        // QA-WARPFS-029: the FIXTURE makes the premise true. Assert it first so
+        // a poisoned root fails with the reason instead of the confusing
+        // `left: Some(<operator workspace>)` mismatch.
+        let dir = tempdir_outside_workspace();
+        let probe = dir.path().join("nowhere");
+        assert!(
+            probe.ancestors().all(|a| !a.join(".vfs").is_dir()),
+            "fixture premise: no ancestor of {} may carry .vfs/",
+            probe.display()
+        );
+        assert_eq!(find_workspace_root(&probe), None);
+    }
+
+    // ch:trace row=QA-WARPFS-029 spec=none:test-only wave=none:serial test=hilo-metadata/src/sidecar.rs::find_workspace_root_prefers_nearest_vfs_over_stray_ancestor doc=none:no-doc-change witness=none:local-test verdict=none:worker-pending commit=none:self-referential-hash
+    #[test]
+    fn find_workspace_root_prefers_nearest_vfs_over_stray_ancestor() {
+        // QA-WARPFS-029 class guard: a stray ancestor `.vfs/` (exactly what a
+        // host leaves in `~/.vfs/`) must never outrank the workspace the caller
+        // is actually inside. Fails if the walk is ever changed to prefer the
+        // topmost marker or to skip the nearest one.
+        let outer = TempDir::new().unwrap();
+        fs::create_dir_all(outer.path().join(".vfs")).unwrap();
+        let inner = outer.path().join("inner");
+        fs::create_dir_all(inner.join(".vfs")).unwrap();
+        let nested = inner.join("src").join("deep");
+        fs::create_dir_all(&nested).unwrap();
+
+        assert_eq!(find_workspace_root(&nested), Some(inner.clone()));
     }
 
     #[test]

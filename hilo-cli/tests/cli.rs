@@ -156,6 +156,30 @@ fn init_project(dir: &std::path::Path) {
     );
 }
 
+/// Create a temp dir that is its OWN project root for graph queries.
+///
+/// QA-WARPFS-029: `resolve_graph_query_root` adopts the nearest ANCESTOR that
+/// holds `.vfs/graph/graph.db` or `.vfs/graph/edges.jsonl` when no ancestor
+/// carries a manifest — so a temp dir under a `$HOME` that carries a stray
+/// `~/.vfs/graph/` makes `hilo graph …` answer from the operator's real graph
+/// (TMPDIR is frequently handed to the suite already inside `$HOME`).
+/// Planting the graph inventory in the fixture terminates that walk here, so
+/// the fixture owns the (empty) graph.
+///
+/// Deliberately NOT `init_project`: a manifest makes `graph stats`/`graph
+/// impact` refuse an unwarmed graph (`require_completed_warm`), which is a
+/// different contract — see `df_warpfs_64_r2_fresh_project_requires_completed_warm`.
+fn isolated_graph_root(label: &str) -> PathBuf {
+    let dir = unique_tempdir(label);
+    let graph_dir = dir.join(".vfs").join("graph");
+    fs::create_dir_all(&graph_dir).expect("failed to create fixture graph dir");
+    // A zero-byte edges inventory is a valid, genuinely empty graph: it claims
+    // the ancestor walk without pretending any edge was ever parsed.
+    fs::write(graph_dir.join("edges.jsonl"), "")
+        .expect("failed to write the fixture's empty edges inventory");
+    dir
+}
+
 /// Run `hilo <args>` in `dir`, asserting it exited 0, and return stdout.
 fn run_hilo_ok(dir: &std::path::Path, args: &[&str]) -> String {
     let output = run_hilo_with_retry(hilo_cmd().args(args).current_dir(dir));
@@ -399,7 +423,10 @@ fn df_warpfs_64_r2_fresh_project_requires_completed_warm() {
 
 #[test]
 fn graph_stats_no_data_prints_message() {
-    let dir = unique_tempdir("graph-stats");
+    // QA-WARPFS-029: the fixture is the QUERY ROOT (its own empty graph
+    // inventory), so this asserts "empty project" instead of borrowing
+    // whatever the host happens to have above TMPDIR.
+    let dir = isolated_graph_root("graph-stats");
 
     let output = hilo_cmd()
         .args(["graph", "stats"])
@@ -416,6 +443,12 @@ fn graph_stats_no_data_prints_message() {
     assert!(
         stdout.contains("Graph cache is empty"),
         "expected a 'Graph cache is empty' message, got:\n{stdout}"
+    );
+    // An ancestor store answering for this fixture shows up as the populated
+    // stats line — fail on that shape explicitly (the leaked-store signature).
+    assert!(
+        !stdout.contains("Total edges:"),
+        "graph stats must answer for the fixture, not an ancestor graph, got:\n{stdout}"
     );
 
     let _ = fs::remove_dir_all(&dir);
@@ -1744,7 +1777,9 @@ fn graph_warm_language_filter_unknown_errors() {
 
 #[test]
 fn graph_impact_nonexistent_file_errors() {
-    let dir = unique_tempdir("impact");
+    // QA-WARPFS-029: fixture-owned query root, so the subject is resolved and
+    // looked up against THIS project's empty graph — never an ancestor's.
+    let dir = isolated_graph_root("impact");
 
     let output = hilo_cmd()
         .args(["graph", "impact", "nonexistent.rs"])
@@ -1941,7 +1976,10 @@ fn graph_related_nonexistent_file_errors() {
 /// shapes instead of reading as plain file-not-found.
 #[test]
 fn graph_accepts_file_prefixed_path_and_teaches_id_forms() {
-    let dir = unique_tempdir("file-prefix");
+    // QA-WARPFS-029: fixture-owned query root. `file:main.go` must resolve
+    // against the fixture's own empty graph; an ancestor store would answer
+    // (or mis-answer) from the operator's tree.
+    let dir = isolated_graph_root("file-prefix");
     fs::write(dir.join("main.go"), "package main\n\nimport \"fmt\"\n")
         .expect("failed to write main.go");
 
