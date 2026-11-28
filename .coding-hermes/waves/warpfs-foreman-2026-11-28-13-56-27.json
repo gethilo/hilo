@@ -1,0 +1,46 @@
+{
+  "wave_id": "warpfs-foreman-2026-11-28-13-56-27",
+  "created": "2026-11-28T19:05:00Z",
+  "base": "bcace2d",
+  "worker_model": "glm-5.3-flash",
+  "worker_provider": "opencode-go-2",
+  "slots": 4,
+  "board_track": [
+    "DF-WARPFS-124 Tier-2 judge re-run on 9router kimi lane (implementation already landed at 9c66d33)",
+    "INT-CI-024 judge-lane blocker update after lane proof"
+  ],
+  "workers": [
+    {
+      "row": "DF-WARPFS-160",
+      "title": "graph untested predicate honesty (import-edge derivation vs CLI-through-test)",
+      "worktree": "/home/kara/worktrees/warpfs-DF-WARPFS-160",
+      "branch": "wt/DF-WARPFS-160-20261128-1356",
+      "seam": "hilo-cli/src/commands/graph.rs, hilo-cli/src/cli.rs, hilo-graph/src/graph.rs",
+      "depends_on": []
+    },
+    {
+      "row": "QA-WARPFS-029",
+      "title": "test isolation: tests must not depend on a clean ancestor chain",
+      "worktree": "/home/kara/worktrees/warpfs-QA-WARPFS-029",
+      "branch": "wt/QA-WARPFS-029-20261128-1356",
+      "seam": "tests/, hilo-cli/tests/, hilo-metadata/ tests",
+      "depends_on": []
+    },
+    {
+      "row": "DOC-7",
+      "title": "SKILL.md states 17 tools in 5 places; MCP server serves 18",
+      "worktree": "/home/kara/worktrees/warpfs-DOC-7",
+      "branch": "wt/DOC-7-20261128-1356",
+      "seam": "SKILL.md",
+      "depends_on": []
+    },
+    {
+      "row": "DOC-13",
+      "title": "docs/hilo-mcp.md + docs/hilo-cli.md claim --mcp is the only implemented serve mode",
+      "worktree": "/home/kara/worktrees/warpfs-DOC-13",
+      "branch": "wt/DOC-13-20261128-1356",
+      "seam": "docs/hilo-mcp.md, docs/hilo-cli.md",
+      "depends_on": []
+    }
+  ]
+}
