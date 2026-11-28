@@ -63,8 +63,7 @@ omits one is answered with JSON-RPC `-32603` naming the missing argument.
 Rate limiting is **manifest-configured**, never a command-line option:
 `hilo serve` reads `performance.rate_limit_rps` from the project manifest
 (`.vfs/manifest.yaml`, falling back to a root-level `manifest.yaml`) and
-passes it to `hilo_mcp::server::run`. The only flag `hilo serve` accepts is
-the required `--mcp`.
+passes it to `hilo_mcp::server::run` when `--mcp` is selected.
 
 ```yaml
 # .vfs/manifest.yaml
@@ -87,10 +86,14 @@ hilo init
 hilo serve --mcp
 ```
 
-`hilo serve --mcp` speaks JSON-RPC 2.0 on stdin/stdout and is the supported
-integration path. `--mcp` is required (the only implemented server mode), and
-the server refuses to start outside an initialized project, naming
-`hilo init`. Diagnostics go to stderr; stdout carries JSON-RPC frames only.
+`hilo serve --mcp` speaks JSON-RPC 2.0 on stdin/stdout; diagnostics go to
+stderr, leaving stdout for JSON-RPC frames. `hilo serve --http` instead starts
+an HTTP server on `0.0.0.0` serving `GET /health` and `GET /metrics`; it does
+not serve MCP over HTTP. Its port comes from `interfaces.mcp.port` in the
+manifest (default 8766), overridden by `--port <PORT>`, which requires `--http`.
+
+Either mode or both may be selected; selecting neither is a usage error. Both require an
+initialized project, and the server names `hilo init` if the manifest is missing.
 
 Set the rate limiting in the manifest (above): the server takes no
 command-line override for it.
